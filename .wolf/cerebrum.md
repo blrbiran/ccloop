@@ -11,11 +11,14 @@
 ## Key Learnings
 
 - **Project:** ccloop
+- This worktree keeps OpenWolf enabled but may omit `.wolf/anatomy.md`, `.wolf/buglog.json`, and `.wolf/memory.md` initially; create those metadata files before following the workflow.
+- The CLI bootstrap for V1 uses a minimal TypeScript/Vitest workspace under `src/` and `tests/cli/` with ESM-style `.js` import specifiers in TypeScript source/tests.
 
 ## Do-Not-Repeat
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->
 <!-- Format: [YYYY-MM-DD] Description of what went wrong and what to do instead. -->
+- [2026-07-14] When running npm commands for the implementation worktree, use `npm --prefix /absolute/worktree/path ...` because this agent's own cwd is a different isolated worktree.
 
 ## Decision Log
 
