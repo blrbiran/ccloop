@@ -18,3 +18,10 @@ reference/superpowers/
 .claude/worktrees/
 
 __pycache__/
+
+# reference
+reference/awesome-loop-engineering
+reference/ccmem
+reference/DoWhiz
+reference/loop-engineering
+reference/ralph-orchestrator
