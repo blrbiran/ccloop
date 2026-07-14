@@ -1,0 +1,20 @@
+.omc/
+
+.ccmem/
+
+# openwolf
+.wolf/buglog.json
+.wolf/hooks/_session.json
+.wolf/memory.md
+.wolf/token-ledger.json
+.wolf/anatomy.md
+
+reference/academic-research-skills/
+reference/ECC/
+reference/Supervisor-Skills/
+reference/superpowers/
+
+.worktrees/
+.claude/worktrees/
+
+__pycache__/
