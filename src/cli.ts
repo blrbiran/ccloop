@@ -1,3 +1,5 @@
+import { pathToFileURL } from "node:url";
+
 export type ParsedArgs = {
   command: "run";
   contractPath: string;
@@ -18,11 +20,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
   const contractPath = values.get("--contract");
   const runDir = values.get("--run-dir");
-  const adapter = values.get("--adapter") as "scripted" | "claude" | undefined;
+  const adapter = values.get("--adapter");
   const adapterConfigPath = values.get("--adapter-config");
 
   if (!contractPath || !runDir || !adapter || !adapterConfigPath) {
     throw new Error("missing required flags");
+  }
+
+  if (adapter !== "scripted" && adapter !== "claude") {
+    throw new Error("invalid adapter");
   }
 
   return {
@@ -41,4 +47,10 @@ export async function main(argv: string[]): Promise<number> {
   } catch {
     return 1;
   }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main(process.argv.slice(2)).then((code) => {
+    process.exitCode = code;
+  });
 }
