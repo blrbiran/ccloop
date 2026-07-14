@@ -1,12 +1,25 @@
 import { z } from "zod";
 
-export const terminalStateSchema = z.enum([
+export const V1_TERMINAL_STATES = [
   "succeeded",
   "blocked_waiting_human",
   "exhausted",
   "cancelled",
   "failed",
-]);
+] as const;
+
+export const terminalStateSchema = z.enum(V1_TERMINAL_STATES);
+
+const terminalStatesSchema = z.array(terminalStateSchema).refine(
+  (states) =>
+    states.length === V1_TERMINAL_STATES.length &&
+    new Set(states).size === V1_TERMINAL_STATES.length &&
+    V1_TERMINAL_STATES.every((state) => states.includes(state)),
+  {
+    message:
+      "terminalStates must include exactly the full V1 terminal states: succeeded, blocked_waiting_human, exhausted, cancelled, failed",
+  },
+);
 
 export const loopContractSchema = z
   .object({
@@ -58,13 +71,7 @@ export const loopContractSchema = z
         escalationTargets: z.array(z.string()).default([]),
         pauseOn: z.array(z.string()).default([]),
         stopOn: z.array(z.string()).default([]),
-        terminalStates: z.array(terminalStateSchema).default([
-          "succeeded",
-          "blocked_waiting_human",
-          "exhausted",
-          "cancelled",
-          "failed",
-        ]),
+        terminalStates: terminalStatesSchema.default(() => [...V1_TERMINAL_STATES]),
       })
       .strict(),
   })

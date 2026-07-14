@@ -76,6 +76,32 @@ describe("loadContract", () => {
     await expect(loadContract(filePath)).rejects.toThrow(/unrecognized key/i);
   });
 
+  it.each([
+    {
+      name: "an empty terminalStates list",
+      terminalStates: [],
+    },
+    {
+      name: "a partial terminalStates list",
+      terminalStates: ["succeeded"],
+    },
+  ])("rejects a contract with $name", async ({ terminalStates }) => {
+    const dir = await mkdtemp(join(tmpdir(), "ccloop-contract-"));
+    const filePath = join(dir, "invalid-terminal-states.json");
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        ...createValidContract(),
+        escalationAndExit: {
+          ...createValidContract().escalationAndExit,
+          terminalStates,
+        },
+      }),
+    );
+
+    await expect(loadContract(filePath)).rejects.toThrow(/terminalStates/i);
+  });
+
   it("rejects a contract with unsupported nested fields", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ccloop-contract-"));
     const filePath = join(dir, "extra-nested.json");
