@@ -44,6 +44,18 @@ function getMatchedStopSignal(contract: LoopContract, stopSignals: string[]): st
   return stopSignals.find((signal) => contract.escalationAndExit.stopOn.includes(signal)) ?? null;
 }
 
+function consumeAttemptBudget(state: RunState, contract: LoopContract, attempt: number): RunState {
+  return {
+    ...state,
+    currentAttempt: attempt,
+    attemptsUsed: attempt,
+    budgetSnapshot: {
+      ...state.budgetSnapshot,
+      attemptsRemaining: Math.max(contract.executionPolicy.maxAttempts - attempt, 0),
+    },
+  };
+}
+
 export async function runLoop(contract: LoopContract, runDir: string, adapter: RuntimeAdapter): Promise<RunState> {
   let state = transitionRunState(initialState(contract), "planning");
   await initializeRunFiles(runDir, contract, state);
@@ -73,9 +85,12 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
     }
 
     try {
+      state = consumeAttemptBudget(state, contract, attempt);
+      await writeRunState(runDir, state);
+
       const planningContext = buildAttemptContext(contract, state, runDir, attempt, worktreePath);
       const plan = await adapter.plan(planningContext);
-      state = transitionRunState({ ...state, currentAttempt: attempt, attemptsUsed: attempt }, "executing");
+      state = transitionRunState(state, "executing");
       await appendTransitionEvent(runDir, state, "attempt_started", `attempt ${attempt}`);
       await writeRunState(runDir, state);
 
@@ -133,16 +148,13 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
             {
               ...state,
               recentFailures: [...state.recentFailures, failure],
-              budgetSnapshot: {
-                ...state.budgetSnapshot,
-                attemptsRemaining: contract.executionPolicy.maxAttempts - attempt,
-              },
             },
             "planning",
             decision.reason,
           ),
         };
         await appendTransitionEvent(runDir, state, "verification_rejected", decision.reason);
+        await writeRunState(runDir, state);
         await cleanupAttemptWorkspace(contract.context.repoPath, worktreePath);
         continue;
       }

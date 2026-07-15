@@ -3,11 +3,12 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runLoop } from "../../src/controller/runLoop.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import type { RuntimeAdapter } from "../../src/runtime/types.js";
+import type { RunState } from "../../src/state/types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -42,6 +43,10 @@ async function readEventTypes(runDir: string): Promise<string[]> {
     .map((line) => JSON.parse(line).type as string);
 }
 
+async function readRunState(runDir: string): Promise<RunState> {
+  return JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8")) as RunState;
+}
+
 describe("runLoop", () => {
   it("succeeds when verification approves", async () => {
     const repoPath = await createRepo();
@@ -59,6 +64,8 @@ describe("runLoop", () => {
     const finalState = await runLoop(contract, runDir, adapter);
 
     expect(finalState.status).toBe("succeeded");
+    expect(finalState.attemptsUsed).toBe(1);
+    expect(finalState.budgetSnapshot.attemptsRemaining).toBe(2);
     expect(await readEventTypes(runDir)).toEqual([
       "loop_planning",
       "attempt_started",
@@ -99,6 +106,8 @@ describe("runLoop", () => {
     const finalState = await runLoop(contract, runDir, adapter);
 
     expect(finalState.status).toBe("blocked_waiting_human");
+    expect(finalState.attemptsUsed).toBe(1);
+    expect(finalState.budgetSnapshot.attemptsRemaining).toBe(2);
   });
 
   it("blocks for human input when approval also hits path-policy gating", async () => {
@@ -133,7 +142,61 @@ describe("runLoop", () => {
     const finalState = await runLoop(contract, runDir, adapter);
 
     expect(finalState.status).toBe("blocked_waiting_human");
+    expect(finalState.attemptsUsed).toBe(1);
+    expect(finalState.budgetSnapshot.attemptsRemaining).toBe(2);
     expect(finalState.stopReason).toBe("allowlist miss: src/index.ts");
+  });
+
+  it("persists retry-ready planning state before retry cleanup runs", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+    const cleanupStates: RunState[] = [];
+
+    vi.resetModules();
+    vi.doMock("../../src/workspace/worktreeManager.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/workspace/worktreeManager.js")>(
+        "../../src/workspace/worktreeManager.js",
+      );
+
+      return {
+        ...actual,
+        cleanupAttemptWorkspace: async (actualRepoPath: string, worktreePath: string) => {
+          cleanupStates.push(await readRunState(runDir));
+          await actual.cleanupAttemptWorkspace(actualRepoPath, worktreePath);
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+      const adapter = new ScriptedAdapter([
+        {
+          plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+          execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "fail" },
+          verification: { approved: false, rejectCategory: "tests-failed", primaryTargetPaths: ["src/index.ts"], failingCommand: "npm test", safeToRetry: true, evidence: ["FAIL"], pauseSignals: [], stopSignals: [] },
+        },
+        {
+          plan: { summary: "change src/index.ts again", primaryTargetPaths: ["src/index.ts"] },
+          execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited again"], stdoutStderrLog: "ok" },
+          verification: { approved: true, rejectCategory: "", primaryTargetPaths: ["src/index.ts"], failingCommand: null, safeToRetry: false, evidence: ["pass"], pauseSignals: [], stopSignals: [] },
+        },
+      ]);
+
+      const finalState = await observedRunLoop(contract, runDir, adapter);
+
+      expect(finalState.status).toBe("succeeded");
+      expect(cleanupStates).not.toHaveLength(0);
+      expect(cleanupStates[0]).toMatchObject({
+        status: "planning",
+        currentAttempt: 1,
+        attemptsUsed: 1,
+        budgetSnapshot: { attemptsRemaining: 2 },
+      });
+    } finally {
+      vi.doUnmock("../../src/workspace/worktreeManager.js");
+      vi.resetModules();
+    }
   });
 
   it("passes the current phase state to each adapter step", async () => {
@@ -199,7 +262,7 @@ describe("runLoop", () => {
 
     expect(finalState.status).toBe("succeeded");
     expect(seenContexts).toEqual([
-      { phase: "plan", status: "planning", currentAttempt: 0, attemptsUsed: 0, attempt: 1 },
+      { phase: "plan", status: "planning", currentAttempt: 1, attemptsUsed: 1, attempt: 1 },
       { phase: "execute", status: "executing", currentAttempt: 1, attemptsUsed: 1, attempt: 1 },
       { phase: "verify", status: "verifying", currentAttempt: 1, attemptsUsed: 1, attempt: 1 },
     ]);
@@ -239,6 +302,8 @@ describe("runLoop", () => {
     const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
 
     expect(finalState.status).toBe("cancelled");
+    expect(finalState.attemptsUsed).toBe(1);
+    expect(finalState.budgetSnapshot.attemptsRemaining).toBe(2);
     expect(finalState.stopReason).toBe("stopOn signal matched: contract-stop");
     expect(stdout).not.toContain(attemptWorktreePath);
     expect(await readEventTypes(runDir)).toEqual([
@@ -249,7 +314,7 @@ describe("runLoop", () => {
     ]);
   });
 
-  it("cleans up the worktree when an exception happens after worktree creation", async () => {
+  it("counts a thrown planning attempt as consumed", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const contract = createContract(repoPath);
@@ -268,9 +333,16 @@ describe("runLoop", () => {
     };
 
     const finalState = await runLoop(contract, runDir, adapter);
+    const persistedState = await readRunState(runDir);
     const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
 
     expect(finalState.status).toBe("failed");
+    expect(finalState.currentAttempt).toBe(1);
+    expect(finalState.attemptsUsed).toBe(1);
+    expect(finalState.budgetSnapshot.attemptsRemaining).toBe(2);
+    expect(persistedState.currentAttempt).toBe(1);
+    expect(persistedState.attemptsUsed).toBe(1);
+    expect(persistedState.budgetSnapshot.attemptsRemaining).toBe(2);
     expect(stdout).not.toContain(attemptWorktreePath);
   });
 
@@ -296,6 +368,8 @@ describe("runLoop", () => {
     const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
 
     expect(finalState.status).toBe("blocked_waiting_human");
+    expect(finalState.attemptsUsed).toBe(2);
+    expect(finalState.budgetSnapshot.attemptsRemaining).toBe(1);
     expect(stdout).toContain(join(runDir, "worktrees", "attempt-2"));
     expect(await readEventTypes(runDir)).toEqual([
       "loop_planning",
