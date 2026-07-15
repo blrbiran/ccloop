@@ -314,6 +314,131 @@ describe("runLoop", () => {
     ]);
   });
 
+  it("exhausts the run when adapter-reported token usage exceeds the token budget", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+    const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
+    const timestamps = [1_000, 1_600];
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => timestamps.shift() ?? 1_600);
+
+    const adapter = new ScriptedAdapter([
+      {
+        plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"], tokenUsage: 400 },
+        execution: {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "fail",
+          tokenUsage: 350,
+        },
+        verification: {
+          approved: false,
+          rejectCategory: "tests-failed",
+          primaryTargetPaths: ["src/index.ts"],
+          failingCommand: "npm test",
+          safeToRetry: true,
+          evidence: ["token budget exhausted"],
+          pauseSignals: [],
+          stopSignals: [],
+          tokenUsage: 500,
+        },
+      },
+    ]);
+
+    try {
+      const finalState = await runLoop(contract, runDir, adapter);
+      const persistedState = await readRunState(runDir);
+      const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+
+      expect(finalState.status).toBe("exhausted");
+      expect(finalState.stopReason).toBe("runtime or token budget exhausted");
+      expect(finalState.attemptsUsed).toBe(1);
+      expect(finalState.budgetSnapshot).toMatchObject({
+        attemptsRemaining: 2,
+        timeRemainingMs: 4_400,
+        tokenBudgetRemaining: 0,
+      });
+      expect(persistedState.budgetSnapshot).toMatchObject({
+        attemptsRemaining: 2,
+        timeRemainingMs: 4_400,
+        tokenBudgetRemaining: 0,
+      });
+      expect(stdout).not.toContain(attemptWorktreePath);
+      expect(await readEventTypes(runDir)).toEqual([
+        "loop_planning",
+        "attempt_started",
+        "execution_finished",
+        "loop_exhausted",
+      ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("returns a failed terminal state when retry cleanup fails", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+
+    vi.resetModules();
+    vi.doMock("../../src/workspace/worktreeManager.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/workspace/worktreeManager.js")>(
+        "../../src/workspace/worktreeManager.js",
+      );
+
+      return {
+        ...actual,
+        cleanupAttemptWorkspace: async () => {
+          throw new Error("cleanup exploded");
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+      const adapter = new ScriptedAdapter([
+        {
+          plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+          execution: {
+            changedFiles: ["src/index.ts"],
+            diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+            commandOutputs: ["edited"],
+            stdoutStderrLog: "fail",
+          },
+          verification: {
+            approved: false,
+            rejectCategory: "tests-failed",
+            primaryTargetPaths: ["src/index.ts"],
+            failingCommand: "npm test",
+            safeToRetry: true,
+            evidence: ["FAIL"],
+            pauseSignals: [],
+            stopSignals: [],
+          },
+        },
+      ]);
+
+      const finalState = await observedRunLoop(contract, runDir, adapter);
+      const persistedState = await readRunState(runDir);
+
+      expect(finalState.status).toBe("failed");
+      expect(finalState.stopReason).toBe("Error: cleanup exploded");
+      expect(persistedState.status).toBe("failed");
+      expect(persistedState.stopReason).toBe("Error: cleanup exploded");
+      expect(await readEventTypes(runDir)).toEqual([
+        "loop_planning",
+        "attempt_started",
+        "execution_finished",
+        "verification_rejected",
+        "attempt_failed",
+      ]);
+    } finally {
+      vi.doUnmock("../../src/workspace/worktreeManager.js");
+      vi.resetModules();
+    }
+  });
+
   it("counts a thrown planning attempt as consumed", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));

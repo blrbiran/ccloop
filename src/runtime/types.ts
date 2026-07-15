@@ -12,6 +12,7 @@ export type AttemptContext = {
 export type AttemptPlan = {
   summary: string;
   primaryTargetPaths: string[];
+  tokenUsage?: number;
 };
 
 export type ExecutionResult = {
@@ -19,6 +20,7 @@ export type ExecutionResult = {
   diffPatch: string;
   commandOutputs: string[];
   stdoutStderrLog: string;
+  tokenUsage?: number;
 };
 
 export type VerificationResult = {
@@ -30,6 +32,7 @@ export type VerificationResult = {
   evidence: string[];
   pauseSignals: string[];
   stopSignals: string[];
+  tokenUsage?: number;
 };
 
 export interface RuntimeAdapter {
