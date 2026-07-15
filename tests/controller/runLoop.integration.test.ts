@@ -205,6 +205,50 @@ describe("runLoop", () => {
     ]);
   });
 
+  it("stops immediately when a stopOn signal matches", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      escalationAndExit: {
+        ...baseContract.escalationAndExit,
+        stopOn: ["contract-stop"],
+      },
+    };
+    const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
+
+    const adapter = new ScriptedAdapter([
+      {
+        plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+        execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "ok" },
+        verification: {
+          approved: false,
+          rejectCategory: "tests-failed",
+          primaryTargetPaths: ["src/index.ts"],
+          failingCommand: "npm test",
+          safeToRetry: true,
+          evidence: ["found stop signal"],
+          pauseSignals: [],
+          stopSignals: ["contract-stop"],
+        },
+      },
+    ]);
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+
+    expect(finalState.status).toBe("cancelled");
+    expect(finalState.stopReason).toBe("stopOn signal matched: contract-stop");
+    expect(stdout).not.toContain(attemptWorktreePath);
+    expect(await readEventTypes(runDir)).toEqual([
+      "loop_planning",
+      "attempt_started",
+      "execution_finished",
+      "loop_cancelled",
+    ]);
+  });
+
   it("cleans up the worktree when an exception happens after worktree creation", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));

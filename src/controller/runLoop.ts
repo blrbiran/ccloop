@@ -40,6 +40,10 @@ async function appendTransitionEvent(runDir: string, state: RunState, type: stri
   await appendEvent(runDir, { type, at: state.lastTransitionAt, detail });
 }
 
+function getMatchedStopSignal(contract: LoopContract, stopSignals: string[]): string | null {
+  return stopSignals.find((signal) => contract.escalationAndExit.stopOn.includes(signal)) ?? null;
+}
+
 export async function runLoop(contract: LoopContract, runDir: string, adapter: RuntimeAdapter): Promise<RunState> {
   let state = transitionRunState(initialState(contract), "planning");
   await initializeRunFiles(runDir, contract, state);
@@ -101,20 +105,22 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       const humanGateHit =
         pathPolicy.humanGateHit ||
         verification.pauseSignals.some((signal) => contract.escalationAndExit.pauseOn.includes(signal));
-      const budgetExceeded = verification.stopSignals.some((signal) => contract.escalationAndExit.stopOn.includes(signal));
+      const matchedStopSignal = getMatchedStopSignal(contract, verification.stopSignals);
 
       const decision: StopDecision = humanGateHit
         ? { kind: "blocked_waiting_human", reason: pathPolicy.reason ?? "human gate or denylist hit" }
-        : evaluateStopDecision({
-            humanCancelled: false,
-            successSatisfied: verification.approved,
-            humanGateHit: false,
-            attemptNumber: attempt,
-            maxAttempts: contract.executionPolicy.maxAttempts,
-            budgetExceeded,
-            recentFailures: state.recentFailures,
-            verifier: verification,
-          });
+        : matchedStopSignal !== null
+          ? { kind: "cancelled", reason: `stopOn signal matched: ${matchedStopSignal}` }
+          : evaluateStopDecision({
+              humanCancelled: false,
+              successSatisfied: verification.approved,
+              humanGateHit: false,
+              attemptNumber: attempt,
+              maxAttempts: contract.executionPolicy.maxAttempts,
+              budgetExceeded: false,
+              recentFailures: state.recentFailures,
+              verifier: verification,
+            });
 
       if (decision.kind === "retryable") {
         const failure: FailureFingerprint = {
