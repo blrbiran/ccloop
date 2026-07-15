@@ -67,6 +67,144 @@ describe("runLoop", () => {
     ]);
   });
 
+  it("blocks for human input when approval also hits a pauseOn gate", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      escalationAndExit: {
+        ...baseContract.escalationAndExit,
+        pauseOn: ["needs-human-review"],
+      },
+    };
+
+    const adapter = new ScriptedAdapter([
+      {
+        plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+        execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "ok" },
+        verification: {
+          approved: true,
+          rejectCategory: "",
+          primaryTargetPaths: ["src/index.ts"],
+          failingCommand: null,
+          safeToRetry: false,
+          evidence: ["looks good"],
+          pauseSignals: ["needs-human-review"],
+          stopSignals: [],
+        },
+      },
+    ]);
+
+    const finalState = await runLoop(contract, runDir, adapter);
+
+    expect(finalState.status).toBe("blocked_waiting_human");
+  });
+
+  it("blocks for human input when approval also hits path-policy gating", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      safetyPolicy: {
+        ...baseContract.safetyPolicy,
+        allowlistPaths: ["src/allowed/**"],
+      },
+    };
+
+    const adapter = new ScriptedAdapter([
+      {
+        plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+        execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "ok" },
+        verification: {
+          approved: true,
+          rejectCategory: "",
+          primaryTargetPaths: ["src/index.ts"],
+          failingCommand: null,
+          safeToRetry: false,
+          evidence: ["looks good"],
+          pauseSignals: [],
+          stopSignals: [],
+        },
+      },
+    ]);
+
+    const finalState = await runLoop(contract, runDir, adapter);
+
+    expect(finalState.status).toBe("blocked_waiting_human");
+    expect(finalState.stopReason).toBe("allowlist miss: src/index.ts");
+  });
+
+  it("passes the current phase state to each adapter step", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+    const seenContexts: Array<{
+      phase: string;
+      status: string;
+      currentAttempt: number;
+      attemptsUsed: number;
+      attempt: number;
+    }> = [];
+
+    const adapter: RuntimeAdapter = {
+      async plan(context) {
+        seenContexts.push({
+          phase: "plan",
+          status: context.state.status,
+          currentAttempt: context.state.currentAttempt,
+          attemptsUsed: context.state.attemptsUsed,
+          attempt: context.attempt,
+        });
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        seenContexts.push({
+          phase: "execute",
+          status: context.state.status,
+          currentAttempt: context.state.currentAttempt,
+          attemptsUsed: context.state.attemptsUsed,
+          attempt: context.attempt,
+        });
+        return {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        };
+      },
+      async verify(context) {
+        seenContexts.push({
+          phase: "verify",
+          status: context.state.status,
+          currentAttempt: context.state.currentAttempt,
+          attemptsUsed: context.state.attemptsUsed,
+          attempt: context.attempt,
+        });
+        return {
+          approved: true,
+          rejectCategory: "",
+          primaryTargetPaths: ["src/index.ts"],
+          failingCommand: null,
+          safeToRetry: false,
+          evidence: ["npm test passed"],
+          pauseSignals: [],
+          stopSignals: [],
+        };
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+
+    expect(finalState.status).toBe("succeeded");
+    expect(seenContexts).toEqual([
+      { phase: "plan", status: "planning", currentAttempt: 0, attemptsUsed: 0, attempt: 1 },
+      { phase: "execute", status: "executing", currentAttempt: 1, attemptsUsed: 1, attempt: 1 },
+      { phase: "verify", status: "verifying", currentAttempt: 1, attemptsUsed: 1, attempt: 1 },
+    ]);
+  });
+
   it("cleans up the worktree when an exception happens after worktree creation", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));

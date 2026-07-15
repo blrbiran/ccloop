@@ -4,7 +4,7 @@ import { evaluateStopDecision } from "../stop/stopController.js";
 import { transitionRunState } from "../state/stateMachine.js";
 import type { LoopContract } from "../contract/schema.js";
 import type { AttemptContext, RuntimeAdapter } from "../runtime/types.js";
-import type { FailureFingerprint, RunState } from "../state/types.js";
+import type { FailureFingerprint, RunState, StopDecision } from "../state/types.js";
 import { cleanupAttemptWorkspace, createAttemptWorkspace } from "../workspace/worktreeManager.js";
 
 export type { AttemptContext } from "../runtime/types.js";
@@ -24,6 +24,16 @@ function initialState(contract: LoopContract): RunState {
     },
     recentFailures: [],
   };
+}
+
+function buildAttemptContext(
+  contract: LoopContract,
+  state: RunState,
+  runDir: string,
+  attempt: number,
+  worktreePath: string,
+): AttemptContext {
+  return { contract, state, runDir, attempt, worktreePath };
 }
 
 async function appendTransitionEvent(runDir: string, state: RunState, type: string, detail: string): Promise<void> {
@@ -58,15 +68,15 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       }
     }
 
-    const context: AttemptContext = { contract, state, runDir, attempt, worktreePath };
-
     try {
-      const plan = await adapter.plan(context);
+      const planningContext = buildAttemptContext(contract, state, runDir, attempt, worktreePath);
+      const plan = await adapter.plan(planningContext);
       state = transitionRunState({ ...state, currentAttempt: attempt, attemptsUsed: attempt }, "executing");
       await appendTransitionEvent(runDir, state, "attempt_started", `attempt ${attempt}`);
       await writeRunState(runDir, state);
 
-      const execution = await adapter.execute(context);
+      const executionContext = buildAttemptContext(contract, state, runDir, attempt, worktreePath);
+      const execution = await adapter.execute(executionContext);
       const pathPolicy = evaluatePathPolicy({
         changedFiles: execution.changedFiles,
         allowlistPaths: contract.safetyPolicy.allowlistPaths,
@@ -78,7 +88,8 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       await appendTransitionEvent(runDir, state, "execution_finished", `attempt ${attempt}`);
       await writeRunState(runDir, state);
 
-      const verification = await adapter.verify(context);
+      const verificationContext = buildAttemptContext(contract, state, runDir, attempt, worktreePath);
+      const verification = await adapter.verify(verificationContext);
       await writeAttemptArtifacts(runDir, attempt, {
         plan,
         execution,
@@ -92,16 +103,18 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
         verification.pauseSignals.some((signal) => contract.escalationAndExit.pauseOn.includes(signal));
       const budgetExceeded = verification.stopSignals.some((signal) => contract.escalationAndExit.stopOn.includes(signal));
 
-      const decision = evaluateStopDecision({
-        humanCancelled: false,
-        successSatisfied: verification.approved,
-        humanGateHit,
-        attemptNumber: attempt,
-        maxAttempts: contract.executionPolicy.maxAttempts,
-        budgetExceeded,
-        recentFailures: state.recentFailures,
-        verifier: verification,
-      });
+      const decision: StopDecision = humanGateHit
+        ? { kind: "blocked_waiting_human", reason: pathPolicy.reason ?? "human gate or denylist hit" }
+        : evaluateStopDecision({
+            humanCancelled: false,
+            successSatisfied: verification.approved,
+            humanGateHit: false,
+            attemptNumber: attempt,
+            maxAttempts: contract.executionPolicy.maxAttempts,
+            budgetExceeded,
+            recentFailures: state.recentFailures,
+            verifier: verification,
+          });
 
       if (decision.kind === "retryable") {
         const failure: FailureFingerprint = {
