@@ -1,4 +1,5 @@
 import type {
+  AttemptContext,
   AttemptPlan,
   ExecutionResult,
   RuntimeAdapter,
@@ -19,7 +20,7 @@ export class ScriptedAdapter implements RuntimeAdapter {
     this.frames = [...frames];
   }
 
-  async plan(): Promise<AttemptPlan> {
+  async plan(_context: AttemptContext): Promise<AttemptPlan> {
     const frame = this.frames.shift();
 
     if (!frame) {
@@ -30,7 +31,7 @@ export class ScriptedAdapter implements RuntimeAdapter {
     return frame.plan;
   }
 
-  async execute(): Promise<ExecutionResult> {
+  async execute(_context: AttemptContext): Promise<ExecutionResult> {
     if (!this.currentFrame) {
       throw new Error("plan must run before execute");
     }
@@ -38,7 +39,7 @@ export class ScriptedAdapter implements RuntimeAdapter {
     return this.currentFrame.execution;
   }
 
-  async verify(): Promise<VerificationResult> {
+  async verify(_context: AttemptContext): Promise<VerificationResult> {
     if (!this.currentFrame) {
       throw new Error("plan must run before verify");
     }

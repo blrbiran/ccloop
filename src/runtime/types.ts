@@ -1,3 +1,14 @@
+import type { LoopContract } from "../contract/schema.js";
+import type { RunState } from "../state/types.js";
+
+export type AttemptContext = {
+  contract: LoopContract;
+  state: RunState;
+  runDir: string;
+  attempt: number;
+  worktreePath: string;
+};
+
 export type AttemptPlan = {
   summary: string;
   primaryTargetPaths: string[];
@@ -17,10 +28,12 @@ export type VerificationResult = {
   failingCommand: string | null;
   safeToRetry: boolean;
   evidence: string[];
+  pauseSignals: string[];
+  stopSignals: string[];
 };
 
 export interface RuntimeAdapter {
-  plan(): Promise<AttemptPlan>;
-  execute(): Promise<ExecutionResult>;
-  verify(): Promise<VerificationResult>;
+  plan(context: AttemptContext): Promise<AttemptPlan>;
+  execute(context: AttemptContext): Promise<ExecutionResult>;
+  verify(context: AttemptContext): Promise<VerificationResult>;
 }
