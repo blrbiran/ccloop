@@ -123,7 +123,7 @@ describe("runLoop", () => {
     expect(finalState.budgetSnapshot.attemptsRemaining).toBe(2);
   });
 
-  it("blocks for human input when approval also hits path-policy gating", async () => {
+  it("blocks for human input before verify when path-policy gating hits", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -134,30 +134,41 @@ describe("runLoop", () => {
         allowlistPaths: ["src/allowed/**"],
       },
     };
+    const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
+    let verifyCalled = false;
 
-    const adapter = new ScriptedAdapter([
-      {
-        plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
-        execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "ok" },
-        verification: {
-          approved: true,
-          rejectCategory: "",
-          primaryTargetPaths: ["src/index.ts"],
-          failingCommand: null,
-          safeToRetry: false,
-          evidence: ["looks good"],
-          pauseSignals: [],
-          stopSignals: [],
-        },
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
       },
-    ]);
+      async execute() {
+        return {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        };
+      },
+      async verify() {
+        verifyCalled = true;
+        throw new Error("verify should not run");
+      },
+    };
 
     const finalState = await runLoop(contract, runDir, adapter);
+    const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
 
     expect(finalState.status).toBe("blocked_waiting_human");
     expect(finalState.attemptsUsed).toBe(1);
     expect(finalState.budgetSnapshot.attemptsRemaining).toBe(2);
     expect(finalState.stopReason).toBe("allowlist miss: src/index.ts");
+    expect(verifyCalled).toBe(false);
+    expect(stdout).toContain(attemptWorktreePath);
+    expect(await readEventTypes(runDir)).toEqual([
+      "loop_planning",
+      "attempt_started",
+      "loop_blocked_waiting_human",
+    ]);
   });
 
   it("persists retry-ready planning state before retry cleanup runs", async () => {
@@ -856,6 +867,59 @@ describe("runLoop", () => {
     expect(persistedState.attemptsUsed).toBe(1);
     expect(persistedState.budgetSnapshot.attemptsRemaining).toBe(2);
     expect(stdout).not.toContain(attemptWorktreePath);
+  });
+
+  it("records both diagnostic and canonical terminal events when worktree creation fails twice", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+    let planCalled = false;
+
+    vi.resetModules();
+    vi.doMock("../../src/workspace/worktreeManager.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/workspace/worktreeManager.js")>(
+        "../../src/workspace/worktreeManager.js",
+      );
+
+      return {
+        ...actual,
+        createAttemptWorkspace: async () => {
+          throw new Error("workspace exploded");
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          planCalled = true;
+          throw new Error("plan should not run");
+        },
+        async execute() {
+          throw new Error("execute should not run");
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const finalState = await observedRunLoop(contract, runDir, adapter);
+
+      expect(finalState.status).toBe("blocked_waiting_human");
+      expect(finalState.attemptsUsed).toBe(0);
+      expect(finalState.stopReason).toBe("workspace unavailable: Error: workspace exploded");
+      expect(planCalled).toBe(false);
+      expect(await readEventTypes(runDir)).toEqual([
+        "loop_planning",
+        "workspace_retry",
+        "workspace_create_failed",
+        "loop_blocked_waiting_human",
+      ]);
+    } finally {
+      vi.doUnmock("../../src/workspace/worktreeManager.js");
+      vi.resetModules();
+    }
   });
 
   it("preserves transition-event completeness when the run blocks for human input", async () => {

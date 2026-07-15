@@ -223,9 +223,17 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
         worktreePath = (await createAttemptWorkspace(contract.context.repoPath, runDir, attempt)).worktreePath;
       } catch (error) {
         if (infraRetryUsed) {
-          state = transitionRunState(state, "blocked_waiting_human", `workspace unavailable: ${String(error)}`);
-          await appendTransitionEvent(runDir, state, "workspace_create_failed", String(error));
-          await writeRunState(runDir, state);
+          await appendEvent(runDir, {
+            type: "workspace_create_failed",
+            at: new Date().toISOString(),
+            detail: String(error),
+          });
+          state = await persistTerminalState(
+            runDir,
+            state,
+            "blocked_waiting_human",
+            `workspace unavailable: ${String(error)}`,
+          );
           return state;
         }
 
@@ -327,6 +335,17 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
         denylistPaths: contract.safetyPolicy.denylistPaths,
         maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
       });
+
+      if (pathPolicy.humanGateHit) {
+        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+        state = await persistTerminalState(
+          runDir,
+          state,
+          "blocked_waiting_human",
+          pathPolicy.reason ?? "human gate or denylist hit",
+        );
+        return state;
+      }
 
       state = transitionRunState(state, "verifying");
       await appendTransitionEvent(runDir, state, "execution_finished", `attempt ${attempt}`);
