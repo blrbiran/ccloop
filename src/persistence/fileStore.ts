@@ -11,10 +11,10 @@ export type RunEvent = {
 
 export type AttemptArtifacts = {
   plan: unknown;
-  execution: unknown;
-  verify: unknown;
-  diffPatch: string;
-  stdoutStderrLog: string;
+  execution?: unknown;
+  verify?: unknown;
+  diffPatch?: string;
+  stdoutStderrLog?: string;
 };
 
 export async function initializeRunFiles(runDir: string, contract: LoopContract, initialState: RunState): Promise<void> {
@@ -36,8 +36,20 @@ export async function writeAttemptArtifacts(runDir: string, attempt: number, art
   const attemptDir = join(runDir, "attempts", String(attempt));
   await mkdir(attemptDir, { recursive: true });
   await writeFile(join(attemptDir, "plan.json"), JSON.stringify(artifacts.plan, null, 2));
-  await writeFile(join(attemptDir, "execution.json"), JSON.stringify(artifacts.execution, null, 2));
-  await writeFile(join(attemptDir, "verify.json"), JSON.stringify(artifacts.verify, null, 2));
-  await writeFile(join(attemptDir, "diff.patch"), artifacts.diffPatch);
-  await writeFile(join(attemptDir, "stdout-stderr.log"), artifacts.stdoutStderrLog);
+
+  if (artifacts.execution !== undefined) {
+    await writeFile(join(attemptDir, "execution.json"), JSON.stringify(artifacts.execution, null, 2));
+  }
+
+  if (artifacts.verify !== undefined) {
+    await writeFile(join(attemptDir, "verify.json"), JSON.stringify(artifacts.verify, null, 2));
+  }
+
+  if (artifacts.diffPatch !== undefined) {
+    await writeFile(join(attemptDir, "diff.patch"), artifacts.diffPatch);
+  }
+
+  if (artifacts.stdoutStderrLog !== undefined) {
+    await writeFile(join(attemptDir, "stdout-stderr.log"), artifacts.stdoutStderrLog);
+  }
 }

@@ -64,8 +64,9 @@ function buildAttemptContext(
   runDir: string,
   attempt: number,
   worktreePath: string,
+  abortSignal?: AbortSignal,
 ): AttemptContext {
-  return { contract, state, runDir, attempt, worktreePath };
+  return { contract, state, runDir, attempt, worktreePath, abortSignal };
 }
 
 async function appendTransitionEvent(runDir: string, state: RunState, type: string, detail: string): Promise<void> {
@@ -128,22 +129,35 @@ function getPhaseTimeoutReason(phase: PhaseName, timeoutMs: number): string {
   return `${phase} phase exceeded per-attempt timeout of ${timeoutMs}ms`;
 }
 
+function getPhaseTimeoutMs(contract: LoopContract, state: RunState): number {
+  return Math.min(contract.executionPolicy.perAttemptTimeoutMs, state.budgetSnapshot.timeRemainingMs);
+}
+
 async function runPhaseWithTimeout<T>(
   timeoutMs: number,
-  operation: () => Promise<T>,
+  operation: (abortSignal: AbortSignal) => Promise<T>,
 ): Promise<PhaseOutcome<T>> {
   const startedAtMs = Date.now();
+
+  if (timeoutMs <= 0) {
+    return { timedOut: true, elapsedMs: 0 };
+  }
+
+  const abortController = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   try {
     const outcome = await Promise.race([
-      operation()
+      operation(abortController.signal)
         .then((result) => ({ kind: "result" as const, result }))
         .catch((error: unknown) => {
           throw new PhaseExecutionError(Math.max(Date.now() - startedAtMs, 0), error);
         }),
       new Promise<{ kind: "timeout" }>((resolve) => {
-        timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+        timer = setTimeout(() => {
+          resolve({ kind: "timeout" });
+          abortController.abort();
+        }, timeoutMs);
       }),
     ]);
     const elapsedMs = Math.max(Date.now() - startedAtMs, 0);
@@ -158,6 +172,26 @@ async function runPhaseWithTimeout<T>(
       clearTimeout(timer);
     }
   }
+}
+
+async function writeCompletedAttemptArtifacts(
+  runDir: string,
+  attempt: number,
+  plan: AttemptPlan | null,
+  execution: ExecutionResult | null,
+  verification?: VerificationResult,
+): Promise<void> {
+  if (plan === null) {
+    return;
+  }
+
+  await writeAttemptArtifacts(runDir, attempt, {
+    plan,
+    execution: execution ?? undefined,
+    verify: verification,
+    diffPatch: execution?.diffPatch,
+    stdoutStderrLog: execution?.stdoutStderrLog,
+  });
 }
 
 async function persistTerminalState(
@@ -208,8 +242,9 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       state = consumeAttemptBudget(state, contract, attempt);
       await writeRunState(runDir, state);
 
-      const planOutcome = await runPhaseWithTimeout(contract.executionPolicy.perAttemptTimeoutMs, () =>
-        adapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath)),
+      const planTimeoutMs = getPhaseTimeoutMs(contract, state);
+      const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal) =>
+        adapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal)),
       );
 
       if (planOutcome.timedOut) {
@@ -218,9 +253,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
           runDir,
           state,
           "exhausted",
-          hasBudgetExceeded(state)
-            ? BUDGET_EXHAUSTED_REASON
-            : getPhaseTimeoutReason("plan", contract.executionPolicy.perAttemptTimeoutMs),
+          hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("plan", planTimeoutMs),
         );
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
@@ -235,6 +268,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       state = applyPhaseUsage(state, planOutcome.elapsedMs, plan.tokenUsage);
 
       if (hasBudgetExceeded(state)) {
+        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
         state = await persistTerminalState(runDir, state, "exhausted", BUDGET_EXHAUSTED_REASON);
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
@@ -249,19 +283,19 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       await appendTransitionEvent(runDir, state, "attempt_started", `attempt ${attempt}`);
       await writeRunState(runDir, state);
 
-      const executeOutcome = await runPhaseWithTimeout(contract.executionPolicy.perAttemptTimeoutMs, () =>
-        adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath)),
+      const executeTimeoutMs = getPhaseTimeoutMs(contract, state);
+      const executeOutcome = await runPhaseWithTimeout(executeTimeoutMs, (abortSignal) =>
+        adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal)),
       );
 
       if (executeOutcome.timedOut) {
         state = applyPhaseUsage(state, executeOutcome.elapsedMs, undefined);
+        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
         state = await persistTerminalState(
           runDir,
           state,
           "exhausted",
-          hasBudgetExceeded(state)
-            ? BUDGET_EXHAUSTED_REASON
-            : getPhaseTimeoutReason("execute", contract.executionPolicy.perAttemptTimeoutMs),
+          hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("execute", executeTimeoutMs),
         );
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
@@ -276,6 +310,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       state = applyPhaseUsage(state, executeOutcome.elapsedMs, execution.tokenUsage);
 
       if (hasBudgetExceeded(state)) {
+        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
         state = await persistTerminalState(runDir, state, "exhausted", BUDGET_EXHAUSTED_REASON);
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
@@ -297,19 +332,19 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       await appendTransitionEvent(runDir, state, "execution_finished", `attempt ${attempt}`);
       await writeRunState(runDir, state);
 
-      const verifyOutcome = await runPhaseWithTimeout(contract.executionPolicy.perAttemptTimeoutMs, () =>
-        adapter.verify(buildAttemptContext(contract, state, runDir, attempt, worktreePath)),
+      const verifyTimeoutMs = getPhaseTimeoutMs(contract, state);
+      const verifyOutcome = await runPhaseWithTimeout(verifyTimeoutMs, (abortSignal) =>
+        adapter.verify(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal)),
       );
 
       if (verifyOutcome.timedOut) {
         state = applyPhaseUsage(state, verifyOutcome.elapsedMs, undefined);
+        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
         state = await persistTerminalState(
           runDir,
           state,
           "exhausted",
-          hasBudgetExceeded(state)
-            ? BUDGET_EXHAUSTED_REASON
-            : getPhaseTimeoutReason("verify", contract.executionPolicy.perAttemptTimeoutMs),
+          hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("verify", verifyTimeoutMs),
         );
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
@@ -322,13 +357,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
 
       verification = verifyOutcome.result;
       state = applyPhaseUsage(state, verifyOutcome.elapsedMs, verification.tokenUsage);
-      await writeAttemptArtifacts(runDir, attempt, {
-        plan,
-        execution,
-        verify: verification,
-        diffPatch: execution.diffPatch,
-        stdoutStderrLog: execution.stdoutStderrLog,
-      });
+      await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution, verification);
 
       const humanGateHit =
         pathPolicy.humanGateHit ||

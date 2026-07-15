@@ -7,6 +7,7 @@ export type AttemptContext = {
   runDir: string;
   attempt: number;
   worktreePath: string;
+  abortSignal?: AbortSignal;
 };
 
 export type AttemptPlan = {

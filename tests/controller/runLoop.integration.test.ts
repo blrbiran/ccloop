@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -49,6 +49,15 @@ async function readRunState(runDir: string): Promise<RunState> {
 
 async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 describe("runLoop", () => {
@@ -366,10 +375,108 @@ describe("runLoop", () => {
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "loop_exhausted"]);
   });
 
+  it("persists completed plan artifacts when execute times out before verify", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+      },
+    };
+    const attemptDir = join(runDir, "attempts", "1");
+    const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
+    let verifyCalled = false;
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        await delay(60);
+        return {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        };
+      },
+      async verify() {
+        verifyCalled = true;
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const persistedState = await readRunState(runDir);
+    const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+
+    expect(finalState.status).toBe("exhausted");
+    expect(finalState.stopReason).toBe("execute phase exceeded per-attempt timeout of 20ms");
+    expect(persistedState.status).toBe("exhausted");
+    expect(persistedState.stopReason).toBe("execute phase exceeded per-attempt timeout of 20ms");
+    expect(await pathExists(join(attemptDir, "plan.json"))).toBe(true);
+    expect(await pathExists(join(attemptDir, "execution.json"))).toBe(false);
+    expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
+    expect(verifyCalled).toBe(false);
+    expect(stdout).not.toContain(attemptWorktreePath);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_exhausted"]);
+  });
+
+  it("caps phase timeout by the remaining runtime budget", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 1_000,
+        totalRuntimeBudgetMs: 20,
+      },
+    };
+    const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
+    let executeCalled = false;
+    let verifyCalled = false;
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        await delay(60);
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        executeCalled = true;
+        throw new Error("execute should not run");
+      },
+      async verify() {
+        verifyCalled = true;
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const persistedState = await readRunState(runDir);
+    const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+
+    expect(finalState.status).toBe("exhausted");
+    expect(finalState.stopReason).toBe("runtime or token budget exhausted");
+    expect(finalState.budgetSnapshot.attemptsRemaining).toBe(2);
+    expect(finalState.budgetSnapshot.timeRemainingMs).toBe(0);
+    expect(persistedState.status).toBe("exhausted");
+    expect(persistedState.stopReason).toBe("runtime or token budget exhausted");
+    expect(executeCalled).toBe(false);
+    expect(verifyCalled).toBe(false);
+    expect(stdout).not.toContain(attemptWorktreePath);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "loop_exhausted"]);
+  });
+
   it("stops after plan token usage exhausts the token budget", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const contract = createContract(repoPath);
+    const attemptDir = join(runDir, "attempts", "1");
     const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
     let executeCalled = false;
     let verifyCalled = false;
@@ -406,6 +513,9 @@ describe("runLoop", () => {
         timeRemainingMs: 5_000,
         tokenBudgetRemaining: 0,
       });
+      expect(await pathExists(join(attemptDir, "plan.json"))).toBe(true);
+      expect(await pathExists(join(attemptDir, "execution.json"))).toBe(false);
+      expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
       expect(executeCalled).toBe(false);
       expect(verifyCalled).toBe(false);
       expect(stdout).not.toContain(attemptWorktreePath);
@@ -419,6 +529,7 @@ describe("runLoop", () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const contract = createContract(repoPath);
+    const attemptDir = join(runDir, "attempts", "1");
     const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
     let verifyCalled = false;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => 1_000);
@@ -459,6 +570,11 @@ describe("runLoop", () => {
         timeRemainingMs: 5_000,
         tokenBudgetRemaining: 0,
       });
+      expect(await pathExists(join(attemptDir, "plan.json"))).toBe(true);
+      expect(await pathExists(join(attemptDir, "execution.json"))).toBe(true);
+      expect(await pathExists(join(attemptDir, "diff.patch"))).toBe(true);
+      expect(await pathExists(join(attemptDir, "stdout-stderr.log"))).toBe(true);
+      expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
       expect(verifyCalled).toBe(false);
       expect(stdout).not.toContain(attemptWorktreePath);
       expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_exhausted"]);
