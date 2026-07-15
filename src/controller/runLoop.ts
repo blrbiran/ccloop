@@ -46,6 +46,23 @@ async function appendTransitionEvent(runDir: string, state: RunState, type: stri
   await appendEvent(runDir, { type, at: state.lastTransitionAt, detail });
 }
 
+async function cleanupAttemptWorkspaceBestEffort(
+  repoPath: string,
+  worktreePath: string,
+  runDir: string,
+  detail: string,
+): Promise<void> {
+  try {
+    await cleanupAttemptWorkspace(repoPath, worktreePath);
+  } catch (error) {
+    await appendEvent(runDir, {
+      type: "workspace_cleanup_failed",
+      at: new Date().toISOString(),
+      detail: `${detail}: ${String(error)}`,
+    });
+  }
+}
+
 function getMatchedStopSignal(contract: LoopContract, stopSignals: string[]): string | null {
   return stopSignals.find((signal) => contract.escalationAndExit.stopOn.includes(signal)) ?? null;
 }
@@ -212,13 +229,12 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
           state = transitionRunState(state, "failed", String(error));
           await appendTransitionEvent(runDir, state, "attempt_failed", String(error));
           await writeRunState(runDir, state);
-
-          try {
-            await cleanupAttemptWorkspace(contract.context.repoPath, worktreePath);
-          } catch {
-            // best effort only: the run should still terminate as failed
-          }
-
+          await cleanupAttemptWorkspaceBestEffort(
+            contract.context.repoPath,
+            worktreePath,
+            runDir,
+            "cleanup after retry cleanup failure",
+          );
           return state;
         }
 
@@ -230,7 +246,12 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       await writeRunState(runDir, state);
 
       if (decision.kind !== "blocked_waiting_human") {
-        await cleanupAttemptWorkspace(contract.context.repoPath, worktreePath);
+        await cleanupAttemptWorkspaceBestEffort(
+          contract.context.repoPath,
+          worktreePath,
+          runDir,
+          `cleanup after terminal decision ${decision.kind}`,
+        );
       }
 
       return state;
@@ -239,12 +260,19 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
         state = applyAttemptUsage(state, attemptStartedAtMs, plan, execution, verification);
       }
 
-      state = transitionRunState(state, "failed", String(error));
-      await appendTransitionEvent(runDir, state, "attempt_failed", String(error));
-      await writeRunState(runDir, state);
+      if (state.status !== "failed") {
+        state = transitionRunState(state, "failed", String(error));
+        await appendTransitionEvent(runDir, state, "attempt_failed", String(error));
+        await writeRunState(runDir, state);
+      }
 
       if (worktreePath !== null) {
-        await cleanupAttemptWorkspace(contract.context.repoPath, worktreePath);
+        await cleanupAttemptWorkspaceBestEffort(
+          contract.context.repoPath,
+          worktreePath,
+          runDir,
+          "cleanup after controller failure",
+        );
       }
 
       return state;
