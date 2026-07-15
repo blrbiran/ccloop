@@ -5,11 +5,10 @@ function isRepeatedFailure(previous: FailureFingerprint | undefined, current: St
     return false;
   }
 
-  return (
-    previous.rejectCategory === current.rejectCategory &&
-    JSON.stringify(previous.primaryTargetPaths) === JSON.stringify(current.primaryTargetPaths) &&
-    previous.failingCommand === current.failingCommand
-  );
+  const sameTargetPaths = JSON.stringify(previous.primaryTargetPaths) === JSON.stringify(current.primaryTargetPaths);
+  const sameFailingCommand = previous.failingCommand === current.failingCommand;
+
+  return previous.rejectCategory === current.rejectCategory && (sameTargetPaths || sameFailingCommand);
 }
 
 export function evaluateStopDecision(input: StopDecisionInput): StopDecision {

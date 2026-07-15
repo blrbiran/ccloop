@@ -44,7 +44,7 @@ describe("evaluateStopDecision", () => {
     ).toBe("blocked_waiting_human");
   });
 
-  it("exhausts after repeated failure pattern", () => {
+  it("exhausts when the reject category matches and the target paths repeat", () => {
     expect(
       evaluateStopDecision({
         humanCancelled: false,
@@ -64,6 +64,33 @@ describe("evaluateStopDecision", () => {
           approved: false,
           rejectCategory: "tests-failed",
           primaryTargetPaths: ["src/core.ts"],
+          failingCommand: "pnpm test",
+          safeToRetry: true,
+        },
+      }).kind,
+    ).toBe("exhausted");
+  });
+
+  it("exhausts when the reject category matches and the failing command repeats", () => {
+    expect(
+      evaluateStopDecision({
+        humanCancelled: false,
+        successSatisfied: false,
+        humanGateHit: false,
+        attemptNumber: 2,
+        maxAttempts: 3,
+        budgetExceeded: false,
+        recentFailures: [
+          {
+            rejectCategory: "tests-failed",
+            primaryTargetPaths: ["src/core.ts"],
+            failingCommand: "npm test",
+          },
+        ],
+        verifier: {
+          approved: false,
+          rejectCategory: "tests-failed",
+          primaryTargetPaths: ["src/other.ts"],
           failingCommand: "npm test",
           safeToRetry: true,
         },
