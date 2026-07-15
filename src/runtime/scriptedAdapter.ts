@@ -1,0 +1,48 @@
+import type {
+  AttemptPlan,
+  ExecutionResult,
+  RuntimeAdapter,
+  VerificationResult,
+} from "./types.js";
+
+export type ScriptedFrame = {
+  plan: AttemptPlan;
+  execution: ExecutionResult;
+  verification: VerificationResult;
+};
+
+export class ScriptedAdapter implements RuntimeAdapter {
+  private readonly frames: ScriptedFrame[];
+  private currentFrame: ScriptedFrame | null = null;
+
+  constructor(frames: ScriptedFrame[]) {
+    this.frames = [...frames];
+  }
+
+  async plan(): Promise<AttemptPlan> {
+    const frame = this.frames.shift();
+
+    if (!frame) {
+      throw new Error("no scripted frame remaining");
+    }
+
+    this.currentFrame = frame;
+    return frame.plan;
+  }
+
+  async execute(): Promise<ExecutionResult> {
+    if (!this.currentFrame) {
+      throw new Error("plan must run before execute");
+    }
+
+    return this.currentFrame.execution;
+  }
+
+  async verify(): Promise<VerificationResult> {
+    if (!this.currentFrame) {
+      throw new Error("plan must run before verify");
+    }
+
+    return this.currentFrame.verification;
+  }
+}
