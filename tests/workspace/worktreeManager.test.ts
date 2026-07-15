@@ -23,6 +23,9 @@ describe("worktreeManager", () => {
     const { worktreePath } = await createAttemptWorkspace(repoDir, runDir, 1);
     expect(worktreePath).toContain(runDir);
 
+    const { stdout: headName } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: worktreePath });
+    expect(headName.trim()).toBe("HEAD");
+
     await cleanupAttemptWorkspace(repoDir, worktreePath);
     const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoDir });
     expect(stdout).not.toContain(worktreePath);
