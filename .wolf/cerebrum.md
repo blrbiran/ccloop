@@ -17,6 +17,8 @@
 
 - Task 4 persistence stores run metadata with camelCase JSON in `loop-contract.json`, `loop-state.json`, newline-delimited `events.jsonl`, and per-attempt files under `attempts/<n>/`.
 
+- Task 5 workspaces are created as detached git worktrees at `runDir/worktrees/attempt-<n>` and cleaned up with `git worktree remove --force` from the repo root.
+
 ## Do-Not-Repeat
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->
