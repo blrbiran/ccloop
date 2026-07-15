@@ -22,6 +22,14 @@ describe("transitionRunState", () => {
     expect(transitionRunState(baseState, "planning").status).toBe("planning");
   });
 
+  it("allows planning -> exhausted", () => {
+    expect(transitionRunState({ ...baseState, status: "planning" }, "exhausted").status).toBe("exhausted");
+  });
+
+  it("allows executing -> exhausted", () => {
+    expect(transitionRunState({ ...baseState, status: "executing" }, "exhausted").status).toBe("exhausted");
+  });
+
   it("rejects succeeded -> planning", () => {
     expect(() => transitionRunState({ ...baseState, status: "succeeded" }, "planning")).toThrow(/illegal/i);
   });

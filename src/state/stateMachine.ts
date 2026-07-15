@@ -2,8 +2,8 @@ import type { RunState, RunStatus } from "./types.js";
 
 const legalTransitions: Record<RunStatus, RunStatus[]> = {
   queued: ["planning", "cancelled"],
-  planning: ["executing", "blocked_waiting_human", "cancelled", "failed"],
-  executing: ["verifying", "blocked_waiting_human", "cancelled", "failed"],
+  planning: ["executing", "blocked_waiting_human", "exhausted", "cancelled", "failed"],
+  executing: ["verifying", "blocked_waiting_human", "exhausted", "cancelled", "failed"],
   verifying: ["planning", "succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"],
   succeeded: [],
   blocked_waiting_human: [],
