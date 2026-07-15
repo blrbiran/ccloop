@@ -26,9 +26,14 @@ function initialState(contract: LoopContract): RunState {
   };
 }
 
+async function appendTransitionEvent(runDir: string, state: RunState, type: string, detail: string): Promise<void> {
+  await appendEvent(runDir, { type, at: state.lastTransitionAt, detail });
+}
+
 export async function runLoop(contract: LoopContract, runDir: string, adapter: RuntimeAdapter): Promise<RunState> {
   let state = transitionRunState(initialState(contract), "planning");
   await initializeRunFiles(runDir, contract, state);
+  await appendTransitionEvent(runDir, state, "loop_planning", "run initialized and ready to plan");
 
   while (true) {
     await writeRunState(runDir, state);
@@ -43,7 +48,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       } catch (error) {
         if (infraRetryUsed) {
           state = transitionRunState(state, "blocked_waiting_human", `workspace unavailable: ${String(error)}`);
-          await appendEvent(runDir, { type: "workspace_create_failed", at: new Date().toISOString(), detail: String(error) });
+          await appendTransitionEvent(runDir, state, "workspace_create_failed", String(error));
           await writeRunState(runDir, state);
           return state;
         }
@@ -58,7 +63,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
     try {
       const plan = await adapter.plan(context);
       state = transitionRunState({ ...state, currentAttempt: attempt, attemptsUsed: attempt }, "executing");
-      await appendEvent(runDir, { type: "attempt_started", at: new Date().toISOString(), detail: `attempt ${attempt}` });
+      await appendTransitionEvent(runDir, state, "attempt_started", `attempt ${attempt}`);
       await writeRunState(runDir, state);
 
       const execution = await adapter.execute(context);
@@ -70,6 +75,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       });
 
       state = transitionRunState(state, "verifying");
+      await appendTransitionEvent(runDir, state, "execution_finished", `attempt ${attempt}`);
       await writeRunState(runDir, state);
 
       const verification = await adapter.verify(context);
@@ -117,12 +123,13 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
             decision.reason,
           ),
         };
+        await appendTransitionEvent(runDir, state, "verification_rejected", decision.reason);
         await cleanupAttemptWorkspace(contract.context.repoPath, worktreePath);
         continue;
       }
 
       state = transitionRunState(state, decision.kind, decision.reason);
-      await appendEvent(runDir, { type: `loop_${decision.kind}`, at: new Date().toISOString(), detail: decision.reason });
+      await appendTransitionEvent(runDir, state, `loop_${decision.kind}`, decision.reason);
       await writeRunState(runDir, state);
 
       if (decision.kind !== "blocked_waiting_human") {
@@ -131,9 +138,14 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
 
       return state;
     } catch (error) {
-      await appendEvent(runDir, { type: "attempt_failed", at: new Date().toISOString(), detail: String(error) });
       state = transitionRunState(state, "failed", String(error));
+      await appendTransitionEvent(runDir, state, "attempt_failed", String(error));
       await writeRunState(runDir, state);
+
+      if (worktreePath !== null) {
+        await cleanupAttemptWorkspace(contract.context.repoPath, worktreePath);
+      }
+
       return state;
     }
   }

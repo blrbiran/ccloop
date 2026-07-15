@@ -1,12 +1,13 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
+import { describe, expect, it } from "vitest";
 import { runLoop } from "../../src/controller/runLoop.js";
-import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
+import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
+import type { RuntimeAdapter } from "../../src/runtime/types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,18 +23,30 @@ async function createRepo(): Promise<string> {
   return repoDir;
 }
 
+function createContract(repoPath: string): LoopContract {
+  return {
+    objective: { taskId: "task-1", goal: "Fix test", successCondition: "required checks pass", nonGoals: [] },
+    context: { repoPath, targetPaths: ["src"], relevantDocs: [], buildTestCommands: ["npm test"], constraints: [] },
+    executionPolicy: { autonomyLevel: "L2", maxAttempts: 3, perAttemptTimeoutMs: 1000, totalRuntimeBudgetMs: 5000, tokenBudget: 1000, worktreeRequired: true },
+    safetyPolicy: { allowlistPaths: ["src/**"], denylistPaths: [".env"], maxFilesTouched: 10, humanGateConditions: [] },
+    verification: { verifierType: "agent", requiredChecks: ["npm test"], rejectOn: ["tests fail"], evidenceRequired: [] },
+    escalationAndExit: { escalationTargets: ["human"], pauseOn: [], stopOn: [], terminalStates: ["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"] },
+  };
+}
+
+async function readEventTypes(runDir: string): Promise<string[]> {
+  const contents = await readFile(join(runDir, "events.jsonl"), "utf8");
+  return contents
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line).type as string);
+}
+
 describe("runLoop", () => {
   it("succeeds when verification approves", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
-    const contract: LoopContract = {
-      objective: { taskId: "task-1", goal: "Fix test", successCondition: "required checks pass", nonGoals: [] },
-      context: { repoPath, targetPaths: ["src"], relevantDocs: [], buildTestCommands: ["npm test"], constraints: [] },
-      executionPolicy: { autonomyLevel: "L2", maxAttempts: 3, perAttemptTimeoutMs: 1000, totalRuntimeBudgetMs: 5000, tokenBudget: 1000, worktreeRequired: true },
-      safetyPolicy: { allowlistPaths: ["src/**"], denylistPaths: [".env"], maxFilesTouched: 10, humanGateConditions: [] },
-      verification: { verifierType: "agent", requiredChecks: ["npm test"], rejectOn: ["tests fail"], evidenceRequired: [] },
-      escalationAndExit: { escalationTargets: ["human"], pauseOn: [], stopOn: [], terminalStates: ["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"] },
-    };
+    const contract = createContract(repoPath);
 
     const adapter = new ScriptedAdapter([
       {
@@ -44,20 +57,45 @@ describe("runLoop", () => {
     ]);
 
     const finalState = await runLoop(contract, runDir, adapter);
+
     expect(finalState.status).toBe("succeeded");
+    expect(await readEventTypes(runDir)).toEqual([
+      "loop_planning",
+      "attempt_started",
+      "execution_finished",
+      "loop_succeeded",
+    ]);
   });
 
-  it("preserves the worktree when the run blocks for human input", async () => {
+  it("cleans up the worktree when an exception happens after worktree creation", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
-    const contract: LoopContract = {
-      objective: { taskId: "task-1", goal: "Fix test", successCondition: "required checks pass", nonGoals: [] },
-      context: { repoPath, targetPaths: ["src"], relevantDocs: [], buildTestCommands: ["npm test"], constraints: [] },
-      executionPolicy: { autonomyLevel: "L2", maxAttempts: 3, perAttemptTimeoutMs: 1000, totalRuntimeBudgetMs: 5000, tokenBudget: 1000, worktreeRequired: true },
-      safetyPolicy: { allowlistPaths: ["src/**"], denylistPaths: [".env"], maxFilesTouched: 10, humanGateConditions: [] },
-      verification: { verifierType: "agent", requiredChecks: ["npm test"], rejectOn: ["tests fail"], evidenceRequired: [] },
-      escalationAndExit: { escalationTargets: ["human"], pauseOn: [], stopOn: [], terminalStates: ["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"] },
+    const contract = createContract(repoPath);
+    const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        throw new Error("plan exploded");
+      },
+      async execute() {
+        throw new Error("execute should not run");
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
     };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+
+    expect(finalState.status).toBe("failed");
+    expect(stdout).not.toContain(attemptWorktreePath);
+  });
+
+  it("preserves transition-event completeness when the run blocks for human input", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
 
     const adapter = new ScriptedAdapter([
       {
@@ -73,8 +111,18 @@ describe("runLoop", () => {
     ]);
 
     const finalState = await runLoop(contract, runDir, adapter);
-    expect(finalState.status).toBe("blocked_waiting_human");
     const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+
+    expect(finalState.status).toBe("blocked_waiting_human");
     expect(stdout).toContain(join(runDir, "worktrees", "attempt-2"));
+    expect(await readEventTypes(runDir)).toEqual([
+      "loop_planning",
+      "attempt_started",
+      "execution_finished",
+      "verification_rejected",
+      "attempt_started",
+      "execution_finished",
+      "loop_blocked_waiting_human",
+    ]);
   });
 });
