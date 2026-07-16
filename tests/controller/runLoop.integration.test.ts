@@ -171,6 +171,70 @@ describe("runLoop", () => {
     ]);
   });
 
+  it("prioritizes the post-execute path-policy human gate over budget exhaustion", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      safetyPolicy: {
+        ...baseContract.safetyPolicy,
+        allowlistPaths: ["src/allowed/**"],
+      },
+    };
+    const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
+    let verifyCalled = false;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => 1_000);
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        return {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+          tokenUsage: 1_000,
+        };
+      },
+      async verify() {
+        verifyCalled = true;
+        throw new Error("verify should not run");
+      },
+    };
+
+    try {
+      const finalState = await runLoop(contract, runDir, adapter);
+      const persistedState = await readRunState(runDir);
+      const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+
+      expect(finalState.status).toBe("blocked_waiting_human");
+      expect(finalState.attemptsUsed).toBe(1);
+      expect(finalState.stopReason).toBe("allowlist miss: src/index.ts");
+      expect(finalState.budgetSnapshot).toMatchObject({
+        attemptsRemaining: 2,
+        tokenBudgetRemaining: 0,
+      });
+      expect(persistedState.status).toBe("blocked_waiting_human");
+      expect(persistedState.stopReason).toBe("allowlist miss: src/index.ts");
+      expect(persistedState.budgetSnapshot).toMatchObject({
+        attemptsRemaining: 2,
+        tokenBudgetRemaining: 0,
+      });
+      expect(verifyCalled).toBe(false);
+      expect(stdout).toContain(attemptWorktreePath);
+      expect(await readEventTypes(runDir)).toEqual([
+        "loop_planning",
+        "attempt_started",
+        "loop_blocked_waiting_human",
+      ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("persists retry-ready planning state before retry cleanup runs", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
@@ -905,10 +969,13 @@ describe("runLoop", () => {
       };
 
       const finalState = await observedRunLoop(contract, runDir, adapter);
+      const persistedState = await readRunState(runDir);
 
       expect(finalState.status).toBe("blocked_waiting_human");
       expect(finalState.attemptsUsed).toBe(0);
       expect(finalState.stopReason).toBe("workspace unavailable: Error: workspace exploded");
+      expect(persistedState.status).toBe("blocked_waiting_human");
+      expect(persistedState.stopReason).toBe("workspace unavailable: Error: workspace exploded");
       expect(planCalled).toBe(false);
       expect(await readEventTypes(runDir)).toEqual([
         "loop_planning",

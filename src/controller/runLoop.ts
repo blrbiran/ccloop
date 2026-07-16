@@ -317,18 +317,6 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       execution = executeOutcome.result;
       state = applyPhaseUsage(state, executeOutcome.elapsedMs, execution.tokenUsage);
 
-      if (hasBudgetExceeded(state)) {
-        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
-        state = await persistTerminalState(runDir, state, "exhausted", BUDGET_EXHAUSTED_REASON);
-        await cleanupAttemptWorkspaceBestEffort(
-          contract.context.repoPath,
-          worktreePath,
-          runDir,
-          "cleanup after terminal decision exhausted",
-        );
-        return state;
-      }
-
       const pathPolicy = evaluatePathPolicy({
         changedFiles: execution.changedFiles,
         allowlistPaths: contract.safetyPolicy.allowlistPaths,
@@ -343,6 +331,18 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
           state,
           "blocked_waiting_human",
           pathPolicy.reason ?? "human gate or denylist hit",
+        );
+        return state;
+      }
+
+      if (hasBudgetExceeded(state)) {
+        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+        state = await persistTerminalState(runDir, state, "exhausted", BUDGET_EXHAUSTED_REASON);
+        await cleanupAttemptWorkspaceBestEffort(
+          contract.context.repoPath,
+          worktreePath,
+          runDir,
+          "cleanup after terminal decision exhausted",
         );
         return state;
       }
