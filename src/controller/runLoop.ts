@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { appendEvent, initializeRunFiles, writeAttemptArtifacts, writeRunState } from "../persistence/fileStore.js";
 import { evaluatePathPolicy } from "../policy/pathPolicy.js";
 import { evaluateStopDecision } from "../stop/stopController.js";
@@ -14,6 +16,8 @@ import type { FailureFingerprint, RunState, StopDecision } from "../state/types.
 import { cleanupAttemptWorkspace, createAttemptWorkspace } from "../workspace/worktreeManager.js";
 
 export type { AttemptContext } from "../runtime/types.js";
+
+const execFileAsync = promisify(execFile);
 
 type PhaseName = "plan" | "execute" | "verify";
 type TerminalDecision = Exclude<StopDecision["kind"], "retryable">;
@@ -131,6 +135,76 @@ function getPhaseTimeoutReason(phase: PhaseName, timeoutMs: number): string {
 
 function getPhaseTimeoutMs(contract: LoopContract, state: RunState): number {
   return Math.min(contract.executionPolicy.perAttemptTimeoutMs, state.budgetSnapshot.timeRemainingMs);
+}
+
+function splitGitPaths(stdout: string): string[] {
+  return stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+async function collectPartialExecutionOutcome(worktreePath: string): Promise<ExecutionResult | null> {
+  try {
+    const [unstagedNames, stagedNames, untrackedNames, unstagedDiff, stagedDiff] = await Promise.all([
+      execFileAsync("git", ["diff", "--name-only", "--relative"], { cwd: worktreePath }),
+      execFileAsync("git", ["diff", "--name-only", "--relative", "--cached"], { cwd: worktreePath }),
+      execFileAsync("git", ["ls-files", "--others", "--exclude-standard"], { cwd: worktreePath }),
+      execFileAsync("git", ["diff", "--relative"], { cwd: worktreePath }),
+      execFileAsync("git", ["diff", "--relative", "--cached"], { cwd: worktreePath }),
+    ]);
+    const changedFiles = Array.from(
+      new Set([
+        ...splitGitPaths(unstagedNames.stdout),
+        ...splitGitPaths(stagedNames.stdout),
+        ...splitGitPaths(untrackedNames.stdout),
+      ]),
+    ).sort();
+
+    if (changedFiles.length === 0) {
+      return null;
+    }
+
+    const diffPatch = [unstagedDiff.stdout, stagedDiff.stdout]
+      .filter((part) => part.length > 0)
+      .join("\n");
+
+    return {
+      changedFiles,
+      diffPatch,
+      commandOutputs: ["partial execution recovered from worktree"],
+      stdoutStderrLog: "execute phase ended before returning a full result",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function getPostExecuteHumanGate(
+  contract: LoopContract,
+  worktreePath: string,
+): Promise<{ execution: ExecutionResult; reason: string } | null> {
+  const partialExecution = await collectPartialExecutionOutcome(worktreePath);
+
+  if (partialExecution === null) {
+    return null;
+  }
+
+  const pathPolicy = evaluatePathPolicy({
+    changedFiles: partialExecution.changedFiles,
+    allowlistPaths: contract.safetyPolicy.allowlistPaths,
+    denylistPaths: contract.safetyPolicy.denylistPaths,
+    maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
+  });
+
+  if (!pathPolicy.humanGateHit) {
+    return null;
+  }
+
+  return {
+    execution: partialExecution,
+    reason: pathPolicy.reason ?? "human gate or denylist hit",
+  };
 }
 
 async function runPhaseWithTimeout<T>(
@@ -298,6 +372,20 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
 
       if (executeOutcome.timedOut) {
         state = applyPhaseUsage(state, executeOutcome.elapsedMs, undefined);
+        const partialExecuteHumanGate = await getPostExecuteHumanGate(contract, worktreePath);
+
+        if (partialExecuteHumanGate !== null) {
+          execution = partialExecuteHumanGate.execution;
+          await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+          state = await persistTerminalState(
+            runDir,
+            state,
+            "blocked_waiting_human",
+            partialExecuteHumanGate.reason,
+          );
+          return state;
+        }
+
         await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
         state = await persistTerminalState(
           runDir,
@@ -452,6 +540,23 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
 
       if (error instanceof PhaseExecutionError) {
         state = applyPhaseUsage(state, error.elapsedMs, undefined);
+      }
+
+      const partialExecuteHumanGate =
+        worktreePath !== null && state.status === "executing"
+          ? await getPostExecuteHumanGate(contract, worktreePath)
+          : null;
+
+      if (partialExecuteHumanGate !== null) {
+        execution = partialExecuteHumanGate.execution;
+        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+        state = await persistTerminalState(
+          runDir,
+          state,
+          "blocked_waiting_human",
+          partialExecuteHumanGate.reason,
+        );
+        return state;
       }
 
       if (state.status !== "failed") {
