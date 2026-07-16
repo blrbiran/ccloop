@@ -501,7 +501,7 @@ describe("runLoop", () => {
   });
 
 
-  it("blocks for human input when execute times out after creating gated changes", async () => {
+  it("treats execute timeout without adapter partial outcome as exhausted even if files changed in the worktree", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -544,31 +544,70 @@ describe("runLoop", () => {
     const finalState = await runLoop(contract, runDir, adapter);
     const persistedState = await readRunState(runDir);
     const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
-    const executionArtifact = JSON.parse(await readFile(join(attemptDir, "execution.json"), "utf8")) as {
-      changedFiles: string[];
-      commandOutputs: string[];
-    };
 
-    expect(finalState.status).toBe("blocked_waiting_human");
-    expect(finalState.stopReason).toBe("denylist match: secret.txt");
+    expect(finalState.status).toBe("exhausted");
+    expect(finalState.stopReason).toBe("runtime or token budget exhausted");
     expect(finalState.budgetSnapshot).toMatchObject({
       attemptsRemaining: 2,
       timeRemainingMs: 0,
     });
-    expect(persistedState.status).toBe("blocked_waiting_human");
-    expect(persistedState.stopReason).toBe("denylist match: secret.txt");
+    expect(persistedState.status).toBe("exhausted");
+    expect(persistedState.stopReason).toBe("runtime or token budget exhausted");
     expect(persistedState.budgetSnapshot).toMatchObject({
       attemptsRemaining: 2,
       timeRemainingMs: 0,
     });
     expect(await pathExists(join(attemptDir, "plan.json"))).toBe(true);
-    expect(await pathExists(join(attemptDir, "execution.json"))).toBe(true);
-    expect(executionArtifact.changedFiles).toEqual(["secret.txt"]);
-    expect(executionArtifact.commandOutputs).toEqual(["partial execution recovered from worktree"]);
+    expect(await pathExists(join(attemptDir, "execution.json"))).toBe(false);
     expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
     expect(verifyCalled).toBe(false);
-    expect(stdout).toContain(attemptWorktreePath);
-    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_blocked_waiting_human"]);
+    expect(stdout).not.toContain(attemptWorktreePath);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_exhausted"]);
+  });
+
+  it("treats execute errors without adapter partial outcome as failed even if files changed in the worktree", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      safetyPolicy: {
+        ...baseContract.safetyPolicy,
+        denylistPaths: ["secret.txt"],
+      },
+    };
+    const attemptDir = join(runDir, "attempts", "1");
+    const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
+    let verifyCalled = false;
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "touch denylisted file", primaryTargetPaths: ["secret.txt"] };
+      },
+      async execute(context) {
+        await writeFile(join(context.worktreePath, "secret.txt"), "partial output\n");
+        throw new Error("execute exploded");
+      },
+      async verify() {
+        verifyCalled = true;
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const persistedState = await readRunState(runDir);
+    const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+
+    expect(finalState.status).toBe("failed");
+    expect(finalState.stopReason).toBe("Error: execute exploded");
+    expect(persistedState.status).toBe("failed");
+    expect(persistedState.stopReason).toBe("Error: execute exploded");
+    expect(await pathExists(join(attemptDir, "plan.json"))).toBe(false);
+    expect(await pathExists(join(attemptDir, "execution.json"))).toBe(false);
+    expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
+    expect(verifyCalled).toBe(false);
+    expect(stdout).not.toContain(attemptWorktreePath);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "attempt_failed"]);
   });
 
   it("caps phase timeout by the remaining runtime budget", async () => {
