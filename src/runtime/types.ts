@@ -16,13 +16,27 @@ export type AttemptPlan = {
   tokenUsage?: number;
 };
 
-export type ExecutionResult = {
+type ExecutionArtifacts = {
   changedFiles: string[];
   diffPatch: string;
   commandOutputs: string[];
   stdoutStderrLog: string;
   tokenUsage?: number;
 };
+
+export type CompleteExecutionResult = ExecutionArtifacts;
+
+export type PartialExecutionResult = ExecutionArtifacts & {
+  completionStatus: "partial";
+  failureType: "timeout" | "error";
+  failureMessage: string;
+};
+
+export type ExecutionResult = CompleteExecutionResult | PartialExecutionResult;
+
+export function isPartialExecutionResult(result: ExecutionResult): result is PartialExecutionResult {
+  return "completionStatus" in result && result.completionStatus === "partial";
+}
 
 export type VerificationResult = {
   approved: boolean;

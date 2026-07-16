@@ -565,6 +565,123 @@ describe("runLoop", () => {
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_exhausted"]);
   });
 
+  it("blocks for human input on execute timeout when the adapter returns a partial outcome with gated files", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+      },
+      safetyPolicy: {
+        ...baseContract.safetyPolicy,
+        denylistPaths: ["secret.txt"],
+      },
+    };
+    const attemptDir = join(runDir, "attempts", "1");
+    const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
+    let verifyCalled = false;
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "touch denylisted file", primaryTargetPaths: ["secret.txt"] };
+      },
+      async execute(context) {
+        await writeFile(join(context.worktreePath, "secret.txt"), "partial output\n");
+        await delay(60);
+        return {
+          completionStatus: "partial",
+          failureType: "timeout",
+          failureMessage: "adapter timed out",
+          changedFiles: ["secret.txt"],
+          diffPatch: "diff --git a/secret.txt b/secret.txt",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "timed out",
+        };
+      },
+      async verify() {
+        verifyCalled = true;
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const persistedState = await readRunState(runDir);
+    const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+
+    expect(finalState.status).toBe("blocked_waiting_human");
+    expect(finalState.stopReason).toBe("denylist match: secret.txt");
+    expect(finalState.budgetSnapshot).toMatchObject({
+      attemptsRemaining: 2,
+      timeRemainingMs: 0,
+    });
+    expect(persistedState.status).toBe("blocked_waiting_human");
+    expect(persistedState.stopReason).toBe("denylist match: secret.txt");
+    expect(await pathExists(join(attemptDir, "plan.json"))).toBe(true);
+    expect(await pathExists(join(attemptDir, "execution.json"))).toBe(true);
+    expect(await pathExists(join(attemptDir, "diff.patch"))).toBe(true);
+    expect(await pathExists(join(attemptDir, "stdout-stderr.log"))).toBe(true);
+    expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
+    expect(verifyCalled).toBe(false);
+    expect(stdout).toContain(attemptWorktreePath);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_blocked_waiting_human"]);
+  });
+
+  it("blocks for human input on execute errors when the adapter returns a partial outcome with gated files", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      safetyPolicy: {
+        ...baseContract.safetyPolicy,
+        denylistPaths: ["secret.txt"],
+      },
+    };
+    const attemptDir = join(runDir, "attempts", "1");
+    const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
+    let verifyCalled = false;
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "touch denylisted file", primaryTargetPaths: ["secret.txt"] };
+      },
+      async execute() {
+        return {
+          completionStatus: "partial",
+          failureType: "error",
+          failureMessage: "adapter exploded",
+          changedFiles: ["secret.txt"],
+          diffPatch: "diff --git a/secret.txt b/secret.txt",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "error",
+        };
+      },
+      async verify() {
+        verifyCalled = true;
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const persistedState = await readRunState(runDir);
+    const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+
+    expect(finalState.status).toBe("blocked_waiting_human");
+    expect(finalState.stopReason).toBe("denylist match: secret.txt");
+    expect(persistedState.status).toBe("blocked_waiting_human");
+    expect(persistedState.stopReason).toBe("denylist match: secret.txt");
+    expect(await pathExists(join(attemptDir, "plan.json"))).toBe(true);
+    expect(await pathExists(join(attemptDir, "execution.json"))).toBe(true);
+    expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
+    expect(verifyCalled).toBe(false);
+    expect(stdout).toContain(attemptWorktreePath);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_blocked_waiting_human"]);
+  });
+
   it("treats execute errors without adapter partial outcome as failed even if files changed in the worktree", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));

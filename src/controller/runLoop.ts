@@ -10,6 +10,7 @@ import type {
   RuntimeAdapter,
   VerificationResult,
 } from "../runtime/types.js";
+import { isPartialExecutionResult } from "../runtime/types.js";
 import type { FailureFingerprint, RunState, StopDecision } from "../state/types.js";
 import { cleanupAttemptWorkspace, createAttemptWorkspace } from "../workspace/worktreeManager.js";
 
@@ -28,6 +29,7 @@ type PhaseOutcome<T> =
   | {
       timedOut: true;
       elapsedMs: number;
+      result?: T;
     };
 
 const BUDGET_EXHAUSTED_REASON = "runtime or token budget exhausted";
@@ -137,6 +139,7 @@ function getPhaseTimeoutMs(contract: LoopContract, state: RunState): number {
 async function runPhaseWithTimeout<T>(
   timeoutMs: number,
   operation: (abortSignal: AbortSignal) => Promise<T>,
+  options?: { allowLateResultAfterTimeout?: boolean },
 ): Promise<PhaseOutcome<T>> {
   const startedAtMs = Date.now();
 
@@ -146,25 +149,42 @@ async function runPhaseWithTimeout<T>(
 
   const abortController = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const operationPromise = operation(abortController.signal)
+    .then((result) => ({ kind: "result" as const, result }))
+    .catch((error: unknown) => {
+      throw new PhaseExecutionError(Math.max(Date.now() - startedAtMs, 0), error);
+    });
 
   try {
     const outcome = await Promise.race([
-      operation(abortController.signal)
-        .then((result) => ({ kind: "result" as const, result }))
-        .catch((error: unknown) => {
-          throw new PhaseExecutionError(Math.max(Date.now() - startedAtMs, 0), error);
-        }),
+      operationPromise,
       new Promise<{ kind: "timeout" }>((resolve) => {
         timer = setTimeout(() => {
-          resolve({ kind: "timeout" });
           abortController.abort();
+          resolve({ kind: "timeout" });
         }, timeoutMs);
       }),
     ]);
     const elapsedMs = Math.max(Date.now() - startedAtMs, 0);
 
     if (outcome.kind === "timeout") {
-      return { timedOut: true, elapsedMs };
+      if (!options?.allowLateResultAfterTimeout) {
+        return { timedOut: true, elapsedMs };
+      }
+
+      const graceOutcome = await Promise.race([
+        operationPromise,
+        new Promise<{ kind: "grace-timeout" }>((resolve) => {
+          setTimeout(() => resolve({ kind: "grace-timeout" }), 100);
+        }),
+      ]).catch(() => ({ kind: "grace-timeout" as const }));
+      const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, 0);
+
+      if (graceOutcome.kind === "result") {
+        return { timedOut: true, elapsedMs: timedOutElapsedMs, result: graceOutcome.result };
+      }
+
+      return { timedOut: true, elapsedMs: timedOutElapsedMs };
     }
 
     return { timedOut: false, elapsedMs, result: outcome.result };
@@ -293,12 +313,57 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       await writeRunState(runDir, state);
 
       const executeTimeoutMs = getPhaseTimeoutMs(contract, state);
-      const executeOutcome = await runPhaseWithTimeout(executeTimeoutMs, (abortSignal) =>
-        adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal)),
+      const executeOutcome = await runPhaseWithTimeout(
+        executeTimeoutMs,
+        (abortSignal) => adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal)),
+        { allowLateResultAfterTimeout: true },
       );
 
       if (executeOutcome.timedOut) {
-        state = applyPhaseUsage(state, executeOutcome.elapsedMs, undefined);
+        state = applyPhaseUsage(
+          state,
+          executeOutcome.elapsedMs,
+          executeOutcome.result !== undefined && isPartialExecutionResult(executeOutcome.result)
+            ? executeOutcome.result.tokenUsage
+            : undefined,
+        );
+
+        if (executeOutcome.result !== undefined && isPartialExecutionResult(executeOutcome.result)) {
+          execution = executeOutcome.result;
+          await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+
+          const partialPathPolicy = evaluatePathPolicy({
+            changedFiles: execution.changedFiles,
+            allowlistPaths: contract.safetyPolicy.allowlistPaths,
+            denylistPaths: contract.safetyPolicy.denylistPaths,
+            maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
+          });
+
+          if (partialPathPolicy.humanGateHit) {
+            state = await persistTerminalState(
+              runDir,
+              state,
+              "blocked_waiting_human",
+              partialPathPolicy.reason ?? executeOutcome.result.failureMessage,
+            );
+            return state;
+          }
+
+          state = await persistTerminalState(
+            runDir,
+            state,
+            executeOutcome.result.failureType === "timeout" ? "exhausted" : "failed",
+            executeOutcome.result.failureMessage,
+          );
+          await cleanupAttemptWorkspaceBestEffort(
+            contract.context.repoPath,
+            worktreePath,
+            runDir,
+            `cleanup after partial execute ${executeOutcome.result.failureType}`,
+          );
+          return state;
+        }
+
         await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
         state = await persistTerminalState(
           runDir,
@@ -317,6 +382,42 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
 
       execution = executeOutcome.result;
       state = applyPhaseUsage(state, executeOutcome.elapsedMs, execution.tokenUsage);
+
+      if (isPartialExecutionResult(execution)) {
+        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+
+        const partialPathPolicy = evaluatePathPolicy({
+          changedFiles: execution.changedFiles,
+          allowlistPaths: contract.safetyPolicy.allowlistPaths,
+          denylistPaths: contract.safetyPolicy.denylistPaths,
+          maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
+        });
+
+        if (partialPathPolicy.humanGateHit) {
+          state = await persistTerminalState(
+            runDir,
+            state,
+            "blocked_waiting_human",
+            partialPathPolicy.reason ?? execution.failureMessage,
+          );
+          return state;
+        }
+
+        state = await persistTerminalState(
+          runDir,
+          state,
+          execution.failureType === "timeout" ? "exhausted" : "failed",
+          execution.failureMessage,
+        );
+
+        await cleanupAttemptWorkspaceBestEffort(
+          contract.context.repoPath,
+          worktreePath,
+          runDir,
+          `cleanup after partial execute ${execution.failureType}`,
+        );
+        return state;
+      }
 
       const pathPolicy = evaluatePathPolicy({
         changedFiles: execution.changedFiles,
@@ -453,6 +554,26 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
 
       if (error instanceof PhaseExecutionError) {
         state = applyPhaseUsage(state, error.elapsedMs, undefined);
+
+        if (execution !== null && isPartialExecutionResult(execution)) {
+          await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+          const partialPathPolicy = evaluatePathPolicy({
+            changedFiles: execution.changedFiles,
+            allowlistPaths: contract.safetyPolicy.allowlistPaths,
+            denylistPaths: contract.safetyPolicy.denylistPaths,
+            maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
+          });
+
+          if (partialPathPolicy.humanGateHit) {
+            state = await persistTerminalState(
+              runDir,
+              state,
+              "blocked_waiting_human",
+              partialPathPolicy.reason ?? execution.failureMessage,
+            );
+            return state;
+          }
+        }
       }
 
       if (state.status !== "failed") {
