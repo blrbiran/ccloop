@@ -160,16 +160,29 @@ async function readDiffPatch(worktreePath) {
   }
 }
 
-function waitForClaudeProcessClose(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) {
-    return Promise.resolve();
-  }
+const claudeProcessClosedSymbol = Symbol("claudeProcessClosed");
+const claudeProcessClosePromiseSymbol = Symbol("claudeProcessClosePromise");
 
-  return new Promise((resolve) => {
+function trackClaudeProcessClose(child) {
+  child[claudeProcessClosedSymbol] = false;
+  child[claudeProcessClosePromiseSymbol] = new Promise((resolve) => {
     child.once("close", () => {
+      child[claudeProcessClosedSymbol] = true;
       resolve();
     });
   });
+}
+
+function waitForClaudeProcessClose(child) {
+  if (!child) {
+    return Promise.resolve();
+  }
+
+  if (child[claudeProcessClosedSymbol] === true) {
+    return Promise.resolve();
+  }
+
+  return child[claudeProcessClosePromiseSymbol] ?? Promise.resolve();
 }
 
 async function terminateClaudeProcess() {
@@ -235,7 +248,13 @@ async function handleInterrupt(signal) {
   }
 
   interruptHandled = true;
+  const child = currentClaudeProcess;
+  const childHadExited = child !== null && (child.exitCode !== null || child.signalCode !== null);
   await terminateClaudeProcess();
+
+  if (childHadExited && child?.exitCode === 0 && child.signalCode === null) {
+    return;
+  }
 
   if (currentRequest?.phase === "execute") {
     const partial = await buildPartialExecutionOutcome(
@@ -291,6 +310,7 @@ async function runClaude(request) {
     },
   );
 
+  trackClaudeProcessClose(child);
   currentClaudeProcess = child;
 
   try {

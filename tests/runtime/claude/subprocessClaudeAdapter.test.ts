@@ -357,6 +357,76 @@ setInterval(() => {}, 1000);
     expect(partial.diffPatch).toContain("diff --git a/unstaged.txt b/unstaged.txt");
   });
 
+  it("waits for close before interrupting a close-pending successful execute", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "ccloop-wrapper-close-pending-success-")), "marker.log");
+    const worktreePath = await createCommittedRepo({
+      "dirty.txt": "before\n",
+    });
+    const binDir = await createFakeClaudeBinary(`
+const { appendFileSync } = require("node:fs");
+const { spawn } = require("node:child_process");
+const markerPath = process.env.CLAUDE_MARKER_PATH;
+const envelope = JSON.stringify({
+  structured_output: {
+    changedFiles: ["inner-success.txt"],
+    diffPatch: "diff --git a/inner-success.txt b/inner-success.txt",
+    commandOutputs: ["inner-success"],
+    stdoutStderrLog: "ok"
+  }
+});
+appendFileSync(markerPath, "started\\n");
+const splitAt = envelope.length - 8;
+process.stdout.write(envelope.slice(0, splitAt));
+const tail = ${JSON.stringify('const { appendFileSync } = require("node:fs"); setTimeout(() => { process.stdout.write(process.argv[1]); appendFileSync(process.env.CLAUDE_MARKER_PATH, "tail\\n"); }, 25); setTimeout(() => process.exit(0), 35);')};
+spawn(process.execPath, ["-e", tail, envelope.slice(splitAt)], {
+  stdio: ["ignore", "inherit", "ignore"],
+  env: process.env,
+});
+process.exit(0);
+`);
+
+    await writeFile(join(worktreePath, "dirty.txt"), "after\n");
+
+    const { child, result } = spawnPhaseRunner(
+      {
+        phase: "execute",
+        prompt: "run execute",
+        attempt: 1,
+        runDir: worktreePath,
+        worktreePath,
+      },
+      {
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        CLAUDE_MARKER_PATH: markerPath,
+      },
+    );
+
+    await waitForFileToContain(markerPath, "started");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    child.kill("SIGTERM");
+
+    const outcome = await Promise.race([
+      result,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("wrapper did not finish after close-pending success interruption")), 3_000);
+      }),
+    ]);
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.signal).toBeNull();
+
+    const payload = JSON.parse(outcome.stdout);
+    expect(payload).toMatchObject({
+      changedFiles: ["inner-success.txt"],
+      diffPatch: "diff --git a/inner-success.txt b/inner-success.txt",
+      commandOutputs: ["inner-success"],
+      stdoutStderrLog: "ok",
+    });
+    expect(payload).not.toHaveProperty("completionStatus");
+    expect(payload.changedFiles).not.toContain("dirty.txt");
+    expect(await readFile(markerPath, "utf8")).toContain("tail");
+  });
+
   it("returns repo-relative target paths for renamed and quoted files", async () => {
     const worktreePath = await createCommittedRepo({
       "old name.txt": "before rename\n",
