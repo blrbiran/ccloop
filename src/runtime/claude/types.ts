@@ -4,10 +4,18 @@ export type SubprocessAdapterConfig = {
   command: string[];
 };
 
-export type ClaudePhaseRequest = {
-  phase: ClaudePhase;
+type ClaudePhaseRequestBase = {
   prompt: string;
   attempt: number;
   runDir: string;
   worktreePath: string;
 };
+
+export type ClaudePhaseRequest =
+  | (ClaudePhaseRequestBase & {
+      phase: "plan" | "verify";
+    })
+  | (ClaudePhaseRequestBase & {
+      phase: "execute";
+      partialOutcomeRecoveryWindowMs: number;
+    });

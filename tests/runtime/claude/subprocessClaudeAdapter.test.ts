@@ -26,6 +26,7 @@ const contract = {
     totalRuntimeBudgetMs: 300_000,
     tokenBudget: 10_000,
     worktreeRequired: true,
+    partialOutcomeRecoveryWindowMs: 1000,
   },
   safetyPolicy: {
     allowlistPaths: ["src/**"],
@@ -237,6 +238,7 @@ setInterval(() => {}, 1000);
           attempt: 1,
           runDir: worktreePath,
           worktreePath,
+          partialOutcomeRecoveryWindowMs: 1000,
         },
         {
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
@@ -338,6 +340,7 @@ setInterval(() => {}, 1000);
         attempt: 1,
         runDir: worktreePath,
         worktreePath,
+        partialOutcomeRecoveryWindowMs: 1000,
       },
       {
         PATH: `${binDir}:${process.env.PATH ?? ""}`,
@@ -394,6 +397,7 @@ process.exit(0);
         attempt: 1,
         runDir: worktreePath,
         worktreePath,
+        partialOutcomeRecoveryWindowMs: 1000,
       },
       {
         PATH: `${binDir}:${process.env.PATH ?? ""}`,
@@ -443,6 +447,7 @@ process.exit(0);
         attempt: 1,
         runDir: worktreePath,
         worktreePath,
+        partialOutcomeRecoveryWindowMs: 1000,
       },
       {
         PATH: `${binDir}:${process.env.PATH ?? ""}`,

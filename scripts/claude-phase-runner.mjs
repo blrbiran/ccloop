@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const CLAUDE_TERMINATION_GRACE_MS = 250;
+const DEFAULT_PARTIAL_OUTCOME_RECOVERY_WINDOW_MS = 1000;
 
 const PLAN_SCHEMA = {
   type: "object",
@@ -115,6 +116,19 @@ async function readStdin() {
   return JSON.parse(body);
 }
 
+function getPartialOutcomeRecoveryWindowMs(request) {
+  if (!request || request.phase !== "execute") {
+    return CLAUDE_TERMINATION_GRACE_MS;
+  }
+
+  const recoveryWindowMs = request.partialOutcomeRecoveryWindowMs;
+  if (typeof recoveryWindowMs === "number" && Number.isFinite(recoveryWindowMs) && recoveryWindowMs >= 0) {
+    return recoveryWindowMs;
+  }
+
+  return DEFAULT_PARTIAL_OUTCOME_RECOVERY_WINDOW_MS;
+}
+
 function parsePorcelainChangedFiles(stdout) {
   const entries = stdout.split("\0").filter(Boolean);
   const changedFiles = [];
@@ -185,7 +199,7 @@ function waitForClaudeProcessClose(child) {
   return child[claudeProcessClosePromiseSymbol] ?? Promise.resolve();
 }
 
-async function terminateClaudeProcess() {
+async function terminateClaudeProcess(recoveryWindowMs) {
   const child = currentClaudeProcess;
   if (!child) {
     return;
@@ -201,7 +215,7 @@ async function terminateClaudeProcess() {
   const terminated = await Promise.race([
     waitForClaudeProcessClose(child).then(() => true),
     new Promise((resolve) => {
-      setTimeout(() => resolve(false), CLAUDE_TERMINATION_GRACE_MS);
+      setTimeout(() => resolve(false), recoveryWindowMs);
     }),
   ]);
 
@@ -250,7 +264,7 @@ async function handleInterrupt(signal) {
   interruptHandled = true;
   const child = currentClaudeProcess;
   const childHadExited = child !== null && (child.exitCode !== null || child.signalCode !== null);
-  await terminateClaudeProcess();
+  await terminateClaudeProcess(getPartialOutcomeRecoveryWindowMs(currentRequest));
 
   if (childHadExited && child?.exitCode === 0 && child.signalCode === null) {
     return;

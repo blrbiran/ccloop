@@ -11,6 +11,11 @@ process.stdin.on("end", () => {
   }
 
   if (request.phase === "execute") {
+    if (typeof request.partialOutcomeRecoveryWindowMs !== "number") {
+      process.stderr.write("missing partialOutcomeRecoveryWindowMs");
+      process.exit(1);
+    }
+
     if (request.runDir.includes("partial")) {
       process.stdout.write(
         JSON.stringify({

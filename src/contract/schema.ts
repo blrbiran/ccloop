@@ -48,6 +48,7 @@ export const loopContractSchema = z
         totalRuntimeBudgetMs: z.number().int().positive(),
         tokenBudget: z.number().int().positive(),
         worktreeRequired: z.literal(true),
+        partialOutcomeRecoveryWindowMs: z.number().int().nonnegative(),
       })
       .strict(),
     safetyPolicy: z

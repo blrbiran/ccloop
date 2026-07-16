@@ -48,6 +48,7 @@ describe("ScriptedAdapter", () => {
           totalRuntimeBudgetMs: 300000,
           tokenBudget: 10000,
           worktreeRequired: true,
+          partialOutcomeRecoveryWindowMs: 1000,
         },
         safetyPolicy: {
           allowlistPaths: ["src/runtime"],

@@ -33,6 +33,7 @@ export function buildExecutorPrompt(contract: LoopContract): string {
     formatList(contract.context.constraints),
     'Return either a complete object with {"changedFiles": string[], "diffPatch": string, "commandOutputs": string[], "stdoutStderrLog": string} or a partial object that also includes {"completionStatus": "partial", "failureType": "timeout" | "error", "failureMessage": string}.',
     "If the attempt is interrupted, preserve any recognizable partial artifacts in those fields.",
+    `If execute is aborted, you may have up to ${contract.executionPolicy.partialOutcomeRecoveryWindowMs}ms to flush one final execute-phase result.`,
   ].join("\n");
 }
 

@@ -28,7 +28,7 @@ function createContract(repoPath: string): LoopContract {
   return {
     objective: { taskId: "task-1", goal: "Fix test", successCondition: "required checks pass", nonGoals: [] },
     context: { repoPath, targetPaths: ["src"], relevantDocs: [], buildTestCommands: ["npm test"], constraints: [] },
-    executionPolicy: { autonomyLevel: "L2", maxAttempts: 3, perAttemptTimeoutMs: 1000, totalRuntimeBudgetMs: 5000, tokenBudget: 1000, worktreeRequired: true },
+    executionPolicy: { autonomyLevel: "L2", maxAttempts: 3, perAttemptTimeoutMs: 1000, totalRuntimeBudgetMs: 5000, tokenBudget: 1000, worktreeRequired: true, partialOutcomeRecoveryWindowMs: 1000 },
     safetyPolicy: { allowlistPaths: ["src/**"], denylistPaths: [".env"], maxFilesTouched: 10, humanGateConditions: [] },
     verification: { verifierType: "agent", requiredChecks: ["npm test"], rejectOn: ["tests fail"], evidenceRequired: [] },
     escalationAndExit: { escalationTargets: ["human"], pauseOn: [], stopOn: [], terminalStates: ["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"] },
@@ -459,6 +459,7 @@ describe("runLoop", () => {
       executionPolicy: {
         ...baseContract.executionPolicy,
         perAttemptTimeoutMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
       },
     };
     const attemptDir = join(runDir, "attempts", "1");
@@ -470,7 +471,7 @@ describe("runLoop", () => {
         return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
       },
       async execute() {
-        await delay(160);
+        await delay(40);
         return {
           changedFiles: ["src/index.ts"],
           diffPatch: "diff --git a/src/index.ts b/src/index.ts",
@@ -511,6 +512,7 @@ describe("runLoop", () => {
         ...baseContract.executionPolicy,
         perAttemptTimeoutMs: 20,
         totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
       },
       safetyPolicy: {
         ...baseContract.safetyPolicy,
@@ -575,6 +577,7 @@ describe("runLoop", () => {
         ...baseContract.executionPolicy,
         perAttemptTimeoutMs: 20,
         totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 50,
       },
       safetyPolicy: {
         ...baseContract.safetyPolicy,
@@ -631,7 +634,7 @@ describe("runLoop", () => {
   });
 
 
-  it("continues normally when execute returns a complete result during timeout grace", async () => {
+  it("continues normally when execute returns a complete result during the recovery window", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -640,6 +643,7 @@ describe("runLoop", () => {
       executionPolicy: {
         ...baseContract.executionPolicy,
         perAttemptTimeoutMs: 20,
+        partialOutcomeRecoveryWindowMs: 30,
       },
     };
     const attemptDir = join(runDir, "attempts", "1");

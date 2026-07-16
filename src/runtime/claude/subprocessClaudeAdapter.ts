@@ -109,6 +109,7 @@ export class SubprocessClaudeAdapter implements RuntimeAdapter {
         attempt: context.attempt,
         runDir: context.runDir,
         worktreePath: context.worktreePath,
+        partialOutcomeRecoveryWindowMs: context.contract.executionPolicy.partialOutcomeRecoveryWindowMs,
       },
       context.abortSignal,
     );

@@ -26,6 +26,7 @@ function createValidContract() {
       totalRuntimeBudgetMs: 900000,
       tokenBudget: 200000,
       worktreeRequired: true,
+      partialOutcomeRecoveryWindowMs: 1000,
     },
     safetyPolicy: {
       allowlistPaths: ["src/**"],
@@ -58,6 +59,18 @@ describe("loadContract", () => {
     const contract = await loadContract(filePath);
     expect(contract.executionPolicy.autonomyLevel).toBe("L2");
     expect(contract.executionPolicy.worktreeRequired).toBe(true);
+    expect(contract.executionPolicy.partialOutcomeRecoveryWindowMs).toBe(1000);
+  });
+
+  it("rejects a contract without a partial outcome recovery window", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ccloop-contract-"));
+    const filePath = join(dir, "missing-recovery-window.json");
+    const contract = createValidContract();
+    delete (contract.executionPolicy as Partial<typeof contract.executionPolicy>).partialOutcomeRecoveryWindowMs;
+
+    await writeFile(filePath, JSON.stringify(contract));
+
+    await expect(loadContract(filePath)).rejects.toThrow(/partialOutcomeRecoveryWindowMs/i);
   });
 
   it("rejects a contract without a success condition", async () => {

@@ -139,7 +139,7 @@ function getPhaseTimeoutMs(contract: LoopContract, state: RunState): number {
 async function runPhaseWithTimeout<T>(
   timeoutMs: number,
   operation: (abortSignal: AbortSignal) => Promise<T>,
-  options?: { allowLateResultAfterTimeout?: boolean },
+  options?: { recoveryWindowMs?: number },
 ): Promise<PhaseOutcome<T>> {
   const startedAtMs = Date.now();
 
@@ -168,20 +168,22 @@ async function runPhaseWithTimeout<T>(
     const elapsedMs = Math.max(Date.now() - startedAtMs, 0);
 
     if (outcome.kind === "timeout") {
-      if (!options?.allowLateResultAfterTimeout) {
+      const recoveryWindowMs = options?.recoveryWindowMs ?? 0;
+
+      if (recoveryWindowMs <= 0) {
         return { timedOut: true, elapsedMs };
       }
 
-      const graceOutcome = await Promise.race([
+      const recoveryOutcome = await Promise.race([
         operationPromise,
-        new Promise<{ kind: "grace-timeout" }>((resolve) => {
-          setTimeout(() => resolve({ kind: "grace-timeout" }), 100);
+        new Promise<{ kind: "recovery-timeout" }>((resolve) => {
+          setTimeout(() => resolve({ kind: "recovery-timeout" }), recoveryWindowMs);
         }),
-      ]).catch(() => ({ kind: "grace-timeout" as const }));
+      ]).catch(() => ({ kind: "recovery-timeout" as const }));
       const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, 0);
 
-      if (graceOutcome.kind === "result") {
-        return { timedOut: true, elapsedMs: timedOutElapsedMs, result: graceOutcome.result };
+      if (recoveryOutcome.kind === "result") {
+        return { timedOut: true, elapsedMs: timedOutElapsedMs, result: recoveryOutcome.result };
       }
 
       return { timedOut: true, elapsedMs: timedOutElapsedMs };
@@ -316,7 +318,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       const executeOutcome = await runPhaseWithTimeout(
         executeTimeoutMs,
         (abortSignal) => adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal)),
-        { allowLateResultAfterTimeout: true },
+        { recoveryWindowMs: contract.executionPolicy.partialOutcomeRecoveryWindowMs },
       );
 
       let executeUsageAlreadyApplied = false;
