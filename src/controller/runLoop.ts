@@ -319,17 +319,32 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
         { allowLateResultAfterTimeout: true },
       );
 
-      if (executeOutcome.timedOut) {
-        state = applyPhaseUsage(
-          state,
-          executeOutcome.elapsedMs,
-          executeOutcome.result !== undefined && isPartialExecutionResult(executeOutcome.result)
-            ? executeOutcome.result.tokenUsage
-            : undefined,
-        );
+      let executeUsageAlreadyApplied = false;
 
-        if (executeOutcome.result !== undefined && isPartialExecutionResult(executeOutcome.result)) {
-          execution = executeOutcome.result;
+      if (executeOutcome.timedOut) {
+        state = applyPhaseUsage(state, executeOutcome.elapsedMs, executeOutcome.result?.tokenUsage);
+        executeUsageAlreadyApplied = true;
+
+        if (executeOutcome.result === undefined) {
+          await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+          state = await persistTerminalState(
+            runDir,
+            state,
+            "exhausted",
+            hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("execute", executeTimeoutMs),
+          );
+          await cleanupAttemptWorkspaceBestEffort(
+            contract.context.repoPath,
+            worktreePath,
+            runDir,
+            "cleanup after terminal decision exhausted",
+          );
+          return state;
+        }
+
+        execution = executeOutcome.result;
+
+        if (isPartialExecutionResult(execution)) {
           await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
 
           const partialPathPolicy = evaluatePathPolicy({
@@ -344,7 +359,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
               runDir,
               state,
               "blocked_waiting_human",
-              partialPathPolicy.reason ?? executeOutcome.result.failureMessage,
+              partialPathPolicy.reason ?? execution.failureMessage,
             );
             return state;
           }
@@ -352,36 +367,28 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
           state = await persistTerminalState(
             runDir,
             state,
-            executeOutcome.result.failureType === "timeout" ? "exhausted" : "failed",
-            executeOutcome.result.failureMessage,
+            execution.failureType === "timeout" ? "exhausted" : "failed",
+            execution.failureMessage,
           );
           await cleanupAttemptWorkspaceBestEffort(
             contract.context.repoPath,
             worktreePath,
             runDir,
-            `cleanup after partial execute ${executeOutcome.result.failureType}`,
+            `cleanup after partial execute ${execution.failureType}`,
           );
           return state;
         }
-
-        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
-        state = await persistTerminalState(
-          runDir,
-          state,
-          "exhausted",
-          hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("execute", executeTimeoutMs),
-        );
-        await cleanupAttemptWorkspaceBestEffort(
-          contract.context.repoPath,
-          worktreePath,
-          runDir,
-          "cleanup after terminal decision exhausted",
-        );
-        return state;
+      } else {
+        execution = executeOutcome.result;
       }
 
-      execution = executeOutcome.result;
-      state = applyPhaseUsage(state, executeOutcome.elapsedMs, execution.tokenUsage);
+      if (execution === null) {
+        throw new Error("execute phase completed without a result");
+      }
+
+      if (!executeUsageAlreadyApplied) {
+        state = applyPhaseUsage(state, executeOutcome.elapsedMs, execution.tokenUsage);
+      }
 
       if (isPartialExecutionResult(execution)) {
         await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);

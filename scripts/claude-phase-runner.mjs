@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { once } from "node:events";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -216,6 +217,14 @@ async function buildPartialExecutionOutcome(request, failureType, failureMessage
   };
 }
 
+async function writeJsonToStdout(value) {
+  const payload = JSON.stringify(value);
+
+  if (!process.stdout.write(payload)) {
+    await once(process.stdout, "drain");
+  }
+}
+
 let currentRequest = null;
 let currentClaudeProcess = null;
 let interruptHandled = false;
@@ -238,8 +247,13 @@ async function handleInterrupt(signal) {
     );
 
     if (partial !== null) {
-      process.stdout.write(JSON.stringify(partial));
-      process.exit(0);
+      try {
+        await writeJsonToStdout(partial);
+        process.exit(0);
+      } catch (error) {
+        process.stderr.write(String(error));
+        process.exit(1);
+      }
       return;
     }
 
@@ -324,7 +338,7 @@ async function main() {
 
     const tokenUsage = getTokenUsage(envelope);
     const response = tokenUsage === undefined ? structured : { ...structured, tokenUsage };
-    process.stdout.write(JSON.stringify(response));
+    await writeJsonToStdout(response);
   } catch (error) {
     if (interruptHandled) {
       return;
@@ -333,7 +347,7 @@ async function main() {
     if (request.phase === "execute") {
       const partial = await buildPartialExecutionOutcome(request, "error", String(error), [], String(error));
       if (partial !== null) {
-        process.stdout.write(JSON.stringify(partial));
+        await writeJsonToStdout(partial);
         return;
       }
     }

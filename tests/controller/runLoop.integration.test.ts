@@ -419,7 +419,7 @@ describe("runLoop", () => {
 
     const adapter: RuntimeAdapter = {
       async plan() {
-        await delay(60);
+        await delay(160);
         return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
       },
       async execute() {
@@ -470,7 +470,7 @@ describe("runLoop", () => {
         return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
       },
       async execute() {
-        await delay(60);
+        await delay(160);
         return {
           changedFiles: ["src/index.ts"],
           diffPatch: "diff --git a/src/index.ts b/src/index.ts",
@@ -527,7 +527,7 @@ describe("runLoop", () => {
       },
       async execute(context) {
         await writeFile(join(context.worktreePath, "secret.txt"), "partial output\n");
-        await delay(60);
+        await delay(160);
         return {
           changedFiles: ["secret.txt"],
           diffPatch: "diff --git a/secret.txt b/secret.txt",
@@ -628,6 +628,67 @@ describe("runLoop", () => {
     expect(verifyCalled).toBe(false);
     expect(stdout).toContain(attemptWorktreePath);
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_blocked_waiting_human"]);
+  });
+
+
+  it("continues normally when execute returns a complete result during timeout grace", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+      },
+    };
+    const attemptDir = join(runDir, "attempts", "1");
+    const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
+    let verifyCalled = false;
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        await delay(40);
+        return {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        };
+      },
+      async verify() {
+        verifyCalled = true;
+        return {
+          approved: true,
+          rejectCategory: "",
+          primaryTargetPaths: ["src/index.ts"],
+          failingCommand: null,
+          safeToRetry: false,
+          evidence: ["npm test passed"],
+          pauseSignals: [],
+          stopSignals: [],
+        };
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const persistedState = await readRunState(runDir);
+    const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+
+    expect(finalState.status).toBe("succeeded");
+    expect(finalState.stopReason).toBe("success condition satisfied");
+    expect(finalState.budgetSnapshot.attemptsRemaining).toBe(2);
+    expect(finalState.budgetSnapshot.timeRemainingMs).toBeLessThan(baseContract.executionPolicy.totalRuntimeBudgetMs);
+    expect(persistedState.status).toBe("succeeded");
+    expect(await pathExists(join(attemptDir, "plan.json"))).toBe(true);
+    expect(await pathExists(join(attemptDir, "execution.json"))).toBe(true);
+    expect(await pathExists(join(attemptDir, "verify.json"))).toBe(true);
+    expect(verifyCalled).toBe(true);
+    expect(stdout).not.toContain(attemptWorktreePath);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execution_finished", "loop_succeeded"]);
   });
 
   it("blocks for human input on execute errors when the adapter returns a partial outcome with gated files", async () => {

@@ -261,6 +261,65 @@ setInterval(() => {}, 1000);
     });
   }
 
+  it("parses a large partial execute payload after wrapper interruption", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "ccloop-wrapper-large-partial-")), "marker.log");
+    const worktreePath = await createCommittedRepo({
+      "big.txt": "before\n",
+    });
+    const binDir = await createFakeClaudeBinary(`
+import { appendFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const markerPath = process.env.CLAUDE_MARKER_PATH;
+writeFileSync(join(process.cwd(), "big.txt"), "x".repeat(400_000) + "\\n");
+appendFileSync(markerPath, "started\\n");
+process.on("SIGTERM", () => {
+  appendFileSync(markerPath, "SIGTERM\\n");
+  process.exit(0);
+});
+setInterval(() => {}, 1000);
+`);
+    const originalPath = process.env.PATH;
+    const originalMarkerPath = process.env.CLAUDE_MARKER_PATH;
+    process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+    process.env.CLAUDE_MARKER_PATH = markerPath;
+
+    const interruptedAdapter = new SubprocessClaudeAdapter({ command: ["node", phaseRunnerPath] });
+    const abortController = new AbortController();
+    const context = {
+      attempt: 4,
+      runDir: ".runs/interrupt-large-partial",
+      worktreePath,
+      contract,
+      state: { status: "executing" },
+      abortSignal: abortController.signal,
+    } as any;
+
+    try {
+      const executionPromise = interruptedAdapter.execute(context);
+      await waitForFileToContain(markerPath, "started");
+      abortController.abort();
+
+      const execution = await executionPromise;
+      const markerContents = await readFile(markerPath, "utf8");
+
+      expect(markerContents).toContain("SIGTERM");
+      expect(execution).toMatchObject({
+        completionStatus: "partial",
+        failureType: "timeout",
+        changedFiles: ["big.txt"],
+      });
+      expect(execution.diffPatch).toContain("diff --git a/big.txt b/big.txt");
+      expect(execution.diffPatch.length).toBeGreaterThan(350_000);
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalMarkerPath === undefined) {
+        delete process.env.CLAUDE_MARKER_PATH;
+      } else {
+        process.env.CLAUDE_MARKER_PATH = originalMarkerPath;
+      }
+    }
+  });
+
   it("includes both staged and unstaged edits in partial execute diff recovery", async () => {
     const worktreePath = await createCommittedRepo({
       "staged.txt": "before staged\n",
