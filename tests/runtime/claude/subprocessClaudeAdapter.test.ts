@@ -1,5 +1,14 @@
+import { execFile, spawn } from "node:child_process";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { SubprocessClaudeAdapter } from "../../../src/runtime/claude/subprocessClaudeAdapter.js";
+
+const execFileAsync = promisify(execFile);
+const phaseRunnerPath = fileURLToPath(new URL("../../../scripts/claude-phase-runner.mjs", import.meta.url));
 
 const contract = {
   objective: { taskId: "task-1", goal: "Fix test", successCondition: "tests pass", nonGoals: [] },
@@ -42,6 +51,85 @@ const adapter = new SubprocessClaudeAdapter({
   command: ["node", "tests/fixtures/fake-claude.mjs"],
 });
 
+async function createFakeClaudeBinary(source: string): Promise<string> {
+  const binDir = await mkdtemp(join(tmpdir(), "ccloop-claude-bin-"));
+  const claudePath = join(binDir, "claude");
+  await writeFile(claudePath, `#!/usr/bin/env node
+${source}`);
+  await chmod(claudePath, 0o755);
+  return binDir;
+}
+
+function spawnPhaseRunner(
+  request: Record<string, unknown>,
+  extraEnv: NodeJS.ProcessEnv = {},
+): {
+  child: ReturnType<typeof spawn>;
+  result: Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>;
+} {
+  const child = spawn("node", [phaseRunnerPath], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      ...extraEnv,
+    },
+  });
+
+  let stdout = "";
+  let stderr = "";
+
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString();
+  });
+
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+
+  child.stdin.end(JSON.stringify(request));
+
+  return {
+    child,
+    result: new Promise((resolve) => {
+      child.on("close", (code, signal) => {
+        resolve({ code, signal, stdout, stderr });
+      });
+    }),
+  };
+}
+
+async function createCommittedRepo(files: Record<string, string>): Promise<string> {
+  const repoDir = await mkdtemp(join(tmpdir(), "ccloop-wrapper-repo-"));
+  await execFileAsync("git", ["init"], { cwd: repoDir });
+  await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd: repoDir });
+  await execFileAsync("git", ["config", "user.name", "Test User"], { cwd: repoDir });
+
+  for (const [name, contents] of Object.entries(files)) {
+    await writeFile(join(repoDir, name), contents);
+  }
+
+  await execFileAsync("git", ["add", "."], { cwd: repoDir });
+  await execFileAsync("git", ["commit", "-m", "init"], { cwd: repoDir });
+  return repoDir;
+}
+
+async function waitForFileToContain(path: string, expected: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      const contents = await readFile(path, "utf8");
+      if (contents.includes(expected)) {
+        return;
+      }
+    } catch {
+      // wait for the fixture to write the marker file
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  throw new Error(`timed out waiting for ${path} to contain ${expected}`);
+}
+
 describe("SubprocessClaudeAdapter", () => {
   it("passes phase context through the wrapper and parses structured JSON", async () => {
     const context = {
@@ -76,5 +164,92 @@ describe("SubprocessClaudeAdapter", () => {
       failureMessage: "subprocess timed out",
       changedFiles: ["secret.txt"],
     });
+  });
+
+  for (const phase of ["plan", "execute", "verify"] as const) {
+    it(`terminates the inner Claude process when ${phase} is interrupted`, async () => {
+      const markerPath = join(await mkdtemp(join(tmpdir(), `ccloop-wrapper-${phase}-`)), "marker.log");
+      const worktreePath = await mkdtemp(join(tmpdir(), `ccloop-wrapper-worktree-${phase}-`));
+      const binDir = await createFakeClaudeBinary(`
+import { appendFileSync } from "node:fs";
+const markerPath = process.env.CLAUDE_MARKER_PATH;
+appendFileSync(markerPath, "started\\n");
+process.on("SIGTERM", () => {
+  appendFileSync(markerPath, "SIGTERM\\n");
+  process.exit(0);
+});
+process.on("SIGINT", () => {
+  appendFileSync(markerPath, "SIGINT\\n");
+  process.exit(0);
+});
+setInterval(() => {}, 1000);
+`);
+
+      const { child, result } = spawnPhaseRunner(
+        {
+          phase,
+          prompt: `run ${phase}`,
+          attempt: 1,
+          runDir: worktreePath,
+          worktreePath,
+        },
+        {
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          CLAUDE_MARKER_PATH: markerPath,
+        },
+      );
+
+      await waitForFileToContain(markerPath, "started");
+      child.kill("SIGTERM");
+
+      const outcome = await Promise.race([
+        result,
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error(`wrapper did not exit after ${phase} interruption`)), 3_000);
+        }),
+      ]);
+
+      const markerContents = await readFile(markerPath, "utf8");
+      expect(markerContents).toContain("SIGTERM");
+      expect(outcome.code).not.toBe(0);
+      expect(outcome.signal).toBeNull();
+    });
+  }
+
+  it("includes both staged and unstaged edits in partial execute diff recovery", async () => {
+    const worktreePath = await createCommittedRepo({
+      "staged.txt": "before staged\n",
+      "unstaged.txt": "before unstaged\n",
+    });
+    const binDir = await createFakeClaudeBinary('process.stderr.write("claude exploded"); process.exit(1);');
+
+    await writeFile(join(worktreePath, "staged.txt"), "after staged\n");
+    await execFileAsync("git", ["add", "staged.txt"], { cwd: worktreePath });
+    await writeFile(join(worktreePath, "unstaged.txt"), "after unstaged\n");
+
+    const { result } = spawnPhaseRunner(
+      {
+        phase: "execute",
+        prompt: "run execute",
+        attempt: 1,
+        runDir: worktreePath,
+        worktreePath,
+      },
+      {
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+    );
+
+    const outcome = await result;
+    expect(outcome.code).toBe(0);
+
+    const partial = JSON.parse(outcome.stdout);
+    expect(partial).toMatchObject({
+      completionStatus: "partial",
+      failureType: "error",
+      changedFiles: ["staged.txt", "unstaged.txt"],
+    });
+    expect(partial.diffPatch).toContain("diff --git a/staged.txt b/staged.txt");
+    expect(partial.diffPatch).toContain("diff --git a/unstaged.txt b/unstaged.txt");
   });
 });

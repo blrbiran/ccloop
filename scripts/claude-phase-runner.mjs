@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const CLAUDE_TERMINATION_GRACE_MS = 250;
 
 const PLAN_SCHEMA = {
   type: "object",
@@ -118,8 +119,7 @@ async function listChangedFiles(worktreePath) {
     const { stdout } = await execFileAsync("git", ["status", "--short"], { cwd: worktreePath });
     return stdout
       .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
+      .filter((line) => line.length > 3)
       .map((line) => line.slice(3).trim())
       .filter(Boolean);
   } catch {
@@ -129,13 +129,51 @@ async function listChangedFiles(worktreePath) {
 
 async function readDiffPatch(worktreePath) {
   try {
-    const { stdout } = await execFileAsync("git", ["diff", "--no-ext-diff"], {
+    const { stdout } = await execFileAsync("git", ["diff", "--no-ext-diff", "HEAD"], {
       cwd: worktreePath,
       maxBuffer: 10 * 1024 * 1024,
     });
     return stdout;
   } catch {
     return "";
+  }
+}
+
+function waitForClaudeProcessClose(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    child.once("close", () => {
+      resolve();
+    });
+  });
+}
+
+async function terminateClaudeProcess() {
+  const child = currentClaudeProcess;
+  if (!child) {
+    return;
+  }
+
+  if (child.exitCode !== null || child.signalCode !== null) {
+    await waitForClaudeProcessClose(child);
+    return;
+  }
+
+  child.kill("SIGTERM");
+
+  const terminated = await Promise.race([
+    waitForClaudeProcessClose(child).then(() => true),
+    new Promise((resolve) => {
+      setTimeout(() => resolve(false), CLAUDE_TERMINATION_GRACE_MS);
+    }),
+  ]);
+
+  if (!terminated && child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGKILL");
+    await waitForClaudeProcessClose(child);
   }
 }
 
@@ -163,32 +201,33 @@ let currentClaudeProcess = null;
 let interruptHandled = false;
 
 async function handleInterrupt(signal) {
-  if (interruptHandled || currentRequest?.phase !== "execute") {
-    process.exitCode = 128;
+  if (interruptHandled) {
     return;
   }
 
   interruptHandled = true;
+  await terminateClaudeProcess();
 
-  if (currentClaudeProcess && !currentClaudeProcess.killed) {
-    currentClaudeProcess.kill("SIGTERM");
-  }
+  if (currentRequest?.phase === "execute") {
+    const partial = await buildPartialExecutionOutcome(
+      currentRequest,
+      "timeout",
+      `claude phase runner interrupted by ${signal}`,
+      [],
+      `claude phase runner interrupted by ${signal}`,
+    );
 
-  const partial = await buildPartialExecutionOutcome(
-    currentRequest,
-    "timeout",
-    `claude phase runner interrupted by ${signal}`,
-    [],
-    `claude phase runner interrupted by ${signal}`,
-  );
+    if (partial !== null) {
+      process.stdout.write(JSON.stringify(partial));
+      process.exit(0);
+      return;
+    }
 
-  if (partial !== null) {
-    process.stdout.write(JSON.stringify(partial));
-    process.exit(0);
+    process.exit(1);
     return;
   }
 
-  process.exit(1);
+  process.exit(128);
 }
 
 process.on("SIGTERM", () => {
@@ -267,6 +306,10 @@ async function main() {
     const response = tokenUsage === undefined ? structured : { ...structured, tokenUsage };
     process.stdout.write(JSON.stringify(response));
   } catch (error) {
+    if (interruptHandled) {
+      return;
+    }
+
     if (request.phase === "execute") {
       const partial = await buildPartialExecutionOutcome(request, "error", String(error), [], String(error));
       if (partial !== null) {
