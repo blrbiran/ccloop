@@ -114,14 +114,34 @@ async function readStdin() {
   return JSON.parse(body);
 }
 
+function parsePorcelainChangedFiles(stdout) {
+  const entries = stdout.split("\0").filter(Boolean);
+  const changedFiles = [];
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (entry.length < 4) {
+      continue;
+    }
+
+    const status = entry.slice(0, 2);
+    const path = entry.slice(3);
+    if (path.length > 0) {
+      changedFiles.push(path);
+    }
+
+    if (status.includes("R") || status.includes("C")) {
+      index += 1;
+    }
+  }
+
+  return [...new Set(changedFiles)];
+}
+
 async function listChangedFiles(worktreePath) {
   try {
-    const { stdout } = await execFileAsync("git", ["status", "--short"], { cwd: worktreePath });
-    return stdout
-      .split("\n")
-      .filter((line) => line.length > 3)
-      .map((line) => line.slice(3).trim())
-      .filter(Boolean);
+    const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "-z"], { cwd: worktreePath });
+    return parsePorcelainChangedFiles(stdout);
   } catch {
     return [];
   }

@@ -62,7 +62,7 @@ async function runPhase<T>(
       finish(() => reject(error));
     });
 
-    child.on("exit", (code, signal) => {
+    child.on("close", (code, signal) => {
       finish(() => {
         if (code !== 0) {
           reject(new Error(stderr || `command failed with exit code ${code ?? "null"} and signal ${signal ?? "none"}`));

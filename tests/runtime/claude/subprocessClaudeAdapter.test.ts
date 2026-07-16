@@ -60,6 +60,13 @@ ${source}`);
   return binDir;
 }
 
+async function createNodeScript(prefix: string, source: string): Promise<string> {
+  const scriptDir = await mkdtemp(join(tmpdir(), prefix));
+  const scriptPath = join(scriptDir, "script.mjs");
+  await writeFile(scriptPath, source);
+  return scriptPath;
+}
+
 function spawnPhaseRunner(
   request: Record<string, unknown>,
   extraEnv: NodeJS.ProcessEnv = {},
@@ -166,6 +173,44 @@ describe("SubprocessClaudeAdapter", () => {
     });
   });
 
+  it("waits for close before parsing wrapper stdout", async () => {
+    const delayedWrapperPath = await createNodeScript(
+      "ccloop-wrapper-close-",
+      `let body = "";
+for await (const chunk of process.stdin) {
+  body += chunk.toString();
+}
+const request = JSON.parse(body);
+const payload = JSON.stringify({
+  changedFiles: ["src/index.ts"],
+  diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+  commandOutputs: [request.worktreePath],
+  stdoutStderrLog: "ok"
+});
+const splitAt = payload.length - 5;
+process.stdout.write(payload.slice(0, splitAt));
+const tail = ${JSON.stringify('setTimeout(() => { process.stdout.write(process.argv[1]); }, 25); setTimeout(() => process.exit(0), 35);')};
+const { spawn } = await import("node:child_process");
+spawn(process.execPath, ["-e", tail, payload.slice(splitAt)], { stdio: ["ignore", "inherit", "ignore"] });
+process.exit(0);
+`,
+    );
+    const delayedAdapter = new SubprocessClaudeAdapter({ command: ["node", delayedWrapperPath] });
+    const context = {
+      attempt: 3,
+      runDir: ".runs/close",
+      worktreePath: "/tmp/worktree",
+      contract,
+      state: { status: "executing" },
+    } as any;
+
+    await expect(delayedAdapter.execute(context)).resolves.toMatchObject({
+      changedFiles: ["src/index.ts"],
+      commandOutputs: ["/tmp/worktree"],
+      stdoutStderrLog: "ok",
+    });
+  });
+
   for (const phase of ["plan", "execute", "verify"] as const) {
     it(`terminates the inner Claude process when ${phase} is interrupted`, async () => {
       const markerPath = join(await mkdtemp(join(tmpdir(), `ccloop-wrapper-${phase}-`)), "marker.log");
@@ -252,4 +297,37 @@ setInterval(() => {}, 1000);
     expect(partial.diffPatch).toContain("diff --git a/staged.txt b/staged.txt");
     expect(partial.diffPatch).toContain("diff --git a/unstaged.txt b/unstaged.txt");
   });
+
+  it("returns repo-relative target paths for renamed and quoted files", async () => {
+    const worktreePath = await createCommittedRepo({
+      "old name.txt": "before rename\n",
+    });
+    const binDir = await createFakeClaudeBinary('process.stderr.write("claude exploded"); process.exit(1);');
+
+    await execFileAsync("git", ["mv", "old name.txt", "new name.txt"], { cwd: worktreePath });
+    await writeFile(join(worktreePath, 'quote "name".txt'), "new file\n");
+
+    const { result } = spawnPhaseRunner(
+      {
+        phase: "execute",
+        prompt: "run execute",
+        attempt: 1,
+        runDir: worktreePath,
+        worktreePath,
+      },
+      {
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+    );
+
+    const outcome = await result;
+    expect(outcome.code).toBe(0);
+
+    const partial = JSON.parse(outcome.stdout);
+    expect(partial.completionStatus).toBe("partial");
+    expect(partial.failureType).toBe("error");
+    expect(partial.changedFiles).toEqual(["new name.txt", 'quote "name".txt']);
+    expect(partial.changedFiles).not.toContain("old name.txt");
+  });
+
 });
