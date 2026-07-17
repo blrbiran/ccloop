@@ -32,6 +32,7 @@
 - [2026-07-14] When running npm commands for the implementation worktree, use `npm --prefix /absolute/worktree/path ...` because this agent's own cwd is a different isolated worktree.
 
 - [2026-07-15] When generating TypeScript files via Python in this implementation worktree, double-escape intended `\n` sequences so JSONL/template literals do not become accidental physical newlines.
+- [2026-07-17] When a task brief says to preserve a specific ignore entry from the source checkout, explicitly add or verify that entry in the isolated worktree before claiming the ignore update is complete.
 
 ## Decision Log
 
