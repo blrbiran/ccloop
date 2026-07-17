@@ -1,8 +1,9 @@
 # Task 3 Report — Single-Scenario Evidence Harness
 
 ## Outcome
-- Status: DONE_WITH_CONCERNS
-- Implementation commit: `88c9cf3d988e3faa74ec1589b169e1f16a292127`
+- Status: DONE
+- Original implementation commit: `88c9cf3d988e3faa74ec1589b169e1f16a292127`
+- Prior report commit: `0df1386963d08ec80db6e4c4cc48aff4772213f3`
 - Scope respected: `/Users/biran/code/skills/loop/ccloop/.worktrees/evidence-first-v1/src` remained unchanged.
 - Real Claude was not launched; verification used synthetic run directories plus fake local adapter scripts only.
 
@@ -23,6 +24,18 @@
 7. Ran mandatory code review, converted reviewer findings into new failing regression tests, then fixed the harness until the focused suite, full suite, typecheck, and build all passed again.
 
 ## Command Log and Results
+### Coordinator follow-up review fix
+- Command: `npm test -- --run tests/validation/evidence.test.ts`
+- Summary: FAIL — new regression tests proved three bugs: existing `evidenceDir` was overwritten, existing `runDir` still triggered evidence packaging, and `--scenario` was not bound to `objective.taskId`.
+- Command: `npm test -- --run tests/validation/evidence.test.ts`
+- Summary: PASS — `1` test file passed; `18` tests passed; `0` failed after reordering preflight safety checks, making evidence-dir creation conditional on freshness, and binding `--scenario` to `objective.taskId`.
+- Command: `npm test`
+- Summary: PASS — `13` test files passed; `97` tests passed; `0` failed.
+- Command: `npm run typecheck`
+- Summary: PASS — `tsc --noEmit -p tsconfig.json` completed without errors.
+- Command: `npm run build`
+- Summary: PASS — TypeScript compiled and regenerated `dist/cli.js` without errors.
+
 ### Red phase
 - Command: `npm test -- --run tests/validation/evidence.test.ts`
 - Summary: FAIL — Vitest could not load `../../validation/v1/lib/evidence.js` because the module did not exist.
@@ -64,8 +77,9 @@
 - Confirmed every non-empty `events.jsonl` line is parsed, and a single malformed line marks the event log `INVALID` with the line number recorded.
 - Confirmed artifact statuses distinguish `PRESENT`, `NOT_PRODUCED`, `NOT_RUN`, `MISSING`, and `INVALID` according to scenario expectations plus observed files.
 - Confirmed required-check evidence is validated against the required command list declared in `loop-contract.json`, not just generic evidence strings.
-- Confirmed `run-scenario.ts` refuses pre-existing run/evidence directories, requires a clean fixture, and rejects `--fixture` when it does not match `contract.context.repoPath`.
+- Confirmed `run-scenario.ts` refuses pre-existing run/evidence directories, never writes into an existing `evidenceDir`, never packages stale `runDir` data after freshness-check failures, requires a clean fixture, and rejects `--fixture` when it does not match `contract.context.repoPath`.
 - Confirmed `run-scenario.ts` launches the CLI from the repository root using an absolute `dist/cli.js` path, so it still works when invoked outside the repo root.
+- Confirmed `run-scenario.ts` binds `--scenario` to the existing Task 2 contract identity via `objective.taskId`, so a rendered A contract is rejected before child launch when invoked as scenario D.
 - Confirmed the wrapper records only environment variable names, captures stdout/stderr into evidence logs, and still writes JSON evidence files when ccloop fails before creating `runDir`.
 - Confirmed terminal outcome and cleanup outcome stay separate in `observations.json`.
 - Confirmed `finalize-review.ts` enforces exact verdict/diagnosis enums, non-empty summaries, no overwrite of `review.json`, and stores diagnosis `null` as JSON `null`.
@@ -73,3 +87,6 @@
 ## Concerns
 - `claudeChildExited` is intentionally conservative and currently always records `"NOT_OBSERVABLE"`. This matches the brief's requirement to avoid claiming adapter-exit certainty without a tracked descendant PID, but it means the harness does not yet emit `YES` or `NO` in practice.
 - OpenWolf metadata files (`.wolf/anatomy.md`, `.wolf/buglog.json`, `.wolf/cerebrum.md`, `.wolf/memory.md`) were updated during the work but remain gitignored in this worktree, so they are not included in normal task commits.
+
+## Final Reviewed Head
+- Final reviewed head: `2e423fd1f3a3f5b0f653a5a6cb098f573e59a8fb`
