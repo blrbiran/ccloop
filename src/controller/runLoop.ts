@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { appendEvent, initializeRunFiles, writeAttemptArtifacts, writeRunState } from "../persistence/fileStore.js";
 import { evaluatePathPolicy } from "../policy/pathPolicy.js";
 import { evaluateStopDecision } from "../stop/stopController.js";
@@ -32,6 +34,25 @@ type PhaseOutcome<T> =
       result?: T;
     };
 
+const execFileAsync = promisify(execFile);
+
+type RequiredChecksOutcome =
+  | {
+      passed: true;
+      evidence: string[];
+    }
+  | {
+      passed: false;
+      verification: VerificationResult;
+    };
+
+type ExecFileError = Error & {
+  stdout?: string;
+  stderr?: string;
+  code?: number | string | null;
+  signal?: string | null;
+};
+
 const BUDGET_EXHAUSTED_REASON = "runtime or token budget exhausted";
 
 class PhaseExecutionError extends Error {
@@ -42,6 +63,141 @@ class PhaseExecutionError extends Error {
     this.name = "PhaseExecutionError";
     this.elapsedMs = elapsedMs;
   }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function buildRequiredCheckEvidence(
+  command: string,
+  status: "passed" | "failed",
+  stdout: string,
+  stderr: string,
+  error?: ExecFileError,
+): string {
+  const details = [`required check ${status}: ${command}`];
+  const trimmedStdout = stdout.trim();
+  const trimmedStderr = stderr.trim();
+
+  if (trimmedStdout) {
+    details.push(`stdout=${trimmedStdout}`);
+  }
+
+  if (trimmedStderr) {
+    details.push(`stderr=${trimmedStderr}`);
+  }
+
+  if (status === "failed") {
+    if (error?.code !== undefined && error.code !== null) {
+      details.push(`exit=${String(error.code)}`);
+    } else if (error?.signal) {
+      details.push(`signal=${error.signal}`);
+    } else if (error?.message) {
+      details.push(`error=${error.message}`);
+    }
+  }
+
+  return details.join(" | ");
+}
+
+function getVerificationPrimaryTargetPaths(
+  contract: LoopContract,
+  plan: AttemptPlan | null,
+  execution: ExecutionResult,
+): string[] {
+  if (execution.changedFiles.length > 0) {
+    return execution.changedFiles;
+  }
+
+  if (plan !== null && plan.primaryTargetPaths.length > 0) {
+    return plan.primaryTargetPaths;
+  }
+
+  return contract.context.targetPaths;
+}
+
+async function runRequiredChecks(
+  requiredChecks: string[],
+  worktreePath: string,
+  primaryTargetPaths: string[],
+  abortSignal?: AbortSignal,
+): Promise<RequiredChecksOutcome> {
+  const evidence: string[] = [];
+
+  for (const command of requiredChecks) {
+    try {
+      const { stdout, stderr } = await execFileAsync("sh", ["-lc", command], {
+        cwd: worktreePath,
+        signal: abortSignal,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      evidence.push(buildRequiredCheckEvidence(command, "passed", stdout, stderr));
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+
+      const execError = error as ExecFileError;
+      return {
+        passed: false,
+        verification: {
+          approved: false,
+          rejectCategory: "required-check-failed",
+          primaryTargetPaths,
+          failingCommand: command,
+          safeToRetry: false,
+          evidence: [
+            ...evidence,
+            buildRequiredCheckEvidence(command, "failed", execError.stdout ?? "", execError.stderr ?? "", execError),
+          ],
+          pauseSignals: [],
+          stopSignals: [],
+        },
+      };
+    }
+  }
+
+  return { passed: true, evidence };
+}
+
+async function runVerification(
+  contract: LoopContract,
+  adapter: RuntimeAdapter,
+  context: AttemptContext,
+  plan: AttemptPlan | null,
+  execution: ExecutionResult,
+): Promise<VerificationResult> {
+  const primaryTargetPaths = getVerificationPrimaryTargetPaths(contract, plan, execution);
+  const requiredChecks = await runRequiredChecks(
+    contract.verification.requiredChecks,
+    context.worktreePath,
+    primaryTargetPaths,
+    context.abortSignal,
+  );
+
+  if (!requiredChecks.passed) {
+    return requiredChecks.verification;
+  }
+
+  if (contract.verification.verifierType === "command") {
+    return {
+      approved: true,
+      rejectCategory: "",
+      primaryTargetPaths,
+      failingCommand: null,
+      safeToRetry: false,
+      evidence: requiredChecks.evidence,
+      pauseSignals: [],
+      stopSignals: [],
+    };
+  }
+
+  const verification = await adapter.verify(context);
+  return {
+    ...verification,
+    evidence: [...requiredChecks.evidence, ...verification.evidence],
+  };
 }
 
 function initialState(contract: LoopContract): RunState {
@@ -167,6 +323,7 @@ async function runPhaseWithTimeout<T>(
 
     if (outcome.kind === "timeout") {
       if (!options?.awaitAbortedResult) {
+        void operationPromise.catch(() => undefined);
         return { timedOut: true, elapsedMs };
       }
 
@@ -338,15 +495,17 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
         throw new Error("execute phase completed without a result");
       }
 
+      const completedExecution = execution;
+
       if (!executeUsageAlreadyApplied) {
-        state = applyPhaseUsage(state, executeOutcome.elapsedMs, execution.tokenUsage);
+        state = applyPhaseUsage(state, executeOutcome.elapsedMs, completedExecution.tokenUsage);
       }
 
-      if (isPartialExecutionResult(execution)) {
-        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+      if (isPartialExecutionResult(completedExecution)) {
+        await writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution);
 
         const partialPathPolicy = evaluatePathPolicy({
-          changedFiles: execution.changedFiles,
+          changedFiles: completedExecution.changedFiles,
           allowlistPaths: contract.safetyPolicy.allowlistPaths,
           denylistPaths: contract.safetyPolicy.denylistPaths,
           maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
@@ -357,7 +516,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
             runDir,
             state,
             "blocked_waiting_human",
-            partialPathPolicy.reason ?? execution.failureMessage,
+            partialPathPolicy.reason ?? completedExecution.failureMessage,
           );
           return state;
         }
@@ -365,28 +524,28 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
         state = await persistTerminalState(
           runDir,
           state,
-          execution.failureType === "timeout" ? "exhausted" : "failed",
-          execution.failureMessage,
+          completedExecution.failureType === "timeout" ? "exhausted" : "failed",
+          completedExecution.failureMessage,
         );
 
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
           worktreePath,
           runDir,
-          `cleanup after partial execute ${execution.failureType}`,
+          `cleanup after partial execute ${completedExecution.failureType}`,
         );
         return state;
       }
 
       const pathPolicy = evaluatePathPolicy({
-        changedFiles: execution.changedFiles,
+        changedFiles: completedExecution.changedFiles,
         allowlistPaths: contract.safetyPolicy.allowlistPaths,
         denylistPaths: contract.safetyPolicy.denylistPaths,
         maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
       });
 
       if (pathPolicy.humanGateHit) {
-        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+        await writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution);
         state = await persistTerminalState(
           runDir,
           state,
@@ -397,7 +556,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       }
 
       if (hasBudgetExceeded(state)) {
-        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+        await writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution);
         state = await persistTerminalState(runDir, state, "exhausted", BUDGET_EXHAUSTED_REASON);
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
@@ -414,12 +573,18 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
 
       const verifyTimeoutMs = getPhaseTimeoutMs(contract, state);
       const verifyOutcome = await runPhaseWithTimeout(verifyTimeoutMs, (abortSignal) =>
-        adapter.verify(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal)),
+        runVerification(
+          contract,
+          adapter,
+          buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal),
+          plan,
+          completedExecution,
+        ),
       );
 
       if (verifyOutcome.timedOut) {
         state = applyPhaseUsage(state, verifyOutcome.elapsedMs, undefined);
-        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+        await writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution);
         state = await persistTerminalState(
           runDir,
           state,

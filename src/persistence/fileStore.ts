@@ -1,4 +1,4 @@
-import { mkdir, appendFile, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { LoopContract } from "../contract/schema.js";
 import type { RunState } from "../state/types.js";
@@ -17,7 +17,53 @@ export type AttemptArtifacts = {
   stdoutStderrLog?: string;
 };
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function directoryHasEntries(path: string): Promise<boolean> {
+  try {
+    return (await readdir(path)).length > 0;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+async function ensureFreshRunDir(runDir: string): Promise<void> {
+  await mkdir(runDir, { recursive: true });
+
+  const blockingPaths = [
+    [join(runDir, "loop-contract.json"), "loop-contract.json"],
+    [join(runDir, "loop-state.json"), "loop-state.json"],
+    [join(runDir, "events.jsonl"), "events.jsonl"],
+  ] as const;
+
+  for (const [path, label] of blockingPaths) {
+    if (await pathExists(path)) {
+      throw new Error(`runDir already contains prior run data (${label}); V1 does not support reinitializing an existing automated run`);
+    }
+  }
+
+  if (await directoryHasEntries(join(runDir, "attempts"))) {
+    throw new Error("runDir already contains prior run data (attempts); V1 does not support reinitializing an existing automated run");
+  }
+
+  if (await directoryHasEntries(join(runDir, "worktrees"))) {
+    throw new Error("runDir already contains prior run data (worktrees); V1 does not support reinitializing an existing automated run");
+  }
+}
+
 export async function initializeRunFiles(runDir: string, contract: LoopContract, initialState: RunState): Promise<void> {
+  await ensureFreshRunDir(runDir);
   await mkdir(join(runDir, "attempts"), { recursive: true });
   await writeFile(join(runDir, "loop-contract.json"), JSON.stringify(contract, null, 2));
   await writeFile(join(runDir, "loop-state.json"), JSON.stringify(initialState, null, 2));

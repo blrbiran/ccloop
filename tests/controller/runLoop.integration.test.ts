@@ -30,7 +30,7 @@ function createContract(repoPath: string): LoopContract {
     context: { repoPath, targetPaths: ["src"], relevantDocs: [], buildTestCommands: ["npm test"], constraints: [] },
     executionPolicy: { autonomyLevel: "L2", maxAttempts: 3, perAttemptTimeoutMs: 1000, totalRuntimeBudgetMs: 5000, tokenBudget: 1000, worktreeRequired: true, partialOutcomeRecoveryWindowMs: 1000 },
     safetyPolicy: { allowlistPaths: ["src/**"], denylistPaths: [".env"], maxFilesTouched: 10, humanGateConditions: [] },
-    verification: { verifierType: "agent", requiredChecks: ["npm test"], rejectOn: ["tests fail"], evidenceRequired: [] },
+    verification: { verifierType: "agent", requiredChecks: ["true"], rejectOn: ["tests fail"], evidenceRequired: [] },
     escalationAndExit: { escalationTargets: ["human"], pauseOn: [], stopOn: [], terminalStates: ["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"] },
   };
 }
@@ -99,6 +99,218 @@ describe("runLoop", () => {
       "execution_finished",
       "loop_succeeded",
     ]);
+  });
+
+  it("rejects reusing a runDir that already contains preserved run state", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      safetyPolicy: {
+        ...baseContract.safetyPolicy,
+        allowlistPaths: ["src/allowed/**"],
+      },
+    };
+    const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
+
+    const firstAdapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        return {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        };
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    const firstState = await runLoop(contract, runDir, firstAdapter);
+    const originalStateFile = await readFile(join(runDir, "loop-state.json"), "utf8");
+    const originalEventsFile = await readFile(join(runDir, "events.jsonl"), "utf8");
+    let planCalled = false;
+
+    const secondAdapter: RuntimeAdapter = {
+      async plan() {
+        planCalled = true;
+        throw new Error("plan should not run");
+      },
+      async execute() {
+        throw new Error("execute should not run");
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    expect(firstState.status).toBe("blocked_waiting_human");
+    await expect(runLoop(contract, runDir, secondAdapter)).rejects.toThrow(
+      "runDir already contains prior run data",
+    );
+    expect(planCalled).toBe(false);
+    expect(await readFile(join(runDir, "loop-state.json"), "utf8")).toBe(originalStateFile);
+    expect(await readFile(join(runDir, "events.jsonl"), "utf8")).toBe(originalEventsFile);
+
+    const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+    expect(stdout).toContain(attemptWorktreePath);
+  });
+
+  it("succeeds from requiredChecks alone when verifierType is command", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      verification: {
+        ...baseContract.verification,
+        verifierType: "command",
+      },
+    };
+    let verifyCalled = false;
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        return {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        };
+      },
+      async verify() {
+        verifyCalled = true;
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const persistedVerify = JSON.parse(await readFile(join(runDir, "attempts", "1", "verify.json"), "utf8")) as {
+      approved: boolean;
+      evidence: string[];
+      failingCommand: string | null;
+    };
+
+    expect(finalState.status).toBe("succeeded");
+    expect(verifyCalled).toBe(false);
+    expect(persistedVerify.approved).toBe(true);
+    expect(persistedVerify.failingCommand).toBeNull();
+    expect(persistedVerify.evidence[0]).toContain("required check passed: true");
+  });
+
+  it("does not succeed when verifierType is command and a required check fails", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      verification: {
+        ...baseContract.verification,
+        verifierType: "command",
+        requiredChecks: ["false"],
+      },
+    };
+    let verifyCalled = false;
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        return {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        };
+      },
+      async verify() {
+        verifyCalled = true;
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const persistedVerify = JSON.parse(await readFile(join(runDir, "attempts", "1", "verify.json"), "utf8")) as {
+      approved: boolean;
+      rejectCategory: string;
+      failingCommand: string | null;
+    };
+
+    expect(finalState.status).toBe("failed");
+    expect(finalState.stopReason).toBe("verifier rejection with no safe retry path");
+    expect(verifyCalled).toBe(false);
+    expect(persistedVerify).toMatchObject({
+      approved: false,
+      rejectCategory: "required-check-failed",
+      failingCommand: "false",
+    });
+  });
+
+  it("skips adapter.verify when agent verification requiredChecks fail", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      verification: {
+        ...baseContract.verification,
+        verifierType: "agent",
+        requiredChecks: ["false"],
+      },
+    };
+    let verifyCalled = false;
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        return {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        };
+      },
+      async verify() {
+        verifyCalled = true;
+        return {
+          approved: true,
+          rejectCategory: "",
+          primaryTargetPaths: ["src/index.ts"],
+          failingCommand: null,
+          safeToRetry: false,
+          evidence: ["should not be used"],
+          pauseSignals: [],
+          stopSignals: [],
+        };
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const persistedVerify = JSON.parse(await readFile(join(runDir, "attempts", "1", "verify.json"), "utf8")) as {
+      approved: boolean;
+      rejectCategory: string;
+      failingCommand: string | null;
+    };
+
+    expect(finalState.status).toBe("failed");
+    expect(finalState.stopReason).toBe("verifier rejection with no safe retry path");
+    expect(verifyCalled).toBe(false);
+    expect(persistedVerify).toMatchObject({
+      approved: false,
+      rejectCategory: "required-check-failed",
+      failingCommand: "false",
+    });
   });
 
   it("blocks for human input when approval also hits a pauseOn gate", async () => {
