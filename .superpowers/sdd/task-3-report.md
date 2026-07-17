@@ -48,6 +48,20 @@
 - Command: `npm run build`
 - Summary: PASS — TypeScript compiled and regenerated `dist/cli.js` without errors.
 
+### Task 5 A-03 token-alias fix
+- Command: `npm test -- --run tests/runtime/claude/subprocessClaudeAdapter.test.ts`
+- Summary: FAIL — new duplicate-alias token regression showed `scripts/claude-phase-runner.mjs` returned `tokenUsage: 250` instead of `125` when both snake_case and camelCase usage aliases were present.
+- Command: `npm test -- --run tests/runtime/claude/subprocessClaudeAdapter.test.ts`
+- Summary: PASS — `1` test file passed; `18` tests passed; `0` failed after selecting snake_case first and falling back to camelCase per side.
+- Command: `npm test`
+- Summary: PASS — `13` test files passed; `102` tests passed; `0` failed.
+- Command: `npm run typecheck`
+- Summary: PASS — `tsc --noEmit -p tsconfig.json` completed without errors.
+- Command: `npm run build`
+- Summary: PASS — TypeScript compiled and regenerated `dist/cli.js` without errors.
+- Command: `git diff --check`
+- Summary: PASS — no whitespace or patch-format errors.
+
 ### Red phase
 - Command: `npm test -- --run tests/validation/evidence.test.ts`
 - Summary: FAIL — Vitest could not load `../../validation/v1/lib/evidence.js` because the module did not exist.
@@ -93,6 +107,7 @@
 - Confirmed `run-scenario.ts` launches the CLI from the repository root using an absolute `dist/cli.js` path, so it still works when invoked outside the repo root.
 - Confirmed `run-scenario.ts` binds `--scenario` to the existing Task 2 contract identity via `objective.taskId`, so a rendered A contract is rejected before child launch when invoked as scenario D.
 - Confirmed the wrapper records only environment variable names, captures stdout/stderr into evidence logs, and still writes JSON evidence files when ccloop fails before creating `runDir`.
+- Confirmed `scripts/claude-phase-runner.mjs` now prefers snake_case usage fields and falls back to camelCase per side, preventing duplicate alias double counting while leaving historical A-03 evidence unchanged/unreclassified.
 - Confirmed terminal outcome and cleanup outcome stay separate in `observations.json`.
 - Confirmed `finalize-review.ts` enforces exact verdict/diagnosis enums, non-empty summaries, no overwrite of `review.json`, and stores diagnosis `null` as JSON `null`.
 

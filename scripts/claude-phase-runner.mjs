@@ -101,11 +101,20 @@ function getTokenUsage(envelope) {
     return undefined;
   }
 
-  const candidates = [usage.input_tokens, usage.output_tokens, usage.inputTokens, usage.outputTokens]
-    .filter((value) => typeof value === "number");
+  const input = typeof usage.input_tokens === "number"
+    ? usage.input_tokens
+    : typeof usage.inputTokens === "number"
+      ? usage.inputTokens
+      : undefined;
+  const output = typeof usage.output_tokens === "number"
+    ? usage.output_tokens
+    : typeof usage.outputTokens === "number"
+      ? usage.outputTokens
+      : undefined;
+  const candidates = [input, output].filter((value) => typeof value === "number");
   const total = candidates.reduce((sum, value) => sum + value, 0);
 
-  return total > 0 ? total : undefined;
+  return candidates.length > 0 && total > 0 ? total : undefined;
 }
 
 async function readStdin() {

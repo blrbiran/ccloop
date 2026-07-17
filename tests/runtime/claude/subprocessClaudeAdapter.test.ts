@@ -139,6 +139,49 @@ async function waitForFileToContain(path: string, expected: string): Promise<voi
   throw new Error(`timed out waiting for ${path} to contain ${expected}`);
 }
 
+
+async function runUsageEnvelopeThroughPhaseRunner(usageLiteral: string): Promise<{
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  payload: Record<string, unknown>;
+}> {
+  const worktreePath = await mkdtemp(join(tmpdir(), "ccloop-token-usage-worktree-"));
+  const binDir = await createFakeClaudeBinary(`
+const envelope = JSON.stringify({
+  structured_output: {
+    changedFiles: ["src/index.ts"],
+    diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+    commandOutputs: ["ok"],
+    stdoutStderrLog: "ok"
+  },
+  usage: ${usageLiteral}
+});
+process.stdout.write(envelope);
+`);
+
+  const { result } = spawnPhaseRunner(
+    {
+      phase: "execute",
+      prompt: "run execute",
+      attempt: 1,
+      runDir: worktreePath,
+      worktreePath,
+      partialOutcomeRecoveryWindowMs: 1000,
+    },
+    {
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    },
+  );
+
+  const outcome = await result;
+  return {
+    ...outcome,
+    payload: JSON.parse(outcome.stdout) as Record<string, unknown>,
+  };
+}
+
 describe("SubprocessClaudeAdapter", () => {
   it("includes the current attempt plan in the executor prompt", () => {
     const prompt = buildExecutorPrompt({
@@ -231,6 +274,45 @@ describe("SubprocessClaudeAdapter", () => {
       changedFiles: ["secret.txt"],
     });
   });
+
+
+  for (const testCase of [
+    {
+      label: "snake-only usage envelope",
+      usageLiteral: '{ input_tokens: 100, output_tokens: 25 }',
+      expectedTokenUsage: 125,
+    },
+    {
+      label: "camel-only usage envelope",
+      usageLiteral: '{ inputTokens: 100, outputTokens: 25 }',
+      expectedTokenUsage: 125,
+    },
+    {
+      label: "duplicate camel and snake aliases without double counting",
+      usageLiteral: '{ input_tokens: 100, output_tokens: 25, inputTokens: 100, outputTokens: 25 }',
+      expectedTokenUsage: 125,
+    },
+    {
+      label: "mixed aliases when only snake input and camel output are present",
+      usageLiteral: '{ input_tokens: 100, outputTokens: 25 }',
+      expectedTokenUsage: 125,
+    },
+  ] as const) {
+    it(`reports token usage for ${testCase.label}`, async () => {
+      const outcome = await runUsageEnvelopeThroughPhaseRunner(testCase.usageLiteral);
+
+      expect(outcome.code).toBe(0);
+      expect(outcome.signal).toBeNull();
+      expect(outcome.stderr).toBe("");
+      expect(outcome.payload).toMatchObject({
+        changedFiles: ["src/index.ts"],
+        diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+        commandOutputs: ["ok"],
+        stdoutStderrLog: "ok",
+        tokenUsage: testCase.expectedTokenUsage,
+      });
+    });
+  }
 
   it("waits for close before parsing wrapper stdout", async () => {
     const delayedWrapperPath = await createNodeScript(
