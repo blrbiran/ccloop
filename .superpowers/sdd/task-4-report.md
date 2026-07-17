@@ -61,7 +61,7 @@ Confirmed `/Users/biran/code/skills/loop/ccloop/.worktrees/evidence-first-v1/val
 - Confirmed only Task 4 README/report files are intended for staging; preexisting docs, reports, `dist/`, and other untracked artifacts were left alone.
 
 ## Commit
-- Task 4 implementation commit: PENDING
+- Task 4 implementation commit: `acbbe21c20ea0eb2799de610b302b0d7260835f6`
 
 ## Concerns
 - `npm ci` reported 5 known vulnerabilities in dependencies (`3 moderate`, `1 high`, `1 critical`), but the task brief did not authorize dependency updates.
