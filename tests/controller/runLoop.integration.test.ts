@@ -51,6 +51,20 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForAbort(signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    return;
+  }
+
+  if (signal.aborted) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -450,7 +464,7 @@ describe("runLoop", () => {
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "loop_exhausted"]);
   });
 
-  it("persists completed plan artifacts when execute times out before verify", async () => {
+  it("persists completed plan artifacts when execute timeout yields no adapter result before verify", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -470,14 +484,9 @@ describe("runLoop", () => {
       async plan() {
         return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
       },
-      async execute() {
-        await delay(40);
-        return {
-          changedFiles: ["src/index.ts"],
-          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
-          commandOutputs: ["edited"],
-          stdoutStderrLog: "ok",
-        };
+      async execute(context) {
+        await waitForAbort(context.abortSignal);
+        return null;
       },
       async verify() {
         verifyCalled = true;
@@ -502,7 +511,7 @@ describe("runLoop", () => {
   });
 
 
-  it("treats execute timeout without adapter partial outcome as exhausted even if files changed in the worktree", async () => {
+  it("treats execute timeout with no adapter result as exhausted even if files changed in the worktree", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -529,13 +538,8 @@ describe("runLoop", () => {
       },
       async execute(context) {
         await writeFile(join(context.worktreePath, "secret.txt"), "partial output\n");
-        await delay(160);
-        return {
-          changedFiles: ["secret.txt"],
-          diffPatch: "diff --git a/secret.txt b/secret.txt",
-          commandOutputs: ["edited"],
-          stdoutStderrLog: "timed out",
-        };
+        await waitForAbort(context.abortSignal);
+        return null;
       },
       async verify() {
         verifyCalled = true;

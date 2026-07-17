@@ -1,6 +1,7 @@
 import type {
   AttemptContext,
   AttemptPlan,
+  ExecutePhaseResult,
   ExecutionResult,
   RuntimeAdapter,
   VerificationResult,
@@ -31,7 +32,7 @@ export class ScriptedAdapter implements RuntimeAdapter {
     return frame.plan;
   }
 
-  async execute(_context: AttemptContext): Promise<ExecutionResult> {
+  async execute(_context: AttemptContext): Promise<ExecutePhaseResult> {
     if (!this.currentFrame) {
       throw new Error("plan must run before execute");
     }

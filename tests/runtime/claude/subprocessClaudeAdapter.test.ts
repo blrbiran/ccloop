@@ -151,6 +151,10 @@ describe("SubprocessClaudeAdapter", () => {
     expect((await adapter.plan(context)).summary).toBe("change src/index.ts");
 
     const execution = await adapter.execute(context);
+    expect(execution).not.toBeNull();
+    if (execution === null) {
+      throw new Error("expected execute result");
+    }
     expect(execution.changedFiles).toEqual(["src/index.ts"]);
     expect(execution.commandOutputs).toEqual(["/tmp/worktree"]);
 
@@ -210,6 +214,54 @@ process.exit(0);
       commandOutputs: ["/tmp/worktree"],
       stdoutStderrLog: "ok",
     });
+  });
+
+  it("returns null when aborted execute yields no final result", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "ccloop-wrapper-no-result-")), "marker.log");
+    const worktreePath = await createCommittedRepo({
+      "clean.txt": "clean",
+    });
+    const binDir = await createFakeClaudeBinary(`
+import { appendFileSync } from "node:fs";
+const markerPath = process.env.CLAUDE_MARKER_PATH;
+appendFileSync(markerPath, "started");
+process.on("SIGTERM", () => {
+  appendFileSync(markerPath, "SIGTERM");
+  process.exit(0);
+});
+setInterval(() => {}, 1000);
+`);
+    const originalPath = process.env.PATH;
+    const originalMarkerPath = process.env.CLAUDE_MARKER_PATH;
+    process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+    process.env.CLAUDE_MARKER_PATH = markerPath;
+
+    const interruptedAdapter = new SubprocessClaudeAdapter({ command: ["node", phaseRunnerPath] });
+    const abortController = new AbortController();
+    const context = {
+      attempt: 5,
+      runDir: ".runs/interrupt-no-result",
+      worktreePath,
+      contract,
+      state: { status: "executing" },
+      abortSignal: abortController.signal,
+    } as any;
+
+    try {
+      const executionPromise = interruptedAdapter.execute(context);
+      await waitForFileToContain(markerPath, "started");
+      abortController.abort();
+
+      await expect(executionPromise).resolves.toBeNull();
+      expect(await readFile(markerPath, "utf8")).toContain("SIGTERM");
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalMarkerPath === undefined) {
+        delete process.env.CLAUDE_MARKER_PATH;
+      } else {
+        process.env.CLAUDE_MARKER_PATH = originalMarkerPath;
+      }
+    }
   });
 
   for (const phase of ["plan", "execute", "verify"] as const) {
@@ -305,6 +357,10 @@ setInterval(() => {}, 1000);
       const markerContents = await readFile(markerPath, "utf8");
 
       expect(markerContents).toContain("SIGTERM");
+      expect(execution).not.toBeNull();
+      if (execution === null) {
+        throw new Error("expected partial execute result");
+      }
       expect(execution).toMatchObject({
         completionStatus: "partial",
         failureType: "timeout",

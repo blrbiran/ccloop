@@ -139,7 +139,7 @@ function getPhaseTimeoutMs(contract: LoopContract, state: RunState): number {
 async function runPhaseWithTimeout<T>(
   timeoutMs: number,
   operation: (abortSignal: AbortSignal) => Promise<T>,
-  options?: { recoveryWindowMs?: number },
+  options?: { awaitAbortedResult?: boolean },
 ): Promise<PhaseOutcome<T>> {
   const startedAtMs = Date.now();
 
@@ -149,15 +149,13 @@ async function runPhaseWithTimeout<T>(
 
   const abortController = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const operationPromise = operation(abortController.signal)
-    .then((result) => ({ kind: "result" as const, result }))
-    .catch((error: unknown) => {
-      throw new PhaseExecutionError(Math.max(Date.now() - startedAtMs, 0), error);
-    });
+  const operationPromise = operation(abortController.signal).catch((error: unknown) => {
+    throw new PhaseExecutionError(Math.max(Date.now() - startedAtMs, 0), error);
+  });
 
   try {
     const outcome = await Promise.race([
-      operationPromise,
+      operationPromise.then((result) => ({ kind: "result" as const, result })),
       new Promise<{ kind: "timeout" }>((resolve) => {
         timer = setTimeout(() => {
           abortController.abort();
@@ -168,25 +166,13 @@ async function runPhaseWithTimeout<T>(
     const elapsedMs = Math.max(Date.now() - startedAtMs, 0);
 
     if (outcome.kind === "timeout") {
-      const recoveryWindowMs = options?.recoveryWindowMs ?? 0;
-
-      if (recoveryWindowMs <= 0) {
+      if (!options?.awaitAbortedResult) {
         return { timedOut: true, elapsedMs };
       }
 
-      const recoveryOutcome = await Promise.race([
-        operationPromise,
-        new Promise<{ kind: "recovery-timeout" }>((resolve) => {
-          setTimeout(() => resolve({ kind: "recovery-timeout" }), recoveryWindowMs);
-        }),
-      ]).catch(() => ({ kind: "recovery-timeout" as const }));
+      const result = await operationPromise;
       const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, 0);
-
-      if (recoveryOutcome.kind === "result") {
-        return { timedOut: true, elapsedMs: timedOutElapsedMs, result: recoveryOutcome.result };
-      }
-
-      return { timedOut: true, elapsedMs: timedOutElapsedMs };
+      return { timedOut: true, elapsedMs: timedOutElapsedMs, result };
     }
 
     return { timedOut: false, elapsedMs, result: outcome.result };
@@ -318,7 +304,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       const executeOutcome = await runPhaseWithTimeout(
         executeTimeoutMs,
         (abortSignal) => adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal)),
-        { recoveryWindowMs: contract.executionPolicy.partialOutcomeRecoveryWindowMs },
+        { awaitAbortedResult: true },
       );
 
       let executeUsageAlreadyApplied = false;
@@ -326,8 +312,9 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       if (executeOutcome.timedOut) {
         state = applyPhaseUsage(state, executeOutcome.elapsedMs, executeOutcome.result?.tokenUsage);
         executeUsageAlreadyApplied = true;
+        execution = executeOutcome.result ?? null;
 
-        if (executeOutcome.result === undefined) {
+        if (execution === null) {
           await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
           state = await persistTerminalState(
             runDir,
@@ -340,43 +327,6 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
             worktreePath,
             runDir,
             "cleanup after terminal decision exhausted",
-          );
-          return state;
-        }
-
-        execution = executeOutcome.result;
-
-        if (isPartialExecutionResult(execution)) {
-          await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
-
-          const partialPathPolicy = evaluatePathPolicy({
-            changedFiles: execution.changedFiles,
-            allowlistPaths: contract.safetyPolicy.allowlistPaths,
-            denylistPaths: contract.safetyPolicy.denylistPaths,
-            maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
-          });
-
-          if (partialPathPolicy.humanGateHit) {
-            state = await persistTerminalState(
-              runDir,
-              state,
-              "blocked_waiting_human",
-              partialPathPolicy.reason ?? execution.failureMessage,
-            );
-            return state;
-          }
-
-          state = await persistTerminalState(
-            runDir,
-            state,
-            execution.failureType === "timeout" ? "exhausted" : "failed",
-            execution.failureMessage,
-          );
-          await cleanupAttemptWorkspaceBestEffort(
-            contract.context.repoPath,
-            worktreePath,
-            runDir,
-            `cleanup after partial execute ${execution.failureType}`,
           );
           return state;
         }

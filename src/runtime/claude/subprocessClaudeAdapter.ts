@@ -1,7 +1,14 @@
 import { spawn } from "node:child_process";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./prompts.js";
 import type { ClaudePhaseRequest, SubprocessAdapterConfig } from "./types.js";
-import type { AttemptContext, AttemptPlan, ExecutionResult, RuntimeAdapter, VerificationResult } from "../types.js";
+import type {
+  AttemptContext,
+  AttemptPlan,
+  ExecutePhaseResult,
+  ExecutionResult,
+  RuntimeAdapter,
+  VerificationResult,
+} from "../types.js";
 
 async function runPhase<T>(
   command: string[],
@@ -100,19 +107,27 @@ export class SubprocessClaudeAdapter implements RuntimeAdapter {
     );
   }
 
-  async execute(context: AttemptContext): Promise<ExecutionResult> {
-    return await runPhase<ExecutionResult>(
-      this.config.command,
-      {
-        phase: "execute",
-        prompt: buildExecutorPrompt(context.contract),
-        attempt: context.attempt,
-        runDir: context.runDir,
-        worktreePath: context.worktreePath,
-        partialOutcomeRecoveryWindowMs: context.contract.executionPolicy.partialOutcomeRecoveryWindowMs,
-      },
-      context.abortSignal,
-    );
+  async execute(context: AttemptContext): Promise<ExecutePhaseResult> {
+    try {
+      return await runPhase<ExecutionResult>(
+        this.config.command,
+        {
+          phase: "execute",
+          prompt: buildExecutorPrompt(context.contract),
+          attempt: context.attempt,
+          runDir: context.runDir,
+          worktreePath: context.worktreePath,
+          partialOutcomeRecoveryWindowMs: context.contract.executionPolicy.partialOutcomeRecoveryWindowMs,
+        },
+        context.abortSignal,
+      );
+    } catch (error) {
+      if (context.abortSignal?.aborted) {
+        return null;
+      }
+
+      throw error;
+    }
   }
 
   async verify(context: AttemptContext): Promise<VerificationResult> {

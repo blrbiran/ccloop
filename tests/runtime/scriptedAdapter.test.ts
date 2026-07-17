@@ -99,6 +99,10 @@ describe("ScriptedAdapter", () => {
     const verification = await adapter.verify(context);
 
     expect(plan.summary).toBe("change src/index.ts");
+    expect(execution).not.toBeNull();
+    if (execution === null) {
+      throw new Error("expected scripted execute result");
+    }
     expect(execution.changedFiles).toEqual(["src/index.ts"]);
     expect(verification.approved).toBe(true);
     expect(verification.pauseSignals).toEqual([]);

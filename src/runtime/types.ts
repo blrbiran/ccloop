@@ -33,6 +33,7 @@ export type PartialExecutionResult = ExecutionArtifacts & {
 };
 
 export type ExecutionResult = CompleteExecutionResult | PartialExecutionResult;
+export type ExecutePhaseResult = ExecutionResult | null;
 
 export function isPartialExecutionResult(result: ExecutionResult): result is PartialExecutionResult {
   return "completionStatus" in result && result.completionStatus === "partial";
@@ -52,6 +53,6 @@ export type VerificationResult = {
 
 export interface RuntimeAdapter {
   plan(context: AttemptContext): Promise<AttemptPlan>;
-  execute(context: AttemptContext): Promise<ExecutionResult>;
+  execute(context: AttemptContext): Promise<ExecutePhaseResult>;
   verify(context: AttemptContext): Promise<VerificationResult>;
 }
