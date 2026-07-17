@@ -549,6 +549,57 @@ if (request.phase === "plan") { process.stdout.write(JSON.stringify({ summary: "
     expect(invocation.exitCode).toBe(0);
   });
 
+
+  it("creates a fresh nested evidence directory when its parent does not exist", async () => {
+    await ensureBuilt();
+    const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-run-scenario-nested-evidence-"));
+    const fixtureDir = join(tempRoot, "fixture");
+    const contractDir = join(tempRoot, "contracts");
+    const contractPath = join(contractDir, "A-01.json");
+    const adapterScriptPath = join(tempRoot, "nested-evidence-runner.mjs");
+    const adapterConfigPath = join(tempRoot, "adapter-config.json");
+    const runDir = join(tempRoot, "runs", "A-01");
+    const evidenceParentDir = join(tempRoot, "evidence");
+    const evidenceDir = join(evidenceParentDir, "A-01");
+    const fixture = await createFixture(templateDir, fixtureDir);
+    const contract = renderScenario("A", { repoPath: fixture.repoPath });
+    await mkdir(contractDir, { recursive: true });
+    await writeFile(contractPath, `${JSON.stringify(contract, null, 2)}\n`);
+    await writeFile(
+      adapterScriptPath,
+      `const chunks = [];\nfor await (const chunk of process.stdin) chunks.push(chunk);\nconst request = JSON.parse(Buffer.concat(chunks).toString("utf8"));\nif (request.phase === "plan") { process.stdout.write(JSON.stringify({ summary: "ok", primaryTargetPaths: ["src/counter.js"] })); } else if (request.phase === "execute") { process.stdout.write(JSON.stringify({ changedFiles: ["src/counter.js"], diffPatch: "diff --git a/src/counter.js b/src/counter.js", commandOutputs: ["edited"], stdoutStderrLog: "ok" })); } else { process.stdout.write(JSON.stringify({ approved: true, rejectCategory: "", primaryTargetPaths: ["src/counter.js"], failingCommand: null, safeToRetry: false, evidence: ["command output | required check passed: npm test"], pauseSignals: [], stopSignals: [] })); }\n`,
+    );
+    await writeFile(adapterConfigPath, `${JSON.stringify({ command: [process.execPath, adapterScriptPath] }, null, 2)}\n`);
+
+    expect(await pathExists(evidenceParentDir)).toBe(false);
+
+    await execFileAsync(
+      tsxBin,
+      [
+        runScenarioScript,
+        "--scenario",
+        "A",
+        "--contract",
+        contractPath,
+        "--fixture",
+        fixture.repoPath,
+        "--run-dir",
+        runDir,
+        "--evidence-dir",
+        evidenceDir,
+        "--adapter-config",
+        adapterConfigPath,
+      ],
+      { cwd: worktreeRoot },
+    );
+
+    expect(await pathExists(evidenceParentDir)).toBe(true);
+    expect(await pathExists(evidenceDir)).toBe(true);
+    expect(await pathExists(join(evidenceDir, "invocation.json"))).toBe(true);
+    const invocation = JSON.parse(await readFile(join(evidenceDir, "invocation.json"), "utf8")) as { exitCode: number };
+    expect(invocation.exitCode).toBe(0);
+  });
+
   it("writes evidence files even when ccloop fails before creating the run directory", async () => {
     await ensureBuilt();
     const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-run-scenario-early-failure-"));

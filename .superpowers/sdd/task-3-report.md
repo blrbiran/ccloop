@@ -36,6 +36,18 @@
 - Command: `npm run build`
 - Summary: PASS — TypeScript compiled and regenerated `dist/cli.js` without errors.
 
+### Task 5 A-01 parent-path fix
+- Command: `npm test -- --run tests/validation/evidence.test.ts`
+- Summary: FAIL — new nested-evidence regression reproduced the A-01-style parent-missing bug with `ENOENT` on a fresh `evidence/A-01` leaf path whose parent directory did not exist.
+- Command: `npm test -- --run tests/validation/evidence.test.ts`
+- Summary: PASS — `1` test file passed; `19` tests passed; `0` failed after creating only `dirname(parsed.evidenceDir)` before the leaf evidence directory.
+- Command: `npm test`
+- Summary: PASS — `13` test files passed; `98` tests passed; `0` failed.
+- Command: `npm run typecheck`
+- Summary: PASS — `tsc --noEmit -p tsconfig.json` completed without errors.
+- Command: `npm run build`
+- Summary: PASS — TypeScript compiled and regenerated `dist/cli.js` without errors.
+
 ### Red phase
 - Command: `npm test -- --run tests/validation/evidence.test.ts`
 - Summary: FAIL — Vitest could not load `../../validation/v1/lib/evidence.js` because the module did not exist.
@@ -77,7 +89,7 @@
 - Confirmed every non-empty `events.jsonl` line is parsed, and a single malformed line marks the event log `INVALID` with the line number recorded.
 - Confirmed artifact statuses distinguish `PRESENT`, `NOT_PRODUCED`, `NOT_RUN`, `MISSING`, and `INVALID` according to scenario expectations plus observed files.
 - Confirmed required-check evidence is validated against the required command list declared in `loop-contract.json`, not just generic evidence strings.
-- Confirmed `run-scenario.ts` refuses pre-existing run/evidence directories, never writes into an existing `evidenceDir`, never packages stale `runDir` data after freshness-check failures, requires a clean fixture, and rejects `--fixture` when it does not match `contract.context.repoPath`.
+- Confirmed `run-scenario.ts` refuses pre-existing run/evidence directories, never writes into an existing `evidenceDir`, never packages stale `runDir` data after freshness-check failures, creates only the missing parent of a fresh nested `evidenceDir` before the leaf directory, requires a clean fixture, and rejects `--fixture` when it does not match `contract.context.repoPath`.
 - Confirmed `run-scenario.ts` launches the CLI from the repository root using an absolute `dist/cli.js` path, so it still works when invoked outside the repo root.
 - Confirmed `run-scenario.ts` binds `--scenario` to the existing Task 2 contract identity via `objective.taskId`, so a rendered A contract is rejected before child launch when invoked as scenario D.
 - Confirmed the wrapper records only environment variable names, captures stdout/stderr into evidence logs, and still writes JSON evidence files when ccloop fails before creating `runDir`.
@@ -89,4 +101,4 @@
 - OpenWolf metadata files (`.wolf/anatomy.md`, `.wolf/buglog.json`, `.wolf/cerebrum.md`, `.wolf/memory.md`) were updated during the work but remain gitignored in this worktree, so they are not included in normal task commits.
 
 ## Final Reviewed Head
-- Final reviewed head: `2e423fd1f3a3f5b0f653a5a6cb098f573e59a8fb`
+- Final reviewed head: `a4b177d426e26e4d7efbe423f370c888632fcb46`

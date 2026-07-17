@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { collectEvidence } from "../lib/evidence.js";
@@ -337,6 +337,7 @@ export async function main(argv: string[]): Promise<number> {
     await assertFreshPath(parsed.evidenceDir, "evidenceDir");
     await assertFreshPath(parsed.runDir, "runDir");
 
+    await mkdir(dirname(parsed.evidenceDir), { recursive: true });
     await mkdir(parsed.evidenceDir, { recursive: false });
     evidenceDirReady = true;
     await Promise.all([
