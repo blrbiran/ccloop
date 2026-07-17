@@ -432,6 +432,44 @@ setInterval(() => {}, 1000);
     }
   });
 
+  it("includes brand-new untracked files in partial execute diff recovery", async () => {
+    const worktreePath = await createCommittedRepo({
+      "tracked.txt": "before\n",
+    });
+    const binDir = await createFakeClaudeBinary('process.stderr.write("claude exploded"); process.exit(1);');
+
+    await writeFile(join(worktreePath, "brand-new.txt"), "brand new contents\n");
+
+    const { result } = spawnPhaseRunner(
+      {
+        phase: "execute",
+        prompt: "run execute",
+        attempt: 1,
+        runDir: worktreePath,
+        worktreePath,
+        partialOutcomeRecoveryWindowMs: 1000,
+      },
+      {
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+    );
+
+    const outcome = await result;
+    expect(outcome.code).toBe(0);
+
+    const partial = JSON.parse(outcome.stdout);
+    expect(partial).toMatchObject({
+      completionStatus: "partial",
+      failureType: "error",
+      changedFiles: ["brand-new.txt"],
+    });
+    expect(partial.diffPatch).toContain("diff --git a/brand-new.txt b/brand-new.txt");
+    expect(partial.diffPatch).toContain("new file mode 100644");
+    expect(partial.diffPatch).toContain("--- /dev/null");
+    expect(partial.diffPatch).toContain("+++ b/brand-new.txt");
+    expect(partial.diffPatch).toContain("+brand new contents");
+  });
+
   it("includes both staged and unstaged edits in partial execute diff recovery", async () => {
     const worktreePath = await createCommittedRepo({
       "staged.txt": "before staged\n",

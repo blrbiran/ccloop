@@ -129,12 +129,12 @@ function getPartialOutcomeRecoveryWindowMs(request) {
   return DEFAULT_PARTIAL_OUTCOME_RECOVERY_WINDOW_MS;
 }
 
-function parsePorcelainChangedFiles(stdout) {
-  const entries = stdout.split("\0").filter(Boolean);
-  const changedFiles = [];
+function parsePorcelainEntries(stdout) {
+  const records = stdout.split("\0").filter(Boolean);
+  const entries = [];
 
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
+  for (let index = 0; index < records.length; index += 1) {
+    const entry = records[index];
     if (entry.length < 4) {
       continue;
     }
@@ -142,7 +142,7 @@ function parsePorcelainChangedFiles(stdout) {
     const status = entry.slice(0, 2);
     const path = entry.slice(3);
     if (path.length > 0) {
-      changedFiles.push(path);
+      entries.push({ status, path });
     }
 
     if (status.includes("R") || status.includes("C")) {
@@ -150,28 +150,58 @@ function parsePorcelainChangedFiles(stdout) {
     }
   }
 
-  return [...new Set(changedFiles)];
+  return entries;
 }
 
-async function listChangedFiles(worktreePath) {
+async function readPorcelainEntries(worktreePath) {
   try {
-    const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "-z"], { cwd: worktreePath });
-    return parsePorcelainChangedFiles(stdout);
+    const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+      cwd: worktreePath,
+    });
+    return parsePorcelainEntries(stdout);
   } catch {
     return [];
   }
 }
 
-async function readDiffPatch(worktreePath) {
+function listChangedFiles(porcelainEntries) {
+  return [...new Set(porcelainEntries.map((entry) => entry.path))];
+}
+
+async function readGitDiff(args, worktreePath) {
   try {
-    const { stdout } = await execFileAsync("git", ["diff", "--no-ext-diff", "HEAD"], {
+    const { stdout } = await execFileAsync("git", args, {
       cwd: worktreePath,
       maxBuffer: 10 * 1024 * 1024,
     });
     return stdout;
-  } catch {
+  } catch (error) {
+    if (error?.code === 1 || error?.code === "1") {
+      if (typeof error.stdout === "string") {
+        return error.stdout;
+      }
+
+      if (Buffer.isBuffer(error.stdout)) {
+        return error.stdout.toString();
+      }
+    }
+
     return "";
   }
+}
+
+async function readDiffPatch(worktreePath, porcelainEntries) {
+  const untrackedFiles = porcelainEntries.filter((entry) => entry.status === "??").map((entry) => entry.path);
+  const [trackedDiff, untrackedDiffs] = await Promise.all([
+    readGitDiff(["diff", "--no-ext-diff", "HEAD"], worktreePath),
+    Promise.all(
+      untrackedFiles.map((path) =>
+        readGitDiff(["diff", "--no-ext-diff", "--no-index", "--", "/dev/null", path], worktreePath),
+      ),
+    ),
+  ]);
+
+  return [trackedDiff, ...untrackedDiffs].filter((patch) => patch.length > 0).join("");
 }
 
 const claudeProcessClosedSymbol = Symbol("claudeProcessClosed");
@@ -226,8 +256,9 @@ async function terminateClaudeProcess(recoveryWindowMs) {
 }
 
 async function buildPartialExecutionOutcome(request, failureType, failureMessage, commandOutputs, stdoutStderrLog) {
-  const changedFiles = await listChangedFiles(request.worktreePath);
-  const diffPatch = await readDiffPatch(request.worktreePath);
+  const porcelainEntries = await readPorcelainEntries(request.worktreePath);
+  const changedFiles = listChangedFiles(porcelainEntries);
+  const diffPatch = await readDiffPatch(request.worktreePath, porcelainEntries);
 
   if (changedFiles.length === 0 && diffPatch.length === 0) {
     return null;
