@@ -2,7 +2,7 @@
 
 > OpenWolf's learning memory. Updated automatically as the AI learns from interactions.
 > Do not edit manually unless correcting an error.
-> Last updated: 2026-07-14
+> Last updated: 2026-07-17
 
 ## User Preferences
 
@@ -22,6 +22,8 @@
 - Task briefs may show extensionless example imports, but this TypeScript ESM worktree still expects `.js` import specifiers in source and test files to match the established Vitest/Node convention.
 - Task 7 path policy uses intentionally minimal matching semantics: `pattern/**` means prefix match on that directory, `**` matches anything, denylist checks run before allowlist checks, and max-files overflow triggers a human gate.
 - Task 8 controller orchestration preserves the current attempt worktree on `blocked_waiting_human`, but cleans up retryable and terminal non-human attempts after artifact/state persistence.
+
+- Evidence-first validation harness files for V1 live under `validation/v1/**` with matching focused Vitest coverage under `tests/validation/**`, and the disposable smoke repo root stays under ignored `.validation-runs/` with a strict do-not-overwrite boundary.
 
 ## Do-Not-Repeat
 
