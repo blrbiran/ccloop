@@ -42,6 +42,8 @@ find .validation-runs/fixture-01 -type l -print
 
 Expected preflight result: tests, typecheck, and build succeed; `claude --version` prints a version; `claude --help` succeeds; fixture creation prints JSON; fixture status is empty; commit count is `1`; and `find` prints no symlinks.
 
+If `npm ci` prints audit or vulnerability output, treat it as observational only. It does not authorize `npm audit fix`, `npm audit fix --force`, editing `package.json`, editing `package-lock.json`, or any other dependency change. Stop and report the finding instead.
+
 ## Evidence Files and Status Definitions
 
 The deterministic harness writes these review inputs under each evidence directory:
