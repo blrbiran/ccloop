@@ -76,7 +76,7 @@ function buildRequiredCheckEvidence(
   stderr: string,
   error?: ExecFileError,
 ): string {
-  const details = [`required check ${status}: ${command}`];
+  const details = ["command output", `required check ${status}: ${command}`];
   const trimmedStdout = stdout.trim();
   const trimmedStderr = stderr.trim();
 
@@ -161,6 +161,44 @@ async function runRequiredChecks(
   return { passed: true, evidence };
 }
 
+function evidenceIncludes(evidence: string[], requirement: string): boolean {
+  return evidence.some((entry) => entry.includes(requirement));
+}
+
+function enforceVerificationContract(contract: LoopContract, verification: VerificationResult): VerificationResult {
+  if (!verification.approved) {
+    return verification;
+  }
+
+  const matchedRejectOn =
+    contract.verification.rejectOn.find((rejectCondition) => evidenceIncludes(verification.evidence, rejectCondition)) ?? null;
+  const missingEvidence = contract.verification.evidenceRequired.filter(
+    (requiredEvidence) => !evidenceIncludes(verification.evidence, requiredEvidence),
+  );
+
+  if (matchedRejectOn === null && missingEvidence.length === 0) {
+    return verification;
+  }
+
+  const enforcementNotes: string[] = [];
+
+  if (matchedRejectOn !== null) {
+    enforcementNotes.push(`contract rejectOn matched: ${matchedRejectOn}`);
+  }
+
+  if (missingEvidence.length > 0) {
+    enforcementNotes.push(`missing required evidence: ${missingEvidence.join(", ")}`);
+  }
+
+  return {
+    ...verification,
+    approved: false,
+    rejectCategory: matchedRejectOn !== null ? "reject-on-matched" : "missing-required-evidence",
+    safeToRetry: false,
+    evidence: [...verification.evidence, ...enforcementNotes],
+  };
+}
+
 async function runVerification(
   contract: LoopContract,
   adapter: RuntimeAdapter,
@@ -181,7 +219,7 @@ async function runVerification(
   }
 
   if (contract.verification.verifierType === "command") {
-    return {
+    return enforceVerificationContract(contract, {
       approved: true,
       rejectCategory: "",
       primaryTargetPaths,
@@ -190,14 +228,14 @@ async function runVerification(
       evidence: requiredChecks.evidence,
       pauseSignals: [],
       stopSignals: [],
-    };
+    });
   }
 
   const verification = await adapter.verify(context);
-  return {
+  return enforceVerificationContract(contract, {
     ...verification,
     evidence: [...requiredChecks.evidence, ...verification.evidence],
-  };
+  });
 }
 
 function initialState(contract: LoopContract): RunState {
@@ -224,8 +262,19 @@ function buildAttemptContext(
   attempt: number,
   worktreePath: string,
   abortSignal?: AbortSignal,
+  plan?: AttemptPlan | null,
+  execution?: ExecutionResult | null,
 ): AttemptContext {
-  return { contract, state, runDir, attempt, worktreePath, abortSignal };
+  return {
+    contract,
+    state,
+    runDir,
+    attempt,
+    worktreePath,
+    abortSignal,
+    ...(plan === undefined || plan === null ? {} : { plan }),
+    ...(execution === undefined || execution === null ? {} : { execution }),
+  };
 }
 
 async function appendTransitionEvent(runDir: string, state: RunState, type: string, detail: string): Promise<void> {
@@ -460,7 +509,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       const executeTimeoutMs = getPhaseTimeoutMs(contract, state);
       const executeOutcome = await runPhaseWithTimeout(
         executeTimeoutMs,
-        (abortSignal) => adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal)),
+        (abortSignal) => adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan)),
         { awaitAbortedResult: true },
       );
 
@@ -576,7 +625,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
         runVerification(
           contract,
           adapter,
-          buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal),
+          buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution),
           plan,
           completedExecution,
         ),

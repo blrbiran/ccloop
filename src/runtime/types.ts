@@ -8,6 +8,8 @@ export type AttemptContext = {
   attempt: number;
   worktreePath: string;
   abortSignal?: AbortSignal;
+  plan?: AttemptPlan;
+  execution?: ExecutionResult;
 };
 
 export type AttemptPlan = {

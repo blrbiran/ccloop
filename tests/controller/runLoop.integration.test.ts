@@ -170,6 +170,7 @@ describe("runLoop", () => {
       verification: {
         ...baseContract.verification,
         verifierType: "command",
+        evidenceRequired: ["command output"],
       },
     };
     let verifyCalled = false;
@@ -311,6 +312,58 @@ describe("runLoop", () => {
       rejectCategory: "required-check-failed",
       failingCommand: "false",
     });
+  });
+
+  it("does not succeed when approved verification is missing required evidence", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      verification: {
+        ...baseContract.verification,
+        evidenceRequired: ["proof token"],
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        return {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        };
+      },
+      async verify() {
+        return {
+          approved: true,
+          rejectCategory: "",
+          primaryTargetPaths: ["src/index.ts"],
+          failingCommand: null,
+          safeToRetry: false,
+          evidence: ["looks good"],
+          pauseSignals: [],
+          stopSignals: [],
+        };
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const persistedVerify = JSON.parse(await readFile(join(runDir, "attempts", "1", "verify.json"), "utf8")) as {
+      approved: boolean;
+      rejectCategory: string;
+      evidence: string[];
+    };
+
+    expect(finalState.status).toBe("failed");
+    expect(finalState.stopReason).toBe("verifier rejection with no safe retry path");
+    expect(persistedVerify.approved).toBe(false);
+    expect(persistedVerify.rejectCategory).toBe("missing-required-evidence");
+    expect(persistedVerify.evidence).toContain("missing required evidence: proof token");
   });
 
   it("blocks for human input when approval also hits a pauseOn gate", async () => {
@@ -513,7 +566,7 @@ describe("runLoop", () => {
     }
   });
 
-  it("passes the current phase state to each adapter step", async () => {
+  it("passes phase state plus plan/execution context to each adapter step", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const contract = createContract(repoPath);
@@ -523,6 +576,8 @@ describe("runLoop", () => {
       currentAttempt: number;
       attemptsUsed: number;
       attempt: number;
+      planSummary?: string;
+      executionChangedFiles?: string[];
     }> = [];
 
     const adapter: RuntimeAdapter = {
@@ -533,6 +588,8 @@ describe("runLoop", () => {
           currentAttempt: context.state.currentAttempt,
           attemptsUsed: context.state.attemptsUsed,
           attempt: context.attempt,
+          planSummary: context.plan?.summary,
+          executionChangedFiles: context.execution?.changedFiles,
         });
         return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
       },
@@ -543,6 +600,8 @@ describe("runLoop", () => {
           currentAttempt: context.state.currentAttempt,
           attemptsUsed: context.state.attemptsUsed,
           attempt: context.attempt,
+          planSummary: context.plan?.summary,
+          executionChangedFiles: context.execution?.changedFiles,
         });
         return {
           changedFiles: ["src/index.ts"],
@@ -558,6 +617,8 @@ describe("runLoop", () => {
           currentAttempt: context.state.currentAttempt,
           attemptsUsed: context.state.attemptsUsed,
           attempt: context.attempt,
+          planSummary: context.plan?.summary,
+          executionChangedFiles: context.execution?.changedFiles,
         });
         return {
           approved: true,
@@ -576,9 +637,33 @@ describe("runLoop", () => {
 
     expect(finalState.status).toBe("succeeded");
     expect(seenContexts).toEqual([
-      { phase: "plan", status: "planning", currentAttempt: 1, attemptsUsed: 1, attempt: 1 },
-      { phase: "execute", status: "executing", currentAttempt: 1, attemptsUsed: 1, attempt: 1 },
-      { phase: "verify", status: "verifying", currentAttempt: 1, attemptsUsed: 1, attempt: 1 },
+      {
+        phase: "plan",
+        status: "planning",
+        currentAttempt: 1,
+        attemptsUsed: 1,
+        attempt: 1,
+        planSummary: undefined,
+        executionChangedFiles: undefined,
+      },
+      {
+        phase: "execute",
+        status: "executing",
+        currentAttempt: 1,
+        attemptsUsed: 1,
+        attempt: 1,
+        planSummary: "change src/index.ts",
+        executionChangedFiles: undefined,
+      },
+      {
+        phase: "verify",
+        status: "verifying",
+        currentAttempt: 1,
+        attemptsUsed: 1,
+        attempt: 1,
+        planSummary: "change src/index.ts",
+        executionChangedFiles: ["src/index.ts"],
+      },
     ]);
   });
 

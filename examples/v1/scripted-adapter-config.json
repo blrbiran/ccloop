@@ -24,6 +24,7 @@
           "src/index.ts"
         ],
         "failingCommand": null,
+        "safeToRetry": false,
         "evidence": [
           "npm test passed"
         ],

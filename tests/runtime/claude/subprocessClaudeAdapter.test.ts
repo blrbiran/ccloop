@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { buildExecutorPrompt, buildVerifierPrompt } from "../../../src/runtime/claude/prompts.js";
 import { SubprocessClaudeAdapter } from "../../../src/runtime/claude/subprocessClaudeAdapter.js";
 
 const execFileAsync = promisify(execFile);
@@ -139,6 +140,59 @@ async function waitForFileToContain(path: string, expected: string): Promise<voi
 }
 
 describe("SubprocessClaudeAdapter", () => {
+  it("includes the current attempt plan in the executor prompt", () => {
+    const prompt = buildExecutorPrompt({
+      attempt: 1,
+      runDir: ".runs/demo",
+      worktreePath: "/tmp/worktree",
+      contract,
+      state: { status: "executing" },
+      plan: {
+        summary: "change src/index.ts",
+        primaryTargetPaths: ["src/index.ts"],
+      },
+    } as any);
+
+    expect(prompt).toContain("Current attempt plan (source of truth for this execution):");
+    expect(prompt).toContain('"summary": "change src/index.ts"');
+    expect(prompt).toContain('"primaryTargetPaths": [');
+  });
+
+  it("includes plan, execution, rejectOn, and evidenceRequired in the verifier prompt", () => {
+    const prompt = buildVerifierPrompt({
+      attempt: 1,
+      runDir: ".runs/demo",
+      worktreePath: "/tmp/worktree",
+      contract: {
+        ...contract,
+        verification: {
+          ...contract.verification,
+          evidenceRequired: ["command output"],
+        },
+      },
+      state: { status: "verifying" },
+      plan: {
+        summary: "change src/index.ts",
+        primaryTargetPaths: ["src/index.ts"],
+      },
+      execution: {
+        changedFiles: ["src/index.ts"],
+        diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+        commandOutputs: ["edited"],
+        stdoutStderrLog: "ok",
+      },
+    } as any);
+
+    expect(prompt).toContain("Reject-on conditions (must force approved=false when present in evidence):");
+    expect(prompt).toContain("tests fail");
+    expect(prompt).toContain("Required evidence labels (approved must be false if any are missing from evidence):");
+    expect(prompt).toContain("command output");
+    expect(prompt).toContain("Current attempt plan:");
+    expect(prompt).toContain("Current execution outcome:");
+    expect(prompt).toContain('"changedFiles": [');
+    expect(prompt).toContain('"src/index.ts"');
+  });
+
   it("passes phase context through the wrapper and parses structured JSON", async () => {
     const context = {
       attempt: 1,

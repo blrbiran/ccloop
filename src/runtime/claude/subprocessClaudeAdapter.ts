@@ -113,7 +113,7 @@ export class SubprocessClaudeAdapter implements RuntimeAdapter {
         this.config.command,
         {
           phase: "execute",
-          prompt: buildExecutorPrompt(context.contract),
+          prompt: buildExecutorPrompt(context),
           attempt: context.attempt,
           runDir: context.runDir,
           worktreePath: context.worktreePath,
@@ -135,7 +135,7 @@ export class SubprocessClaudeAdapter implements RuntimeAdapter {
       this.config.command,
       {
         phase: "verify",
-        prompt: buildVerifierPrompt(context.contract),
+        prompt: buildVerifierPrompt(context),
         attempt: context.attempt,
         runDir: context.runDir,
         worktreePath: context.worktreePath,
