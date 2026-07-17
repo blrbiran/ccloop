@@ -29,6 +29,7 @@
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->
 <!-- Format: [YYYY-MM-DD] Description of what went wrong and what to do instead. -->
+- [2026-07-17] When generating TypeScript via Python for this worktree, escape newline sequences inside JS/TS string literals as \\n; otherwise Vitest/esbuild will fail on unterminated strings.
 - [2026-07-14] When running npm commands for the implementation worktree, use `npm --prefix /absolute/worktree/path ...` because this agent's own cwd is a different isolated worktree.
 
 - [2026-07-15] When generating TypeScript files via Python in this implementation worktree, double-escape intended `\n` sequences so JSONL/template literals do not become accidental physical newlines.
