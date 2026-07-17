@@ -49,7 +49,7 @@ The runtime adapter translates a contract-driven attempt into concrete planner, 
 
 ### Workspace Manager
 
-The workspace manager creates and cleans up one isolated workspace per attempt. For code tasks, this is a git worktree by default.
+The workspace manager creates and cleans up one isolated workspace per attempt. For code tasks, this is a git worktree by default. If worktree creation fails, the controller may perform one bounded infrastructure retry; if the workspace is still unavailable, the run transitions to `blocked_waiting_human`. The controller must not fall back to editing in the main checkout. When a run ends in `blocked_waiting_human`, the attempt worktree is preserved for human handoff.
 
 ### Stop Controller
 
@@ -112,6 +112,9 @@ The success condition must be phrased so the verifier can judge it with evidence
 - `totalRuntimeBudgetMs`
 - `tokenBudget`
 - `worktreeRequired`
+- `partialOutcomeRecoveryWindowMs`
+
+`partialOutcomeRecoveryWindowMs` is an execute-only recovery window. After an execute timeout/abort, the controller waits up to this bound for the runtime adapter to flush and return a structured partial execution outcome before finalizing the run as exhausted.
 
 ### Safety Policy
 
@@ -167,7 +170,20 @@ Each loop round is controller-driven and discrete.
    - Run inside an isolated workspace.
    - Produce changed files, command output, and structured execution notes.
    - Never declare task success.
-   - After execution produces changed files, path-policy human gates are evaluated before any budget-based terminal decision. If execution already requires human handoff, the run ends as `blocked_waiting_human` and preserves the worktree even when the same phase also exhausted remaining budget.
+   - The runtime adapter exposes execute-phase results as either a complete execution outcome or a structured partial execution outcome.
+   - If execution ends with a timeout or error but still yields identifiable partial execution artifacts, the runtime adapter should return those artifacts in a structured partial execution outcome rather than forcing the controller to infer them from workspace state.
+   - Execute timeout first triggers adapter abort, then opens an execute-only recovery window bounded by `partialOutcomeRecoveryWindowMs`.
+   - During that recovery window, the controller only waits for a structured partial execution outcome from the runtime adapter; if no partial outcome arrives before the window expires, the controller finalizes the run as exhausted.
+   - If the controller receives a partial execution outcome with identifiable changed files, it must evaluate path-policy human gates against those partial artifacts before applying any budget-based terminal decision.
+   - If those partial execution artifacts require human handoff, the current automated run ends as `blocked_waiting_human` and preserves the worktree even when the same phase also exhausted remaining budget.
+
+The controller does not infer partial execution outcomes by scanning the workspace; partial execution recovery is an adapter/wrapper responsibility.
+
+A minimal V1 execute-phase contract is:
+- complete outcome: changed files, diff/command output, structured execution notes
+- partial outcome: identifiable changed files plus whatever diff/log output is available, with a terminal reason such as timeout or error
+- recovery window: execute-phase only, bounded by `partialOutcomeRecoveryWindowMs`, used solely to let the adapter flush and return a structured partial execution outcome after timeout/abort
+- After execution produces changed files, path-policy human gates are evaluated before any budget-based terminal decision. If execution already requires human handoff, the run ends as `blocked_waiting_human` and preserves the worktree even when the same phase also exhausted remaining budget.
 
 3. **Verify**
    - Run the required checks.
@@ -202,7 +218,7 @@ The stop controller evaluates rules in fixed priority order:
 5. runtime, timeout, or token budget exhausted
 6. repeated failure pattern detected
 
-For V1, a repeated failure pattern means two consecutive failed attempts with the same verifier rejection category and the same primary target paths or failing command.
+For V1, a repeated failure pattern means two consecutive failed attempts with the same verifier rejection category and either the same primary target paths or the same failing command.
 7. verifier rejection with no safe retry path
 
 This order prevents the executor from drifting into endless self-extension.

@@ -4,7 +4,7 @@
 
 **Goal:** Build a runnable TypeScript CLI that executes one code-task loop end-to-end with contract validation, durable state, isolated worktrees, stop control, and a Claude-backed runtime adapter under L2 assisted autonomy.
 
-**Architecture:** A small kernel owns contract validation, run state, stop policy, persistence, and attempt orchestration. Runtime adapters provide planner/executor/verifier behavior; V1 ships with a deterministic scripted adapter for tests and a subprocess-based Claude adapter for real runs.
+**Architecture:** A small kernel owns contract validation, run state, stop policy, persistence, and attempt orchestration. Runtime adapters provide planner/executor/verifier behavior, while the controller remains authoritative over worktree lifecycle, retries, human gates, artifact validation, and stop decisions. V1 ships with a deterministic scripted adapter for tests and a subprocess-based Claude adapter for real runs.
 
 **Tech Stack:** Node.js 20, TypeScript 5, Zod, Vitest, native `fs/promises`, native `child_process`, `git` CLI
 
@@ -14,13 +14,16 @@
 - The framework uses a mixed-mode architecture.
 - The first supported operating model is L2 assisted autonomy.
 - Code-modifying attempts run in isolated worktrees.
+- If worktree creation fails, the controller may perform one bounded infrastructure retry; otherwise it must block for human input and must not fall back to in-place execution in the main checkout.
+- If a run ends in `blocked_waiting_human`, the attempt worktree is preserved for human handoff.
+- Claude phase execution is managed non-intrusively through a subprocess wrapper; completion is determined by validated artifacts and structured results, not assistant text alone.
 - Executors cannot declare success.
 - Conversation history is not treated as durable system state.
 - If a path matches both an allowlist and a denylist rule, the denylist always wins.
 - `retryable` is a controller decision, not a persisted state. It increments the attempt counter, records the retry reason, and transitions the run back to `planning`.
-- `pause_on` defines conditions that suspend progress and wait for human input without ending the run. `stop_on` defines conditions that immediately end the run. `terminal_states` is the allowed set of persisted end states.
-- For V1, a repeated failure pattern means two consecutive failed attempts with the same verifier rejection category and the same primary target paths or failing command.
-- For V1, `budget_snapshot` includes at least `attempts_remaining`, `time_remaining_ms`, and `token_budget_remaining`.
+- `pauseOn` defines conditions that suspend autonomous progress and move the current automated run into `blocked_waiting_human` for human handoff. In V1, that ends the current automated run while preserving state, artifacts, and worktree for later human action. `stopOn` defines conditions that immediately end the run. `terminalStates` is the allowed set of persisted end states for a single automated run.
+- For V1, a repeated failure pattern means two consecutive failed attempts with the same verifier rejection category and either the same primary target paths or the same failing command.
+- For V1, `budgetSnapshot` includes at least `attemptsRemaining`, `timeRemainingMs`, and `tokenBudgetRemaining`.
 
 ---
 
@@ -557,6 +560,60 @@ describe("evaluateStopDecision", () => {
       }).kind,
     ).toBe("exhausted");
   });
+
+  it("exhausts when the failure category and command repeat even if target paths change", () => {
+    expect(
+      evaluateStopDecision({
+        humanCancelled: false,
+        successSatisfied: false,
+        humanGateHit: false,
+        attemptNumber: 2,
+        maxAttempts: 3,
+        budgetExceeded: false,
+        recentFailures: [
+          {
+            rejectCategory: "tests-failed",
+            primaryTargetPaths: ["src/first.ts"],
+            failingCommand: "npm test",
+          },
+        ],
+        verifier: {
+          approved: false,
+          rejectCategory: "tests-failed",
+          primaryTargetPaths: ["src/second.ts"],
+          failingCommand: "npm test",
+          safeToRetry: true,
+        },
+      }).kind,
+    ).toBe("exhausted");
+  });
+
+  it("exhausts when the failure category and target paths repeat even if the failing command changes", () => {
+    expect(
+      evaluateStopDecision({
+        humanCancelled: false,
+        successSatisfied: false,
+        humanGateHit: false,
+        attemptNumber: 2,
+        maxAttempts: 3,
+        budgetExceeded: false,
+        recentFailures: [
+          {
+            rejectCategory: "tests-failed",
+            primaryTargetPaths: ["src/core.ts"],
+            failingCommand: "npm test",
+          },
+        ],
+        verifier: {
+          approved: false,
+          rejectCategory: "tests-failed",
+          primaryTargetPaths: ["src/core.ts"],
+          failingCommand: "pnpm test",
+          safeToRetry: true,
+        },
+      }).kind,
+    ).toBe("exhausted");
+  });
 });
 ```
 
@@ -667,11 +724,11 @@ import type { FailureFingerprint, StopDecision, StopDecisionInput } from "../sta
 function isRepeatedFailure(previous: FailureFingerprint | undefined, current: StopDecisionInput["verifier"]): boolean {
   if (!previous) return false;
 
-  return (
-    previous.rejectCategory === current.rejectCategory &&
-    JSON.stringify(previous.primaryTargetPaths) === JSON.stringify(current.primaryTargetPaths) &&
-    previous.failingCommand === current.failingCommand
-  );
+  const sameCategory = previous.rejectCategory === current.rejectCategory;
+  const samePaths = JSON.stringify(previous.primaryTargetPaths) === JSON.stringify(current.primaryTargetPaths);
+  const sameCommand = previous.failingCommand === current.failingCommand;
+
+  return sameCategory && (samePaths || sameCommand);
 }
 
 export function evaluateStopDecision(input: StopDecisionInput): StopDecision {
@@ -940,13 +997,16 @@ git commit -m "feat: add isolated worktree management"
 
 ### Task 6: Define runtime adapter interfaces and a deterministic scripted adapter
 
+Task 6 defines the stable V1 runtime adapter surface used by later controller and Claude adapter tasks. The interface must already accept per-attempt context and must already expose verifier `pauseSignals` / `stopSignals`, so Tasks 8 and 9 can build on it without a breaking redesign.
+
 **Files:**
 - Create: `src/runtime/types.ts`
 - Create: `src/runtime/scriptedAdapter.ts`
 - Test: `tests/runtime/scriptedAdapter.test.ts`
 
 **Interfaces:**
-- Consumes: `LoopContract`, `RunState`
+- Consumes: `LoopContract`, `RunState`, `AttemptContext`
+- Produces: `type AttemptContext = { contract: LoopContract; state: RunState; runDir: string; attempt: number; worktreePath: string }`
 - Produces: `type AttemptPlan`
 - Produces: `type ExecutionResult`
 - Produces: `type VerificationResult`
@@ -961,22 +1021,32 @@ import { describe, expect, it } from "vitest";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter";
 
 describe("ScriptedAdapter", () => {
-  it("returns the next scripted plan, execution result, and verification result", async () => {
+  it("returns the next scripted plan, execution result, and verification result for a provided attempt context", async () => {
     const adapter = new ScriptedAdapter([
       {
         plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
         execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "ok" },
-        verification: { approved: true, rejectCategory: "", primaryTargetPaths: ["src/index.ts"], failingCommand: null, safeToRetry: false, evidence: ["npm test passed"] },
+        verification: { approved: true, rejectCategory: "", primaryTargetPaths: ["src/index.ts"], failingCommand: null, safeToRetry: false, evidence: ["npm test passed"], pauseSignals: [], stopSignals: [] },
       },
     ]);
 
-    const plan = await adapter.plan();
-    const execution = await adapter.execute();
-    const verification = await adapter.verify();
+    const context = {
+      contract: {} as any,
+      state: {} as any,
+      runDir: ".runs/demo",
+      attempt: 1,
+      worktreePath: "/tmp/worktree",
+    };
+
+    const plan = await adapter.plan(context);
+    const execution = await adapter.execute(context);
+    const verification = await adapter.verify(context);
 
     expect(plan.summary).toBe("change src/index.ts");
     expect(execution.changedFiles).toEqual(["src/index.ts"]);
     expect(verification.approved).toBe(true);
+    expect(verification.pauseSignals).toEqual([]);
+    expect(verification.stopSignals).toEqual([]);
   });
 });
 ```
@@ -991,6 +1061,17 @@ Expected: FAIL because the runtime adapter modules do not exist.
 
 ```ts
 // src/runtime/types.ts
+import type { LoopContract } from "../contract/schema";
+import type { RunState } from "../state/types";
+
+export type AttemptContext = {
+  contract: LoopContract;
+  state: RunState;
+  runDir: string;
+  attempt: number;
+  worktreePath: string;
+};
+
 export type AttemptPlan = {
   summary: string;
   primaryTargetPaths: string[];
@@ -1010,18 +1091,20 @@ export type VerificationResult = {
   failingCommand: string | null;
   safeToRetry: boolean;
   evidence: string[];
+  pauseSignals: string[];
+  stopSignals: string[];
 };
 
 export interface RuntimeAdapter {
-  plan(): Promise<AttemptPlan>;
-  execute(): Promise<ExecutionResult>;
-  verify(): Promise<VerificationResult>;
+  plan(context: AttemptContext): Promise<AttemptPlan>;
+  execute(context: AttemptContext): Promise<ExecutionResult>;
+  verify(context: AttemptContext): Promise<VerificationResult>;
 }
 ```
 
 ```ts
 // src/runtime/scriptedAdapter.ts
-import type { AttemptPlan, ExecutionResult, RuntimeAdapter, VerificationResult } from "./types";
+import type { AttemptContext, AttemptPlan, ExecutionResult, RuntimeAdapter, VerificationResult } from "./types";
 
 export type ScriptedFrame = {
   plan: AttemptPlan;
@@ -1037,19 +1120,19 @@ export class ScriptedAdapter implements RuntimeAdapter {
     this.frames = [...frames];
   }
 
-  async plan(): Promise<AttemptPlan> {
+  async plan(_context: AttemptContext): Promise<AttemptPlan> {
     const frame = this.frames.shift();
     if (!frame) throw new Error("no scripted frame remaining");
     this.currentFrame = frame;
     return frame.plan;
   }
 
-  async execute(): Promise<ExecutionResult> {
+  async execute(_context: AttemptContext): Promise<ExecutionResult> {
     if (!this.currentFrame) throw new Error("plan must run before execute");
     return this.currentFrame.execution;
   }
 
-  async verify(): Promise<VerificationResult> {
+  async verify(_context: AttemptContext): Promise<VerificationResult> {
     if (!this.currentFrame) throw new Error("plan must run before verify");
     return this.currentFrame.verification;
   }
@@ -1071,45 +1154,172 @@ git add src/runtime/types.ts src/runtime/scriptedAdapter.ts tests/runtime/script
 git commit -m "feat: add runtime adapter interface and scripted adapter"
 ```
 
-### Task 7: Orchestrate one full V1 run through the controller
+### Task 7: Add runtime path policy and human-gate enforcement
+
+**Files:**
+- Create: `src/policy/pathPolicy.ts`
+- Test: `tests/policy/pathPolicy.test.ts`
+
+**Interfaces:**
+- Produces: `evaluatePathPolicy(input: { changedFiles: string[]; allowlistPaths: string[]; denylistPaths: string[]; maxFilesTouched: number }): { allowed: boolean; humanGateHit: boolean; reason: string | null }`
+
+- [ ] **Step 1: Write the failing path-policy test**
+
+```ts
+// tests/policy/pathPolicy.test.ts
+import { describe, expect, it } from "vitest";
+import { evaluatePathPolicy } from "../../src/policy/pathPolicy";
+
+describe("evaluatePathPolicy", () => {
+  it("blocks denylisted paths even if allowlisted broadly", () => {
+    expect(
+      evaluatePathPolicy({
+        changedFiles: ["src/auth/token.ts"],
+        allowlistPaths: ["src/**"],
+        denylistPaths: ["src/auth/**"],
+        maxFilesTouched: 10,
+      }),
+    ).toEqual({
+      allowed: false,
+      humanGateHit: true,
+      reason: "denylist match: src/auth/token.ts",
+    });
+  });
+
+  it("blocks when changed file count exceeds the limit", () => {
+    expect(
+      evaluatePathPolicy({
+        changedFiles: ["a.ts", "b.ts", "c.ts"],
+        allowlistPaths: [],
+        denylistPaths: [],
+        maxFilesTouched: 2,
+      }).humanGateHit,
+    ).toBe(true);
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npm test -- tests/policy/pathPolicy.test.ts`
+
+Expected: FAIL because the path policy module does not exist.
+
+- [ ] **Step 3: Write the path-policy implementation**
+
+```ts
+// src/policy/pathPolicy.ts
+function matches(pattern: string, value: string): boolean {
+  if (pattern.endsWith("/**")) {
+    const prefix = pattern.slice(0, -2);
+    return value.startsWith(prefix);
+  }
+  if (pattern === "**") return true;
+  return pattern === value;
+}
+
+export function evaluatePathPolicy(input: {
+  changedFiles: string[];
+  allowlistPaths: string[];
+  denylistPaths: string[];
+  maxFilesTouched: number;
+}): { allowed: boolean; humanGateHit: boolean; reason: string | null } {
+  if (input.changedFiles.length > input.maxFilesTouched) {
+    return { allowed: false, humanGateHit: true, reason: `max files exceeded: ${input.changedFiles.length}` };
+  }
+
+  for (const file of input.changedFiles) {
+    if (input.denylistPaths.some((pattern) => matches(pattern, file))) {
+      return { allowed: false, humanGateHit: true, reason: `denylist match: ${file}` };
+    }
+  }
+
+  if (input.allowlistPaths.length > 0) {
+    for (const file of input.changedFiles) {
+      if (!input.allowlistPaths.some((pattern) => matches(pattern, file))) {
+        return { allowed: false, humanGateHit: true, reason: `allowlist miss: ${file}` };
+      }
+    }
+  }
+
+  return { allowed: true, humanGateHit: false, reason: null };
+}
+```
+
+- [ ] **Step 4: Run tests and typecheck**
+
+Run:
+- `npm test -- tests/policy/pathPolicy.test.ts`
+- `npm run typecheck`
+
+Expected: both commands pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/policy/pathPolicy.ts tests/policy/pathPolicy.test.ts
+git commit -m "feat: add runtime path policy enforcement"
+```
+
+### Task 8: Orchestrate one full V1 run through the controller
+
+Within Task 8, if `execute()` has already produced changed files and `evaluatePathPolicy(...)` requires human handoff, the controller must end the current automated run as `blocked_waiting_human` and preserve the worktree before any budget-based terminal decision. When `execute()` ends with a timeout or error, Task 8 only applies that same precedence if the runtime adapter already returned a structured partial execution outcome; Task 8 does not scan the workspace to infer partial execution results. After Task 9, Task 8 must consume the finalized execute-phase adapter contract: the adapter owns the execute-only recovery window and returns the final execute-phase result (complete, partial, or no result), while Task 8 applies policy ordering and terminal-state handling to that returned result.
 
 **Files:**
 - Create: `src/controller/runLoop.ts`
 - Test: `tests/controller/runLoop.integration.test.ts`
 
 **Interfaces:**
-- Consumes: `LoopContract`, `RunState`, `RuntimeAdapter`, `evaluateStopDecision`, `transitionRunState`, file-store helpers, worktree helpers
+- Consumes: `LoopContract`, `RunState`, `RuntimeAdapter`, `evaluateStopDecision`, `transitionRunState`, `evaluatePathPolicy`, file-store helpers, worktree helpers
+- Produces: `type AttemptContext = { contract: LoopContract; state: RunState; runDir: string; attempt: number; worktreePath: string }`
 - Produces: `runLoop(contract: LoopContract, runDir: string, adapter: RuntimeAdapter): Promise<RunState>`
 
 - [ ] **Step 1: Write the failing integration tests**
 
 ```ts
 // tests/controller/runLoop.integration.test.ts
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { runLoop } from "../../src/controller/runLoop";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter";
 import type { LoopContract } from "../../src/contract/schema";
 
-const contract: LoopContract = {
-  objective: { taskId: "task-1", goal: "Fix test", successCondition: "required checks pass", nonGoals: [] },
-  context: { repoPath: process.cwd(), targetPaths: ["src"], relevantDocs: [], buildTestCommands: ["npm test"], constraints: [] },
-  executionPolicy: { autonomyLevel: "L2", maxAttempts: 3, perAttemptTimeoutMs: 1000, totalRuntimeBudgetMs: 5000, tokenBudget: 1000, worktreeRequired: true },
-  safetyPolicy: { allowlistPaths: ["src/**"], denylistPaths: [".env"], maxFilesTouched: 10, humanGateConditions: [] },
-  verification: { verifierType: "agent", requiredChecks: ["npm test"], rejectOn: ["tests fail"], evidenceRequired: [] },
-  escalationAndExit: { escalationTargets: ["human"], pauseOn: [], stopOn: [], terminalStates: ["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"] },
-};
+const execFileAsync = promisify(execFile);
+
+async function createRepo(): Promise<string> {
+  const repoDir = await mkdtemp(join(tmpdir(), "ccloop-repo-"));
+  await execFileAsync("git", ["init"], { cwd: repoDir });
+  await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd: repoDir });
+  await execFileAsync("git", ["config", "user.name", "Test User"], { cwd: repoDir });
+  await mkdir(join(repoDir, "src"), { recursive: true });
+  await writeFile(join(repoDir, "src", "index.ts"), "export const value = 1;\n");
+  await execFileAsync("git", ["add", "src/index.ts"], { cwd: repoDir });
+  await execFileAsync("git", ["commit", "-m", "init"], { cwd: repoDir });
+  return repoDir;
+}
 
 describe("runLoop", () => {
   it("succeeds when verification approves", async () => {
+    const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract: LoopContract = {
+      objective: { taskId: "task-1", goal: "Fix test", successCondition: "required checks pass", nonGoals: [] },
+      context: { repoPath, targetPaths: ["src"], relevantDocs: [], buildTestCommands: ["npm test"], constraints: [] },
+      executionPolicy: { autonomyLevel: "L2", maxAttempts: 3, perAttemptTimeoutMs: 1000, totalRuntimeBudgetMs: 5000, tokenBudget: 1000, worktreeRequired: true },
+      safetyPolicy: { allowlistPaths: ["src/**"], denylistPaths: [".env"], maxFilesTouched: 10, humanGateConditions: [] },
+      verification: { verifierType: "agent", requiredChecks: ["npm test"], rejectOn: ["tests fail"], evidenceRequired: [] },
+      escalationAndExit: { escalationTargets: ["human"], pauseOn: [], stopOn: [], terminalStates: ["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"] },
+    };
+
     const adapter = new ScriptedAdapter([
       {
         plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
         execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "ok" },
-        verification: { approved: true, rejectCategory: "", primaryTargetPaths: ["src/index.ts"], failingCommand: null, safeToRetry: false, evidence: ["npm test passed"] },
+        verification: { approved: true, rejectCategory: "", primaryTargetPaths: ["src/index.ts"], failingCommand: null, safeToRetry: false, evidence: ["npm test passed"], pauseSignals: [], stopSignals: [] },
       },
     ]);
 
@@ -1117,23 +1327,35 @@ describe("runLoop", () => {
     expect(finalState.status).toBe("succeeded");
   });
 
-  it("blocks after the second failed attempt because L2 requires human approval", async () => {
+  it("preserves the worktree when the run blocks for human input", async () => {
+    const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract: LoopContract = {
+      objective: { taskId: "task-1", goal: "Fix test", successCondition: "required checks pass", nonGoals: [] },
+      context: { repoPath, targetPaths: ["src"], relevantDocs: [], buildTestCommands: ["npm test"], constraints: [] },
+      executionPolicy: { autonomyLevel: "L2", maxAttempts: 3, perAttemptTimeoutMs: 1000, totalRuntimeBudgetMs: 5000, tokenBudget: 1000, worktreeRequired: true },
+      safetyPolicy: { allowlistPaths: ["src/**"], denylistPaths: [".env"], maxFilesTouched: 10, humanGateConditions: [] },
+      verification: { verifierType: "agent", requiredChecks: ["npm test"], rejectOn: ["tests fail"], evidenceRequired: [] },
+      escalationAndExit: { escalationTargets: ["human"], pauseOn: [], stopOn: [], terminalStates: ["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"] },
+    };
+
     const adapter = new ScriptedAdapter([
       {
-        plan: { summary: "change src/a.ts", primaryTargetPaths: ["src/a.ts"] },
-        execution: { changedFiles: ["src/a.ts"], diffPatch: "diff --git a/src/a.ts b/src/a.ts", commandOutputs: ["edited"], stdoutStderrLog: "fail" },
-        verification: { approved: false, rejectCategory: "tests-failed", primaryTargetPaths: ["src/a.ts"], failingCommand: "npm test", safeToRetry: true, evidence: ["FAIL"] },
+        plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+        execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "fail" },
+        verification: { approved: false, rejectCategory: "tests-failed", primaryTargetPaths: ["src/index.ts"], failingCommand: "npm test", safeToRetry: true, evidence: ["FAIL"], pauseSignals: [], stopSignals: [] },
       },
       {
-        plan: { summary: "change src/a.ts again", primaryTargetPaths: ["src/a.ts"] },
-        execution: { changedFiles: ["src/a.ts"], diffPatch: "diff --git a/src/a.ts b/src/a.ts", commandOutputs: ["edited again"], stdoutStderrLog: "fail" },
-        verification: { approved: false, rejectCategory: "different-reason", primaryTargetPaths: ["src/a.ts"], failingCommand: "npm test", safeToRetry: true, evidence: ["FAIL"] },
+        plan: { summary: "change src/index.ts again", primaryTargetPaths: ["src/index.ts"] },
+        execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited again"], stdoutStderrLog: "fail" },
+        verification: { approved: false, rejectCategory: "different-reason", primaryTargetPaths: ["src/index.ts"], failingCommand: "npm test", safeToRetry: true, evidence: ["FAIL"], pauseSignals: [], stopSignals: [] },
       },
     ]);
 
     const finalState = await runLoop(contract, runDir, adapter);
     expect(finalState.status).toBe("blocked_waiting_human");
+    const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+    expect(stdout).toContain(join(runDir, "worktrees", "attempt-2"));
   });
 });
 ```
@@ -1148,12 +1370,22 @@ Expected: FAIL because the controller does not exist.
 
 ```ts
 // src/controller/runLoop.ts
-import { initializeRunFiles, appendEvent, writeAttemptArtifacts, writeRunState } from "../persistence/fileStore";
+import { appendEvent, initializeRunFiles, writeAttemptArtifacts, writeRunState } from "../persistence/fileStore";
+import { evaluatePathPolicy } from "../policy/pathPolicy";
 import { evaluateStopDecision } from "../stop/stopController";
 import { transitionRunState } from "../state/stateMachine";
 import type { LoopContract } from "../contract/schema";
 import type { FailureFingerprint, RunState } from "../state/types";
 import type { RuntimeAdapter } from "../runtime/types";
+import { cleanupAttemptWorkspace, createAttemptWorkspace } from "../workspace/worktreeManager";
+
+export type AttemptContext = {
+  contract: LoopContract;
+  state: RunState;
+  runDir: string;
+  attempt: number;
+  worktreePath: string;
+};
 
 function initialState(contract: LoopContract): RunState {
   return {
@@ -1173,69 +1405,113 @@ function initialState(contract: LoopContract): RunState {
 }
 
 export async function runLoop(contract: LoopContract, runDir: string, adapter: RuntimeAdapter): Promise<RunState> {
-  let state = initialState(contract);
+  let state = transitionRunState(initialState(contract), "planning");
   await initializeRunFiles(runDir, contract, state);
 
   while (true) {
-    state = transitionRunState(state, "planning");
     await writeRunState(runDir, state);
-
     const attempt = state.attemptsUsed + 1;
-    const plan = await adapter.plan();
-    state = transitionRunState({ ...state, currentAttempt: attempt, attemptsUsed: attempt }, "executing");
-    await appendEvent(runDir, { type: "attempt_started", at: new Date().toISOString(), detail: `attempt ${attempt}` });
-    await writeRunState(runDir, state);
 
-    const execution = await adapter.execute();
-    state = transitionRunState(state, "verifying");
-    await writeRunState(runDir, state);
+    let worktreePath: string | null = null;
+    let infraRetryUsed = false;
 
-    const verification = await adapter.verify();
-    await writeAttemptArtifacts(runDir, attempt, {
-      plan,
-      execution,
-      verify: verification,
-      diffPatch: execution.diffPatch,
-      stdoutStderrLog: execution.stdoutStderrLog,
-    });
-
-    const decision = evaluateStopDecision({
-      humanCancelled: false,
-      successSatisfied: verification.approved,
-      humanGateHit: false,
-      attemptNumber: attempt,
-      maxAttempts: contract.executionPolicy.maxAttempts,
-      budgetExceeded: false,
-      recentFailures: state.recentFailures,
-      verifier: verification,
-    });
-
-    if (decision.kind === "retryable") {
-      const failure: FailureFingerprint = {
-        rejectCategory: verification.rejectCategory,
-        primaryTargetPaths: verification.primaryTargetPaths,
-        failingCommand: verification.failingCommand,
-      };
-      state = transitionRunState(
-        {
-          ...state,
-          recentFailures: [...state.recentFailures, failure],
-          budgetSnapshot: {
-            ...state.budgetSnapshot,
-            attemptsRemaining: contract.executionPolicy.maxAttempts - attempt,
-          },
-        },
-        "planning",
-        decision.reason,
-      );
-      await writeRunState(runDir, state);
-      continue;
+    while (!worktreePath) {
+      try {
+        worktreePath = (await createAttemptWorkspace(contract.context.repoPath, runDir, attempt)).worktreePath;
+      } catch (error) {
+        if (infraRetryUsed) {
+          state = transitionRunState(state, "blocked_waiting_human", `workspace unavailable: ${String(error)}`);
+          await appendEvent(runDir, { type: "workspace_create_failed", at: new Date().toISOString(), detail: String(error) });
+          await writeRunState(runDir, state);
+          return state;
+        }
+        infraRetryUsed = true;
+        await appendEvent(runDir, { type: "workspace_retry", at: new Date().toISOString(), detail: String(error) });
+      }
     }
 
-    state = transitionRunState(state, decision.kind, decision.reason);
-    await appendEvent(runDir, { type: `loop_${decision.kind}`, at: new Date().toISOString(), detail: decision.reason });
-    await writeRunState(runDir, state);
-    return state;
+    const context: AttemptContext = { contract, state, runDir, attempt, worktreePath };
+
+    try {
+      const plan = await adapter.plan(context);
+      state = transitionRunState({ ...state, currentAttempt: attempt, attemptsUsed: attempt }, "executing");
+      await appendEvent(runDir, { type: "attempt_started", at: new Date().toISOString(), detail: `attempt ${attempt}` });
+      await writeRunState(runDir, state);
+
+      const execution = await adapter.execute(context);
+      const pathPolicy = evaluatePathPolicy({
+        changedFiles: execution.changedFiles,
+        allowlistPaths: contract.safetyPolicy.allowlistPaths,
+        denylistPaths: contract.safetyPolicy.denylistPaths,
+        maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
+      });
+
+      state = transitionRunState(state, "verifying");
+      await writeRunState(runDir, state);
+
+      const verification = await adapter.verify(context);
+      await writeAttemptArtifacts(runDir, attempt, {
+        plan,
+        execution,
+        verify: verification,
+        diffPatch: execution.diffPatch,
+        stdoutStderrLog: execution.stdoutStderrLog,
+      });
+
+      const humanGateHit =
+        pathPolicy.humanGateHit ||
+        verification.pauseSignals.some((signal) => contract.escalationAndExit.pauseOn.includes(signal));
+      const budgetExceeded = verification.stopSignals.some((signal) => contract.escalationAndExit.stopOn.includes(signal));
+
+      const decision = evaluateStopDecision({
+        humanCancelled: false,
+        successSatisfied: verification.approved,
+        humanGateHit,
+        attemptNumber: attempt,
+        maxAttempts: contract.executionPolicy.maxAttempts,
+        budgetExceeded,
+        recentFailures: state.recentFailures,
+        verifier: verification,
+      });
+
+      if (decision.kind === "retryable") {
+        const failure: FailureFingerprint = {
+          rejectCategory: verification.rejectCategory,
+          primaryTargetPaths: verification.primaryTargetPaths,
+          failingCommand: verification.failingCommand,
+        };
+        state = {
+          ...transitionRunState(
+            {
+              ...state,
+              recentFailures: [...state.recentFailures, failure],
+              budgetSnapshot: {
+                ...state.budgetSnapshot,
+                attemptsRemaining: contract.executionPolicy.maxAttempts - attempt,
+              },
+            },
+            "planning",
+            decision.reason,
+          ),
+        };
+        await cleanupAttemptWorkspace(contract.context.repoPath, worktreePath);
+        continue;
+      }
+
+      state = transitionRunState(state, decision.kind, decision.reason);
+      await appendEvent(runDir, { type: `loop_${decision.kind}`, at: new Date().toISOString(), detail: decision.reason });
+      await writeRunState(runDir, state);
+
+      if (decision.kind !== "blocked_waiting_human") {
+        await cleanupAttemptWorkspace(contract.context.repoPath, worktreePath);
+      }
+      return state;
+    } catch (error) {
+      await appendEvent(runDir, { type: "attempt_failed", at: new Date().toISOString(), detail: String(error) });
+      state = transitionRunState(state, "failed", String(error));
+      await writeRunState(runDir, state);
+      return state;
+    }
   }
 }
 ```
@@ -1256,19 +1532,30 @@ git add src/controller/runLoop.ts tests/controller/runLoop.integration.test.ts
 git commit -m "feat: orchestrate the V1 loop controller"
 ```
 
-### Task 8: Add the subprocess-based Claude adapter and wire the CLI to real runs
+### Task 9: Add the subprocess-based Claude adapter and wire the CLI to real runs
+
+Task 9 upgrades the runtime adapter contract to support execute-phase partial outcomes. `execute(context)` must be able to return either a complete execution result or a structured partial execution outcome for timeout/error cases, so Task 8 can apply post-execute human-gate precedence without scanning workspace or git state. Task 9 also owns the execute-only `partialOutcomeRecoveryWindowMs` contract: after timeout/abort, the adapter may use that bounded window to flush and return a structured partial execution outcome before the controller finalizes as exhausted. This recovery window is a first-class execution-policy setting, not an implicit magic-number grace period.
+
+Task 9 must ensure the adapter/wrapper can still deliver a complete execution result if it fully flushes inside the recovery window; the window is not partial-only, it is the bounded period during which the controller accepts the adapter's final execute-phase result.
+
+Recommended V1 default: `partialOutcomeRecoveryWindowMs = 1000`.
+
+Task 8 consumes this contract but does not define it.
 
 **Files:**
 - Create: `src/runtime/claude/prompts.ts`
+- Create: `src/runtime/claude/types.ts`
 - Create: `src/runtime/claude/subprocessClaudeAdapter.ts`
+- Create: `scripts/claude-phase-runner.mjs`
 - Create: `tests/fixtures/fake-claude.mjs`
 - Test: `tests/runtime/claude/subprocessClaudeAdapter.test.ts`
 - Modify: `src/cli.ts`
 - Modify: `src/index.ts`
 
 **Interfaces:**
-- Consumes: `LoopContract`, `RunState`, `AttemptPlan`, `ExecutionResult`, `VerificationResult`, `runLoop()`
-- Produces: `type SubprocessAdapterConfig = { plannerCommand: string[]; executorCommand: string[]; verifierCommand: string[] }`
+- Consumes: `LoopContract`, `AttemptContext`, `AttemptPlan`, `ExecutionResult`, `VerificationResult`, `runLoop()`
+- Produces: `type SubprocessAdapterConfig = { command: string[] }`
+- Produces: `type ClaudePhaseRequest = { phase: "plan" | "execute" | "verify"; prompt: string; attempt: number; runDir: string; worktreePath: string }`
 - Produces: `class SubprocessClaudeAdapter implements RuntimeAdapter`
 
 - [ ] **Step 1: Write the failing Claude adapter test**
@@ -1279,30 +1566,44 @@ import { describe, expect, it } from "vitest";
 import { SubprocessClaudeAdapter } from "../../../src/runtime/claude/subprocessClaudeAdapter";
 
 const adapter = new SubprocessClaudeAdapter({
-  plannerCommand: ["node", "tests/fixtures/fake-claude.mjs", "plan"],
-  executorCommand: ["node", "tests/fixtures/fake-claude.mjs", "execute"],
-  verifierCommand: ["node", "tests/fixtures/fake-claude.mjs", "verify"],
+  command: ["node", "tests/fixtures/fake-claude.mjs"],
 });
 
 describe("SubprocessClaudeAdapter", () => {
-  it("parses planner, executor, and verifier JSON output", async () => {
-    expect((await adapter.plan()).summary).toBe("change src/index.ts");
-    expect((await adapter.execute()).changedFiles).toEqual(["src/index.ts"]);
-    expect((await adapter.verify()).approved).toBe(true);
+  it("passes phase context through the wrapper and parses structured JSON", async () => {
+    const context = {
+      attempt: 1,
+      runDir: ".runs/demo",
+      worktreePath: "/tmp/worktree",
+      contract: {
+        objective: { taskId: "task-1", goal: "Fix test", successCondition: "tests pass", nonGoals: [] },
+      },
+      state: { status: "planning" },
+    } as any;
+
+    expect((await adapter.plan(context)).summary).toBe("change src/index.ts");
+    expect((await adapter.execute(context)).changedFiles).toEqual(["src/index.ts"]);
+    expect((await adapter.verify(context)).approved).toBe(true);
   });
 });
 ```
 
 ```js
 // tests/fixtures/fake-claude.mjs
-const mode = process.argv[2];
-if (mode === "plan") {
-  console.log(JSON.stringify({ summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] }));
-} else if (mode === "execute") {
-  console.log(JSON.stringify({ changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "ok" }));
-} else {
-  console.log(JSON.stringify({ approved: true, rejectCategory: "", primaryTargetPaths: ["src/index.ts"], failingCommand: null, safeToRetry: false, evidence: ["npm test passed"] }));
-}
+let body = "";
+process.stdin.on("data", (chunk) => {
+  body += chunk.toString();
+});
+process.stdin.on("end", () => {
+  const request = JSON.parse(body);
+  if (request.phase === "plan") {
+    console.log(JSON.stringify({ summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] }));
+  } else if (request.phase === "execute") {
+    console.log(JSON.stringify({ changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: [request.worktreePath], stdoutStderrLog: "ok" }));
+  } else {
+    console.log(JSON.stringify({ approved: true, rejectCategory: "", primaryTargetPaths: ["src/index.ts"], failingCommand: null, safeToRetry: false, evidence: ["npm test passed"], pauseSignals: [], stopSignals: [] }));
+  }
+});
 ```
 
 - [ ] **Step 2: Run the adapter test to verify it fails**
@@ -1311,7 +1612,18 @@ Run: `npm test -- tests/runtime/claude/subprocessClaudeAdapter.test.ts`
 
 Expected: FAIL because the subprocess Claude adapter does not exist.
 
-- [ ] **Step 3: Write the Claude adapter and CLI wiring**
+- [ ] **Step 3: Write the Claude adapter, wrapper contract, and CLI wiring**
+
+```ts
+// src/runtime/claude/types.ts
+export type ClaudePhaseRequest = {
+  phase: "plan" | "execute" | "verify";
+  prompt: string;
+  attempt: number;
+  runDir: string;
+  worktreePath: string;
+};
+```
 
 ```ts
 // src/runtime/claude/prompts.ts
@@ -1333,18 +1645,19 @@ export function buildVerifierPrompt(contract: LoopContract): string {
 ```ts
 // src/runtime/claude/subprocessClaudeAdapter.ts
 import { spawn } from "node:child_process";
-import type { RuntimeAdapter, AttemptPlan, ExecutionResult, VerificationResult } from "../types";
+import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./prompts";
+import type { ClaudePhaseRequest } from "./types";
+import type { AttemptContext } from "../../controller/runLoop";
+import type { AttemptPlan, ExecutionResult, RuntimeAdapter, VerificationResult } from "../types";
 
 type SubprocessAdapterConfig = {
-  plannerCommand: string[];
-  executorCommand: string[];
-  verifierCommand: string[];
+  command: string[];
 };
 
-async function runJsonCommand(command: string[]): Promise<unknown> {
+async function runPhase<T>(command: string[], request: ClaudePhaseRequest): Promise<T> {
   const [file, ...args] = command;
   return await new Promise((resolve, reject) => {
-    const child = spawn(file!, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(file!, args, { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -1358,26 +1671,59 @@ async function runJsonCommand(command: string[]): Promise<unknown> {
         reject(new Error(stderr || `command failed with exit code ${code}`));
         return;
       }
-      resolve(JSON.parse(stdout));
+      resolve(JSON.parse(stdout) as T);
     });
+    child.stdin.end(JSON.stringify(request));
   });
 }
 
 export class SubprocessClaudeAdapter implements RuntimeAdapter {
   constructor(private readonly config: SubprocessAdapterConfig) {}
 
-  async plan(): Promise<AttemptPlan> {
-    return (await runJsonCommand(this.config.plannerCommand)) as AttemptPlan;
+  async plan(context: AttemptContext): Promise<AttemptPlan> {
+    return await runPhase<AttemptPlan>(this.config.command, {
+      phase: "plan",
+      prompt: buildPlannerPrompt(context.contract),
+      attempt: context.attempt,
+      runDir: context.runDir,
+      worktreePath: context.worktreePath,
+    });
   }
 
-  async execute(): Promise<ExecutionResult> {
-    return (await runJsonCommand(this.config.executorCommand)) as ExecutionResult;
+  async execute(context: AttemptContext): Promise<ExecutionResult> {
+    return await runPhase<ExecutionResult>(this.config.command, {
+      phase: "execute",
+      prompt: buildExecutorPrompt(context.contract),
+      attempt: context.attempt,
+      runDir: context.runDir,
+      worktreePath: context.worktreePath,
+    });
   }
 
-  async verify(): Promise<VerificationResult> {
-    return (await runJsonCommand(this.config.verifierCommand)) as VerificationResult;
+  async verify(context: AttemptContext): Promise<VerificationResult> {
+    return await runPhase<VerificationResult>(this.config.command, {
+      phase: "verify",
+      prompt: buildVerifierPrompt(context.contract),
+      attempt: context.attempt,
+      runDir: context.runDir,
+      worktreePath: context.worktreePath,
+    });
   }
 }
+```
+
+```js
+// scripts/claude-phase-runner.mjs
+let body = "";
+process.stdin.on("data", (chunk) => {
+  body += chunk.toString();
+});
+process.stdin.on("end", async () => {
+  const request = JSON.parse(body);
+  // V1 wrapper contract: receive phase prompt/context, call Claude CLI here, return normalized JSON.
+  // Implementation task should replace this stub with the actual Claude invocation.
+  process.stdout.write(JSON.stringify({ phase: request.phase, promptLength: request.prompt.length }));
+});
 ```
 
 ```ts
@@ -1432,11 +1778,11 @@ Expected: all commands pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/runtime/claude/prompts.ts src/runtime/claude/subprocessClaudeAdapter.ts src/cli.ts src/index.ts tests/runtime/claude/subprocessClaudeAdapter.test.ts tests/fixtures/fake-claude.mjs
-git commit -m "feat: add Claude subprocess adapter and CLI run wiring"
+git add src/runtime/claude/prompts.ts src/runtime/claude/types.ts src/runtime/claude/subprocessClaudeAdapter.ts scripts/claude-phase-runner.mjs src/cli.ts src/index.ts tests/runtime/claude/subprocessClaudeAdapter.test.ts tests/fixtures/fake-claude.mjs
+git commit -m "feat: add Claude subprocess wrapper adapter"
 ```
 
-### Task 9: Add runnable V1 examples and final smoke coverage
+### Task 10: Add runnable V1 examples and final smoke coverage
 
 **Files:**
 - Create: `examples/v1/minimal-contract.json`
@@ -1587,8 +1933,10 @@ git commit -m "feat: add runnable V1 loop examples"
   - state machine, retry semantics, stop ordering, repeated-failure rule: Task 3
   - durable state, event ledger, and attempt artifacts: Task 4
   - isolated worktrees: Task 5
-  - runtime adapters and Claude adapter: Tasks 6 and 8
-  - end-to-end L2 orchestration: Task 7
-  - runnable examples and smoke path: Task 9
+  - runtime adapters and deterministic scripted adapter: Task 6
+  - runtime path policy and human-gate enforcement: Task 7
+  - end-to-end L2 orchestration: Task 8
+  - Claude adapter and wrapper integration: Task 9
+  - runnable examples and smoke path: Task 10
 - **Placeholder scan:** no `TODO`, `TBD`, or unnamed interfaces remain.
 - **Type consistency:** `LoopContract`, `RunState`, `StopDecision`, `RuntimeAdapter`, and `runLoop()` names are consistent across tasks.
