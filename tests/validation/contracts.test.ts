@@ -66,11 +66,11 @@ describe("validation scenario rendering", () => {
     expect(() => renderScenario("D", { repoPath: fixtureRepo, timeoutMs: -1 })).toThrow(/timeoutMs/);
   });
 
-  it("renders scenarios C and D with the provided timeout and shared recovery window", () => {
+  it("renders scenarios C and D with the provided timeout and fixed shared total budget", () => {
     expect(renderScenario("C", optionsFor("C")).executionPolicy.perAttemptTimeoutMs).toBe(1234);
     expect(renderScenario("D", optionsFor("D")).executionPolicy.perAttemptTimeoutMs).toBe(1234);
-    expect(renderScenario("C", optionsFor("C")).executionPolicy.totalRuntimeBudgetMs).toBe(2468);
-    expect(renderScenario("D", optionsFor("D")).executionPolicy.totalRuntimeBudgetMs).toBe(2468);
+    expect(renderScenario("C", optionsFor("C")).executionPolicy.totalRuntimeBudgetMs).toBe(600000);
+    expect(renderScenario("D", optionsFor("D")).executionPolicy.totalRuntimeBudgetMs).toBe(600000);
     expect(renderScenario("C", optionsFor("C")).executionPolicy.partialOutcomeRecoveryWindowMs).toBe(3000);
     expect(renderScenario("D", optionsFor("D")).executionPolicy.partialOutcomeRecoveryWindowMs).toBe(3000);
   });

@@ -204,7 +204,6 @@ function buildExecutionPolicy(id: ScenarioId, timeoutMs?: number): LoopContract[
     return {
       ...DEFAULT_EXECUTION_POLICY,
       perAttemptTimeoutMs,
-      totalRuntimeBudgetMs: perAttemptTimeoutMs * 2,
     };
   }
 
