@@ -593,6 +593,90 @@ if (request.phase === "plan") { process.stdout.write(JSON.stringify({ summary: "
     expect(observations.loopState.status).toBe("MISSING");
   });
 
+
+  it("fails on an existing evidence directory without overwriting it", async () => {
+    await ensureBuilt();
+    const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-run-scenario-existing-evidence-"));
+    const fixtureDir = join(tempRoot, "fixture");
+    const contractPath = join(tempRoot, "scenario-a.json");
+    const runDir = join(tempRoot, "run");
+    const evidenceDir = join(tempRoot, "evidence");
+    const sentinelPath = join(evidenceDir, "artifacts.json");
+    const adapterConfigPath = join(worktreeRoot, "examples", "v1", "claude-adapter-config.json");
+    const fixture = await createFixture(templateDir, fixtureDir);
+    await mkdir(evidenceDir, { recursive: true });
+    await writeFile(sentinelPath, '{"keep":"original"}\n');
+    await writeFile(contractPath, `${JSON.stringify(renderScenario("A", { repoPath: fixture.repoPath }), null, 2)}\n`);
+
+    await expect(
+      execFileAsync(
+        tsxBin,
+        [
+          runScenarioScript,
+          "--scenario",
+          "A",
+          "--contract",
+          contractPath,
+          "--fixture",
+          fixture.repoPath,
+          "--run-dir",
+          runDir,
+          "--evidence-dir",
+          evidenceDir,
+          "--adapter-config",
+          adapterConfigPath,
+        ],
+        { cwd: worktreeRoot },
+      ),
+    ).rejects.toMatchObject({ stderr: expect.stringMatching(/evidenceDir already exists/) });
+
+    expect(await readFile(sentinelPath, "utf8")).toBe('{"keep":"original"}\n');
+    expect(await pathExists(join(evidenceDir, "invocation.json"))).toBe(false);
+    expect(await pathExists(runDir)).toBe(false);
+  });
+
+  it("fails on an existing run directory without creating evidence or harvesting stale run data", async () => {
+    await ensureBuilt();
+    const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-run-scenario-existing-run-"));
+    const fixtureDir = join(tempRoot, "fixture");
+    const contractPath = join(tempRoot, "scenario-a.json");
+    const runDir = join(tempRoot, "run");
+    const evidenceDir = join(tempRoot, "evidence");
+    const adapterConfigPath = join(worktreeRoot, "examples", "v1", "claude-adapter-config.json");
+    const fixture = await createFixture(templateDir, fixtureDir);
+    await mkdir(join(runDir, "attempts", "1"), { recursive: true });
+    await writeFile(join(runDir, "loop-state.json"), '{"status":"succeeded"}\n');
+    await writeFile(join(runDir, "events.jsonl"), '{"type":"loop_succeeded"}\n');
+    await writeFile(join(runDir, "attempts", "1", "plan.json"), '{"summary":"stale"}\n');
+    await writeFile(contractPath, `${JSON.stringify(renderScenario("A", { repoPath: fixture.repoPath }), null, 2)}\n`);
+
+    await expect(
+      execFileAsync(
+        tsxBin,
+        [
+          runScenarioScript,
+          "--scenario",
+          "A",
+          "--contract",
+          contractPath,
+          "--fixture",
+          fixture.repoPath,
+          "--run-dir",
+          runDir,
+          "--evidence-dir",
+          evidenceDir,
+          "--adapter-config",
+          adapterConfigPath,
+        ],
+        { cwd: worktreeRoot },
+      ),
+    ).rejects.toMatchObject({ stderr: expect.stringMatching(/runDir already exists/) });
+
+    expect(await pathExists(join(evidenceDir, "invocation.json"))).toBe(false);
+    expect(await pathExists(evidenceDir)).toBe(false);
+    expect(await readFile(join(runDir, "attempts", "1", "plan.json"), "utf8")).toContain("stale");
+  });
+
   it("rejects a fixture path that does not match the rendered contract repoPath", async () => {
     await ensureBuilt();
     const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-run-scenario-mismatch-"));
@@ -626,6 +710,58 @@ if (request.phase === "plan") { process.stdout.write(JSON.stringify({ summary: "
         { cwd: worktreeRoot },
       ),
     ).rejects.toMatchObject({ stderr: expect.stringMatching(/contract.*repoPath.*fixture/i) });
+  });
+
+
+  it("rejects a scenario that does not match contract objective.taskId before child launch", async () => {
+    await ensureBuilt();
+    const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-run-scenario-taskid-mismatch-"));
+    const fixtureDir = join(tempRoot, "fixture");
+    const contractPath = join(tempRoot, "scenario-a.json");
+    const adapterScriptPath = join(tempRoot, "launch-marker-runner.mjs");
+    const adapterConfigPath = join(tempRoot, "adapter-config.json");
+    const launchMarkerPath = join(tempRoot, "child-launched.txt");
+    const runDir = join(tempRoot, "run");
+    const evidenceDir = join(tempRoot, "evidence");
+    const fixture = await createFixture(templateDir, fixtureDir);
+    await writeFile(contractPath, `${JSON.stringify(renderScenario("A", { repoPath: fixture.repoPath }), null, 2)}\n`);
+    await writeFile(
+      adapterScriptPath,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(launchMarkerPath)}, "launched\n");\nprocess.stdout.write("{}\n");\n`,
+    );
+    await writeFile(adapterConfigPath, `${JSON.stringify({ command: [process.execPath, adapterScriptPath] }, null, 2)}\n`);
+
+    await expect(
+      execFileAsync(
+        tsxBin,
+        [
+          runScenarioScript,
+          "--scenario",
+          "D",
+          "--contract",
+          contractPath,
+          "--fixture",
+          fixture.repoPath,
+          "--run-dir",
+          runDir,
+          "--evidence-dir",
+          evidenceDir,
+          "--adapter-config",
+          adapterConfigPath,
+        ],
+        { cwd: worktreeRoot },
+      ),
+    ).rejects.toMatchObject({ stderr: expect.stringMatching(/objective\.taskId|scenario/i) });
+
+    expect(await pathExists(launchMarkerPath)).toBe(false);
+    expect(await pathExists(runDir)).toBe(false);
+    expect(await pathExists(join(evidenceDir, "invocation.json"))).toBe(true);
+    const artifacts = JSON.parse(await readFile(join(evidenceDir, "artifacts.json"), "utf8")) as {
+      artifacts: Array<{ name: string; status: string }>;
+    };
+    expect(artifacts.artifacts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "plan", status: "MISSING" })]),
+    );
   });
 
   it("records claudeChildExited as NOT_OBSERVABLE when no adapter descendant was tracked", async () => {
