@@ -62,7 +62,14 @@ Confirmed `/Users/biran/code/skills/loop/ccloop/.worktrees/evidence-first-v1/val
 
 ## Commit
 - Task 4 implementation commit: `acbbe21c20ea0eb2799de610b302b0d7260835f6`
+- Prior reviewed head before this fix: `608c48b99be85d5feae9c50b3fa71016b9d57bde`
+- Current reviewed head after this fix: `0069bab7e283d9433560a757f1f6b5bec234ce79`
 
 ## Concerns
 - `npm ci` reported 5 known vulnerabilities in dependencies (`3 moderate`, `1 high`, `1 critical`), but the task brief did not authorize dependency updates.
 - The worktree already contained unrelated modified/untracked docs and prior-task artifacts (`.superpowers/sdd/task-2-report.md`, `.superpowers/sdd/task-3-report.md`, `.wolf/cerebrum.md`, `dist/`, and untracked docs/briefs). They were preserved and must remain out of the Task 4 commit.
+## Fix Report
+- Review finding 1: updated `/Users/biran/code/skills/loop/ccloop/.worktrees/evidence-first-v1/validation/v1/README.md` preflight to state that npm audit/vulnerability output is observational only and does not authorize dependency changes.
+- Review finding 2: updated this report to distinguish the original Task 4 implementation commit from the reviewed heads before and after the fix.
+- Verification: `grep -n "observational only\|dependency change" validation/v1/README.md` matched the new scope statement.
+- Verification: `git diff --check -- validation/v1/README.md` returned no output.
