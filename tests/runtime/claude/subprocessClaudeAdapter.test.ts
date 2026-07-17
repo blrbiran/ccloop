@@ -182,6 +182,40 @@ process.stdout.write(envelope);
   };
 }
 
+
+async function runRawEnvelopeThroughPhaseRunner(rawEnvelope: string): Promise<{
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  payload: Record<string, unknown>;
+}> {
+  const worktreePath = await mkdtemp(join(tmpdir(), "ccloop-token-raw-usage-worktree-"));
+  const binDir = await createFakeClaudeBinary(`
+process.stdout.write(${JSON.stringify(rawEnvelope)});
+`);
+
+  const { result } = spawnPhaseRunner(
+    {
+      phase: "execute",
+      prompt: "run execute",
+      attempt: 1,
+      runDir: worktreePath,
+      worktreePath,
+      partialOutcomeRecoveryWindowMs: 1000,
+    },
+    {
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    },
+  );
+
+  const outcome = await result;
+  return {
+    ...outcome,
+    payload: JSON.parse(outcome.stdout) as Record<string, unknown>,
+  };
+}
+
 describe("SubprocessClaudeAdapter", () => {
   it("includes the current attempt plan in the executor prompt", () => {
     const prompt = buildExecutorPrompt({
@@ -313,6 +347,41 @@ describe("SubprocessClaudeAdapter", () => {
       });
     });
   }
+
+
+  it("falls back from a non-finite snake alias to a finite camel alias", async () => {
+    const outcome = await runRawEnvelopeThroughPhaseRunner(
+      '{"structured_output":{"changedFiles":["src/index.ts"],"diffPatch":"diff --git a/src/index.ts b/src/index.ts","commandOutputs":["ok"],"stdoutStderrLog":"ok"},"usage":{"input_tokens":1e400,"inputTokens":100,"output_tokens":25}}',
+    );
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.signal).toBeNull();
+    expect(outcome.stderr).toBe("");
+    expect(outcome.payload).toMatchObject({
+      changedFiles: ["src/index.ts"],
+      diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+      commandOutputs: ["ok"],
+      stdoutStderrLog: "ok",
+      tokenUsage: 125,
+    });
+  });
+
+  it("ignores a non-finite alias when no finite fallback exists", async () => {
+    const outcome = await runRawEnvelopeThroughPhaseRunner(
+      '{"structured_output":{"changedFiles":["src/index.ts"],"diffPatch":"diff --git a/src/index.ts b/src/index.ts","commandOutputs":["ok"],"stdoutStderrLog":"ok"},"usage":{"input_tokens":1e400,"output_tokens":25}}',
+    );
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.signal).toBeNull();
+    expect(outcome.stderr).toBe("");
+    expect(outcome.payload).toMatchObject({
+      changedFiles: ["src/index.ts"],
+      diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+      commandOutputs: ["ok"],
+      stdoutStderrLog: "ok",
+      tokenUsage: 25,
+    });
+  });
 
   it("waits for close before parsing wrapper stdout", async () => {
     const delayedWrapperPath = await createNodeScript(

@@ -192,3 +192,22 @@ This is the minimal failing regression because it directly proves alias de-dupli
 ### Historical A-03 Caveat
 - This fix does **not** overwrite, reinterpret, or reclassify historical A-03 evidence.
 - The preserved A-03 artifacts still cannot prove that the real CLI emitted both alias families in that run; they only prove that the old wrapper logic would double count if both were present.
+
+### Non-finite JSON exponent follow-up
+- Added two more actual phase-runner-path regressions using raw valid JSON envelopes so `1e400` survives parse as `Infinity`:
+  - non-finite snake alias with finite camel fallback + finite output => `125`
+  - non-finite snake alias with no finite fallback + finite output => `25`
+- Command: `npm test -- --run tests/runtime/claude/subprocessClaudeAdapter.test.ts`
+- Result: FAIL — both new cases returned `tokenUsage: null` because `typeof === "number"` still accepted parsed `Infinity` and JSON serialization converted the resulting non-finite total to `null`.
+- Minimal follow-up fix: switched alias selection and candidate filtering from `typeof === "number"` to `Number.isFinite`, while preserving snake-first/camel-fallback semantics and all approved finite behavior.
+- Command: `npm test -- --run tests/runtime/claude/subprocessClaudeAdapter.test.ts`
+- Result: PASS — `1` test file passed; `20` tests passed; `0` failed.
+- Command: `npm test`
+- Result: PASS — `13` test files passed; `104` tests passed; `0` failed.
+- Command: `npm run typecheck`
+- Result: PASS — `tsc --noEmit -p tsconfig.json` completed without errors.
+- Command: `npm run build`
+- Result: PASS — TypeScript compiled and regenerated `dist/cli.js` without errors.
+- Command: `git diff --check`
+- Result: PASS — no whitespace or patch-format errors.
+- Historical caveat remains unchanged: A-03 artifacts are preserved and still cannot prove that the real CLI emitted dual aliases; this follow-up only hardens the wrapper against non-finite parsed values at the external JSON boundary.

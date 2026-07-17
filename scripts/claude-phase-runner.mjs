@@ -101,17 +101,17 @@ function getTokenUsage(envelope) {
     return undefined;
   }
 
-  const input = typeof usage.input_tokens === "number"
+  const input = Number.isFinite(usage.input_tokens)
     ? usage.input_tokens
-    : typeof usage.inputTokens === "number"
+    : Number.isFinite(usage.inputTokens)
       ? usage.inputTokens
       : undefined;
-  const output = typeof usage.output_tokens === "number"
+  const output = Number.isFinite(usage.output_tokens)
     ? usage.output_tokens
-    : typeof usage.outputTokens === "number"
+    : Number.isFinite(usage.outputTokens)
       ? usage.outputTokens
       : undefined;
-  const candidates = [input, output].filter((value) => typeof value === "number");
+  const candidates = [input, output].filter((value) => Number.isFinite(value));
   const total = candidates.reduce((sum, value) => sum + value, 0);
 
   return candidates.length > 0 && total > 0 ? total : undefined;
