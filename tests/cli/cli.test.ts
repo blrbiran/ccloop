@@ -1,3 +1,6 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { main, parseArgs } from "../../src/cli.js";
 
@@ -29,13 +32,15 @@ describe("parseArgs", () => {
   });
 
   it("returns 0 for the scripted example run", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-cli-scripted-"));
+
     await expect(
       main([
         "run",
         "--contract",
         "examples/v1/minimal-contract.json",
         "--run-dir",
-        ".runs/example-scripted",
+        runDir,
         "--adapter",
         "scripted",
         "--adapter-config",
