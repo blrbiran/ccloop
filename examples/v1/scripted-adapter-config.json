@@ -1,0 +1,36 @@
+{
+  "frames": [
+    {
+      "plan": {
+        "summary": "change src/index.ts",
+        "primaryTargetPaths": [
+          "src/index.ts"
+        ]
+      },
+      "execution": {
+        "changedFiles": [
+          "src/index.ts"
+        ],
+        "diffPatch": "diff --git a/src/index.ts b/src/index.ts",
+        "commandOutputs": [
+          "edited"
+        ],
+        "stdoutStderrLog": "ok"
+      },
+      "verification": {
+        "approved": true,
+        "rejectCategory": "",
+        "primaryTargetPaths": [
+          "src/index.ts"
+        ],
+        "failingCommand": null,
+        "safeToRetry": false,
+        "evidence": [
+          "npm test passed"
+        ],
+        "pauseSignals": [],
+        "stopSignals": []
+      }
+    }
+  ]
+}

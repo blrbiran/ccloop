@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "bin": {
-    "ccloop": "dist/src/cli.js"
+    "ccloop": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs');fs.writeFileSync('dist/cli.js', '#!/usr/bin/env node\\nexport * from \\\"./src/cli.js\\\";\\nimport { main } from \\\"./src/cli.js\\\";\\nvoid main(process.argv.slice(2)).then((code) => { process.exitCode = code; });\\n');fs.writeFileSync('dist/cli.d.ts', 'export * from \\\"./src/cli.js\\\";\\n');\"",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -1,0 +1,77 @@
+{
+  "objective": {
+    "taskId": "example-1",
+    "goal": "Demonstrate a successful scripted loop run",
+    "successCondition": "The verifier approves the first attempt",
+    "nonGoals": [
+      "Do not modify remote state"
+    ]
+  },
+  "context": {
+    "repoPath": ".",
+    "targetPaths": [
+      "src"
+    ],
+    "relevantDocs": [
+      "docs/superpowers/specs/2026-07-14-loop-engineer-framework-design.md"
+    ],
+    "buildTestCommands": [
+      "npm test"
+    ],
+    "constraints": [
+      "smallest possible diff"
+    ]
+  },
+  "executionPolicy": {
+    "autonomyLevel": "L2",
+    "maxAttempts": 3,
+    "perAttemptTimeoutMs": 300000,
+    "totalRuntimeBudgetMs": 900000,
+    "tokenBudget": 200000,
+    "worktreeRequired": true,
+    "partialOutcomeRecoveryWindowMs": 1000
+  },
+  "safetyPolicy": {
+    "allowlistPaths": [
+      "src/**"
+    ],
+    "denylistPaths": [
+      ".env",
+      "auth/**"
+    ],
+    "maxFilesTouched": 10,
+    "humanGateConditions": [
+      "touches gated path"
+    ]
+  },
+  "verification": {
+    "verifierType": "agent",
+    "requiredChecks": [
+      "npm test"
+    ],
+    "rejectOn": [
+      "tests fail"
+    ],
+    "evidenceRequired": [
+      "command output"
+    ]
+  },
+  "escalationAndExit": {
+    "escalationTargets": [
+      "human"
+    ],
+    "pauseOn": [
+      "missing information"
+    ],
+    "stopOn": [
+      "budget exhausted"
+    ],
+    "terminalStates": [
+      "succeeded",
+      "blocked_waiting_human",
+      "exhausted",
+      "cancelled",
+      "failed"
+    ]
+  }
+}

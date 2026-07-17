@@ -1,0 +1,6 @@
+{
+  "command": [
+    "node",
+    "scripts/claude-phase-runner.mjs"
+  ]
+}

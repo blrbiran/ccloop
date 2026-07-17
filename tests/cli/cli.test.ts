@@ -27,4 +27,20 @@ describe("parseArgs", () => {
   it("returns exit code 1 when required flags are missing", async () => {
     await expect(main(["run"])).resolves.toBe(1);
   });
+
+  it("returns 0 for the scripted example run", async () => {
+    await expect(
+      main([
+        "run",
+        "--contract",
+        "examples/v1/minimal-contract.json",
+        "--run-dir",
+        ".runs/example-scripted",
+        "--adapter",
+        "scripted",
+        "--adapter-config",
+        "examples/v1/scripted-adapter-config.json",
+      ]),
+    ).resolves.toBe(0);
+  });
 });
