@@ -43,6 +43,7 @@
 - [2026-07-18] Before the session's first Bash call, state the current request and exactly what the command verifies so GateGuard does not block it.
 - [2026-07-18] The available reviewer agent is `ecc:code-reviewer`; the unnamespaced `code-reviewer` type is not registered in this environment.
 - [2026-07-18] Validation CLI tests must create their own temporary Git repositories; never depend on ignored `.validation-runs/fixture-smoke`, which may exist in one worktree and not another. Compare canonical paths with `fs.realpath` on macOS because `/var` resolves through `/private/var`.
+- [2026-07-18] When searching Markdown literals containing backticks from Bash, avoid double-quoted `rg` patterns because the shell performs command substitution; use Node string checks or single-quoted patterns.
 
 ## Decision Log
 
@@ -50,3 +51,4 @@
 - [2026-07-14] V1 implementation stack: TypeScript CLI. Why: best fit for local orchestration, Claude adapter integration, JSON/JSONL state, and fast iteration in this repository.
 - [2026-07-17] Next milestone uses an evidence-first sequence: manually exercise real Claude success, human-gate, and interrupted/partial-recovery paths before automating them. Why: automation should encode observed runtime behavior rather than assumptions.
 - [2026-07-18] Claude usage evidence is persisted in standard phase artifacts, not a validation sidecar or full raw envelope. Why: controller accounting and audit evidence must stay phase/attempt-bound without retaining unnecessary or potentially sensitive response data.
+- [2026-07-18] A-04 preparation uses a one-shot-completion-first envelope: `tokenBudget 550000`, `per-attempt timeout 600000ms`, `total runtime 1200000ms`, `recovery 5000ms`, full deterministic preflight, strict single approval, and single-run stop with no automatic next paid call. Why: the user explicitly prioritized maximizing the chance of one complete evidence-grade Scenario A run while preserving the evidence-first V1 boundary and explicit human approval before any real Claude invocation.
