@@ -2,7 +2,7 @@
 
 ## Status
 - Status: DONE
-- Commit: PENDING
+- Implementation commit: `550065fef9d8728ca6862bf94cb4d67d688a4810`
 
 ## Modified Files
 - `tests/runtime/claude/subprocessClaudeAdapter.test.ts`
