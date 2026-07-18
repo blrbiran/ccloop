@@ -17,3 +17,4 @@ Claude usage evidence: complete (commits 65aaf8b..675fee3; whitelisted phase evi
 Task 4: complete (rewritten commits 675fee3..a5478ad, 13 files/113 tests + typecheck/build pass, privacy clean, task review clean; A-04 unapproved/unrun)
 Legacy artifact compatibility: complete (commit 38055b3; real evidence reader accepts artifacts without usageEvidence; 20 evidence tests + typecheck pass)
 History privacy cleanup: complete (backup/evidence-first-v1-before-memory-history-cleanup preserves pre-rewrite state; target branch drops 73fa00e/e0d3fb1; local .wolf/memory.md and 98 validation files preserved; no push)
+Final post-rewrite verification: complete (13 files/114 tests pass; typecheck/build pass; final review approved; no real Claude call; A-04 unapproved/unrun)
