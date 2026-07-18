@@ -29,3 +29,11 @@
 - validation/v1/scripts/prepare-a04.ts — CLI for non-paid A-04 preparation and approval package output (~400 tok)
 
 - tests/validation/prepareA04.test.ts — Covers A-04 main-branch gating, read-only inspection, preserved verified checkout binding, self-contained dependency copy semantics, spec-locked phase order, explicit approval-package fields, overlap guards, and final on-disk contract gating (~2350 tok)
+
+- validation/v1/README.md
+  - Operator-facing validation V1 procedure and A-04 preparation contract, including verified-checkout freezing and symlink/path-safety semantics.
+  - ~330 lines / medium token cost.
+
+- .superpowers/sdd/task-2-report.md
+  - Append-only Task 2 implementation/report log with exact commands, outputs, and follow-up fixes for A-04 preparation.
+  - ~360 lines / medium token cost.

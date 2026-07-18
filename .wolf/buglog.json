@@ -231,5 +231,50 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-18T13:50:14.999356+00:00"
+  },
+  {
+    "id": "bug-012",
+    "timestamp": "2026-07-18T14:34:39.707456+00:00",
+    "error_message": "Final A-04 whole-branch review found adapterConfigPath could still escape through repo-internal or verified-checkout symlinks, and freshness checks treated dangling symlinks as non-existent.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "Adapter-config validation only checked lexical containment plus existence, and freshness used stat-style semantics, so symlink targets outside the frozen checkout and dangling symlink occupants were not rejected mechanically.",
+    "fix": "Switched freshness existence detection to lstat semantics and added realpath-based adapter-config containment checks for both the source repo root and preserved verified checkout, with focused regressions for source escape, verified-checkout escape, and dangling contract/run/evidence symlinks.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "symlink",
+      "realpath",
+      "lstat",
+      "freshness"
+    ],
+    "related_bugs": [
+      "bug-011"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T14:34:39.707456+00:00"
+  },
+  {
+    "id": "bug-013",
+    "timestamp": "2026-07-18T14:34:39.707456+00:00",
+    "error_message": "Typecheck/build failed after the new dangling-symlink parameterized test accessed union-only pathOverrides properties directly.",
+    "file": "tests/validation/prepareA04.test.ts",
+    "root_cause": "The refactored test table used a union of object shapes for contractPath/runDir/evidenceDir, but the test body read all three properties without narrowing, which TypeScript correctly rejected.",
+    "fix": "Changed the parameterized dataset to carry the occupiedPath explicitly so the test still targets the right path field without unsafe union property access, then re-ran focused tests, typecheck, and build successfully.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "test",
+      "typecheck",
+      "build-failure",
+      "union-typing"
+    ],
+    "related_bugs": [
+      "bug-012"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T14:34:39.707456+00:00"
   }
 ]

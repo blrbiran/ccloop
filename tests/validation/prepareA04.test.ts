@@ -89,6 +89,7 @@ function buildDeps(input: {
   pathExists?: (path: string) => Promise<boolean>;
   assertCleanFixture?: (fixturePath: string) => Promise<{ head: string; status: string }>;
   readCurrentBranch?: (repoRoot: string) => Promise<string>;
+  resolveRealPath?: (path: string) => Promise<string>;
   inspectReadOnlyInspection?: (repoRoot: string) => Promise<ReadOnlyInspection>;
   createMainVerificationCheckout?: (repoRoot: string) => Promise<{ path: string; head: string; cleanup: () => Promise<void> }>;
   runCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
@@ -107,6 +108,7 @@ function buildDeps(input: {
         path === "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json"),
     assertCleanFixture: input.assertCleanFixture ?? (async () => ({ head: "fixture-head", status: "" })),
     readCurrentBranch: input.readCurrentBranch ?? (async () => "main"),
+    resolveRealPath: input.resolveRealPath ?? (async (path) => path),
     inspectReadOnlyInspection: input.inspectReadOnlyInspection ?? (async () => buildReadOnlyInspection()),
     createMainVerificationCheckout:
       input.createMainVerificationCheckout ??
@@ -292,18 +294,46 @@ describe("A-04 approval package", () => {
   });
 
   it.each([
-    ["contract path", "/repo/.validation-runs/contracts/A-04.json"],
-    ["run directory", "/repo/.validation-runs/runs/A-04"],
-    ["evidence directory", "/repo/.validation-runs/evidence/A-04"],
-  ])("refuses to prepare when %s already exists", async (label, existingPath) => {
+    [
+      "contract path",
+      { contractPath: "/repo/.validation-runs/contracts/A-04.json" },
+      "/repo/.validation-runs/contracts/A-04.json",
+    ],
+    [
+      "contract path",
+      { contractPath: "/repo/.validation-runs/contracts/A-04.dangling-link" },
+      "/repo/.validation-runs/contracts/A-04.dangling-link",
+    ],
+    [
+      "run directory",
+      { runDir: "/repo/.validation-runs/runs/A-04" },
+      "/repo/.validation-runs/runs/A-04",
+    ],
+    [
+      "run directory",
+      { runDir: "/repo/.validation-runs/runs/A-04.dangling-link" },
+      "/repo/.validation-runs/runs/A-04.dangling-link",
+    ],
+    [
+      "evidence directory",
+      { evidenceDir: "/repo/.validation-runs/evidence/A-04" },
+      "/repo/.validation-runs/evidence/A-04",
+    ],
+    [
+      "evidence directory",
+      { evidenceDir: "/repo/.validation-runs/evidence/A-04.dangling-link" },
+      "/repo/.validation-runs/evidence/A-04.dangling-link",
+    ],
+  ])("refuses to prepare when %s already exists", async (label, pathOverrides, occupiedPath) => {
     const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+    const options = buildOptions({}, pathOverrides);
 
     await expect(
       prepareA04(
-        buildOptions(),
+        options,
         buildDeps({
           pathExists: async (path) =>
-            path === existingPath ||
+            path === occupiedPath ||
             path === "/repo/examples/v1/claude-adapter-config.json" ||
             path === "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
           runCommand,
@@ -316,6 +346,63 @@ describe("A-04 approval package", () => {
       ["npm", ["run", "typecheck"], "/tmp/a04-main-checkout"],
       ["npm", ["run", "build"], "/tmp/a04-main-checkout"],
     ]);
+  });
+
+  it("rejects a dangling symlink at contractPath as non-fresh", async () => {
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions({}, { contractPath: "/repo/.validation-runs/contracts/A-04.dangling-link" }),
+        buildDeps({
+          pathExists: async (path) =>
+            path === "/repo/.validation-runs/contracts/A-04.dangling-link" ||
+            path === "/repo/examples/v1/claude-adapter-config.json" ||
+            path === "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+          runCommand,
+        }),
+      ),
+    ).rejects.toThrow("contract path already exists");
+
+    expect(runCommand).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects a dangling symlink at runDir as non-fresh", async () => {
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions({}, { runDir: "/repo/.validation-runs/runs/A-04.dangling-link" }),
+        buildDeps({
+          pathExists: async (path) =>
+            path === "/repo/.validation-runs/runs/A-04.dangling-link" ||
+            path === "/repo/examples/v1/claude-adapter-config.json" ||
+            path === "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+          runCommand,
+        }),
+      ),
+    ).rejects.toThrow("run directory already exists");
+
+    expect(runCommand).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects a dangling symlink at evidenceDir as non-fresh", async () => {
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions({}, { evidenceDir: "/repo/.validation-runs/evidence/A-04.dangling-link" }),
+        buildDeps({
+          pathExists: async (path) =>
+            path === "/repo/.validation-runs/evidence/A-04.dangling-link" ||
+            path === "/repo/examples/v1/claude-adapter-config.json" ||
+            path === "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+          runCommand,
+        }),
+      ),
+    ).rejects.toThrow("evidence directory already exists");
+
+    expect(runCommand).toHaveBeenCalledTimes(3);
   });
 
   it.each([
@@ -372,6 +459,37 @@ describe("A-04 approval package", () => {
     expect(runCommand).not.toHaveBeenCalled();
   });
 
+  it("rejects adapter configs that are symlinks escaping repo root", async () => {
+    const createMainVerificationCheckout = vi.fn(async () => ({
+      path: "/tmp/a04-main-checkout",
+      head: "verified-main-head",
+      cleanup: async () => {},
+    }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          createMainVerificationCheckout,
+          runCommand,
+          resolveRealPath: async (path) => {
+            if (path === "/repo") {
+              return "/repo";
+            }
+            if (path === "/repo/examples/v1/claude-adapter-config.json") {
+              return "/outside/live-adapter-config.json";
+            }
+            return path;
+          },
+        }),
+      ),
+    ).rejects.toThrow(/adapter config must resolve inside repo root for A-04 approval/);
+
+    expect(createMainVerificationCheckout).not.toHaveBeenCalled();
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
   it("rejects missing adapter configs before creating the verification checkout", async () => {
     const createMainVerificationCheckout = vi.fn(async () => ({
       path: "/tmp/a04-main-checkout",
@@ -413,6 +531,42 @@ describe("A-04 approval package", () => {
         }),
       ),
     ).rejects.toThrow(/adapter config inside the preserved verified checkout must exist for A-04 approval/);
+
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects verified-checkout adapter configs that are symlinks escaping the preserved checkout", async () => {
+    const createMainVerificationCheckout = vi.fn(async () => ({
+      path: "/tmp/a04-main-checkout",
+      head: "verified-main-head",
+      cleanup: async () => {},
+    }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          createMainVerificationCheckout,
+          runCommand,
+          resolveRealPath: async (path) => {
+            if (path === "/repo") {
+              return "/repo";
+            }
+            if (path === "/repo/examples/v1/claude-adapter-config.json") {
+              return "/repo/examples/v1/claude-adapter-config.json";
+            }
+            if (path === "/tmp/a04-main-checkout") {
+              return "/tmp/a04-main-checkout";
+            }
+            if (path === "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json") {
+              return "/outside/live-adapter-config.json";
+            }
+            return path;
+          },
+        }),
+      ),
+    ).rejects.toThrow(/adapter config inside the preserved verified checkout must resolve inside the preserved verified checkout for A-04 approval/);
 
     expect(runCommand).not.toHaveBeenCalled();
   });

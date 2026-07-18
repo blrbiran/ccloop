@@ -41,6 +41,8 @@
 - A-04 spec 6.1 read-only inspection is intentionally lightweight but mandatory: before deterministic verification, confirm the retained `main` checkout, retained `evidence-first-v1` worktree, backup branch, stashes, and preserved `.validation-runs/` recovery evidence are still present and readable.
 - In `validation/v1/lib/scenarios.ts`, `executionPolicyOverrides` is a Scenario A-only surface; non-A scenarios must reject it at runtime even if a caller bypasses TypeScript.
 
+- A-04 path hardening must use `realpath` containment for frozen adapter configs in both the source repo and preserved verified checkout, and freshness checks must use `lstat` semantics so dangling symlinks count as occupied paths rather than fresh destinations.
+
 ## Do-Not-Repeat
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->
@@ -58,6 +60,8 @@
 
 - [2026-07-18] In validation/v1 scenario rendering, never spread runtime `executionPolicyOverrides` directly into the contract; whitelist the four approved fields and keep an `as any` regression test proving blocked fields like `maxAttempts` are ignored.
 - [2026-07-18] When narrowing `renderScenario(...)` by scenario id, do not use separate A/non-A overloads; use a generic conditional signature so existing callers with `ScenarioId` unions still typecheck while non-A overrides remain blocked.
+
+- [2026-07-18] For A-04 path safety, do not rely on lexical containment or `stat()`-style existence checks; use `realpath` for adapter-config freeze guarantees and `lstat` for freshness so symlink escapes and dangling symlinks cannot pass pre-approval.
 
 ## Decision Log
 

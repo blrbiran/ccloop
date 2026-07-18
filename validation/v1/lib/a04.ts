@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -132,6 +132,7 @@ export type PrepareDeps = {
   pathExists: (path: string) => Promise<boolean>;
   assertCleanFixture: (fixturePath: string) => Promise<{ head: string; status: string }>;
   readCurrentBranch: (repoRoot: string) => Promise<string>;
+  resolveRealPath: (path: string) => Promise<string>;
   inspectReadOnlyInspection: (repoRoot: string) => Promise<ReadOnlyInspection>;
   createMainVerificationCheckout: (repoRoot: string) => Promise<IsolatedVerificationCheckout>;
   runCommand: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
@@ -162,7 +163,7 @@ const FOCUSED_EVIDENCE_CHAIN_REGRESSION_COMMANDS: ReadonlyArray<readonly [string
 
 async function pathExists(path: string): Promise<boolean> {
   try {
-    await stat(path);
+    await lstat(path);
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -193,6 +194,10 @@ async function defaultAssertCleanFixture(fixturePath: string): Promise<{ head: s
 
 async function defaultReadCurrentBranch(repoRoot: string): Promise<string> {
   return gitOutput(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
+}
+
+async function defaultResolveRealPath(path: string): Promise<string> {
+  return realpath(path);
 }
 
 type GitWorktreeEntry = {
@@ -427,6 +432,7 @@ const defaultDeps: PrepareDeps = {
   pathExists,
   assertCleanFixture: defaultAssertCleanFixture,
   readCurrentBranch: defaultReadCurrentBranch,
+  resolveRealPath: defaultResolveRealPath,
   inspectReadOnlyInspection: defaultInspectReadOnlyInspection,
   createMainVerificationCheckout: defaultCreateMainVerificationCheckout,
   runCommand: defaultRunCommand,
@@ -491,9 +497,34 @@ function resolvePathForVerifiedCheckout(verifiedCheckoutPath: string, repoRoot: 
   return resolve(verifiedCheckoutPath, relative(repoRoot, originalPath));
 }
 
-async function assertAdapterConfigExists(deps: PrepareDeps, adapterConfigPath: string, label: string): Promise<void> {
+async function assertAdapterConfigResolvesWithinRoot(
+  deps: PrepareDeps,
+  rootPath: string,
+  adapterConfigPath: string,
+  label: string,
+  rootLabel: string,
+): Promise<void> {
   if (!(await deps.pathExists(adapterConfigPath))) {
     throw new Error(`${label} must exist for A-04 approval`);
+  }
+
+  let realRootPath: string;
+  let realAdapterConfigPath: string;
+  try {
+    [realRootPath, realAdapterConfigPath] = await Promise.all([
+      deps.resolveRealPath(rootPath),
+      deps.resolveRealPath(adapterConfigPath),
+    ]);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`${label} must exist for A-04 approval`);
+    }
+
+    throw error;
+  }
+
+  if (!isSameOrDescendantPath(realAdapterConfigPath, realRootPath)) {
+    throw new Error(`${label} must resolve inside ${rootLabel} for A-04 approval`);
   }
 }
 
@@ -722,7 +753,13 @@ export async function prepareA04(
   await assertMainCheckout(deps, resolvedOptions.repoRoot);
   const readOnlyInspection = await deps.inspectReadOnlyInspection(resolvedOptions.repoRoot);
   assertAdapterConfigUnderRepoRoot(resolvedOptions.repoRoot, resolvedOptions.adapterConfigPath);
-  await assertAdapterConfigExists(deps, resolvedOptions.adapterConfigPath, "adapter config");
+  await assertAdapterConfigResolvesWithinRoot(
+    deps,
+    resolvedOptions.repoRoot,
+    resolvedOptions.adapterConfigPath,
+    "adapter config",
+    "repo root",
+  );
 
   const verificationCheckout = await deps.createMainVerificationCheckout(resolvedOptions.repoRoot);
   const verifiedAdapterConfigPath = resolvePathForVerifiedCheckout(
@@ -730,10 +767,12 @@ export async function prepareA04(
     resolvedOptions.repoRoot,
     resolvedOptions.adapterConfigPath,
   );
-  await assertAdapterConfigExists(
+  await assertAdapterConfigResolvesWithinRoot(
     deps,
+    verificationCheckout.path,
     verifiedAdapterConfigPath,
     "adapter config inside the preserved verified checkout",
+    "the preserved verified checkout",
   );
   let preserveVerificationCheckout = false;
 

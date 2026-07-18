@@ -330,3 +330,37 @@ void main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 
 ### Concerns
 - Left the pre-existing unrelated unstaged changes in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/progress.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-3-report.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/memory.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, and `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/package-lock.json` untouched and out of this follow-up.
+
+
+## Final remaining review follow-up — 2026-07-18 (adapter-config symlink escape + dangling-symlink freshness)
+### What changed
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` so A-04 freshness now uses `lstat()`-style existence semantics; any existing filesystem entry at `contractPath`, `runDir`, or `evidenceDir` — including a dangling symlink — is rejected as non-fresh.
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` so `adapterConfigPath` is now frozen with `realpath()` containment checks: a repo-internal adapter-config symlink may not resolve outside repo root, and the mapped adapter-config path inside the preserved verified checkout may not resolve outside that checkout.
+- Expanded `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts` with focused regressions for repo-internal adapter-config symlink escape, verified-checkout adapter-config symlink escape, and dangling-symlink occupancy at `contractPath`, `runDir`, and `evidenceDir`.
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/README.md` so the operator contract now says `--adapter-config` must realpath-resolve within both the source repo and the preserved verified checkout.
+
+### Exact test commands
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" test -- --run tests/validation/prepareA04.test.ts`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run typecheck`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run build`
+
+### Relevant output
+- Focused tests:
+  - `Test Files  1 passed (1)`
+  - `Tests  33 passed (33)`
+- Typecheck:
+  - `tsc --noEmit -p tsconfig.json`
+- Build:
+  - `tsc -p tsconfig.json && node -e "const fs=require('fs');fs.writeFileSync('dist/cli.js', '#!/usr/bin/env node\nexport * from "./src/cli.js";\nimport { main } from "./src/cli.js";\nvoid main(process.argv.slice(2)).then((code) => { process.exitCode = code; });\n');fs.writeFileSync('dist/cli.d.ts', 'export * from "./src/cli.js";\n');"`
+
+### Files changed for this follow-up
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/README.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-2-report.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/anatomy.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/cerebrum.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/buglog.json`
+
+### Concerns
+- Left the pre-existing unrelated unstaged changes in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/progress.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-3-report.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/memory.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, and `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/package-lock.json` untouched and out of this follow-up.
