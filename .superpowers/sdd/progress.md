@@ -14,3 +14,4 @@ Task 1: complete (commits cb5ce5b..65aaf8b, spec compliant, quality approved; Mi
 Task 2: complete (commits 65aaf8b..a5fdac7, review clean after negative-total coverage fix)
 Task 3: complete (commits a5fdac7..675fee3, review clean)
 Claude usage evidence: complete (commits 65aaf8b..675fee3; whitelisted phase evidence + fake-Claude controller accounting; 58 focused/113 full tests; typecheck/build pass; no real Claude call; A-04 unapproved and unrun)
+Task 4: complete (commits 675fee3..e0d3fb1, 13 files/113 tests + typecheck/build pass, privacy clean, review clean; A-04 unapproved/unrun)
