@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, lstat, mkdir, mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -58,6 +58,10 @@ type RepoState = {
   status: string;
 };
 
+type MainCheckoutState = RepoState & {
+  fingerprint: string;
+};
+
 type FrozenContract = {
   contract: LoopContract;
   sha256: string;
@@ -94,6 +98,7 @@ export type ApprovalPackage = {
     head: string;
     runScenarioScriptPath: string;
     adapterConfigPath: string;
+    contractPath: string;
   };
   readOnlyInspection: ReadOnlyInspection;
   workingDirectory: string;
@@ -133,12 +138,14 @@ export type PrepareDeps = {
   assertCleanFixture: (fixturePath: string) => Promise<{ head: string; status: string }>;
   readCurrentBranch: (repoRoot: string) => Promise<string>;
   readMainCheckoutState: (repoRoot: string) => Promise<RepoState>;
+  readMainCheckoutFingerprint: (repoRoot: string, allowedMutablePaths: string[]) => Promise<string>;
   resolveRealPath: (path: string) => Promise<string>;
   inspectReadOnlyInspection: (repoRoot: string) => Promise<ReadOnlyInspection>;
   createMainVerificationCheckout: (repoRoot: string) => Promise<IsolatedVerificationCheckout>;
   runCommand: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
   writeContract: (options: Pick<A04PrepareOptions, "fixturePath" | "contractPath" | "executionPolicyOverrides">) => Promise<FrozenContract>;
   readFrozenContract: (contractPath: string) => Promise<FrozenContract>;
+  writeVerifiedContract: (sourceContractPath: string, verifiedContractPath: string) => Promise<void>;
 };
 
 const MAIN_DETERMINISTIC_VERIFICATION_COMMANDS: ReadonlyArray<readonly [string, string[]]> = [
@@ -208,6 +215,96 @@ async function defaultReadMainCheckoutState(repoRoot: string): Promise<RepoState
 
 async function defaultResolveRealPath(path: string): Promise<string> {
   return realpath(path);
+}
+
+function shouldExcludeMainCheckoutPath(candidatePath: string, excludedPaths: readonly string[]): boolean {
+  return excludedPaths.some((excludedPath) => isSameOrDescendantPath(candidatePath, excludedPath));
+}
+
+async function expandAllowedMutableMainCheckoutPaths(
+  repoRoot: string,
+  allowedMutablePaths: readonly string[],
+): Promise<string[]> {
+  const expandedPaths = new Set<string>();
+
+  for (const allowedMutablePath of allowedMutablePaths) {
+    let currentPath = resolve(allowedMutablePath);
+    if (!isSameOrDescendantPath(currentPath, repoRoot)) {
+      continue;
+    }
+
+    expandedPaths.add(currentPath);
+
+    while (currentPath !== repoRoot) {
+      const parentPath = dirname(currentPath);
+      if (parentPath === currentPath || !isSameOrDescendantPath(parentPath, repoRoot)) {
+        break;
+      }
+      if (await pathExists(parentPath)) {
+        break;
+      }
+
+      expandedPaths.add(parentPath);
+      currentPath = parentPath;
+    }
+  }
+
+  return [...expandedPaths].sort();
+}
+
+async function appendMainCheckoutSnapshotEntries(
+  snapshotEntries: string[],
+  repoRoot: string,
+  currentPath: string,
+  excludedPaths: readonly string[],
+): Promise<void> {
+  const relativePath = currentPath === repoRoot ? "." : relative(repoRoot, currentPath);
+  const stats = await lstat(currentPath);
+
+  if (stats.isSymbolicLink()) {
+    snapshotEntries.push(`symlink	${relativePath}	${stats.mode.toString(8)}	${await readlink(currentPath)}`);
+    return;
+  }
+
+  if (stats.isDirectory()) {
+    snapshotEntries.push(`dir	${relativePath}`);
+
+    for (const entry of (await readdir(currentPath)).sort()) {
+      if (relativePath === "." && entry === ".git") {
+        continue;
+      }
+
+      const childPath = resolve(currentPath, entry);
+      if (shouldExcludeMainCheckoutPath(childPath, excludedPaths)) {
+        continue;
+      }
+
+      await appendMainCheckoutSnapshotEntries(snapshotEntries, repoRoot, childPath, excludedPaths);
+    }
+
+    return;
+  }
+
+  if (stats.isFile()) {
+    const body = await readFile(currentPath);
+    snapshotEntries.push(
+      `file\t${relativePath}\t${stats.mode.toString(8)}\t${body.byteLength}\t${createHash("sha256").update(body).digest("hex")}`,
+    );
+    return;
+  }
+
+  snapshotEntries.push(`other\t${relativePath}\t${stats.mode.toString(8)}\t${stats.size}`);
+}
+
+async function defaultReadMainCheckoutFingerprint(
+  repoRoot: string,
+  allowedMutablePaths: string[],
+): Promise<string> {
+  const resolvedRepoRoot = resolve(repoRoot);
+  const excludedPaths = await expandAllowedMutableMainCheckoutPaths(resolvedRepoRoot, allowedMutablePaths);
+  const snapshotEntries: string[] = [];
+  await appendMainCheckoutSnapshotEntries(snapshotEntries, resolvedRepoRoot, resolvedRepoRoot, excludedPaths);
+  return createHash("sha256").update(snapshotEntries.join("\n")).digest("hex");
 }
 
 type GitWorktreeEntry = {
@@ -443,12 +540,20 @@ const defaultDeps: PrepareDeps = {
   assertCleanFixture: defaultAssertCleanFixture,
   readCurrentBranch: defaultReadCurrentBranch,
   readMainCheckoutState: defaultReadMainCheckoutState,
+  readMainCheckoutFingerprint: defaultReadMainCheckoutFingerprint,
   resolveRealPath: defaultResolveRealPath,
   inspectReadOnlyInspection: defaultInspectReadOnlyInspection,
   createMainVerificationCheckout: defaultCreateMainVerificationCheckout,
   runCommand: defaultRunCommand,
   writeContract: defaultWriteContract,
   readFrozenContract: defaultReadFrozenContract,
+  writeVerifiedContract: async (sourceContractPath: string, verifiedContractPath: string) => {
+    await mkdir(dirname(resolve(verifiedContractPath)), { recursive: true });
+    await cp(resolve(sourceContractPath), resolve(verifiedContractPath), {
+      force: false,
+      errorOnExist: true,
+    });
+  },
 };
 
 export function validateA04ExecutionPolicy(
@@ -497,14 +602,22 @@ function resolvePrepareOptions(options: A04PrepareOptions): A04PrepareOptions {
   };
 }
 
-function assertAdapterConfigUnderRepoRoot(repoRoot: string, adapterConfigPath: string): void {
-  if (!isSameOrDescendantPath(adapterConfigPath, repoRoot)) {
-    throw new Error("adapter config must live under repo root for A-04 approval");
+function assertPathUnderRepoRoot(repoRoot: string, path: string, label: string): void {
+  if (!isSameOrDescendantPath(path, repoRoot)) {
+    throw new Error(`${label} must live under repo root for A-04 approval`);
   }
 }
 
+function assertAdapterConfigUnderRepoRoot(repoRoot: string, adapterConfigPath: string): void {
+  assertPathUnderRepoRoot(repoRoot, adapterConfigPath, "adapter config");
+}
+
+function assertContractPathUnderRepoRoot(repoRoot: string, contractPath: string): void {
+  assertPathUnderRepoRoot(repoRoot, contractPath, "contract path");
+}
+
 function resolvePathForVerifiedCheckout(verifiedCheckoutPath: string, repoRoot: string, originalPath: string): string {
-  assertAdapterConfigUnderRepoRoot(repoRoot, originalPath);
+  assertPathUnderRepoRoot(repoRoot, originalPath, "path");
   return resolve(verifiedCheckoutPath, relative(repoRoot, originalPath));
 }
 
@@ -605,6 +718,7 @@ export function buildApprovalPackage(input: {
       head: input.verifiedCheckoutHead,
       runScenarioScriptPath: resolve(input.verifiedCheckoutPath, A04_RUN_SCENARIO_SCRIPT),
       adapterConfigPath: input.adapterConfigPath,
+      contractPath: input.contractPath,
     },
     readOnlyInspection: input.readOnlyInspection,
     workingDirectory: input.verifiedCheckoutPath,
@@ -667,24 +781,42 @@ async function assertMainCheckout(deps: PrepareDeps, repoRoot: string): Promise<
   }
 }
 
-async function assertCleanMainCheckoutBeforePrepare(deps: PrepareDeps, repoRoot: string): Promise<RepoState> {
-  const mainCheckoutState = await deps.readMainCheckoutState(repoRoot);
+async function assertCleanMainCheckoutBeforePrepare(
+  deps: PrepareDeps,
+  repoRoot: string,
+  allowedMutablePaths: string[],
+): Promise<MainCheckoutState> {
+  const [mainCheckoutState, fingerprint] = await Promise.all([
+    deps.readMainCheckoutState(repoRoot),
+    deps.readMainCheckoutFingerprint(repoRoot, allowedMutablePaths),
+  ]);
 
   if (mainCheckoutState.status !== "") {
     throw new Error("main checkout must be clean before preparing A-04");
   }
 
-  return mainCheckoutState;
+  return {
+    ...mainCheckoutState,
+    fingerprint,
+  };
 }
 
 async function assertMainCheckoutUnchangedBeforeApproval(
   deps: PrepareDeps,
   repoRoot: string,
-  beforePrepare: RepoState,
+  beforePrepare: MainCheckoutState,
+  allowedMutablePaths: string[],
 ): Promise<void> {
-  const mainCheckoutState = await deps.readMainCheckoutState(repoRoot);
+  const [mainCheckoutState, fingerprint] = await Promise.all([
+    deps.readMainCheckoutState(repoRoot),
+    deps.readMainCheckoutFingerprint(repoRoot, allowedMutablePaths),
+  ]);
 
-  if (mainCheckoutState.head !== beforePrepare.head || mainCheckoutState.status !== beforePrepare.status) {
+  if (
+    mainCheckoutState.head !== beforePrepare.head ||
+    mainCheckoutState.status !== beforePrepare.status ||
+    fingerprint !== beforePrepare.fingerprint
+  ) {
     throw new Error("main checkout must remain unchanged through final A-04 pre-approval");
   }
 }
@@ -770,11 +902,11 @@ async function assertFrozenContractOnDiskAtFinalGate(
 async function assertFinalPreApprovalGate(
   deps: PrepareDeps,
   options: Pick<A04PrepareOptions, "repoRoot" | "fixturePath" | "contractPath" | "runDir" | "evidenceDir">,
-  beforePreflight: { fixture: RepoState; mainCheckout: RepoState },
+  beforePreflight: { fixture: RepoState; mainCheckout: MainCheckoutState },
   expectedSha256: string,
 ): Promise<FrozenContract> {
   await assertFixtureUnchangedBeforeApproval(deps, options.fixturePath, beforePreflight.fixture);
-  await assertMainCheckoutUnchangedBeforeApproval(deps, options.repoRoot, beforePreflight.mainCheckout);
+  await assertMainCheckoutUnchangedBeforeApproval(deps, options.repoRoot, beforePreflight.mainCheckout, [options.contractPath]);
   await assertFreshPath(deps, options.runDir, "run directory");
   await assertFreshPath(deps, options.evidenceDir, "evidence directory");
   return assertFrozenContractOnDiskAtFinalGate(deps, options.contractPath, expectedSha256);
@@ -787,8 +919,13 @@ export async function prepareA04(
   const resolvedOptions = resolvePrepareOptions(options);
   const executionPolicyOverrides = validateA04ExecutionPolicy(resolvedOptions.executionPolicyOverrides);
   assertNoContractMaterializationOverlap(resolvedOptions);
+  assertContractPathUnderRepoRoot(resolvedOptions.repoRoot, resolvedOptions.contractPath);
   await assertMainCheckout(deps, resolvedOptions.repoRoot);
-  const mainCheckoutStateBeforePrepare = await assertCleanMainCheckoutBeforePrepare(deps, resolvedOptions.repoRoot);
+  const mainCheckoutStateBeforePrepare = await assertCleanMainCheckoutBeforePrepare(
+    deps,
+    resolvedOptions.repoRoot,
+    [resolvedOptions.contractPath],
+  );
   const readOnlyInspection = await deps.inspectReadOnlyInspection(resolvedOptions.repoRoot);
   assertAdapterConfigUnderRepoRoot(resolvedOptions.repoRoot, resolvedOptions.adapterConfigPath);
   await assertAdapterConfigResolvesWithinRoot(
@@ -804,6 +941,11 @@ export async function prepareA04(
     verificationCheckout.path,
     resolvedOptions.repoRoot,
     resolvedOptions.adapterConfigPath,
+  );
+  const verifiedContractPath = resolvePathForVerifiedCheckout(
+    verificationCheckout.path,
+    resolvedOptions.repoRoot,
+    resolvedOptions.contractPath,
   );
   await assertAdapterConfigResolvesWithinRoot(
     deps,
@@ -831,6 +973,12 @@ export async function prepareA04(
       { fixture: fixtureStateBeforeContractRender, mainCheckout: mainCheckoutStateBeforePrepare },
       sha256,
     );
+    await deps.writeVerifiedContract(resolvedOptions.contractPath, verifiedContractPath);
+    const frozenVerifiedContract = await assertFrozenContractOnDiskAtFinalGate(
+      deps,
+      verifiedContractPath,
+      frozenContract.sha256,
+    );
 
     preserveVerificationCheckout = true;
 
@@ -839,9 +987,9 @@ export async function prepareA04(
         verifiedCheckoutPath: verificationCheckout.path,
         verifiedCheckoutHead: verificationCheckout.head,
         readOnlyInspection,
-        contract: frozenContract.contract,
-        contractPath: resolvedOptions.contractPath,
-        contractSha256: frozenContract.sha256,
+        contract: frozenVerifiedContract.contract,
+        contractPath: verifiedContractPath,
+        contractSha256: frozenVerifiedContract.sha256,
         fixturePath: resolvedOptions.fixturePath,
         runDir: resolvedOptions.runDir,
         evidenceDir: resolvedOptions.evidenceDir,

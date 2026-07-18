@@ -90,6 +90,7 @@ function buildDeps(input: {
   assertCleanFixture?: (fixturePath: string) => Promise<{ head: string; status: string }>;
   readCurrentBranch?: (repoRoot: string) => Promise<string>;
   readMainCheckoutState?: (repoRoot: string) => Promise<{ head: string; status: string }>;
+  readMainCheckoutFingerprint?: (repoRoot: string, allowedMutablePaths: string[]) => Promise<string>;
   resolveRealPath?: (path: string) => Promise<string>;
   inspectReadOnlyInspection?: (repoRoot: string) => Promise<ReadOnlyInspection>;
   createMainVerificationCheckout?: (repoRoot: string) => Promise<{ path: string; head: string; cleanup: () => Promise<void> }>;
@@ -100,6 +101,7 @@ function buildDeps(input: {
     executionPolicyOverrides: typeof A04_APPROVED_EXECUTION_POLICY;
   }) => Promise<{ contract: ReturnType<typeof renderScenario>; sha256: string }>;
   readFrozenContract?: (contractPath: string) => Promise<{ contract: ReturnType<typeof renderScenario>; sha256: string }>;
+  writeVerifiedContract?: (sourceContractPath: string, verifiedContractPath: string) => Promise<void>;
 } = {}) {
   return {
     pathExists:
@@ -110,6 +112,7 @@ function buildDeps(input: {
     assertCleanFixture: input.assertCleanFixture ?? (async () => ({ head: "fixture-head", status: "" })),
     readCurrentBranch: input.readCurrentBranch ?? (async () => "main"),
     readMainCheckoutState: input.readMainCheckoutState ?? (async () => ({ head: "main-head", status: "" })),
+    readMainCheckoutFingerprint: input.readMainCheckoutFingerprint ?? (async () => "main-fingerprint"),
     resolveRealPath: input.resolveRealPath ?? (async (path) => path),
     inspectReadOnlyInspection: input.inspectReadOnlyInspection ?? (async () => buildReadOnlyInspection()),
     createMainVerificationCheckout:
@@ -135,6 +138,7 @@ function buildDeps(input: {
         contract: buildContract(),
         sha256: "abc123",
       })),
+    writeVerifiedContract: input.writeVerifiedContract ?? (async () => {}),
   };
 }
 
@@ -169,7 +173,7 @@ describe("A-04 approval package", () => {
       verifiedCheckoutHead: "verified-main-head",
       readOnlyInspection: buildReadOnlyInspection(),
       contract: buildContract(),
-      contractPath: "/repo/.validation-runs/contracts/A-04.json",
+      contractPath: "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
       contractSha256: "abc123",
       fixturePath: "/repo/.validation-runs/fixture-01",
       runDir: "/repo/.validation-runs/runs/A-04",
@@ -178,7 +182,7 @@ describe("A-04 approval package", () => {
     });
 
     expect(pkg.contractIdentity).toEqual({
-      path: "/repo/.validation-runs/contracts/A-04.json",
+      path: "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
       sha256: "abc123",
       schemaValid: true,
     });
@@ -187,11 +191,12 @@ describe("A-04 approval package", () => {
       head: "verified-main-head",
       runScenarioScriptPath: "/tmp/a04-main-checkout/validation/v1/scripts/run-scenario.ts",
       adapterConfigPath: "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+      contractPath: "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
     });
     expect(pkg.readOnlyInspection).toEqual(buildReadOnlyInspection());
     expect(pkg.workingDirectory).toBe("/tmp/a04-main-checkout");
     expect(pkg.paths).toEqual({
-      contractPath: "/repo/.validation-runs/contracts/A-04.json",
+      contractPath: "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
       fixturePath: "/repo/.validation-runs/fixture-01",
       runDir: "/repo/.validation-runs/runs/A-04",
       evidenceDir: "/repo/.validation-runs/evidence/A-04",
@@ -241,7 +246,7 @@ describe("A-04 approval package", () => {
       "--scenario",
       "A",
       "--contract",
-      "/repo/.validation-runs/contracts/A-04.json",
+      "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
       "--fixture",
       "/repo/.validation-runs/fixture-01",
       "--run-dir",
@@ -297,7 +302,7 @@ describe("A-04 approval package", () => {
             maxAttempts: 2,
           },
         },
-        contractPath: "/repo/.validation-runs/contracts/A-04.json",
+        contractPath: "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
         contractSha256: "abc123",
         fixturePath: "/repo/.validation-runs/fixture-01",
         runDir: "/repo/.validation-runs/runs/A-04",
@@ -491,12 +496,41 @@ describe("A-04 approval package", () => {
 
             return { head: "main-head", status: "?? drifted-untracked.txt" };
           },
+          readMainCheckoutFingerprint: async () => "main-fingerprint",
           runCommand,
           writeContract,
         }),
       ),
     ).rejects.toThrow(/main checkout must remain unchanged through final A-04 pre-approval/);
 
+    expect(runCommand).toHaveBeenCalledTimes(5);
+    expect(writeContract).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects ignored-file drift in the main checkout even when git porcelain stays clean", async () => {
+    const writeContract = vi.fn(async () => ({ contract: buildContract(), sha256: "abc123" }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+    const readMainCheckoutFingerprint = vi
+      .fn<(_repoRoot: string, _allowedMutablePaths: string[]) => Promise<string>>()
+      .mockResolvedValueOnce("baseline-fingerprint")
+      .mockResolvedValueOnce("drifted-fingerprint");
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          readMainCheckoutState: async () => ({ head: "main-head", status: "" }),
+          readMainCheckoutFingerprint,
+          runCommand,
+          writeContract,
+        }),
+      ),
+    ).rejects.toThrow(/main checkout must remain unchanged through final A-04 pre-approval/);
+
+    expect(readMainCheckoutFingerprint.mock.calls).toEqual([
+      ["/repo", ["/repo/.validation-runs/contracts/A-04.json"]],
+      ["/repo", ["/repo/.validation-runs/contracts/A-04.json"]],
+    ]);
     expect(runCommand).toHaveBeenCalledTimes(5);
     expect(writeContract).toHaveBeenCalledTimes(1);
   });
@@ -679,18 +713,27 @@ describe("A-04 approval package", () => {
       cleanup,
     }));
     const runCommand = vi.fn(async (..._args: [string, string[], string]) => ({ stdout: "", stderr: "" }));
+    const writeVerifiedContract = vi.fn(async () => {});
 
     const result = await prepareA04(
       buildOptions(),
       buildDeps({
         createMainVerificationCheckout,
         runCommand,
+        writeVerifiedContract,
       }),
     );
 
     expect(createMainVerificationCheckout).toHaveBeenCalledWith("/repo");
     expect(result.approvalPackage.verifiedCheckout.adapterConfigPath).toBe(
       "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+    );
+    expect(result.approvalPackage.verifiedCheckout.contractPath).toBe(
+      "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
+    );
+    expect(writeVerifiedContract).toHaveBeenCalledWith(
+      "/repo/.validation-runs/contracts/A-04.json",
+      "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
     );
     expect(result.approvalPackage.exactCommand).toEqual([
       "npx",
@@ -700,7 +743,7 @@ describe("A-04 approval package", () => {
       "--scenario",
       "A",
       "--contract",
-      "/repo/.validation-runs/contracts/A-04.json",
+      "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
       "--fixture",
       "/repo/.validation-runs/fixture-01",
       "--run-dir",
@@ -883,12 +926,15 @@ describe("A-04 approval package", () => {
             sha256: "abc123",
           };
         },
-        readFrozenContract: async () => {
-          steps.push("readContract");
+        readFrozenContract: async (contractPath) => {
+          steps.push(`readContract:${contractPath}`);
           return {
             contract: buildContract(),
             sha256: "abc123",
           };
+        },
+        writeVerifiedContract: async (sourceContractPath, verifiedContractPath) => {
+          steps.push(`writeVerifiedContract:${sourceContractPath}->${verifiedContractPath}`);
         },
       }),
     );
@@ -911,7 +957,9 @@ describe("A-04 approval package", () => {
       "fixture",
       "exists:/repo/.validation-runs/runs/A-04",
       "exists:/repo/.validation-runs/evidence/A-04",
-      "readContract",
+      "readContract:/repo/.validation-runs/contracts/A-04.json",
+      "writeVerifiedContract:/repo/.validation-runs/contracts/A-04.json->/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
+      "readContract:/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
     ]);
   });
 
@@ -947,7 +995,7 @@ describe("A-04 approval package", () => {
   it("prepare-a04 CLI prints approval package JSON only", async () => {
     const approvalPackage = {
       contractIdentity: {
-        path: "/repo/.validation-runs/contracts/A-04.json",
+        path: "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
         sha256: "abc123",
         schemaValid: true,
       },
@@ -957,10 +1005,11 @@ describe("A-04 approval package", () => {
         head: "verified-main-head",
         runScenarioScriptPath: "/tmp/a04-main-checkout/validation/v1/scripts/run-scenario.ts",
         adapterConfigPath: "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+        contractPath: "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
       },
       readOnlyInspection: buildReadOnlyInspection(),
       paths: {
-        contractPath: "/repo/.validation-runs/contracts/A-04.json",
+        contractPath: "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
         fixturePath: "/repo/.validation-runs/fixture-01",
         runDir: "/repo/.validation-runs/runs/A-04",
         evidenceDir: "/repo/.validation-runs/evidence/A-04",
@@ -1002,7 +1051,24 @@ describe("A-04 approval package", () => {
           requiredChecks: "PRESENT",
         },
       },
-      exactCommand: ["npx", "--no-install", "tsx", "/tmp/a04-main-checkout/validation/v1/scripts/run-scenario.ts"],
+      exactCommand: [
+        "npx",
+        "--no-install",
+        "tsx",
+        "/tmp/a04-main-checkout/validation/v1/scripts/run-scenario.ts",
+        "--scenario",
+        "A",
+        "--contract",
+        "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
+        "--fixture",
+        "/repo/.validation-runs/fixture-01",
+        "--run-dir",
+        "/repo/.validation-runs/runs/A-04",
+        "--evidence-dir",
+        "/repo/.validation-runs/evidence/A-04",
+        "--adapter-config",
+        "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+      ],
       usageEvidenceExpectations: [
         "this approved invocation may consume budget across up to three Claude-backed phases: plan, execute, and verify",
         "each produced phase artifact is expected to carry standard usageEvidence fields, explicit alias selection, and normalizedTotal",

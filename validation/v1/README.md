@@ -67,9 +67,9 @@ Expected result:
 - the A-04 freshness check confirms the fixture is clean and the contract/run/evidence paths are still fresh before contract render;
 - `.validation-runs/contracts/A-04.json` is created once and schema-validates as Scenario A with only the approved A-04 execution-policy fields overridden;
 - the focused evidence-chain regression set runs after contract render and before the final pre-approval gate;
-- the final pre-approval gate re-reads `.validation-runs/contracts/A-04.json` from disk, re-parses it under schema, and recomputes its sha256 so the approval package matches the exact on-disk contract;
+- the final pre-approval gate re-reads `.validation-runs/contracts/A-04.json` from disk, re-parses it under schema, and recomputes its sha256 before copying that exact contract into the preserved verified checkout;
 - `.validation-runs/runs/A-04/` and `.validation-runs/evidence/A-04/` still do not exist;
-- stdout prints an approval package containing the preserved verified checkout path/head, the read-only inspection results, and an exact command whose runnable `run-scenario.ts` target resolves inside that verified checkout rather than the operator checkout; the preserved checkout does not symlink `node_modules` back to the operator checkout, and `--adapter-config` must realpath-resolve under the repo root (including through any symlink target) and realpath-resolve inside that preserved checkout so the approved command cannot drift to an external config.
+- stdout prints an approval package containing the preserved verified checkout path/head, the read-only inspection results, and an exact command whose runnable `run-scenario.ts` target and `--contract` argument both resolve inside that verified checkout rather than the operator checkout; the preserved checkout does not symlink `node_modules` back to the operator checkout, `--adapter-config` must realpath-resolve under the repo root (including through any symlink target) and realpath-resolve inside that preserved checkout so the approved command cannot drift to an external config, and `mainCheckoutMustRemainUnchanged: true` is backed by a deterministic repo snapshot that catches ignored-file drift such as `dist/**`.
 
 `prepare-a04.ts` must not invoke Claude or create `review.json`.
 

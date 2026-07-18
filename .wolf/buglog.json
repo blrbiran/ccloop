@@ -299,5 +299,29 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-18T22:56:00.000000+00:00"
+  },
+  {
+    "id": "bug-015",
+    "timestamp": "2026-07-18T23:22:27+00:00",
+    "error_message": "Final A-04 review found that the approved command still consumed the mutable main-checkout contract path and that mainCheckoutMustRemainUnchanged still missed ignored-file drift such as dist/**.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "prepareA04 froze only the contract hash while leaving exactCommand bound to the source-checkout contract path, and the main-checkout invariant compared only git HEAD/porcelain instead of an on-disk snapshot that includes ignored files.",
+    "fix": "Copied the frozen contract into the preserved verified checkout, bound approval-package contractIdentity/exactCommand to that copy, added a deterministic main-checkout filesystem fingerprint with a narrow allowed-mutable exclusion for the contract path, and expanded focused regressions.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "approval-package",
+      "contract-freeze",
+      "ignored-file-drift",
+      "fingerprint"
+    ],
+    "related_bugs": [
+      "bug-010",
+      "bug-014"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T23:22:27+00:00"
   }
 ]

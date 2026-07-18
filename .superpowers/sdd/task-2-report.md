@@ -400,3 +400,34 @@ void main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 
 ### Concerns
 - Did not stage or include the excluded dirty files `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/progress.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-3-report.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/memory.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, or `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/package-lock.json` in this follow-up commit.
+
+
+## Final review follow-up — 2026-07-18 (frozen verified contract path + ignored-file drift fingerprint)
+### What changed
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` so successful A-04 preparation now copies the frozen contract into the preserved verified checkout and binds the emitted approval package to that verified-checkout contract path; both `contractIdentity.path` and `exactCommand --contract` now point at the frozen verified-checkout copy instead of the mutable main-checkout path.
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` so `mainCheckoutMustRemainUnchanged: true` is backed by a deterministic filesystem fingerprint over the main checkout (excluding only the intentionally allowed mutable contract path), which catches ignored-file drift that plain git porcelain can miss.
+- Expanded `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts` to prove the approved command uses the verified-checkout contract copy, to assert the contract copy is written into the preserved verified checkout, and to reject ignored-file drift even when git porcelain remains clean.
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/README.md` to document the frozen verified-checkout contract semantics and the stronger main-checkout drift invariant.
+
+### Exact commands
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" test -- --run tests/validation/prepareA04.test.ts`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run typecheck`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run build`
+
+### Relevant output
+- Focused tests:
+  - `Test Files  1 passed (1)`
+  - `Tests  36 passed (36)`
+- Typecheck:
+  - `tsc --noEmit -p tsconfig.json`
+- Build:
+  - `tsc -p tsconfig.json`
+
+### Files changed for this follow-up
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/README.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-2-report.md`
+
+### Concerns
+- Left the excluded unrelated dirty files `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/progress.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-3-report.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/memory.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, and `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/package-lock.json` untouched and out of this follow-up commit.
