@@ -89,6 +89,7 @@ function buildDeps(input: {
   pathExists?: (path: string) => Promise<boolean>;
   assertCleanFixture?: (fixturePath: string) => Promise<{ head: string; status: string }>;
   readCurrentBranch?: (repoRoot: string) => Promise<string>;
+  readMainCheckoutState?: (repoRoot: string) => Promise<{ head: string; status: string }>;
   resolveRealPath?: (path: string) => Promise<string>;
   inspectReadOnlyInspection?: (repoRoot: string) => Promise<ReadOnlyInspection>;
   createMainVerificationCheckout?: (repoRoot: string) => Promise<{ path: string; head: string; cleanup: () => Promise<void> }>;
@@ -108,6 +109,7 @@ function buildDeps(input: {
         path === "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json"),
     assertCleanFixture: input.assertCleanFixture ?? (async () => ({ head: "fixture-head", status: "" })),
     readCurrentBranch: input.readCurrentBranch ?? (async () => "main"),
+    readMainCheckoutState: input.readMainCheckoutState ?? (async () => ({ head: "main-head", status: "" })),
     resolveRealPath: input.resolveRealPath ?? (async (path) => path),
     inspectReadOnlyInspection: input.inspectReadOnlyInspection ?? (async () => buildReadOnlyInspection()),
     createMainVerificationCheckout:
@@ -249,6 +251,18 @@ describe("A-04 approval package", () => {
       "--adapter-config",
       "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
     ]);
+    expect(pkg.usageEvidenceExpectations).toEqual([
+      "this approved invocation may consume budget across up to three Claude-backed phases: plan, execute, and verify",
+      "each produced phase artifact is expected to carry standard usageEvidence fields, explicit alias selection, and normalizedTotal",
+      "tokenUsage is expected exactly when usageEvidence.normalizedTotal is finite and positive, and then must equal normalizedTotal",
+      "usage evidence improves auditability, but does not define success by itself",
+      "tokenBudget is a controller stopping threshold derived from adapter-reported usage, not a guaranteed API-cost cap",
+    ]);
+    expect(pkg.invariants).toEqual({
+      fixtureClean: true,
+      mainCheckoutMustRemainUnchanged: true,
+      maxClaudePhases: 3,
+    });
   });
 
   it("rejects approval packages built from a non-A-04 execution policy", () => {
@@ -435,6 +449,56 @@ describe("A-04 approval package", () => {
     ).rejects.toThrow(/A-04 preparation must run from branch main/);
 
     expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the main checkout is already dirty before prepare starts", async () => {
+    const createMainVerificationCheckout = vi.fn(async () => ({
+      path: "/tmp/a04-main-checkout",
+      head: "verified-main-head",
+      cleanup: async () => {},
+    }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          readMainCheckoutState: async () => ({ head: "main-head", status: " M validation/v1/lib/a04.ts" }),
+          createMainVerificationCheckout,
+          runCommand,
+        }),
+      ),
+    ).rejects.toThrow(/main checkout must be clean before preparing A-04/);
+
+    expect(createMainVerificationCheckout).not.toHaveBeenCalled();
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the main checkout drifts during prepare", async () => {
+    const writeContract = vi.fn(async () => ({ contract: buildContract(), sha256: "abc123" }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+    let mainCheckoutReads = 0;
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          readMainCheckoutState: async () => {
+            mainCheckoutReads += 1;
+            if (mainCheckoutReads === 1) {
+              return { head: "main-head", status: "" };
+            }
+
+            return { head: "main-head", status: "?? drifted-untracked.txt" };
+          },
+          runCommand,
+          writeContract,
+        }),
+      ),
+    ).rejects.toThrow(/main checkout must remain unchanged through final A-04 pre-approval/);
+
+    expect(runCommand).toHaveBeenCalledTimes(5);
+    expect(writeContract).toHaveBeenCalledTimes(1);
   });
 
   it("rejects adapter configs outside repo root", async () => {
@@ -939,7 +1003,13 @@ describe("A-04 approval package", () => {
         },
       },
       exactCommand: ["npx", "--no-install", "tsx", "/tmp/a04-main-checkout/validation/v1/scripts/run-scenario.ts"],
-      usageEvidenceExpectations: ["usage evidence is normalized in artifacts"],
+      usageEvidenceExpectations: [
+        "this approved invocation may consume budget across up to three Claude-backed phases: plan, execute, and verify",
+        "each produced phase artifact is expected to carry standard usageEvidence fields, explicit alias selection, and normalizedTotal",
+        "tokenUsage is expected exactly when usageEvidence.normalizedTotal is finite and positive, and then must equal normalizedTotal",
+        "usage evidence improves auditability, but does not define success by itself",
+        "tokenBudget is a controller stopping threshold derived from adapter-reported usage, not a guaranteed API-cost cap",
+      ],
       invariants: {
         fixtureClean: true,
         mainCheckoutMustRemainUnchanged: true,

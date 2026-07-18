@@ -364,3 +364,39 @@ void main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 
 ### Concerns
 - Left the pre-existing unrelated unstaged changes in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/progress.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-3-report.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/memory.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, and `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/package-lock.json` untouched and out of this follow-up.
+
+
+## Final remaining review follow-up — 2026-07-18 (main-checkout porcelain truthfulness + usage-evidence expectations)
+### What changed
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` so A-04 preparation now captures the repo-root main checkout baseline (`git rev-parse HEAD` plus full `git status --porcelain`) before prepare begins, rejects immediately if the main checkout is already dirty, and re-checks the same baseline before emitting the approval package.
+- Strengthened `usageEvidenceExpectations` in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` so the approval package now says budget may be consumed across up to three Claude-backed phases, each produced phase artifact is expected to carry standard `usageEvidence` plus explicit alias selection and `normalizedTotal`, `tokenUsage` appears exactly when `usageEvidence.normalizedTotal` is finite and positive and must equal it, and usage evidence improves auditability without defining success by itself.
+- Expanded `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts` with focused regressions for a dirty main checkout before prepare, main-checkout drift during prepare, and the full approval-package `usageEvidenceExpectations` shape.
+
+### Exact test commands
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" test -- --run tests/validation/prepareA04.test.ts`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run typecheck`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run build`
+
+### Relevant output
+- Focused tests:
+  - `Test Files  1 passed (1)`
+  - `Tests  35 passed (35)`
+- Typecheck:
+  - `tsc --noEmit -p tsconfig.json`
+- Build:
+  - `tsc -p tsconfig.json && node -e "const fs=require('fs');fs.writeFileSync('dist/cli.js', '#!/usr/bin/env node
+export * from "./src/cli.js";
+import { main } from "./src/cli.js";
+void main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
+');fs.writeFileSync('dist/cli.d.ts', 'export * from "./src/cli.js";
+');"`
+
+### Files changed for this follow-up
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-2-report.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/cerebrum.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/buglog.json`
+
+### Concerns
+- Did not stage or include the excluded dirty files `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/progress.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-3-report.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/memory.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, or `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/package-lock.json` in this follow-up commit.

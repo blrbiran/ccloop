@@ -276,5 +276,28 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-18T14:34:39.707456+00:00"
+  },
+  {
+    "id": "bug-014",
+    "timestamp": "2026-07-18T22:56:00.000000+00:00",
+    "error_message": "Final whole-branch review found that A-04 still overstated mainCheckoutMustRemainUnchanged and left usageEvidenceExpectations under-specified.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "prepareA04 only gated on branch main plus fixture cleanliness, never captured a repo-root main-checkout HEAD/porcelain baseline before and after prepare, and ApprovalPackage still used weaker usage-evidence wording than the approved A-04 spec.",
+    "fix": "Added repo-root main-checkout state reads before prepare and at the final pre-approval gate with dirty/drift rejection, strengthened usageEvidenceExpectations to match the approved semantics, and added focused regressions for dirty/drifted main checkout plus approval-package shape.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "main-checkout",
+      "usage-evidence",
+      "approval-package"
+    ],
+    "related_bugs": [
+      "bug-007",
+      "bug-008"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T22:56:00.000000+00:00"
   }
 ]

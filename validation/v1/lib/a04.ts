@@ -132,6 +132,7 @@ export type PrepareDeps = {
   pathExists: (path: string) => Promise<boolean>;
   assertCleanFixture: (fixturePath: string) => Promise<{ head: string; status: string }>;
   readCurrentBranch: (repoRoot: string) => Promise<string>;
+  readMainCheckoutState: (repoRoot: string) => Promise<RepoState>;
   resolveRealPath: (path: string) => Promise<string>;
   inspectReadOnlyInspection: (repoRoot: string) => Promise<ReadOnlyInspection>;
   createMainVerificationCheckout: (repoRoot: string) => Promise<IsolatedVerificationCheckout>;
@@ -194,6 +195,15 @@ async function defaultAssertCleanFixture(fixturePath: string): Promise<{ head: s
 
 async function defaultReadCurrentBranch(repoRoot: string): Promise<string> {
   return gitOutput(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
+}
+
+async function defaultReadMainCheckoutState(repoRoot: string): Promise<RepoState> {
+  const [head, status] = await Promise.all([
+    gitOutput(repoRoot, ["rev-parse", "HEAD"]),
+    gitOutput(repoRoot, ["status", "--porcelain"]),
+  ]);
+
+  return { head, status };
 }
 
 async function defaultResolveRealPath(path: string): Promise<string> {
@@ -432,6 +442,7 @@ const defaultDeps: PrepareDeps = {
   pathExists,
   assertCleanFixture: defaultAssertCleanFixture,
   readCurrentBranch: defaultReadCurrentBranch,
+  readMainCheckoutState: defaultReadMainCheckoutState,
   resolveRealPath: defaultResolveRealPath,
   inspectReadOnlyInspection: defaultInspectReadOnlyInspection,
   createMainVerificationCheckout: defaultCreateMainVerificationCheckout,
@@ -628,8 +639,11 @@ export function buildApprovalPackage(input: {
       runScenarioScriptPath: resolve(input.verifiedCheckoutPath, A04_RUN_SCENARIO_SCRIPT),
     }),
     usageEvidenceExpectations: [
-      "plan/execute/verify artifacts may include usageEvidence fields and tokenUsage when normalizedTotal is finite and positive",
-      "tokenBudget is a controller stopping threshold, not an API cost cap",
+      "this approved invocation may consume budget across up to three Claude-backed phases: plan, execute, and verify",
+      "each produced phase artifact is expected to carry standard usageEvidence fields, explicit alias selection, and normalizedTotal",
+      "tokenUsage is expected exactly when usageEvidence.normalizedTotal is finite and positive, and then must equal normalizedTotal",
+      "usage evidence improves auditability, but does not define success by itself",
+      "tokenBudget is a controller stopping threshold derived from adapter-reported usage, not a guaranteed API-cost cap",
     ],
     invariants: {
       fixtureClean: true,
@@ -650,6 +664,28 @@ async function assertMainCheckout(deps: PrepareDeps, repoRoot: string): Promise<
 
   if (currentBranch !== "main") {
     throw new Error(`A-04 preparation must run from branch main (current branch: ${currentBranch})`);
+  }
+}
+
+async function assertCleanMainCheckoutBeforePrepare(deps: PrepareDeps, repoRoot: string): Promise<RepoState> {
+  const mainCheckoutState = await deps.readMainCheckoutState(repoRoot);
+
+  if (mainCheckoutState.status !== "") {
+    throw new Error("main checkout must be clean before preparing A-04");
+  }
+
+  return mainCheckoutState;
+}
+
+async function assertMainCheckoutUnchangedBeforeApproval(
+  deps: PrepareDeps,
+  repoRoot: string,
+  beforePrepare: RepoState,
+): Promise<void> {
+  const mainCheckoutState = await deps.readMainCheckoutState(repoRoot);
+
+  if (mainCheckoutState.head !== beforePrepare.head || mainCheckoutState.status !== beforePrepare.status) {
+    throw new Error("main checkout must remain unchanged through final A-04 pre-approval");
   }
 }
 
@@ -733,11 +769,12 @@ async function assertFrozenContractOnDiskAtFinalGate(
 
 async function assertFinalPreApprovalGate(
   deps: PrepareDeps,
-  options: Pick<A04PrepareOptions, "fixturePath" | "contractPath" | "runDir" | "evidenceDir">,
-  beforePreflight: { fixture: RepoState },
+  options: Pick<A04PrepareOptions, "repoRoot" | "fixturePath" | "contractPath" | "runDir" | "evidenceDir">,
+  beforePreflight: { fixture: RepoState; mainCheckout: RepoState },
   expectedSha256: string,
 ): Promise<FrozenContract> {
   await assertFixtureUnchangedBeforeApproval(deps, options.fixturePath, beforePreflight.fixture);
+  await assertMainCheckoutUnchangedBeforeApproval(deps, options.repoRoot, beforePreflight.mainCheckout);
   await assertFreshPath(deps, options.runDir, "run directory");
   await assertFreshPath(deps, options.evidenceDir, "evidence directory");
   return assertFrozenContractOnDiskAtFinalGate(deps, options.contractPath, expectedSha256);
@@ -751,6 +788,7 @@ export async function prepareA04(
   const executionPolicyOverrides = validateA04ExecutionPolicy(resolvedOptions.executionPolicyOverrides);
   assertNoContractMaterializationOverlap(resolvedOptions);
   await assertMainCheckout(deps, resolvedOptions.repoRoot);
+  const mainCheckoutStateBeforePrepare = await assertCleanMainCheckoutBeforePrepare(deps, resolvedOptions.repoRoot);
   const readOnlyInspection = await deps.inspectReadOnlyInspection(resolvedOptions.repoRoot);
   assertAdapterConfigUnderRepoRoot(resolvedOptions.repoRoot, resolvedOptions.adapterConfigPath);
   await assertAdapterConfigResolvesWithinRoot(
@@ -790,7 +828,7 @@ export async function prepareA04(
     const frozenContract = await assertFinalPreApprovalGate(
       deps,
       resolvedOptions,
-      { fixture: fixtureStateBeforeContractRender },
+      { fixture: fixtureStateBeforeContractRender, mainCheckout: mainCheckoutStateBeforePrepare },
       sha256,
     );
 
