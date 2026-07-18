@@ -1,0 +1,64 @@
+{
+  "objective": {
+    "taskId": "A",
+    "goal": "Legacy artifact compatibility fixture",
+    "successCondition": "Evidence collector reads old artifacts without usageEvidence.",
+    "nonGoals": []
+  },
+  "context": {
+    "repoPath": "/tmp/fixture",
+    "targetPaths": [
+      "src/counter.js",
+      "test/counter.test.js"
+    ],
+    "relevantDocs": [],
+    "buildTestCommands": [
+      "npm test"
+    ],
+    "constraints": []
+  },
+  "executionPolicy": {
+    "autonomyLevel": "L2",
+    "maxAttempts": 1,
+    "perAttemptTimeoutMs": 300000,
+    "totalRuntimeBudgetMs": 600000,
+    "tokenBudget": 50000,
+    "worktreeRequired": true,
+    "partialOutcomeRecoveryWindowMs": 3000
+  },
+  "safetyPolicy": {
+    "allowlistPaths": [
+      "src/**",
+      "test/**"
+    ],
+    "denylistPaths": [],
+    "maxFilesTouched": 10,
+    "humanGateConditions": []
+  },
+  "verification": {
+    "verifierType": "agent",
+    "requiredChecks": [
+      "npm test"
+    ],
+    "rejectOn": [
+      "required check failed"
+    ],
+    "evidenceRequired": [
+      "command output"
+    ]
+  },
+  "escalationAndExit": {
+    "escalationTargets": [
+      "human"
+    ],
+    "pauseOn": [],
+    "stopOn": [],
+    "terminalStates": [
+      "succeeded",
+      "blocked_waiting_human",
+      "exhausted",
+      "cancelled",
+      "failed"
+    ]
+  }
+}

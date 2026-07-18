@@ -1,0 +1,13 @@
+{
+  "changedFiles": [
+    "src/counter.js",
+    "test/counter.test.js"
+  ],
+  "diffPatch": "diff --git a/src/counter.js b/src/counter.js",
+  "commandOutputs": [
+    "edited src/counter.js",
+    "edited test/counter.test.js"
+  ],
+  "stdoutStderrLog": "npm test\nPASS\n",
+  "tokenUsage": 220
+}

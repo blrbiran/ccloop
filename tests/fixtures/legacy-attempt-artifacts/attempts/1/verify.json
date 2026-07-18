@@ -1,0 +1,16 @@
+{
+  "approved": true,
+  "rejectCategory": "",
+  "primaryTargetPaths": [
+    "src/counter.js",
+    "test/counter.test.js"
+  ],
+  "failingCommand": null,
+  "safeToRetry": false,
+  "evidence": [
+    "command output | required check passed: npm test"
+  ],
+  "pauseSignals": [],
+  "stopSignals": [],
+  "tokenUsage": 330
+}

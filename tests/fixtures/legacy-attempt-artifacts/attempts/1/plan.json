@@ -1,0 +1,8 @@
+{
+  "summary": "legacy plan without usage evidence",
+  "primaryTargetPaths": [
+    "src/counter.js",
+    "test/counter.test.js"
+  ],
+  "tokenUsage": 110
+}

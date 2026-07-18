@@ -1,0 +1,2 @@
+{"type": "attempt_started", "at": "2026-07-18T00:00:00.000Z", "detail": "attempt 1"}
+{"type": "loop_succeeded", "at": "2026-07-18T00:00:05.000Z", "detail": "success condition satisfied"}

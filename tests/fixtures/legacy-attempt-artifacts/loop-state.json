@@ -1,0 +1,14 @@
+{
+  "status": "succeeded",
+  "currentAttempt": 1,
+  "attemptsUsed": 1,
+  "lastTransitionAt": "2026-07-18T00:00:00.000Z",
+  "waitingOnHuman": false,
+  "stopReason": "success condition satisfied",
+  "budgetSnapshot": {
+    "attemptsRemaining": 0,
+    "timeRemainingMs": 592000,
+    "tokenBudgetRemaining": 49560
+  },
+  "recentFailures": []
+}

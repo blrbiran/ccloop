@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectArtifacts, collectEvidence } from "../../validation/v1/lib/evidence.js";
+import { collectArtifacts, collectEvidence, sha256File } from "../../validation/v1/lib/evidence.js";
 import { getScenario, renderScenario } from "../../validation/v1/lib/scenarios.js";
 import { createFixture } from "../../validation/v1/scripts/create-fixture.js";
 
@@ -274,6 +274,64 @@ describe("evidence collection", () => {
     );
   });
 
+
+  it("accepts legacy attempt artifacts that omit usageEvidence", async () => {
+    const runDir = join(worktreeRoot, "tests", "fixtures", "legacy-attempt-artifacts");
+    const evidenceDir = await mkdtemp(join(tmpdir(), "ccloop-evidence-legacy-"));
+    const planPath = join(runDir, "attempts", "1", "plan.json");
+    const executionPath = join(runDir, "attempts", "1", "execution.json");
+    const verifyPath = join(runDir, "attempts", "1", "verify.json");
+
+    const [planSha, executionSha, verifySha, plan, execution, verify, evidence] = await Promise.all([
+      sha256File(planPath),
+      sha256File(executionPath),
+      sha256File(verifyPath),
+      readFile(planPath, "utf8").then((contents) => JSON.parse(contents) as {
+        summary: string;
+        primaryTargetPaths: string[];
+        tokenUsage: number;
+        usageEvidence?: unknown;
+      }),
+      readFile(executionPath, "utf8").then((contents) => JSON.parse(contents) as {
+        changedFiles: string[];
+        tokenUsage: number;
+        usageEvidence?: unknown;
+      }),
+      readFile(verifyPath, "utf8").then((contents) => JSON.parse(contents) as {
+        approved: boolean;
+        evidence: string[];
+        tokenUsage: number;
+        usageEvidence?: unknown;
+      }),
+      collectEvidence({
+        scenario: getScenario("A"),
+        ...baseInput(runDir, evidenceDir),
+      }),
+    ]);
+
+    expect(plan).not.toHaveProperty("usageEvidence");
+    expect(execution).not.toHaveProperty("usageEvidence");
+    expect(verify).not.toHaveProperty("usageEvidence");
+    expect(plan.summary).toBe("legacy plan without usage evidence");
+    expect(plan.primaryTargetPaths).toEqual(["src/counter.js", "test/counter.test.js"]);
+    expect(plan.tokenUsage).toBe(110);
+    expect(execution.changedFiles).toEqual(["src/counter.js", "test/counter.test.js"]);
+    expect(execution.tokenUsage).toBe(220);
+    expect(verify.approved).toBe(true);
+    expect(verify.evidence).toEqual(["command output | required check passed: npm test"]);
+    expect(verify.tokenUsage).toBe(330);
+
+    expect(
+      evidence.artifacts
+        .filter((artifact) => artifact.name === "plan" || artifact.name === "execution" || artifact.name === "verify")
+        .map((artifact) => ({ name: artifact.name, status: artifact.status, sha256: artifact.sha256 })),
+    ).toEqual([
+      { name: "plan", status: "PRESENT", sha256: planSha },
+      { name: "execution", status: "PRESENT", sha256: executionSha },
+      { name: "verify", status: "PRESENT", sha256: verifySha },
+    ]);
+    expect(evidence.requiredChecks).toMatchObject({ status: "PRESENT" });
+  });
 
   it("requires evidence for every required check declared in loop-contract.json", async () => {
     const { runDir, evidenceDir } = await createSyntheticRun({ scenarioId: "A" });
