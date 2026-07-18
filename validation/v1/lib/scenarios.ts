@@ -213,17 +213,13 @@ function buildExecutionPolicy(
   timeoutMs?: number,
   executionPolicyOverrides: ExecutionPolicyOverrides = {},
 ): LoopContract["executionPolicy"] {
-  const executionPolicy =
-    id === "C" || id === "D"
-      ? {
-          ...DEFAULT_EXECUTION_POLICY,
-          perAttemptTimeoutMs: resolveTimeoutMs(id, timeoutMs),
-        }
-      : { ...DEFAULT_EXECUTION_POLICY };
+  const perAttemptTimeoutMs =
+    executionPolicyOverrides.perAttemptTimeoutMs ?? resolveTimeoutMs(id, timeoutMs);
 
   return {
-    ...executionPolicy,
+    ...DEFAULT_EXECUTION_POLICY,
     ...executionPolicyOverrides,
+    perAttemptTimeoutMs,
   };
 }
 
