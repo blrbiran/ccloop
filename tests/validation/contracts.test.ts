@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { V1_TERMINAL_STATES, loopContractSchema } from "../../src/contract/schema.js";
@@ -11,6 +11,12 @@ const execFileAsync = promisify(execFile);
 const worktreeRoot = process.cwd();
 const fixtureRepo = join(worktreeRoot, ".validation-runs", "fixture-smoke");
 const renderScript = join(worktreeRoot, "validation", "v1", "scripts", "render-contract.ts");
+
+async function createGitRepo(): Promise<string> {
+  const repoPath = await mkdtemp(join(tmpdir(), "ccloop-contract-repo-"));
+  await execFileAsync("git", ["init"], { cwd: repoPath });
+  return repoPath;
+}
 
 type ScenarioOptions = {
   repoPath: string;
@@ -90,6 +96,7 @@ describe("validation scenario rendering", () => {
 describe("render-contract CLI", () => {
   it("writes a validated scenario contract JSON file", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-render-contract-"));
+    const repoPath = await createGitRepo();
     const outputPath = join(tempRoot, "A.json");
 
     await execFileAsync(
@@ -101,7 +108,7 @@ describe("render-contract CLI", () => {
         "--scenario",
         "A",
         "--repo",
-        fixtureRepo,
+        repoPath,
         "--output",
         outputPath,
       ],
@@ -109,7 +116,7 @@ describe("render-contract CLI", () => {
     );
 
     const written = JSON.parse(await readFile(outputPath, "utf8")) as unknown;
-    expect(loopContractSchema.parse(written).context.repoPath).toBe(resolve(fixtureRepo));
+    expect(loopContractSchema.parse(written).context.repoPath).toBe(await realpath(repoPath));
   });
 
   it("rejects scenario C without an explicit timeout", async () => {
@@ -162,6 +169,7 @@ describe("render-contract CLI", () => {
 
   it("refuses to overwrite an existing output file", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-render-contract-"));
+    const repoPath = await createGitRepo();
     const outputPath = join(tempRoot, "A.json");
     await writeFile(outputPath, `{}
 `);
@@ -176,7 +184,7 @@ describe("render-contract CLI", () => {
           "--scenario",
           "A",
           "--repo",
-          fixtureRepo,
+          repoPath,
           "--output",
           outputPath,
         ],
