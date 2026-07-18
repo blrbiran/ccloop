@@ -15,6 +15,8 @@ const EXECUTION_POLICY_FIELDS = [
 ] as const;
 const A04_EXECUTION_POLICY_DESCRIPTION =
   "tokenBudget=550000, perAttemptTimeoutMs=600000, totalRuntimeBudgetMs=1200000, partialOutcomeRecoveryWindowMs=5000";
+const A04_ONE_SHOT_CONTRACT_DESCRIPTION =
+  "autonomyLevel=L2, maxAttempts=1, worktreeRequired=true, tokenBudget=550000, perAttemptTimeoutMs=600000, totalRuntimeBudgetMs=1200000, partialOutcomeRecoveryWindowMs=5000";
 
 export const A04_APPROVED_EXECUTION_POLICY: Readonly<Required<ExecutionPolicyOverrides>> = Object.freeze({
   tokenBudget: 550000,
@@ -137,6 +139,7 @@ async function defaultWriteContract(options: Pick<A04PrepareOptions, "fixturePat
       executionPolicyOverrides: options.executionPolicyOverrides,
     }),
   );
+  contractExecutionPolicyToA04Overrides(contract);
   const contractPath = resolve(options.contractPath);
   await mkdir(dirname(contractPath), { recursive: true });
   const body = `${JSON.stringify(contract, null, 2)}
@@ -169,6 +172,14 @@ export function validateA04ExecutionPolicy(
 }
 
 function contractExecutionPolicyToA04Overrides(contract: LoopContract): Required<ExecutionPolicyOverrides> {
+  if (
+    contract.executionPolicy.autonomyLevel !== "L2" ||
+    contract.executionPolicy.maxAttempts !== 1 ||
+    contract.executionPolicy.worktreeRequired !== true
+  ) {
+    throw new Error(`A-04 requires fixed one-shot contract execution policy: ${A04_ONE_SHOT_CONTRACT_DESCRIPTION}`);
+  }
+
   return validateA04ExecutionPolicy({
     tokenBudget: contract.executionPolicy.tokenBudget,
     perAttemptTimeoutMs: contract.executionPolicy.perAttemptTimeoutMs,

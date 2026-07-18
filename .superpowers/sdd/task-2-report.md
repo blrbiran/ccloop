@@ -107,3 +107,26 @@
 
 ### Concerns
 - The target worktree still contains unrelated pre-existing unstaged changes in `.superpowers/sdd/progress.md`, `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, and `package-lock.json`; they were intentionally excluded from the review-fix commit.
+
+
+## Review Fix Follow-up — 2026-07-18 (one-shot invariant)
+### What changed
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` so the approval gate now mechanically enforces the frozen one-shot contract invariants in addition to the four numeric A-04 fields.
+- The helper now rejects any drifted Scenario A contract where `autonomyLevel !== "L2"`, `maxAttempts !== 1`, or `worktreeRequired !== true` before approval-package generation.
+- Added a focused regression test in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts` proving a drifted contract with `maxAttempts: 2` is rejected.
+
+### Exact test command(s)
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" test -- --run tests/validation/prepareA04.test.ts`
+
+### Relevant output
+- `Test Files  1 passed (1)`
+- `Tests  13 passed (13)`
+
+### Files changed
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-2-report.md`
+
+### Concerns
+- Left the pre-existing unrelated unstaged changes in `.superpowers/sdd/progress.md`, `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, and `package-lock.json` untouched and out of the fix commit.
+- `.wolf/memory.md` still contains one historical line with literal `\n` escapes; I left it unchanged to keep this fix scoped to the reviewer finding.

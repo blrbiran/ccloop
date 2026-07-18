@@ -119,6 +119,28 @@ describe("A-04 approval package", () => {
     ).toThrow(/A-04 requires fixed execution policy/);
   });
 
+  it("rejects approval packages built from a drifted non-one-shot contract", () => {
+    const contract = buildContract();
+
+    expect(() =>
+      buildApprovalPackage({
+        contract: {
+          ...contract,
+          executionPolicy: {
+            ...contract.executionPolicy,
+            maxAttempts: 2,
+          },
+        },
+        contractPath: "/repo/.validation-runs/contracts/A-04.json",
+        contractSha256: "abc123",
+        fixturePath: "/repo/.validation-runs/fixture-01",
+        runDir: "/repo/.validation-runs/runs/A-04",
+        evidenceDir: "/repo/.validation-runs/evidence/A-04",
+        adapterConfigPath: "/repo/examples/v1/claude-adapter-config.json",
+      }),
+    ).toThrow(/A-04 requires fixed one-shot contract execution policy/);
+  });
+
   it.each([
     ["contract path", "/repo/.validation-runs/contracts/A-04.json"],
     ["run directory", "/repo/.validation-runs/runs/A-04"],
