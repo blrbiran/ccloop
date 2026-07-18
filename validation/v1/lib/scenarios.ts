@@ -8,9 +8,20 @@ export type ScenarioDefinition = {
   expectedArtifacts: Record<"plan" | "execution" | "verify" | "diff" | "log" | "requiredChecks", ArtifactExpectation>;
 };
 
+export type ExecutionPolicyOverrides = Partial<
+  Pick<
+    LoopContract["executionPolicy"],
+    | "tokenBudget"
+    | "perAttemptTimeoutMs"
+    | "totalRuntimeBudgetMs"
+    | "partialOutcomeRecoveryWindowMs"
+  >
+>;
+
 type RenderOptions = {
   repoPath: string;
   timeoutMs?: number;
+  executionPolicyOverrides?: ExecutionPolicyOverrides;
 };
 
 type ScenarioSpec = ScenarioDefinition & {
@@ -197,17 +208,23 @@ function resolveTimeoutMs(id: ScenarioId, timeoutMs?: number): number {
   return timeoutMs;
 }
 
-function buildExecutionPolicy(id: ScenarioId, timeoutMs?: number): LoopContract["executionPolicy"] {
-  const perAttemptTimeoutMs = resolveTimeoutMs(id, timeoutMs);
+function buildExecutionPolicy(
+  id: ScenarioId,
+  timeoutMs?: number,
+  executionPolicyOverrides: ExecutionPolicyOverrides = {},
+): LoopContract["executionPolicy"] {
+  const executionPolicy =
+    id === "C" || id === "D"
+      ? {
+          ...DEFAULT_EXECUTION_POLICY,
+          perAttemptTimeoutMs: resolveTimeoutMs(id, timeoutMs),
+        }
+      : { ...DEFAULT_EXECUTION_POLICY };
 
-  if (id === "C" || id === "D") {
-    return {
-      ...DEFAULT_EXECUTION_POLICY,
-      perAttemptTimeoutMs,
-    };
-  }
-
-  return { ...DEFAULT_EXECUTION_POLICY };
+  return {
+    ...executionPolicy,
+    ...executionPolicyOverrides,
+  };
 }
 
 export function getScenario(id: ScenarioId): ScenarioDefinition {
@@ -236,7 +253,7 @@ export function renderScenario(id: ScenarioId, options: RenderOptions): LoopCont
       buildTestCommands: [...scenario.buildTestCommands],
       constraints: [...scenario.constraints],
     },
-    executionPolicy: buildExecutionPolicy(id, options.timeoutMs),
+    executionPolicy: buildExecutionPolicy(id, options.timeoutMs, options.executionPolicyOverrides),
     safetyPolicy: {
       allowlistPaths: [...scenario.allowlistPaths],
       denylistPaths: [...scenario.denylistPaths],
