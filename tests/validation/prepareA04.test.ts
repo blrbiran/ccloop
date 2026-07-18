@@ -4,6 +4,7 @@ import {
   A04_APPROVED_EXECUTION_POLICY,
   buildA04RunCommand,
   buildApprovalPackage,
+  type ReadOnlyInspection,
   prepareA04,
 } from "../../validation/v1/lib/a04.js";
 import { renderScenario } from "../../validation/v1/lib/scenarios.js";
@@ -44,11 +45,49 @@ function buildContract(overrides: Partial<typeof A04_APPROVED_EXECUTION_POLICY> 
   });
 }
 
+
+function buildReadOnlyInspection(overrides: Partial<ReadOnlyInspection> = {}): ReadOnlyInspection {
+  return {
+    mainCheckout: {
+      path: "/repo",
+      head: "main-head",
+      branch: "main",
+    },
+    evidenceFirstValidationWorktree: {
+      path: "/repo/.worktrees/evidence-first-v1",
+      head: "evidence-head",
+      branch: "evidence-first-v1",
+    },
+    retainedBackupBranch: {
+      name: "backup/evidence-first-v1-before-memory-history-cleanup",
+      head: "backup-head",
+    },
+    retainedStashes: [
+      "stash@{0}: On main: pre-local-merge-evidence-first-v1-2026-07-18",
+      "stash@{1}: On main: pre-merge local changes 2026-07-16",
+    ],
+    preservedEvidenceTree: {
+      path: "/repo/.worktrees/evidence-first-v1/.validation-runs",
+      requiredPaths: [
+        "/repo/.worktrees/evidence-first-v1/.validation-runs/fixture-01",
+        "/repo/.worktrees/evidence-first-v1/.validation-runs/contracts/A-01.json",
+        "/repo/.worktrees/evidence-first-v1/.validation-runs/contracts/A-02.json",
+        "/repo/.worktrees/evidence-first-v1/.validation-runs/contracts/A-03.json",
+        "/repo/.worktrees/evidence-first-v1/.validation-runs/evidence/A-01/review.json",
+        "/repo/.worktrees/evidence-first-v1/.validation-runs/evidence/A-02/review.json",
+        "/repo/.worktrees/evidence-first-v1/.validation-runs/evidence/A-03/review.json",
+      ],
+    },
+    ...overrides,
+  };
+}
+
 function buildDeps(input: {
   pathExists?: (path: string) => Promise<boolean>;
   assertCleanFixture?: (fixturePath: string) => Promise<{ head: string; status: string }>;
   readCurrentBranch?: (repoRoot: string) => Promise<string>;
-  createMainVerificationCheckout?: (repoRoot: string) => Promise<{ path: string; cleanup: () => Promise<void> }>;
+  inspectReadOnlyInspection?: (repoRoot: string) => Promise<ReadOnlyInspection>;
+  createMainVerificationCheckout?: (repoRoot: string) => Promise<{ path: string; head: string; cleanup: () => Promise<void> }>;
   runCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
   writeContract?: (options: {
     fixturePath: string;
@@ -61,10 +100,12 @@ function buildDeps(input: {
     pathExists: input.pathExists ?? (async () => false),
     assertCleanFixture: input.assertCleanFixture ?? (async () => ({ head: "fixture-head", status: "" })),
     readCurrentBranch: input.readCurrentBranch ?? (async () => "main"),
+    inspectReadOnlyInspection: input.inspectReadOnlyInspection ?? (async () => buildReadOnlyInspection()),
     createMainVerificationCheckout:
       input.createMainVerificationCheckout ??
       (async () => ({
         path: "/tmp/a04-main-checkout",
+        head: "verified-main-head",
         cleanup: async () => {},
       })),
     runCommand: input.runCommand ?? (async () => ({ stdout: "", stderr: "" })),
@@ -89,14 +130,16 @@ function buildDeps(input: {
 describe("A-04 approval package", () => {
   it("builds a frozen approval package with explicit scenario, path, and artifact expectations", () => {
     const pkg = buildApprovalPackage({
-      repoRoot: "/repo",
+      verifiedCheckoutPath: "/tmp/a04-main-checkout",
+      verifiedCheckoutHead: "verified-main-head",
+      readOnlyInspection: buildReadOnlyInspection(),
       contract: buildContract(),
       contractPath: "/repo/.validation-runs/contracts/A-04.json",
       contractSha256: "abc123",
       fixturePath: "/repo/.validation-runs/fixture-01",
       runDir: "/repo/.validation-runs/runs/A-04",
       evidenceDir: "/repo/.validation-runs/evidence/A-04",
-      adapterConfigPath: "/repo/examples/v1/claude-adapter-config.json",
+      adapterConfigPath: "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
     });
 
     expect(pkg.contractIdentity).toEqual({
@@ -104,7 +147,14 @@ describe("A-04 approval package", () => {
       sha256: "abc123",
       schemaValid: true,
     });
-    expect(pkg.workingDirectory).toBe("/repo");
+    expect(pkg.verifiedCheckout).toEqual({
+      path: "/tmp/a04-main-checkout",
+      head: "verified-main-head",
+      runScenarioScriptPath: "/tmp/a04-main-checkout/validation/v1/scripts/run-scenario.ts",
+      adapterConfigPath: "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+    });
+    expect(pkg.readOnlyInspection).toEqual(buildReadOnlyInspection());
+    expect(pkg.workingDirectory).toBe("/tmp/a04-main-checkout");
     expect(pkg.paths).toEqual({
       contractPath: "/repo/.validation-runs/contracts/A-04.json",
       fixturePath: "/repo/.validation-runs/fixture-01",
@@ -152,7 +202,7 @@ describe("A-04 approval package", () => {
       "npx",
       "--no-install",
       "tsx",
-      "validation/v1/scripts/run-scenario.ts",
+      "/tmp/a04-main-checkout/validation/v1/scripts/run-scenario.ts",
       "--scenario",
       "A",
       "--contract",
@@ -164,21 +214,23 @@ describe("A-04 approval package", () => {
       "--evidence-dir",
       "/repo/.validation-runs/evidence/A-04",
       "--adapter-config",
-      "/repo/examples/v1/claude-adapter-config.json",
+      "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
     ]);
   });
 
   it("rejects approval packages built from a non-A-04 execution policy", () => {
     expect(() =>
       buildApprovalPackage({
-        repoRoot: "/repo",
+        verifiedCheckoutPath: "/tmp/a04-main-checkout",
+        verifiedCheckoutHead: "verified-main-head",
+        readOnlyInspection: buildReadOnlyInspection(),
         contract: buildContract({ tokenBudget: 1 }),
         contractPath: "/repo/.validation-runs/contracts/A-04.json",
         contractSha256: "abc123",
         fixturePath: "/repo/.validation-runs/fixture-01",
         runDir: "/repo/.validation-runs/runs/A-04",
         evidenceDir: "/repo/.validation-runs/evidence/A-04",
-        adapterConfigPath: "/repo/examples/v1/claude-adapter-config.json",
+        adapterConfigPath: "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
       }),
     ).toThrow(/A-04 requires fixed execution policy/);
   });
@@ -188,7 +240,9 @@ describe("A-04 approval package", () => {
 
     expect(() =>
       buildApprovalPackage({
-        repoRoot: "/repo",
+        verifiedCheckoutPath: "/tmp/a04-main-checkout",
+        verifiedCheckoutHead: "verified-main-head",
+        readOnlyInspection: buildReadOnlyInspection(),
         contract: {
           ...contract,
           executionPolicy: {
@@ -201,7 +255,7 @@ describe("A-04 approval package", () => {
         fixturePath: "/repo/.validation-runs/fixture-01",
         runDir: "/repo/.validation-runs/runs/A-04",
         evidenceDir: "/repo/.validation-runs/evidence/A-04",
-        adapterConfigPath: "/repo/examples/v1/claude-adapter-config.json",
+        adapterConfigPath: "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
       }),
     ).toThrow(/A-04 requires fixed one-shot contract execution policy/);
   });
@@ -275,10 +329,34 @@ describe("A-04 approval package", () => {
     expect(runCommand).not.toHaveBeenCalled();
   });
 
-  it("runs deterministic verification inside an isolated temporary checkout and cleans it up", async () => {
+
+  it("fails read-only inspection before creating the verification checkout", async () => {
+    const createMainVerificationCheckout = vi.fn(async () => ({
+      path: "/tmp/a04-main-checkout",
+      head: "verified-main-head",
+      cleanup: async () => {},
+    }));
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          inspectReadOnlyInspection: async () => {
+            throw new Error("A-04 read-only inspection requires retained stash matching: On main: pre-local-merge-evidence-first-v1-2026-07-18");
+          },
+          createMainVerificationCheckout,
+        }),
+      ),
+    ).rejects.toThrow(/A-04 read-only inspection requires retained stash matching/);
+
+    expect(createMainVerificationCheckout).not.toHaveBeenCalled();
+  });
+
+  it("preserves the isolated verified checkout so approval stays bound to the verified runnable revision", async () => {
     const cleanup = vi.fn(async () => {});
     const createMainVerificationCheckout = vi.fn(async () => ({
       path: "/tmp/a04-main-checkout",
+      head: "verified-main-head",
       cleanup,
     }));
     const runCommand = vi.fn(async (..._args: [string, string[], string]) => ({ stdout: "", stderr: "" }));
@@ -299,6 +377,30 @@ describe("A-04 approval package", () => {
       "/tmp/a04-main-checkout",
       "/tmp/a04-main-checkout",
     ]);
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("cleans up the isolated verification checkout when preparation fails after checkout creation", async () => {
+    const cleanup = vi.fn(async () => {});
+    const createMainVerificationCheckout = vi.fn(async () => ({
+      path: "/tmp/a04-main-checkout",
+      head: "verified-main-head",
+      cleanup,
+    }));
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          createMainVerificationCheckout,
+          readFrozenContract: async () => ({
+            contract: buildContract(),
+            sha256: "drifted-sha256",
+          }),
+        }),
+      ),
+    ).rejects.toThrow(/contract file contents must remain frozen through final A-04 pre-approval/);
+
     expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
@@ -396,16 +498,21 @@ describe("A-04 approval package", () => {
     ]);
   });
 
-  it("runs A-04 phases in spec order: main verification, freshness, contract render, focused regressions, final gate", async () => {
+  it("runs A-04 phases in spec order: read-only inspection, main verification, freshness, contract render, focused regressions, final gate", async () => {
     const steps: string[] = [];
 
     await prepareA04(
       buildOptions(),
       buildDeps({
+        inspectReadOnlyInspection: async () => {
+          steps.push("readOnlyInspection");
+          return buildReadOnlyInspection();
+        },
         createMainVerificationCheckout: async () => {
           steps.push("createCheckout");
           return {
             path: "/tmp/a04-main-checkout",
+            head: "verified-main-head",
             cleanup: async () => {
               steps.push("cleanupCheckout");
             },
@@ -444,6 +551,7 @@ describe("A-04 approval package", () => {
     );
 
     expect(steps).toEqual([
+      "readOnlyInspection",
       "createCheckout",
       "npm test",
       "npm run typecheck",
@@ -459,7 +567,6 @@ describe("A-04 approval package", () => {
       "exists:/repo/.validation-runs/runs/A-04",
       "exists:/repo/.validation-runs/evidence/A-04",
       "readContract",
-      "cleanupCheckout",
     ]);
   });
 
@@ -499,7 +606,14 @@ describe("A-04 approval package", () => {
         sha256: "abc123",
         schemaValid: true,
       },
-      workingDirectory: "/repo",
+      workingDirectory: "/tmp/a04-main-checkout",
+      verifiedCheckout: {
+        path: "/tmp/a04-main-checkout",
+        head: "verified-main-head",
+        runScenarioScriptPath: "/tmp/a04-main-checkout/validation/v1/scripts/run-scenario.ts",
+        adapterConfigPath: "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+      },
+      readOnlyInspection: buildReadOnlyInspection(),
       paths: {
         contractPath: "/repo/.validation-runs/contracts/A-04.json",
         fixturePath: "/repo/.validation-runs/fixture-01",
@@ -543,7 +657,7 @@ describe("A-04 approval package", () => {
           requiredChecks: "PRESENT",
         },
       },
-      exactCommand: ["npx", "--no-install", "tsx", "validation/v1/scripts/run-scenario.ts"],
+      exactCommand: ["npx", "--no-install", "tsx", "/tmp/a04-main-checkout/validation/v1/scripts/run-scenario.ts"],
       usageEvidenceExpectations: ["usage evidence is normalized in artifacts"],
       invariants: {
         fixtureClean: true,

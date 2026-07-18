@@ -62,13 +62,14 @@ npx --no-install tsx validation/v1/scripts/prepare-a04.ts \
 ```
 
 Expected result:
-- main deterministic verification (`npm test`, `npm run typecheck`, `npm run build`) passes first inside an isolated temporary checkout based on the verified `main` revision;
+- a spec 6.1 read-only inspection succeeds first, confirming the retained `main` checkout, retained `evidence-first-v1` worktree, backup branch, stashes, and preserved `.validation-runs/` recovery evidence are still present and readable;
+- main deterministic verification (`npm test`, `npm run typecheck`, `npm run build`) passes next inside an isolated temporary checkout based on the verified `main` revision;
 - the A-04 freshness check confirms the fixture is clean and the contract/run/evidence paths are still fresh before contract render;
 - `.validation-runs/contracts/A-04.json` is created once and schema-validates as Scenario A with only the approved A-04 execution-policy fields overridden;
 - the focused evidence-chain regression set runs after contract render and before the final pre-approval gate;
 - the final pre-approval gate re-reads `.validation-runs/contracts/A-04.json` from disk, re-parses it under schema, and recomputes its sha256 so the approval package matches the exact on-disk contract;
 - `.validation-runs/runs/A-04/` and `.validation-runs/evidence/A-04/` still do not exist;
-- stdout prints an approval package containing contract identity, expected file scope, expected diff scope, exact `run-scenario.ts` command, and cost semantics.
+- stdout prints an approval package containing the preserved verified checkout path/head, the read-only inspection results, and an exact command whose runnable `run-scenario.ts` target resolves inside that verified checkout rather than the operator checkout.
 
 `prepare-a04.ts` must not invoke Claude or create `review.json`.
 

@@ -186,5 +186,28 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-18T11:55:42.738023+00:00"
+  },
+  {
+    "id": "bug-010",
+    "timestamp": "2026-07-18T13:00:05.557461+00:00",
+    "error_message": "Final whole-branch review found that A-04 approval still did not freeze the runnable verified revision and still skipped the spec 6.1 read-only repository/evidence-preservation inspection.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "prepareA04 cleaned up the isolated verification checkout after success, so the emitted approval package still pointed at a drift-prone runnable target, and the flow started directly at deterministic verification without checking retained recovery context.",
+    "fix": "Added a lightweight read-only inspection for the retained main checkout, evidence-first worktree, backup branch, stashes, and preserved .validation-runs evidence; preserved the verified checkout on success; and bound approval-package workingDirectory/exactCommand to that checkout's run-scenario.ts path.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "verified-checkout",
+      "read-only-inspection",
+      "approval-package"
+    ],
+    "related_bugs": [
+      "bug-007",
+      "bug-008"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T13:00:05.557621+00:00"
   }
 ]

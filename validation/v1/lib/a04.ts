@@ -30,6 +30,21 @@ const A04_RUN_ARTIFACTS = [
   "attempts/1/stdout-stderr.log",
 ] as const;
 const A04_EVIDENCE_ARTIFACTS = ["artifacts.json", "observations.json"] as const;
+const A04_RETAINED_BACKUP_BRANCH = "backup/evidence-first-v1-before-memory-history-cleanup";
+const A04_REQUIRED_RETAINED_STASH_LINES = [
+  "On main: pre-local-merge-evidence-first-v1-2026-07-18",
+  "On main: pre-merge local changes 2026-07-16",
+] as const;
+const A04_REQUIRED_PRESERVED_EVIDENCE_PATHS = [
+  "fixture-01",
+  "contracts/A-01.json",
+  "contracts/A-02.json",
+  "contracts/A-03.json",
+  "evidence/A-01/review.json",
+  "evidence/A-02/review.json",
+  "evidence/A-03/review.json",
+] as const;
+const A04_RUN_SCENARIO_SCRIPT = "validation/v1/scripts/run-scenario.ts";
 
 export const A04_APPROVED_EXECUTION_POLICY: Readonly<Required<ExecutionPolicyOverrides>> = Object.freeze({
   tokenBudget: 550000,
@@ -50,7 +65,16 @@ type FrozenContract = {
 
 type IsolatedVerificationCheckout = {
   path: string;
+  head: string;
   cleanup: () => Promise<void>;
+};
+
+export type ReadOnlyInspection = {
+  mainCheckout: { path: string; head: string; branch: "main" };
+  evidenceFirstValidationWorktree: { path: string; head: string; branch: "evidence-first-v1" };
+  retainedBackupBranch: { name: typeof A04_RETAINED_BACKUP_BRANCH; head: string };
+  retainedStashes: string[];
+  preservedEvidenceTree: { path: string; requiredPaths: string[] };
 };
 
 export type A04PrepareOptions = {
@@ -65,6 +89,13 @@ export type A04PrepareOptions = {
 
 export type ApprovalPackage = {
   contractIdentity: { path: string; sha256: string; schemaValid: true };
+  verifiedCheckout: {
+    path: string;
+    head: string;
+    runScenarioScriptPath: string;
+    adapterConfigPath: string;
+  };
+  readOnlyInspection: ReadOnlyInspection;
   workingDirectory: string;
   paths: {
     contractPath: string;
@@ -101,6 +132,7 @@ export type PrepareDeps = {
   pathExists: (path: string) => Promise<boolean>;
   assertCleanFixture: (fixturePath: string) => Promise<{ head: string; status: string }>;
   readCurrentBranch: (repoRoot: string) => Promise<string>;
+  inspectReadOnlyInspection: (repoRoot: string) => Promise<ReadOnlyInspection>;
   createMainVerificationCheckout: (repoRoot: string) => Promise<IsolatedVerificationCheckout>;
   runCommand: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
   writeContract: (options: Pick<A04PrepareOptions, "fixturePath" | "contractPath" | "executionPolicyOverrides">) => Promise<FrozenContract>;
@@ -163,6 +195,135 @@ async function defaultReadCurrentBranch(repoRoot: string): Promise<string> {
   return gitOutput(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
 }
 
+type GitWorktreeEntry = {
+  path: string;
+  head: string;
+  branch?: string;
+};
+
+function parseGitWorktreeList(output: string): GitWorktreeEntry[] {
+  const entries: GitWorktreeEntry[] = [];
+  let current: Partial<GitWorktreeEntry> = {};
+
+  const flush = () => {
+    if (current.path && current.head) {
+      entries.push({
+        path: current.path,
+        head: current.head,
+        branch: current.branch,
+      });
+    }
+
+    current = {};
+  };
+
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.trim();
+
+    if (line === "") {
+      flush();
+      continue;
+    }
+
+    const separatorIndex = line.indexOf(" ");
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex);
+    const value = line.slice(separatorIndex + 1);
+
+    if (key === "worktree") {
+      current.path = value;
+    } else if (key === "HEAD") {
+      current.head = value;
+    } else if (key === "branch") {
+      current.branch = value;
+    }
+  }
+
+  flush();
+  return entries;
+}
+
+async function assertReadablePath(path: string, label: string): Promise<void> {
+  try {
+    await stat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`${label} is missing for A-04 read-only inspection`);
+    }
+
+    throw new Error(`${label} must remain readable for A-04 read-only inspection`);
+  }
+}
+
+async function defaultInspectReadOnlyInspection(repoRoot: string): Promise<ReadOnlyInspection> {
+  const worktrees = parseGitWorktreeList(await gitOutput(repoRoot, ["worktree", "list", "--porcelain"]));
+  const mainCheckout = worktrees.find((entry) => entry.branch === "refs/heads/main");
+  if (!mainCheckout) {
+    throw new Error("A-04 read-only inspection requires the main checkout worktree");
+  }
+
+  const evidenceFirstValidationWorktree = worktrees.find((entry) => entry.branch === "refs/heads/evidence-first-v1");
+  if (!evidenceFirstValidationWorktree) {
+    throw new Error("A-04 read-only inspection requires the retained evidence-first-v1 worktree");
+  }
+
+  await assertReadablePath(mainCheckout.path, "main checkout");
+  await assertReadablePath(evidenceFirstValidationWorktree.path, "evidence-first-v1 worktree");
+
+  let backupBranchHead: string;
+  try {
+    backupBranchHead = await gitOutput(repoRoot, ["rev-parse", "--verify", `refs/heads/${A04_RETAINED_BACKUP_BRANCH}`]);
+  } catch {
+    throw new Error(`A-04 read-only inspection requires retained backup branch ${A04_RETAINED_BACKUP_BRANCH}`);
+  }
+
+  const stashLinesOutput = await gitOutput(repoRoot, ["stash", "list"]);
+  const stashLines = stashLinesOutput === "" ? [] : stashLinesOutput.split("\n").map((line) => line.trim()).filter(Boolean);
+  const retainedStashes = A04_REQUIRED_RETAINED_STASH_LINES.map((requiredLine) => {
+    const match = stashLines.find((line) => line.includes(requiredLine));
+    if (!match) {
+      throw new Error(`A-04 read-only inspection requires retained stash matching: ${requiredLine}`);
+    }
+
+    return match;
+  });
+
+  const preservedEvidenceTreePath = resolve(evidenceFirstValidationWorktree.path, ".validation-runs");
+  await assertReadablePath(preservedEvidenceTreePath, "preserved .validation-runs evidence tree");
+  const requiredPaths = [];
+
+  for (const relativePath of A04_REQUIRED_PRESERVED_EVIDENCE_PATHS) {
+    const absolutePath = resolve(preservedEvidenceTreePath, relativePath);
+    await assertReadablePath(absolutePath, `preserved evidence path ${relativePath}`);
+    requiredPaths.push(absolutePath);
+  }
+
+  return {
+    mainCheckout: {
+      path: mainCheckout.path,
+      head: mainCheckout.head,
+      branch: "main",
+    },
+    evidenceFirstValidationWorktree: {
+      path: evidenceFirstValidationWorktree.path,
+      head: evidenceFirstValidationWorktree.head,
+      branch: "evidence-first-v1",
+    },
+    retainedBackupBranch: {
+      name: A04_RETAINED_BACKUP_BRANCH,
+      head: backupBranchHead,
+    },
+    retainedStashes,
+    preservedEvidenceTree: {
+      path: preservedEvidenceTreePath,
+      requiredPaths,
+    },
+  };
+}
+
 async function defaultCreateMainVerificationCheckout(repoRoot: string): Promise<IsolatedVerificationCheckout> {
   const worktreePath = await mkdtemp(join(tmpdir(), "ccloop-a04-main-"));
   await execFileAsync("git", ["-C", repoRoot, "worktree", "add", "--detach", worktreePath, "HEAD"], {
@@ -174,8 +335,11 @@ async function defaultCreateMainVerificationCheckout(repoRoot: string): Promise<
     await symlink(sourceNodeModulesPath, resolve(worktreePath, "node_modules"));
   }
 
+  const head = await gitOutput(worktreePath, ["rev-parse", "HEAD"]);
+
   return {
     path: worktreePath,
+    head,
     cleanup: async () => {
       await execFileAsync("git", ["-C", repoRoot, "worktree", "remove", "--force", worktreePath], {
         maxBuffer: 10 * 1024 * 1024,
@@ -245,6 +409,7 @@ const defaultDeps: PrepareDeps = {
   pathExists,
   assertCleanFixture: defaultAssertCleanFixture,
   readCurrentBranch: defaultReadCurrentBranch,
+  inspectReadOnlyInspection: defaultInspectReadOnlyInspection,
   createMainVerificationCheckout: defaultCreateMainVerificationCheckout,
   runCommand: defaultRunCommand,
   writeContract: defaultWriteContract,
@@ -297,6 +462,14 @@ function resolvePrepareOptions(options: A04PrepareOptions): A04PrepareOptions {
   };
 }
 
+function resolvePathForVerifiedCheckout(verifiedCheckoutPath: string, repoRoot: string, originalPath: string): string {
+  if (!isSameOrDescendantPath(originalPath, repoRoot)) {
+    return originalPath;
+  }
+
+  return resolve(verifiedCheckoutPath, relative(repoRoot, originalPath));
+}
+
 function assertNoContractMaterializationOverlap(
   options: Pick<A04PrepareOptions, "contractPath" | "runDir" | "evidenceDir">,
 ): void {
@@ -316,12 +489,13 @@ export function buildA04RunCommand(input: {
   runDir: string;
   evidenceDir: string;
   adapterConfigPath: string;
+  runScenarioScriptPath?: string;
 }): string[] {
   return [
     "npx",
     "--no-install",
     "tsx",
-    "validation/v1/scripts/run-scenario.ts",
+    input.runScenarioScriptPath ?? A04_RUN_SCENARIO_SCRIPT,
     "--scenario",
     "A",
     "--contract",
@@ -338,7 +512,9 @@ export function buildA04RunCommand(input: {
 }
 
 export function buildApprovalPackage(input: {
-  repoRoot: string;
+  verifiedCheckoutPath: string;
+  verifiedCheckoutHead: string;
+  readOnlyInspection: ReadOnlyInspection;
   contract: LoopContract;
   contractPath: string;
   contractSha256: string;
@@ -355,7 +531,14 @@ export function buildApprovalPackage(input: {
       sha256: input.contractSha256,
       schemaValid: true,
     },
-    workingDirectory: input.repoRoot,
+    verifiedCheckout: {
+      path: input.verifiedCheckoutPath,
+      head: input.verifiedCheckoutHead,
+      runScenarioScriptPath: resolve(input.verifiedCheckoutPath, A04_RUN_SCENARIO_SCRIPT),
+      adapterConfigPath: input.adapterConfigPath,
+    },
+    readOnlyInspection: input.readOnlyInspection,
+    workingDirectory: input.verifiedCheckoutPath,
     paths: {
       contractPath: input.contractPath,
       fixturePath: input.fixturePath,
@@ -378,7 +561,14 @@ export function buildApprovalPackage(input: {
       requiredChecks: [...input.contract.verification.requiredChecks],
       expectedEvidenceArtifactStatuses: { ...scenario.expectedArtifacts },
     },
-    exactCommand: buildA04RunCommand(input),
+    exactCommand: buildA04RunCommand({
+      contractPath: input.contractPath,
+      fixturePath: input.fixturePath,
+      runDir: input.runDir,
+      evidenceDir: input.evidenceDir,
+      adapterConfigPath: input.adapterConfigPath,
+      runScenarioScriptPath: resolve(input.verifiedCheckoutPath, A04_RUN_SCENARIO_SCRIPT),
+    }),
     usageEvidenceExpectations: [
       "plan/execute/verify artifacts may include usageEvidence fields and tokenUsage when normalizedTotal is finite and positive",
       "tokenBudget is a controller stopping threshold, not an API cost cap",
@@ -503,8 +693,15 @@ export async function prepareA04(
   const executionPolicyOverrides = validateA04ExecutionPolicy(resolvedOptions.executionPolicyOverrides);
   assertNoContractMaterializationOverlap(resolvedOptions);
   await assertMainCheckout(deps, resolvedOptions.repoRoot);
+  const readOnlyInspection = await deps.inspectReadOnlyInspection(resolvedOptions.repoRoot);
 
   const verificationCheckout = await deps.createMainVerificationCheckout(resolvedOptions.repoRoot);
+  const verifiedAdapterConfigPath = resolvePathForVerifiedCheckout(
+    verificationCheckout.path,
+    resolvedOptions.repoRoot,
+    resolvedOptions.adapterConfigPath,
+  );
+  let preserveVerificationCheckout = false;
 
   try {
     const preflightCommands = await runMainDeterministicVerification(deps, verificationCheckout.path);
@@ -524,20 +721,26 @@ export async function prepareA04(
       sha256,
     );
 
+    preserveVerificationCheckout = true;
+
     return {
       approvalPackage: buildApprovalPackage({
-        repoRoot: resolvedOptions.repoRoot,
+        verifiedCheckoutPath: verificationCheckout.path,
+        verifiedCheckoutHead: verificationCheckout.head,
+        readOnlyInspection,
         contract: frozenContract.contract,
         contractPath: resolvedOptions.contractPath,
         contractSha256: frozenContract.sha256,
         fixturePath: resolvedOptions.fixturePath,
         runDir: resolvedOptions.runDir,
         evidenceDir: resolvedOptions.evidenceDir,
-        adapterConfigPath: resolvedOptions.adapterConfigPath,
+        adapterConfigPath: verifiedAdapterConfigPath,
       }),
       preflightCommands,
     };
   } finally {
-    await verificationCheckout.cleanup();
+    if (!preserveVerificationCheckout) {
+      await verificationCheckout.cleanup();
+    }
   }
 }
