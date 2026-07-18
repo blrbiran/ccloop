@@ -30,6 +30,9 @@
 
 - Evidence-first validation harness files for V1 live under `validation/v1/**` with matching focused Vitest coverage under `tests/validation/**`, and the disposable smoke repo root stays under ignored `.validation-runs/` with a strict do-not-overwrite boundary.
 
+- A-04 mechanical preflight is intentionally non-paid: prepare-a04 runs deterministic repo checks first, freezes a contract plus approval package, prints JSON only, and must not create run/evidence directories or invoke run-scenario.
+- A-04 approval is valid only for the fixed envelope `550000/600000/1200000/5000`, and `mainCheckoutMustRemainUnchanged: true` must be backed by tracked repo-root cleanliness checks before and after deterministic preflight.
+
 ## Do-Not-Repeat
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->
@@ -45,9 +48,12 @@
 - [2026-07-18] Validation CLI tests must create their own temporary Git repositories; never depend on ignored `.validation-runs/fixture-smoke`, which may exist in one worktree and not another. Compare canonical paths with `fs.realpath` on macOS because `/var` resolves through `/private/var`.
 - [2026-07-18] When searching Markdown literals containing backticks from Bash, avoid double-quoted `rg` patterns because the shell performs command substitution; use Node string checks or single-quoted patterns.
 
+- [2026-07-18] In validation/v1 scenario rendering, never spread runtime `executionPolicyOverrides` directly into the contract; whitelist the four approved fields and keep an `as any` regression test proving blocked fields like `maxAttempts` are ignored.
+
 ## Decision Log
 
 <!-- Significant technical decisions with rationale. Why X was chosen over Y. -->
+- [2026-07-18] Task 2 preflight ordering follows the approved A-04 spec resolution: deterministic verification runs before run/evidence freshness checks. Why: approval should be based on a freshly validated main checkout before freezing the contract and expected run envelope.
 - [2026-07-14] V1 implementation stack: TypeScript CLI. Why: best fit for local orchestration, Claude adapter integration, JSON/JSONL state, and fast iteration in this repository.
 - [2026-07-17] Next milestone uses an evidence-first sequence: manually exercise real Claude success, human-gate, and interrupted/partial-recovery paths before automating them. Why: automation should encode observed runtime behavior rather than assumptions.
 - [2026-07-18] Claude usage evidence is persisted in standard phase artifacts, not a validation sidecar or full raw envelope. Why: controller accounting and audit evidence must stay phase/attempt-bound without retaining unnecessary or potentially sensitive response data.

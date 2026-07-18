@@ -7,6 +7,26 @@ import { loopContractSchema, type LoopContract } from "../../../src/contract/sch
 import { renderScenario, type ExecutionPolicyOverrides } from "./scenarios.js";
 
 const execFileAsync = promisify(execFile);
+const EXECUTION_POLICY_FIELDS = [
+  "tokenBudget",
+  "perAttemptTimeoutMs",
+  "totalRuntimeBudgetMs",
+  "partialOutcomeRecoveryWindowMs",
+] as const;
+const A04_EXECUTION_POLICY_DESCRIPTION =
+  "tokenBudget=550000, perAttemptTimeoutMs=600000, totalRuntimeBudgetMs=1200000, partialOutcomeRecoveryWindowMs=5000";
+
+export const A04_APPROVED_EXECUTION_POLICY: Readonly<Required<ExecutionPolicyOverrides>> = Object.freeze({
+  tokenBudget: 550000,
+  perAttemptTimeoutMs: 600000,
+  totalRuntimeBudgetMs: 1200000,
+  partialOutcomeRecoveryWindowMs: 5000,
+});
+
+type RepoTrackedState = {
+  head: string;
+  status: string;
+};
 
 export type A04PrepareOptions = {
   repoRoot: string;
@@ -35,6 +55,7 @@ export type ApprovalPackage = {
 export type PrepareDeps = {
   pathExists: (path: string) => Promise<boolean>;
   assertCleanFixture: (fixturePath: string) => Promise<{ head: string; status: string }>;
+  readRepoTrackedState: (repoRoot: string) => Promise<RepoTrackedState>;
   runCommand: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
   writeContract: (options: Pick<A04PrepareOptions, "fixturePath" | "contractPath" | "executionPolicyOverrides">) => Promise<{
     contract: LoopContract;
@@ -91,6 +112,12 @@ async function defaultAssertCleanFixture(fixturePath: string): Promise<{ head: s
   return { head, status };
 }
 
+async function defaultReadRepoTrackedState(repoRoot: string): Promise<RepoTrackedState> {
+  const head = await gitOutput(repoRoot, ["rev-parse", "HEAD"]);
+  const status = await gitOutput(repoRoot, ["status", "--porcelain", "--untracked-files=no"]);
+  return { head, status };
+}
+
 async function defaultRunCommand(command: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
   const result = await execFileAsync(command, args, {
     cwd,
@@ -124,9 +151,31 @@ async function defaultWriteContract(options: Pick<A04PrepareOptions, "fixturePat
 const defaultDeps: PrepareDeps = {
   pathExists,
   assertCleanFixture: defaultAssertCleanFixture,
+  readRepoTrackedState: defaultReadRepoTrackedState,
   runCommand: defaultRunCommand,
   writeContract: defaultWriteContract,
 };
+
+export function validateA04ExecutionPolicy(
+  executionPolicyOverrides: Required<ExecutionPolicyOverrides>,
+): Required<ExecutionPolicyOverrides> {
+  for (const field of EXECUTION_POLICY_FIELDS) {
+    if (executionPolicyOverrides[field] !== A04_APPROVED_EXECUTION_POLICY[field]) {
+      throw new Error(`A-04 requires fixed execution policy: ${A04_EXECUTION_POLICY_DESCRIPTION}`);
+    }
+  }
+
+  return { ...A04_APPROVED_EXECUTION_POLICY };
+}
+
+function contractExecutionPolicyToA04Overrides(contract: LoopContract): Required<ExecutionPolicyOverrides> {
+  return validateA04ExecutionPolicy({
+    tokenBudget: contract.executionPolicy.tokenBudget,
+    perAttemptTimeoutMs: contract.executionPolicy.perAttemptTimeoutMs,
+    totalRuntimeBudgetMs: contract.executionPolicy.totalRuntimeBudgetMs,
+    partialOutcomeRecoveryWindowMs: contract.executionPolicy.partialOutcomeRecoveryWindowMs,
+  });
+}
 
 export function buildA04RunCommand(input: {
   contractPath: string;
@@ -170,12 +219,7 @@ export function buildApprovalPackage(input: {
       sha256: input.contractSha256,
       schemaValid: true,
     },
-    executionPolicy: {
-      tokenBudget: input.contract.executionPolicy.tokenBudget,
-      perAttemptTimeoutMs: input.contract.executionPolicy.perAttemptTimeoutMs,
-      totalRuntimeBudgetMs: input.contract.executionPolicy.totalRuntimeBudgetMs,
-      partialOutcomeRecoveryWindowMs: input.contract.executionPolicy.partialOutcomeRecoveryWindowMs,
-    },
+    executionPolicy: contractExecutionPolicyToA04Overrides(input.contract),
     expectedFileScope: [...input.contract.context.targetPaths],
     expectedDiffScope: [...input.contract.safetyPolicy.allowlistPaths],
     exactCommand: buildA04RunCommand(input),
@@ -208,12 +252,37 @@ async function runDeterministicPreflight(deps: PrepareDeps, repoRoot: string): P
   return commands;
 }
 
+async function assertCleanRepoRootBeforePreflight(deps: PrepareDeps, repoRoot: string): Promise<RepoTrackedState> {
+  const beforePreflight = await deps.readRepoTrackedState(repoRoot);
+
+  if (beforePreflight.status !== "") {
+    throw new Error("repo root must have no tracked changes before deterministic A-04 preflight");
+  }
+
+  return beforePreflight;
+}
+
+async function assertRepoRootUnchangedAfterPreflight(
+  deps: PrepareDeps,
+  repoRoot: string,
+  beforePreflight: RepoTrackedState,
+): Promise<void> {
+  const afterPreflight = await deps.readRepoTrackedState(repoRoot);
+
+  if (afterPreflight.head !== beforePreflight.head || afterPreflight.status !== "") {
+    throw new Error("deterministic A-04 preflight must leave the main checkout unchanged");
+  }
+}
+
 export async function prepareA04(
   options: A04PrepareOptions,
   deps: PrepareDeps = defaultDeps,
 ): Promise<{ approvalPackage: ApprovalPackage; preflightCommands: string[] }> {
+  const executionPolicyOverrides = validateA04ExecutionPolicy(options.executionPolicyOverrides);
   await deps.assertCleanFixture(options.fixturePath);
+  const repoRootStateBeforePreflight = await assertCleanRepoRootBeforePreflight(deps, options.repoRoot);
   const preflightCommands = await runDeterministicPreflight(deps, options.repoRoot);
+  await assertRepoRootUnchangedAfterPreflight(deps, options.repoRoot, repoRootStateBeforePreflight);
   await assertFreshPath(deps, options.contractPath, "contract path");
   await assertFreshPath(deps, options.runDir, "run directory");
   await assertFreshPath(deps, options.evidenceDir, "evidence directory");
@@ -221,7 +290,7 @@ export async function prepareA04(
   const { contract, sha256 } = await deps.writeContract({
     fixturePath: options.fixturePath,
     contractPath: options.contractPath,
-    executionPolicyOverrides: options.executionPolicyOverrides,
+    executionPolicyOverrides,
   });
 
   return {

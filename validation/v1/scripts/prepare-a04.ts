@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { prepareA04 } from "../lib/a04.js";
+import { prepareA04, validateA04ExecutionPolicy } from "../lib/a04.js";
 
 type ParsedArgs = {
   fixturePath: string;
@@ -90,6 +90,12 @@ function parseArgs(argv: string[]): ParsedArgs {
 export async function main(argv: string[]): Promise<number> {
   try {
     const parsed = parseArgs(argv);
+    const executionPolicyOverrides = validateA04ExecutionPolicy({
+      tokenBudget: parsed.tokenBudget,
+      perAttemptTimeoutMs: parsed.perAttemptTimeoutMs,
+      totalRuntimeBudgetMs: parsed.totalRuntimeBudgetMs,
+      partialOutcomeRecoveryWindowMs: parsed.partialRecoveryWindowMs,
+    });
     const result = await prepareA04({
       repoRoot: resolve("."),
       fixturePath: resolve(parsed.fixturePath),
@@ -97,12 +103,7 @@ export async function main(argv: string[]): Promise<number> {
       runDir: resolve(parsed.runDir),
       evidenceDir: resolve(parsed.evidenceDir),
       adapterConfigPath: resolve(parsed.adapterConfigPath),
-      executionPolicyOverrides: {
-        tokenBudget: parsed.tokenBudget,
-        perAttemptTimeoutMs: parsed.perAttemptTimeoutMs,
-        totalRuntimeBudgetMs: parsed.totalRuntimeBudgetMs,
-        partialOutcomeRecoveryWindowMs: parsed.partialRecoveryWindowMs,
-      },
+      executionPolicyOverrides,
     });
 
     process.stdout.write(`${JSON.stringify(result.approvalPackage, null, 2)}

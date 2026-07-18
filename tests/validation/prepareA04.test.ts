@@ -1,22 +1,69 @@
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { buildA04RunCommand, buildApprovalPackage, prepareA04 } from "../../validation/v1/lib/a04.js";
+import {
+  A04_APPROVED_EXECUTION_POLICY,
+  buildA04RunCommand,
+  buildApprovalPackage,
+  prepareA04,
+} from "../../validation/v1/lib/a04.js";
 import { renderScenario } from "../../validation/v1/lib/scenarios.js";
+
+function buildOptions(overrides: Partial<typeof A04_APPROVED_EXECUTION_POLICY> = {}) {
+  return {
+    repoRoot: "/repo",
+    fixturePath: "/repo/.validation-runs/fixture-01",
+    contractPath: "/repo/.validation-runs/contracts/A-04.json",
+    runDir: "/repo/.validation-runs/runs/A-04",
+    evidenceDir: "/repo/.validation-runs/evidence/A-04",
+    adapterConfigPath: "/repo/examples/v1/claude-adapter-config.json",
+    executionPolicyOverrides: {
+      ...A04_APPROVED_EXECUTION_POLICY,
+      ...overrides,
+    },
+  };
+}
+
+function buildContract(overrides: Partial<typeof A04_APPROVED_EXECUTION_POLICY> = {}) {
+  return renderScenario("A", {
+    repoPath: "/repo/.validation-runs/fixture-01",
+    executionPolicyOverrides: {
+      ...A04_APPROVED_EXECUTION_POLICY,
+      ...overrides,
+    },
+  });
+}
+
+function buildDeps(input: {
+  pathExists?: (path: string) => Promise<boolean>;
+  readRepoTrackedState?: (repoRoot: string) => Promise<{ head: string; status: string }>;
+  runCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
+  writeContract?: (options: {
+    fixturePath: string;
+    contractPath: string;
+    executionPolicyOverrides: typeof A04_APPROVED_EXECUTION_POLICY;
+  }) => Promise<{ contract: ReturnType<typeof renderScenario>; sha256: string }>;
+} = {}) {
+  return {
+    pathExists: input.pathExists ?? (async () => false),
+    assertCleanFixture: async () => ({ head: "fixture-head", status: "" }),
+    readRepoTrackedState: input.readRepoTrackedState ?? (async () => ({ head: "repo-head", status: "" })),
+    runCommand: input.runCommand ?? (async () => ({ stdout: "", stderr: "" })),
+    writeContract:
+      input.writeContract ??
+      (async ({ fixturePath, executionPolicyOverrides }) => ({
+        contract: renderScenario("A", {
+          repoPath: fixturePath,
+          executionPolicyOverrides,
+        }),
+        sha256: "abc123",
+      })),
+  };
+}
 
 describe("A-04 approval package", () => {
   it("builds a frozen approval package with contract identity and expected scope", () => {
-    const contract = renderScenario("A", {
-      repoPath: "/repo/.validation-runs/fixture-01",
-      executionPolicyOverrides: {
-        tokenBudget: 550000,
-        perAttemptTimeoutMs: 600000,
-        totalRuntimeBudgetMs: 1200000,
-        partialOutcomeRecoveryWindowMs: 5000,
-      },
-    });
-
     const pkg = buildApprovalPackage({
-      contract,
+      contract: buildContract(),
       contractPath: "/repo/.validation-runs/contracts/A-04.json",
       contractSha256: "abc123",
       fixturePath: "/repo/.validation-runs/fixture-01",
@@ -58,36 +105,36 @@ describe("A-04 approval package", () => {
     ]);
   });
 
-  it("refuses to prepare when run or evidence paths already exist", async () => {
+  it("rejects approval packages built from a non-A-04 execution policy", () => {
+    expect(() =>
+      buildApprovalPackage({
+        contract: buildContract({ tokenBudget: 1 }),
+        contractPath: "/repo/.validation-runs/contracts/A-04.json",
+        contractSha256: "abc123",
+        fixturePath: "/repo/.validation-runs/fixture-01",
+        runDir: "/repo/.validation-runs/runs/A-04",
+        evidenceDir: "/repo/.validation-runs/evidence/A-04",
+        adapterConfigPath: "/repo/examples/v1/claude-adapter-config.json",
+      }),
+    ).toThrow(/A-04 requires fixed execution policy/);
+  });
+
+  it.each([
+    ["contract path", "/repo/.validation-runs/contracts/A-04.json"],
+    ["run directory", "/repo/.validation-runs/runs/A-04"],
+    ["evidence directory", "/repo/.validation-runs/evidence/A-04"],
+  ])("refuses to prepare when %s already exists", async (label, existingPath) => {
     const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
 
     await expect(
       prepareA04(
-        {
-          repoRoot: "/repo",
-          fixturePath: "/repo/.validation-runs/fixture-01",
-          contractPath: "/repo/.validation-runs/contracts/A-04.json",
-          runDir: "/repo/.validation-runs/runs/A-04",
-          evidenceDir: "/repo/.validation-runs/evidence/A-04",
-          adapterConfigPath: "/repo/examples/v1/claude-adapter-config.json",
-          executionPolicyOverrides: {
-            tokenBudget: 550000,
-            perAttemptTimeoutMs: 600000,
-            totalRuntimeBudgetMs: 1200000,
-            partialOutcomeRecoveryWindowMs: 5000,
-          },
-        },
-        {
-          pathExists: async (path) => path.endsWith("runs/A-04"),
-          assertCleanFixture: async () => ({ head: "abc", status: "" }),
+        buildOptions(),
+        buildDeps({
+          pathExists: async (path) => path === existingPath,
           runCommand,
-          writeContract: async () => ({
-            contract: renderScenario("A", { repoPath: "/repo/.validation-runs/fixture-01" }),
-            sha256: "abc123",
-          }),
-        },
+        }),
       ),
-    ).rejects.toThrow(/already exists/);
+    ).rejects.toThrow(`${label} already exists`);
 
     expect(runCommand.mock.calls).toEqual([
       ["npm", ["test"], "/repo"],
@@ -109,36 +156,73 @@ describe("A-04 approval package", () => {
     ]);
   });
 
+  it("refuses execution policies that do not match the fixed A-04 envelope", async () => {
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions({ tokenBudget: 1 }),
+        buildDeps({ runCommand }),
+      ),
+    ).rejects.toThrow(/A-04 requires fixed execution policy/);
+
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it("refuses to start deterministic preflight when repo root already has tracked changes", async () => {
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          readRepoTrackedState: async () => ({ head: "repo-head", status: " M validation/v1/lib/a04.ts" }),
+          runCommand,
+        }),
+      ),
+    ).rejects.toThrow(/repo root must have no tracked changes before deterministic A-04 preflight/);
+
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it("fails when deterministic preflight leaves tracked changes in the main checkout", async () => {
+    const writeContract = vi.fn(async () => ({ contract: buildContract(), sha256: "abc123" }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+    let repoRootReads = 0;
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          readRepoTrackedState: async () => {
+            repoRootReads += 1;
+            if (repoRootReads === 1) {
+              return { head: "repo-head", status: "" };
+            }
+
+            return { head: "repo-head", status: " M validation/v1/lib/a04.ts" };
+          },
+          runCommand,
+          writeContract,
+        }),
+      ),
+    ).rejects.toThrow(/deterministic A-04 preflight must leave the main checkout unchanged/);
+
+    expect(runCommand).toHaveBeenCalledTimes(5);
+    expect(writeContract).not.toHaveBeenCalled();
+  });
+
   it("runs deterministic preflight commands in the required order", async () => {
     const commands: string[] = [];
 
     await prepareA04(
-      {
-        repoRoot: "/repo",
-        fixturePath: "/repo/.validation-runs/fixture-01",
-        contractPath: "/repo/.validation-runs/contracts/A-04.json",
-        runDir: "/repo/.validation-runs/runs/A-04",
-        evidenceDir: "/repo/.validation-runs/evidence/A-04",
-        adapterConfigPath: "/repo/examples/v1/claude-adapter-config.json",
-        executionPolicyOverrides: {
-          tokenBudget: 550000,
-          perAttemptTimeoutMs: 600000,
-          totalRuntimeBudgetMs: 1200000,
-          partialOutcomeRecoveryWindowMs: 5000,
-        },
-      },
-      {
-        pathExists: async () => false,
-        assertCleanFixture: async () => ({ head: "abc", status: "" }),
+      buildOptions(),
+      buildDeps({
         runCommand: async (command, args) => {
           commands.push([command, ...args].join(" "));
           return { stdout: "", stderr: "" };
         },
-        writeContract: async () => ({
-          contract: renderScenario("A", { repoPath: "/repo/.validation-runs/fixture-01" }),
-          sha256: "abc123",
-        }),
-      },
+      }),
     );
 
     expect(commands).toEqual([
@@ -208,9 +292,13 @@ describe("A-04 approval package", () => {
     }));
 
     vi.resetModules();
-    vi.doMock("../../validation/v1/lib/a04.js", () => ({
-      prepareA04: prepareA04Mock,
-    }));
+    vi.doMock("../../validation/v1/lib/a04.js", async () => {
+      const actual = await vi.importActual("../../validation/v1/lib/a04.js");
+      return {
+        ...actual,
+        prepareA04: prepareA04Mock,
+      };
+    });
 
     const stdoutChunks: string[] = [];
     const stderrChunks: string[] = [];
@@ -263,6 +351,68 @@ describe("A-04 approval package", () => {
           partialOutcomeRecoveryWindowMs: 5000,
         },
       });
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+      vi.doUnmock("../../validation/v1/lib/a04.js");
+      vi.resetModules();
+    }
+  });
+
+  it("prepare-a04 CLI rejects non-A-04 execution policy values before preparing", async () => {
+    const prepareA04Mock = vi.fn(async () => ({
+      approvalPackage: {},
+      preflightCommands: [],
+    }));
+
+    vi.resetModules();
+    vi.doMock("../../validation/v1/lib/a04.js", async () => {
+      const actual = await vi.importActual("../../validation/v1/lib/a04.js");
+      return {
+        ...actual,
+        prepareA04: prepareA04Mock,
+      };
+    });
+
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      stdoutChunks.push(String(chunk));
+      return true;
+    });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      stderrChunks.push(String(chunk));
+      return true;
+    });
+
+    try {
+      const { main } = await import("../../validation/v1/scripts/prepare-a04.js");
+      const code = await main([
+        "--fixture",
+        "/repo/.validation-runs/fixture-01",
+        "--contract",
+        "/repo/.validation-runs/contracts/A-04.json",
+        "--run-dir",
+        "/repo/.validation-runs/runs/A-04",
+        "--evidence-dir",
+        "/repo/.validation-runs/evidence/A-04",
+        "--adapter-config",
+        "/repo/examples/v1/claude-adapter-config.json",
+        "--token-budget",
+        "1",
+        "--per-attempt-timeout-ms",
+        "600000",
+        "--total-runtime-budget-ms",
+        "1200000",
+        "--partial-recovery-window-ms",
+        "5000",
+      ]);
+
+      expect(code).toBe(1);
+      expect(stdoutChunks).toEqual([]);
+      expect(stderrChunks.join(""))
+        .toContain("A-04 requires fixed execution policy: tokenBudget=550000, perAttemptTimeoutMs=600000, totalRuntimeBudgetMs=1200000, partialOutcomeRecoveryWindowMs=5000");
+      expect(prepareA04Mock).not.toHaveBeenCalled();
     } finally {
       stdoutSpy.mockRestore();
       stderrSpy.mockRestore();
