@@ -2,7 +2,8 @@
 
 ## Status
 - Status: DONE
-- Implementation commit: `550065fef9d8728ca6862bf94cb4d67d688a4810`
+- Implementation commit: `550065f84500d8531ace377126629f81e117bf4a`
+- Report correction commit: `cfa0299a993ce4528713448c8ad2ab1f3c2ea1b7`
 
 ## Modified Files
 - `tests/runtime/claude/subprocessClaudeAdapter.test.ts`
