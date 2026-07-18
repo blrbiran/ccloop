@@ -329,12 +329,19 @@ describe("SubprocessClaudeAdapter", () => {
       state: { status: "executing" },
     } as any;
 
-    await expect(adapter.execute(context)).resolves.toMatchObject({
+    const execution = await adapter.execute(context);
+    expect(execution).not.toBeNull();
+    if (execution === null) {
+      throw new Error("expected partial execute result");
+    }
+    expect(execution).toMatchObject({
       completionStatus: "partial",
       failureType: "timeout",
       failureMessage: "subprocess timed out",
       changedFiles: ["secret.txt"],
     });
+    expect(execution).not.toHaveProperty("usageEvidence");
+    expect(execution).not.toHaveProperty("tokenUsage");
   });
 
 
@@ -454,11 +461,81 @@ describe("SubprocessClaudeAdapter", () => {
         normalizedTotal: null,
       },
     },
+    {
+      label: "all usage aliases have invalid types",
+      rawEnvelope:
+        '{"structured_output":{"changedFiles":["src/index.ts"],"diffPatch":"diff --git a/src/index.ts b/src/index.ts","commandOutputs":["ok"],"stdoutStderrLog":"ok"},"usage":{"input_tokens":"100","inputTokens":{"value":100},"output_tokens":null,"outputTokens":true}}',
+      expectedUsageEvidence: {
+        usageStatus: "present",
+        fields: {
+          input_tokens: { status: "invalid_type" },
+          inputTokens: { status: "invalid_type" },
+          output_tokens: { status: "invalid_type" },
+          outputTokens: { status: "invalid_type" },
+        },
+        selectedInputField: null,
+        selectedOutputField: null,
+        normalizedTotal: null,
+      },
+    },
+    {
+      label: "invalid snake input type keeps finite output token usage",
+      rawEnvelope:
+        '{"structured_output":{"changedFiles":["src/index.ts"],"diffPatch":"diff --git a/src/index.ts b/src/index.ts","commandOutputs":["ok"],"stdoutStderrLog":"ok"},"usage":{"input_tokens":"100","output_tokens":25}}',
+      expectedTokenUsage: 25,
+      expectedUsageEvidence: {
+        usageStatus: "present",
+        fields: {
+          input_tokens: { status: "invalid_type" },
+          inputTokens: { status: "absent" },
+          output_tokens: { status: "finite", value: 25 },
+          outputTokens: { status: "absent" },
+        },
+        selectedInputField: null,
+        selectedOutputField: "output_tokens",
+        normalizedTotal: 25,
+      },
+    },
+    {
+      label: "negative and fractional values preserve current semantics",
+      rawEnvelope:
+        '{"structured_output":{"changedFiles":["src/index.ts"],"diffPatch":"diff --git a/src/index.ts b/src/index.ts","commandOutputs":["ok"],"stdoutStderrLog":"ok"},"usage":{"input_tokens":-2.5,"output_tokens":10}}',
+      expectedTokenUsage: 7.5,
+      expectedUsageEvidence: {
+        usageStatus: "present",
+        fields: {
+          input_tokens: { status: "finite", value: -2.5 },
+          inputTokens: { status: "absent" },
+          output_tokens: { status: "finite", value: 10 },
+          outputTokens: { status: "absent" },
+        },
+        selectedInputField: "input_tokens",
+        selectedOutputField: "output_tokens",
+        normalizedTotal: 7.5,
+      },
+    },
+    {
+      label: "zero total is not reported",
+      rawEnvelope:
+        '{"structured_output":{"changedFiles":["src/index.ts"],"diffPatch":"diff --git a/src/index.ts b/src/index.ts","commandOutputs":["ok"],"stdoutStderrLog":"ok"},"usage":{"input_tokens":-10,"output_tokens":10}}',
+      expectedUsageEvidence: {
+        usageStatus: "present",
+        fields: {
+          input_tokens: { status: "finite", value: -10 },
+          inputTokens: { status: "absent" },
+          output_tokens: { status: "finite", value: 10 },
+          outputTokens: { status: "absent" },
+        },
+        selectedInputField: "input_tokens",
+        selectedOutputField: "output_tokens",
+        normalizedTotal: null,
+      },
+    },
   ] as const) {
-    it(`omits token usage when ${testCase.label}`, async () => {
+    it(`reports usage evidence when ${testCase.label}`, async () => {
       const outcome = await runRawEnvelopeThroughPhaseRunner(testCase.rawEnvelope);
 
-      expectSuccessfulUsageOutcome(outcome, testCase.expectedUsageEvidence);
+      expectSuccessfulUsageOutcome(outcome, testCase.expectedUsageEvidence, testCase.expectedTokenUsage);
     });
   }
 
@@ -505,6 +582,28 @@ describe("SubprocessClaudeAdapter", () => {
         normalizedTotal: 25,
       },
       25,
+    );
+  });
+
+  it("omits token usage when finite selected fields overflow in sum", async () => {
+    const outcome = await runUsageEnvelopeThroughPhaseRunner(
+      '{ input_tokens: Number.MAX_VALUE, output_tokens: Number.MAX_VALUE }',
+    );
+
+    expectSuccessfulUsageOutcome(
+      outcome,
+      {
+        usageStatus: "present",
+        fields: {
+          input_tokens: { status: "finite", value: Number.MAX_VALUE },
+          inputTokens: { status: "absent" },
+          output_tokens: { status: "finite", value: Number.MAX_VALUE },
+          outputTokens: { status: "absent" },
+        },
+        selectedInputField: "input_tokens",
+        selectedOutputField: "output_tokens",
+        normalizedTotal: null,
+      },
     );
   });
 
@@ -696,6 +795,8 @@ setInterval(() => {}, 1000);
         failureType: "timeout",
         changedFiles: ["big.txt"],
       });
+      expect(execution).not.toHaveProperty("usageEvidence");
+      expect(execution).not.toHaveProperty("tokenUsage");
       expect(execution.diffPatch).toContain("diff --git a/big.txt b/big.txt");
       expect(execution.diffPatch.length).toBeGreaterThan(350_000);
     } finally {
@@ -739,6 +840,8 @@ setInterval(() => {}, 1000);
       failureType: "error",
       changedFiles: ["brand-new.txt"],
     });
+    expect(partial).not.toHaveProperty("usageEvidence");
+    expect(partial).not.toHaveProperty("tokenUsage");
     expect(partial.diffPatch).toContain("diff --git a/brand-new.txt b/brand-new.txt");
     expect(partial.diffPatch).toContain("new file mode 100644");
     expect(partial.diffPatch).toContain("--- /dev/null");
