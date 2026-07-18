@@ -531,6 +531,23 @@ describe("SubprocessClaudeAdapter", () => {
         normalizedTotal: null,
       },
     },
+    {
+      label: "negative total is not reported",
+      rawEnvelope:
+        '{"structured_output":{"changedFiles":["src/index.ts"],"diffPatch":"diff --git a/src/index.ts b/src/index.ts","commandOutputs":["ok"],"stdoutStderrLog":"ok"},"usage":{"input_tokens":-20,"output_tokens":10}}',
+      expectedUsageEvidence: {
+        usageStatus: "present",
+        fields: {
+          input_tokens: { status: "finite", value: -20 },
+          inputTokens: { status: "absent" },
+          output_tokens: { status: "finite", value: 10 },
+          outputTokens: { status: "absent" },
+        },
+        selectedInputField: "input_tokens",
+        selectedOutputField: "output_tokens",
+        normalizedTotal: null,
+      },
+    },
   ] as const) {
     it(`reports usage evidence when ${testCase.label}`, async () => {
       const outcome = await runRawEnvelopeThroughPhaseRunner(testCase.rawEnvelope);

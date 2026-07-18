@@ -22,3 +22,11 @@
 
 ## Concerns
 - None.
+
+## Reviewer Follow-up Fix (2026-07-18)
+- Finding addressed: `tests/runtime/claude/subprocessClaudeAdapter.test.ts` covered `total===0` but lacked an independent `total<0` raw-envelope case.
+- Fix: added a dedicated raw-envelope case with `input_tokens:-20` and `output_tokens:10`, asserting finite values are preserved in all four `usageEvidence.fields`, `selectedInputField === "input_tokens"`, `selectedOutputField === "output_tokens"`, `normalizedTotal === null`, and the payload omits `tokenUsage`.
+- Verification command: `npm --prefix /Users/biran/code/skills/loop/ccloop/.worktrees/evidence-first-v1 test -- --run tests/runtime/claude/subprocessClaudeAdapter.test.ts`
+- Verification result: PASS. Vitest reported `Test Files  1 passed (1)` and `Tests  28 passed (28)` in 9.49s.
+- Self-review: scoped diff only changes `tests/runtime/claude/subprocessClaudeAdapter.test.ts` and this report; product code remains unchanged.
+- Commit message: `test: cover negative-total usage evidence case`
