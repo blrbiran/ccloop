@@ -1,16 +1,19 @@
 import { execFile } from "node:child_process";
-import { access, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { runLoop } from "../../src/controller/runLoop.js";
+import { SubprocessClaudeAdapter } from "../../src/runtime/claude/subprocessClaudeAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import type { RuntimeAdapter } from "../../src/runtime/types.js";
 import type { RunState } from "../../src/state/types.js";
 
 const execFileAsync = promisify(execFile);
+const phaseRunnerPath = fileURLToPath(new URL("../../scripts/claude-phase-runner.mjs", import.meta.url));
 
 async function createRepo(): Promise<string> {
   const repoDir = await mkdtemp(join(tmpdir(), "ccloop-repo-"));
@@ -22,6 +25,29 @@ async function createRepo(): Promise<string> {
   await execFileAsync("git", ["add", "src/index.ts"], { cwd: repoDir });
   await execFileAsync("git", ["commit", "-m", "init"], { cwd: repoDir });
   return repoDir;
+}
+
+async function createUsageAwareFakeClaude(): Promise<string> {
+  const binDir = await mkdtemp(join(tmpdir(), "ccloop-controller-claude-bin-"));
+  const claudePath = join(binDir, "claude");
+  await writeFile(claudePath, `#!/usr/bin/env node
+const prompt = process.argv.at(-1) ?? "";
+let structured_output;
+let usage;
+if (prompt.includes("Plan one isolated L2 attempt")) {
+  structured_output = { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+  usage = { input_tokens: 100, output_tokens: 10, inputTokens: 999, secretSentinel: "DO_NOT_PERSIST" };
+} else if (prompt.includes("Execute one isolated attempt")) {
+  structured_output = { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "ok" };
+  usage = { inputTokens: 200, outputTokens: 20, unknown_usage: 777 };
+} else {
+  structured_output = { approved: true, rejectCategory: "", primaryTargetPaths: ["src/index.ts"], failingCommand: null, safeToRetry: false, evidence: ["verified"], pauseSignals: [], stopSignals: [] };
+  usage = { input_tokens: 300, outputTokens: 30 };
+}
+process.stdout.write(JSON.stringify({ structured_output, usage }));
+`);
+  await chmod(claudePath, 0o755);
+  return binDir;
 }
 
 function createContract(repoPath: string): LoopContract {
@@ -1138,6 +1164,71 @@ describe("runLoop", () => {
     expect(verifyCalled).toBe(false);
     expect(stdout).not.toContain(attemptWorktreePath);
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "loop_exhausted"]);
+  });
+
+  it("persists phase usage evidence from the subprocess adapter without recomputing controller totals", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+    const originalPath = process.env.PATH;
+    const fakeBinDir = await createUsageAwareFakeClaude();
+    const adapter = new SubprocessClaudeAdapter({ command: ["node", phaseRunnerPath] });
+
+    try {
+      process.env.PATH = `${fakeBinDir}:${originalPath ?? ""}`;
+
+      const finalState = await runLoop(contract, runDir, adapter);
+      const attemptDir = join(runDir, "attempts", "1");
+      const plan = JSON.parse(await readFile(join(attemptDir, "plan.json"), "utf8")) as {
+        tokenUsage: number;
+        usageEvidence: {
+          normalizedTotal: number | null;
+          selectedInputField: string | null;
+          selectedOutputField: string | null;
+        };
+      };
+      const execution = JSON.parse(await readFile(join(attemptDir, "execution.json"), "utf8")) as {
+        tokenUsage: number;
+        usageEvidence: {
+          normalizedTotal: number | null;
+          selectedInputField: string | null;
+          selectedOutputField: string | null;
+        };
+      };
+      const verify = JSON.parse(await readFile(join(attemptDir, "verify.json"), "utf8")) as {
+        tokenUsage: number;
+        usageEvidence: {
+          normalizedTotal: number | null;
+          selectedInputField: string | null;
+          selectedOutputField: string | null;
+        };
+      };
+      const persistedState = await readRunState(runDir);
+      const serializedArtifacts = JSON.stringify({ plan, execution, verify });
+
+      expect(finalState.status).toBe("succeeded");
+      expect(plan.tokenUsage).toBe(110);
+      expect(execution.tokenUsage).toBe(220);
+      expect(verify.tokenUsage).toBe(330);
+      expect(plan.usageEvidence.normalizedTotal).toBe(plan.tokenUsage);
+      expect(execution.usageEvidence.normalizedTotal).toBe(execution.tokenUsage);
+      expect(verify.usageEvidence.normalizedTotal).toBe(verify.tokenUsage);
+      expect(plan.usageEvidence.selectedInputField).toBe("input_tokens");
+      expect(plan.usageEvidence.selectedOutputField).toBe("output_tokens");
+      expect(execution.usageEvidence.selectedInputField).toBe("inputTokens");
+      expect(execution.usageEvidence.selectedOutputField).toBe("outputTokens");
+      expect(verify.usageEvidence.selectedInputField).toBe("input_tokens");
+      expect(verify.usageEvidence.selectedOutputField).toBe("outputTokens");
+      expect(persistedState.budgetSnapshot.tokenBudgetRemaining).toBe(1000 - 110 - 220 - 330);
+      expect(serializedArtifacts).not.toContain("DO_NOT_PERSIST");
+      expect(serializedArtifacts).not.toContain("unknown_usage");
+    } finally {
+      if (originalPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = originalPath;
+      }
+    }
   });
 
   it("stops after plan token usage exhausts the token budget", async () => {
