@@ -24,14 +24,8 @@
   - Session action log with short checkpoint entries.
   - Append-only markdown table / low token cost.
 
-- validation/v1/lib/a04.ts
-  - A-04 deterministic preflight helper that enforces the fixed approval envelope and checks repo-root cleanliness before and after deterministic verification.
-  - ~280 lines / medium token cost.
+- validation/v1/lib/a04.ts — Builds A-04 deterministic preflight results and approval package (~900 tok)
 
-- validation/v1/scripts/prepare-a04.ts
-  - CLI wrapper that accepts the A-04 flags, rejects non-approved execution-policy values, and prints approval-package JSON only.
-  - ~120 lines / low token cost.
+- validation/v1/scripts/prepare-a04.ts — CLI for non-paid A-04 preparation and approval package output (~400 tok)
 
-- tests/validation/prepareA04.test.ts
-  - Focused Vitest coverage for fixed-envelope refusal, existing-path refusal, main-checkout cleanliness invariants, preflight ordering, and CLI stdout-only behavior.
-  - ~360 lines / medium token cost.
+- tests/validation/prepareA04.test.ts — Covers A-04 preparation command order, approval package fields, and freshness gates (~1100 tok)

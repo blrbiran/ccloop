@@ -44,6 +44,29 @@ Expected preflight result: tests, typecheck, and build succeed; `claude --versio
 
 If `npm ci` prints audit or vulnerability output, treat it as observational only. It does not authorize `npm audit fix`, `npm audit fix --force`, editing `package.json`, editing `package-lock.json`, or any other dependency change. Stop and report the finding instead.
 
+## A-04 mechanical prepare (no paid call)
+
+```bash
+npx --no-install tsx validation/v1/scripts/prepare-a04.ts \
+  --fixture .validation-runs/fixture-01 \
+  --contract .validation-runs/contracts/A-04.json \
+  --run-dir .validation-runs/runs/A-04 \
+  --evidence-dir .validation-runs/evidence/A-04 \
+  --adapter-config examples/v1/claude-adapter-config.json \
+  --token-budget 550000 \
+  --per-attempt-timeout-ms 600000 \
+  --total-runtime-budget-ms 1200000 \
+  --partial-recovery-window-ms 5000
+```
+
+Expected result:
+- deterministic local checks pass;
+- `.validation-runs/contracts/A-04.json` is created once;
+- `.validation-runs/runs/A-04/` and `.validation-runs/evidence/A-04/` still do not exist;
+- stdout prints an approval package containing contract identity, expected file scope, expected diff scope, exact `run-scenario.ts` command, and cost semantics.
+
+`prepare-a04.ts` must not invoke Claude or create `review.json`.
+
 ## Evidence Files and Status Definitions
 
 The deterministic harness writes these review inputs under each evidence directory:
