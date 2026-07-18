@@ -203,3 +203,28 @@
 
 ### Concerns
 - Left the pre-existing unrelated unstaged changes in `.superpowers/sdd/progress.md`, `.superpowers/sdd/task-3-report.md`, `.wolf/memory.md`, `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, and `package-lock.json` out of the fix commit.
+
+
+## Whole-branch override chronology correction follow-up — 2026-07-18
+### Correction
+- This report now explicitly distinguishes the fixed A-04 execution-policy envelope from the later whole-branch Scenario A-only override restriction.
+- The initial Task 2 implementation/reporting covered the approved A-04 override values used by `prepareA04(...)`, but it did not yet prove that non-A scenarios rejected `executionPolicyOverrides` globally.
+- That branch-wide restriction was added later in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/scenarios.ts` and `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/contracts.test.ts`, where non-A scenarios now reject `executionPolicyOverrides` at runtime and the old Scenario C override-only success case has been replaced by rejection coverage.
+
+### Exact commands
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" test -- --run tests/validation/contracts.test.ts`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run typecheck`
+
+### Relevant output
+- Focused contracts verification:
+  - `Test Files  1 passed (1)`
+  - `Tests  19 passed (19)`
+- Supporting typecheck attempt:
+  - failed with `tests/validation/prepareA04.test.ts(295,53): error TS2493: Tuple type '[]' of length '0' has no element at index '2'.`
+  - This failure comes from separate pre-existing unstaged work in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts`, not from the Scenario A override restriction in `validation/v1/lib/scenarios.ts` or `tests/validation/contracts.test.ts`.
+
+### Files changed for this follow-up
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-2-report.md`
+
+### Concerns
+- Left the unrelated unstaged changes in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/progress.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-3-report.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/memory.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, and `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/package-lock.json` untouched and out of this follow-up.
