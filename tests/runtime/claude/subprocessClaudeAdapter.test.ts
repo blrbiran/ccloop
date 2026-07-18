@@ -216,6 +216,34 @@ process.stdout.write(${JSON.stringify(rawEnvelope)});
   };
 }
 
+function expectSuccessfulUsageOutcome(
+  outcome: Awaited<ReturnType<typeof runUsageEnvelopeThroughPhaseRunner>>,
+  expectedUsageEvidence: Record<string, unknown>,
+  expectedTokenUsage?: number,
+): void {
+  expect(outcome.code).toBe(0);
+  expect(outcome.signal).toBeNull();
+  expect(outcome.stderr).toBe("");
+  expect(outcome.payload).toMatchObject({
+    changedFiles: ["src/index.ts"],
+    diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+    commandOutputs: ["ok"],
+    stdoutStderrLog: "ok",
+  });
+  expect(outcome.payload.usageEvidence).toEqual(expectedUsageEvidence);
+
+  if (expectedTokenUsage === undefined) {
+    expect(outcome.payload.tokenUsage).toBeUndefined();
+    expect("tokenUsage" in outcome.payload).toBe(false);
+  } else {
+    expect(outcome.payload.tokenUsage).toBe(expectedTokenUsage);
+  }
+
+  const serializedPayload = JSON.stringify(outcome.payload);
+  expect(serializedPayload).not.toContain("cache_creation_input_tokens");
+  expect(serializedPayload).not.toContain("DO_NOT_PERSIST");
+}
+
 describe("SubprocessClaudeAdapter", () => {
   it("includes the current attempt plan in the executor prompt", () => {
     const prompt = buildExecutorPrompt({
@@ -310,60 +338,151 @@ describe("SubprocessClaudeAdapter", () => {
   });
 
 
+  const absentUsageFields = {
+    input_tokens: { status: "absent" },
+    inputTokens: { status: "absent" },
+    output_tokens: { status: "absent" },
+    outputTokens: { status: "absent" },
+  } as const;
+
   for (const testCase of [
     {
       label: "snake-only usage envelope",
       usageLiteral: '{ input_tokens: 100, output_tokens: 25 }',
       expectedTokenUsage: 125,
+      expectedUsageEvidence: {
+        usageStatus: "present",
+        fields: {
+          input_tokens: { status: "finite", value: 100 },
+          inputTokens: { status: "absent" },
+          output_tokens: { status: "finite", value: 25 },
+          outputTokens: { status: "absent" },
+        },
+        selectedInputField: "input_tokens",
+        selectedOutputField: "output_tokens",
+        normalizedTotal: 125,
+      },
     },
     {
       label: "camel-only usage envelope",
       usageLiteral: '{ inputTokens: 100, outputTokens: 25 }',
       expectedTokenUsage: 125,
+      expectedUsageEvidence: {
+        usageStatus: "present",
+        fields: {
+          input_tokens: { status: "absent" },
+          inputTokens: { status: "finite", value: 100 },
+          output_tokens: { status: "absent" },
+          outputTokens: { status: "finite", value: 25 },
+        },
+        selectedInputField: "inputTokens",
+        selectedOutputField: "outputTokens",
+        normalizedTotal: 125,
+      },
     },
     {
       label: "duplicate camel and snake aliases without double counting",
-      usageLiteral: '{ input_tokens: 100, output_tokens: 25, inputTokens: 100, outputTokens: 25 }',
+      usageLiteral: `{
+        input_tokens: 100,
+        output_tokens: 25,
+        inputTokens: 999,
+        outputTokens: 888,
+        cache_creation_input_tokens: 77,
+        secretSentinel: "DO_NOT_PERSIST"
+      }`,
       expectedTokenUsage: 125,
+      expectedUsageEvidence: {
+        usageStatus: "present",
+        fields: {
+          input_tokens: { status: "finite", value: 100 },
+          inputTokens: { status: "finite", value: 999 },
+          output_tokens: { status: "finite", value: 25 },
+          outputTokens: { status: "finite", value: 888 },
+        },
+        selectedInputField: "input_tokens",
+        selectedOutputField: "output_tokens",
+        normalizedTotal: 125,
+      },
     },
     {
       label: "mixed aliases when only snake input and camel output are present",
       usageLiteral: '{ input_tokens: 100, outputTokens: 25 }',
       expectedTokenUsage: 125,
+      expectedUsageEvidence: {
+        usageStatus: "present",
+        fields: {
+          input_tokens: { status: "finite", value: 100 },
+          inputTokens: { status: "absent" },
+          output_tokens: { status: "absent" },
+          outputTokens: { status: "finite", value: 25 },
+        },
+        selectedInputField: "input_tokens",
+        selectedOutputField: "outputTokens",
+        normalizedTotal: 125,
+      },
     },
   ] as const) {
     it(`reports token usage for ${testCase.label}`, async () => {
       const outcome = await runUsageEnvelopeThroughPhaseRunner(testCase.usageLiteral);
 
-      expect(outcome.code).toBe(0);
-      expect(outcome.signal).toBeNull();
-      expect(outcome.stderr).toBe("");
-      expect(outcome.payload).toMatchObject({
-        changedFiles: ["src/index.ts"],
-        diffPatch: "diff --git a/src/index.ts b/src/index.ts",
-        commandOutputs: ["ok"],
-        stdoutStderrLog: "ok",
-        tokenUsage: testCase.expectedTokenUsage,
-      });
+      expectSuccessfulUsageOutcome(outcome, testCase.expectedUsageEvidence, testCase.expectedTokenUsage);
     });
   }
 
+  for (const testCase of [
+    {
+      label: "missing usage keeps evidence absent",
+      rawEnvelope:
+        '{"structured_output":{"changedFiles":["src/index.ts"],"diffPatch":"diff --git a/src/index.ts b/src/index.ts","commandOutputs":["ok"],"stdoutStderrLog":"ok"}}',
+      expectedUsageEvidence: {
+        usageStatus: "absent",
+        fields: absentUsageFields,
+        selectedInputField: null,
+        selectedOutputField: null,
+        normalizedTotal: null,
+      },
+    },
+    {
+      label: "null usage is recorded as invalid",
+      rawEnvelope:
+        '{"structured_output":{"changedFiles":["src/index.ts"],"diffPatch":"diff --git a/src/index.ts b/src/index.ts","commandOutputs":["ok"],"stdoutStderrLog":"ok"},"usage":null}',
+      expectedUsageEvidence: {
+        usageStatus: "invalid",
+        fields: absentUsageFields,
+        selectedInputField: null,
+        selectedOutputField: null,
+        normalizedTotal: null,
+      },
+    },
+  ] as const) {
+    it(`omits token usage when ${testCase.label}`, async () => {
+      const outcome = await runRawEnvelopeThroughPhaseRunner(testCase.rawEnvelope);
+
+      expectSuccessfulUsageOutcome(outcome, testCase.expectedUsageEvidence);
+    });
+  }
 
   it("falls back from a non-finite snake alias to a finite camel alias", async () => {
     const outcome = await runRawEnvelopeThroughPhaseRunner(
       '{"structured_output":{"changedFiles":["src/index.ts"],"diffPatch":"diff --git a/src/index.ts b/src/index.ts","commandOutputs":["ok"],"stdoutStderrLog":"ok"},"usage":{"input_tokens":1e400,"inputTokens":100,"output_tokens":25}}',
     );
 
-    expect(outcome.code).toBe(0);
-    expect(outcome.signal).toBeNull();
-    expect(outcome.stderr).toBe("");
-    expect(outcome.payload).toMatchObject({
-      changedFiles: ["src/index.ts"],
-      diffPatch: "diff --git a/src/index.ts b/src/index.ts",
-      commandOutputs: ["ok"],
-      stdoutStderrLog: "ok",
-      tokenUsage: 125,
-    });
+    expectSuccessfulUsageOutcome(
+      outcome,
+      {
+        usageStatus: "present",
+        fields: {
+          input_tokens: { status: "non_finite" },
+          inputTokens: { status: "finite", value: 100 },
+          output_tokens: { status: "finite", value: 25 },
+          outputTokens: { status: "absent" },
+        },
+        selectedInputField: "inputTokens",
+        selectedOutputField: "output_tokens",
+        normalizedTotal: 125,
+      },
+      125,
+    );
   });
 
   it("ignores a non-finite alias when no finite fallback exists", async () => {
@@ -371,16 +490,22 @@ describe("SubprocessClaudeAdapter", () => {
       '{"structured_output":{"changedFiles":["src/index.ts"],"diffPatch":"diff --git a/src/index.ts b/src/index.ts","commandOutputs":["ok"],"stdoutStderrLog":"ok"},"usage":{"input_tokens":1e400,"output_tokens":25}}',
     );
 
-    expect(outcome.code).toBe(0);
-    expect(outcome.signal).toBeNull();
-    expect(outcome.stderr).toBe("");
-    expect(outcome.payload).toMatchObject({
-      changedFiles: ["src/index.ts"],
-      diffPatch: "diff --git a/src/index.ts b/src/index.ts",
-      commandOutputs: ["ok"],
-      stdoutStderrLog: "ok",
-      tokenUsage: 25,
-    });
+    expectSuccessfulUsageOutcome(
+      outcome,
+      {
+        usageStatus: "present",
+        fields: {
+          input_tokens: { status: "non_finite" },
+          inputTokens: { status: "absent" },
+          output_tokens: { status: "finite", value: 25 },
+          outputTokens: { status: "absent" },
+        },
+        selectedInputField: null,
+        selectedOutputField: "output_tokens",
+        normalizedTotal: 25,
+      },
+      25,
+    );
   });
 
   it("waits for close before parsing wrapper stdout", async () => {

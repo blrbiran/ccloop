@@ -91,30 +91,61 @@ function getSchemaForPhase(phase) {
   return VERIFY_SCHEMA;
 }
 
-function getTokenUsage(envelope) {
-  if (!envelope || typeof envelope !== "object") {
-    return undefined;
+const USAGE_FIELDS = ["input_tokens", "inputTokens", "output_tokens", "outputTokens"];
+
+function inspectUsageField(usage, field) {
+  if (!Object.prototype.hasOwnProperty.call(usage, field)) {
+    return { status: "absent" };
   }
 
-  const usage = envelope.usage;
-  if (!usage || typeof usage !== "object") {
-    return undefined;
+  const value = usage[field];
+  if (typeof value !== "number") {
+    return { status: "invalid_type" };
   }
 
-  const input = Number.isFinite(usage.input_tokens)
-    ? usage.input_tokens
-    : Number.isFinite(usage.inputTokens)
-      ? usage.inputTokens
-      : undefined;
-  const output = Number.isFinite(usage.output_tokens)
-    ? usage.output_tokens
-    : Number.isFinite(usage.outputTokens)
-      ? usage.outputTokens
-      : undefined;
-  const candidates = [input, output].filter((value) => Number.isFinite(value));
-  const total = candidates.reduce((sum, value) => sum + value, 0);
+  if (!Number.isFinite(value)) {
+    return { status: "non_finite" };
+  }
 
-  return candidates.length > 0 && total > 0 ? total : undefined;
+  return { status: "finite", value };
+}
+
+function buildUsageEvidence(envelope) {
+  const rawUsage = envelope && typeof envelope === "object" ? envelope.usage : undefined;
+  const usageStatus = rawUsage === undefined
+    ? "absent"
+    : rawUsage !== null && typeof rawUsage === "object" && !Array.isArray(rawUsage)
+      ? "present"
+      : "invalid";
+  const usage = usageStatus === "present" ? rawUsage : {};
+  const fields = Object.fromEntries(
+    USAGE_FIELDS.map((field) => [field, inspectUsageField(usage, field)]),
+  );
+  const selectedInputField = fields.input_tokens.status === "finite"
+    ? "input_tokens"
+    : fields.inputTokens.status === "finite"
+      ? "inputTokens"
+      : null;
+  const selectedOutputField = fields.output_tokens.status === "finite"
+    ? "output_tokens"
+    : fields.outputTokens.status === "finite"
+      ? "outputTokens"
+      : null;
+  const selectedValues = [selectedInputField, selectedOutputField]
+    .filter((field) => field !== null)
+    .map((field) => fields[field].value);
+  const total = selectedValues.reduce((sum, value) => sum + value, 0);
+  const normalizedTotal = selectedValues.length > 0 && Number.isFinite(total) && total > 0
+    ? total
+    : null;
+
+  return {
+    usageStatus,
+    fields,
+    selectedInputField,
+    selectedOutputField,
+    normalizedTotal,
+  };
 }
 
 async function readStdin() {
@@ -410,8 +441,10 @@ async function main() {
       throw new Error("Claude CLI did not return structured_output");
     }
 
-    const tokenUsage = getTokenUsage(envelope);
-    const response = tokenUsage === undefined ? structured : { ...structured, tokenUsage };
+    const usageEvidence = buildUsageEvidence(envelope);
+    const response = usageEvidence.normalizedTotal === null
+      ? { ...structured, usageEvidence }
+      : { ...structured, usageEvidence, tokenUsage: usageEvidence.normalizedTotal };
     await writeJsonToStdout(response);
   } catch (error) {
     if (interruptHandled) {

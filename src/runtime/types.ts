@@ -12,10 +12,29 @@ export type AttemptContext = {
   execution?: ExecutionResult;
 };
 
+export type UsageFieldEvidence = {
+  status: "absent" | "finite" | "non_finite" | "invalid_type";
+  value?: number;
+};
+
+export type UsageEvidence = {
+  usageStatus: "present" | "absent" | "invalid";
+  fields: {
+    input_tokens: UsageFieldEvidence;
+    inputTokens: UsageFieldEvidence;
+    output_tokens: UsageFieldEvidence;
+    outputTokens: UsageFieldEvidence;
+  };
+  selectedInputField: "input_tokens" | "inputTokens" | null;
+  selectedOutputField: "output_tokens" | "outputTokens" | null;
+  normalizedTotal: number | null;
+};
+
 export type AttemptPlan = {
   summary: string;
   primaryTargetPaths: string[];
   tokenUsage?: number;
+  usageEvidence?: UsageEvidence;
 };
 
 type ExecutionArtifacts = {
@@ -24,6 +43,7 @@ type ExecutionArtifacts = {
   commandOutputs: string[];
   stdoutStderrLog: string;
   tokenUsage?: number;
+  usageEvidence?: UsageEvidence;
 };
 
 export type CompleteExecutionResult = ExecutionArtifacts;
@@ -51,6 +71,7 @@ export type VerificationResult = {
   pauseSignals: string[];
   stopSignals: string[];
   tokenUsage?: number;
+  usageEvidence?: UsageEvidence;
 };
 
 export interface RuntimeAdapter {
