@@ -100,7 +100,11 @@ function buildDeps(input: {
   readFrozenContract?: (contractPath: string) => Promise<{ contract: ReturnType<typeof renderScenario>; sha256: string }>;
 } = {}) {
   return {
-    pathExists: input.pathExists ?? (async () => false),
+    pathExists:
+      input.pathExists ??
+      (async (path) =>
+        path === "/repo/examples/v1/claude-adapter-config.json" ||
+        path === "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json"),
     assertCleanFixture: input.assertCleanFixture ?? (async () => ({ head: "fixture-head", status: "" })),
     readCurrentBranch: input.readCurrentBranch ?? (async () => "main"),
     inspectReadOnlyInspection: input.inspectReadOnlyInspection ?? (async () => buildReadOnlyInspection()),
@@ -298,7 +302,10 @@ describe("A-04 approval package", () => {
       prepareA04(
         buildOptions(),
         buildDeps({
-          pathExists: async (path) => path === existingPath,
+          pathExists: async (path) =>
+            path === existingPath ||
+            path === "/repo/examples/v1/claude-adapter-config.json" ||
+            path === "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
           runCommand,
         }),
       ),
@@ -339,6 +346,73 @@ describe("A-04 approval package", () => {
         }),
       ),
     ).rejects.toThrow(/A-04 preparation must run from branch main/);
+
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects adapter configs outside repo root", async () => {
+    const createMainVerificationCheckout = vi.fn(async () => ({
+      path: "/tmp/a04-main-checkout",
+      head: "verified-main-head",
+      cleanup: async () => {},
+    }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions({}, { adapterConfigPath: "/tmp/adapter-config.json" }),
+        buildDeps({
+          createMainVerificationCheckout,
+          runCommand,
+        }),
+      ),
+    ).rejects.toThrow(/adapter config must live under repo root for A-04 approval/);
+
+    expect(createMainVerificationCheckout).not.toHaveBeenCalled();
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing adapter configs before creating the verification checkout", async () => {
+    const createMainVerificationCheckout = vi.fn(async () => ({
+      path: "/tmp/a04-main-checkout",
+      head: "verified-main-head",
+      cleanup: async () => {},
+    }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          pathExists: async () => false,
+          createMainVerificationCheckout,
+          runCommand,
+        }),
+      ),
+    ).rejects.toThrow(/adapter config must exist for A-04 approval/);
+
+    expect(createMainVerificationCheckout).not.toHaveBeenCalled();
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects adapter configs that do not exist in the preserved verified checkout", async () => {
+    const createMainVerificationCheckout = vi.fn(async () => ({
+      path: "/tmp/a04-main-checkout",
+      head: "verified-main-head",
+      cleanup: async () => {},
+    }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          pathExists: async (path) => path === "/repo/examples/v1/claude-adapter-config.json",
+          createMainVerificationCheckout,
+          runCommand,
+        }),
+      ),
+    ).rejects.toThrow(/adapter config inside the preserved verified checkout must exist for A-04 approval/);
 
     expect(runCommand).not.toHaveBeenCalled();
   });
@@ -388,7 +462,7 @@ describe("A-04 approval package", () => {
     }));
     const runCommand = vi.fn(async (..._args: [string, string[], string]) => ({ stdout: "", stderr: "" }));
 
-    await prepareA04(
+    const result = await prepareA04(
       buildOptions(),
       buildDeps({
         createMainVerificationCheckout,
@@ -397,6 +471,27 @@ describe("A-04 approval package", () => {
     );
 
     expect(createMainVerificationCheckout).toHaveBeenCalledWith("/repo");
+    expect(result.approvalPackage.verifiedCheckout.adapterConfigPath).toBe(
+      "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+    );
+    expect(result.approvalPackage.exactCommand).toEqual([
+      "npx",
+      "--no-install",
+      "tsx",
+      "/tmp/a04-main-checkout/validation/v1/scripts/run-scenario.ts",
+      "--scenario",
+      "A",
+      "--contract",
+      "/repo/.validation-runs/contracts/A-04.json",
+      "--fixture",
+      "/repo/.validation-runs/fixture-01",
+      "--run-dir",
+      "/repo/.validation-runs/runs/A-04",
+      "--evidence-dir",
+      "/repo/.validation-runs/evidence/A-04",
+      "--adapter-config",
+      "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+    ]);
     expect(runCommand.mock.calls.map((call) => call[2])).toEqual([
       "/tmp/a04-main-checkout",
       "/tmp/a04-main-checkout",
@@ -551,7 +646,10 @@ describe("A-04 approval package", () => {
         },
         pathExists: async (path) => {
           steps.push(`exists:${path}`);
-          return false;
+          return (
+            path === "/repo/examples/v1/claude-adapter-config.json" ||
+            path === "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json"
+          );
         },
         runCommand: async (command, args) => {
           steps.push([command, ...args].join(" "));
@@ -579,7 +677,9 @@ describe("A-04 approval package", () => {
 
     expect(steps).toEqual([
       "readOnlyInspection",
+      "exists:/repo/examples/v1/claude-adapter-config.json",
       "createCheckout",
+      "exists:/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
       "npm test",
       "npm run typecheck",
       "npm run build",

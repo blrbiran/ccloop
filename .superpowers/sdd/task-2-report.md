@@ -295,3 +295,38 @@
 
 ### Concerns
 - Left the pre-existing unrelated unstaged changes in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/progress.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-3-report.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/memory.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, and `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/package-lock.json` untouched and out of this follow-up.
+
+
+## Final critical follow-up — 2026-07-18 (freeze adapter config inside verified checkout)
+### What changed
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` so A-04 preparation now rejects `adapterConfigPath` values outside `repoRoot`, requires the source adapter config to exist before approval, maps it into the preserved verified checkout, and requires that verified-checkout copy/path to exist before emitting the approval package.
+- Expanded `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts` with focused regressions that reject repo-external adapter configs, reject missing adapter configs, reject adapter configs missing from the preserved verified checkout, and verify the approval package plus `exactCommand` use the frozen verified-checkout adapter config path.
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/README.md` so the operator contract now explicitly states that `--adapter-config` must stay under repo root and resolve inside the preserved verified checkout.
+
+### Exact test commands
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" test -- --run tests/validation/prepareA04.test.ts`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run typecheck`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run build`
+
+### Relevant output
+- Focused tests:
+  - `Test Files  1 passed (1)`
+  - `Tests  25 passed (25)`
+- Typecheck:
+  - `tsc --noEmit -p tsconfig.json`
+- Build:
+  - `tsc -p tsconfig.json && node -e "const fs=require('fs');fs.writeFileSync('dist/cli.js', '#!/usr/bin/env node
+export * from "./src/cli.js";
+import { main } from "./src/cli.js";
+void main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
+');fs.writeFileSync('dist/cli.d.ts', 'export * from "./src/cli.js";
+');"`
+
+### Files changed for this follow-up
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/README.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-2-report.md`
+
+### Concerns
+- Left the pre-existing unrelated unstaged changes in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/progress.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-3-report.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/memory.md`, `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, and `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/package-lock.json` untouched and out of this follow-up.

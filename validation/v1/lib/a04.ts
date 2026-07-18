@@ -480,12 +480,21 @@ function resolvePrepareOptions(options: A04PrepareOptions): A04PrepareOptions {
   };
 }
 
-function resolvePathForVerifiedCheckout(verifiedCheckoutPath: string, repoRoot: string, originalPath: string): string {
-  if (!isSameOrDescendantPath(originalPath, repoRoot)) {
-    return originalPath;
+function assertAdapterConfigUnderRepoRoot(repoRoot: string, adapterConfigPath: string): void {
+  if (!isSameOrDescendantPath(adapterConfigPath, repoRoot)) {
+    throw new Error("adapter config must live under repo root for A-04 approval");
   }
+}
 
+function resolvePathForVerifiedCheckout(verifiedCheckoutPath: string, repoRoot: string, originalPath: string): string {
+  assertAdapterConfigUnderRepoRoot(repoRoot, originalPath);
   return resolve(verifiedCheckoutPath, relative(repoRoot, originalPath));
+}
+
+async function assertAdapterConfigExists(deps: PrepareDeps, adapterConfigPath: string, label: string): Promise<void> {
+  if (!(await deps.pathExists(adapterConfigPath))) {
+    throw new Error(`${label} must exist for A-04 approval`);
+  }
 }
 
 function assertNoContractMaterializationOverlap(
@@ -712,12 +721,19 @@ export async function prepareA04(
   assertNoContractMaterializationOverlap(resolvedOptions);
   await assertMainCheckout(deps, resolvedOptions.repoRoot);
   const readOnlyInspection = await deps.inspectReadOnlyInspection(resolvedOptions.repoRoot);
+  assertAdapterConfigUnderRepoRoot(resolvedOptions.repoRoot, resolvedOptions.adapterConfigPath);
+  await assertAdapterConfigExists(deps, resolvedOptions.adapterConfigPath, "adapter config");
 
   const verificationCheckout = await deps.createMainVerificationCheckout(resolvedOptions.repoRoot);
   const verifiedAdapterConfigPath = resolvePathForVerifiedCheckout(
     verificationCheckout.path,
     resolvedOptions.repoRoot,
     resolvedOptions.adapterConfigPath,
+  );
+  await assertAdapterConfigExists(
+    deps,
+    verifiedAdapterConfigPath,
+    "adapter config inside the preserved verified checkout",
   );
   let preserveVerificationCheckout = false;
 

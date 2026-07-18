@@ -69,7 +69,7 @@ Expected result:
 - the focused evidence-chain regression set runs after contract render and before the final pre-approval gate;
 - the final pre-approval gate re-reads `.validation-runs/contracts/A-04.json` from disk, re-parses it under schema, and recomputes its sha256 so the approval package matches the exact on-disk contract;
 - `.validation-runs/runs/A-04/` and `.validation-runs/evidence/A-04/` still do not exist;
-- stdout prints an approval package containing the preserved verified checkout path/head, the read-only inspection results, and an exact command whose runnable `run-scenario.ts` target resolves inside that verified checkout rather than the operator checkout; the preserved checkout does not symlink `node_modules` back to the operator checkout.
+- stdout prints an approval package containing the preserved verified checkout path/head, the read-only inspection results, and an exact command whose runnable `run-scenario.ts` target resolves inside that verified checkout rather than the operator checkout; the preserved checkout does not symlink `node_modules` back to the operator checkout, and `--adapter-config` must resolve under the repo root and exist inside that preserved checkout so the approved command cannot drift to an external config.
 
 `prepare-a04.ts` must not invoke Claude or create `review.json`.
 
