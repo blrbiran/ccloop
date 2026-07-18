@@ -24,8 +24,8 @@
   - Session action log with short checkpoint entries.
   - Append-only markdown table / low token cost.
 
-- validation/v1/lib/a04.ts — Builds A-04 deterministic preflight results with main-branch gating, explicit spec-phase ordering, approval packages, and final overlap/cleanliness guards (~1400 tok)
+- validation/v1/lib/a04.ts — Builds A-04 deterministic preflight results with main-branch gating, isolated temp-checkout verification, approval packages, and final overlap/on-disk contract guards (~1500 tok)
 
 - validation/v1/scripts/prepare-a04.ts — CLI for non-paid A-04 preparation and approval package output (~400 tok)
 
-- tests/validation/prepareA04.test.ts — Covers A-04 main-branch gating, spec-locked phase order, explicit approval-package fields, overlap guards, and freshness/final-gate behavior (~1800 tok)
+- tests/validation/prepareA04.test.ts — Covers A-04 main-branch gating, isolated verification checkout usage, spec-locked phase order, explicit approval-package fields, overlap guards, and final on-disk contract gating (~1900 tok)

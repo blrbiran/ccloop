@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, stat, writeFile } from "node:fs/promises";
-import { dirname, relative, resolve } from "node:path";
+import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { loopContractSchema, type LoopContract } from "../../../src/contract/schema.js";
 import { getScenario, renderScenario, type ExecutionPolicyOverrides, type ScenarioDefinition } from "./scenarios.js";
@@ -40,6 +41,16 @@ export const A04_APPROVED_EXECUTION_POLICY: Readonly<Required<ExecutionPolicyOve
 type RepoState = {
   head: string;
   status: string;
+};
+
+type FrozenContract = {
+  contract: LoopContract;
+  sha256: string;
+};
+
+type IsolatedVerificationCheckout = {
+  path: string;
+  cleanup: () => Promise<void>;
 };
 
 export type A04PrepareOptions = {
@@ -90,12 +101,10 @@ export type PrepareDeps = {
   pathExists: (path: string) => Promise<boolean>;
   assertCleanFixture: (fixturePath: string) => Promise<{ head: string; status: string }>;
   readCurrentBranch: (repoRoot: string) => Promise<string>;
-  readRepoTrackedState: (repoRoot: string) => Promise<RepoState>;
+  createMainVerificationCheckout: (repoRoot: string) => Promise<IsolatedVerificationCheckout>;
   runCommand: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
-  writeContract: (options: Pick<A04PrepareOptions, "fixturePath" | "contractPath" | "executionPolicyOverrides">) => Promise<{
-    contract: LoopContract;
-    sha256: string;
-  }>;
+  writeContract: (options: Pick<A04PrepareOptions, "fixturePath" | "contractPath" | "executionPolicyOverrides">) => Promise<FrozenContract>;
+  readFrozenContract: (contractPath: string) => Promise<FrozenContract>;
 };
 
 const MAIN_DETERMINISTIC_VERIFICATION_COMMANDS: ReadonlyArray<readonly [string, string[]]> = [
@@ -154,10 +163,25 @@ async function defaultReadCurrentBranch(repoRoot: string): Promise<string> {
   return gitOutput(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
 }
 
-async function defaultReadRepoTrackedState(repoRoot: string): Promise<RepoState> {
-  const head = await gitOutput(repoRoot, ["rev-parse", "HEAD"]);
-  const status = await gitOutput(repoRoot, ["status", "--porcelain"]);
-  return { head, status };
+async function defaultCreateMainVerificationCheckout(repoRoot: string): Promise<IsolatedVerificationCheckout> {
+  const worktreePath = await mkdtemp(join(tmpdir(), "ccloop-a04-main-"));
+  await execFileAsync("git", ["-C", repoRoot, "worktree", "add", "--detach", worktreePath, "HEAD"], {
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  const sourceNodeModulesPath = resolve(repoRoot, "node_modules");
+  if (await pathExists(sourceNodeModulesPath)) {
+    await symlink(sourceNodeModulesPath, resolve(worktreePath, "node_modules"));
+  }
+
+  return {
+    path: worktreePath,
+    cleanup: async () => {
+      await execFileAsync("git", ["-C", repoRoot, "worktree", "remove", "--force", worktreePath], {
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    },
+  };
 }
 
 async function defaultRunCommand(command: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
@@ -172,7 +196,7 @@ async function defaultRunCommand(command: string, args: string[], cwd: string): 
   };
 }
 
-async function defaultWriteContract(options: Pick<A04PrepareOptions, "fixturePath" | "contractPath" | "executionPolicyOverrides">) {
+async function defaultWriteContract(options: Pick<A04PrepareOptions, "fixturePath" | "contractPath" | "executionPolicyOverrides">): Promise<FrozenContract> {
   const contract = loopContractSchema.parse(
     renderScenario("A", {
       repoPath: options.fixturePath,
@@ -191,13 +215,40 @@ async function defaultWriteContract(options: Pick<A04PrepareOptions, "fixturePat
   };
 }
 
+async function defaultReadFrozenContract(contractPath: string): Promise<FrozenContract> {
+  let body: Buffer;
+
+  try {
+    body = await readFile(resolve(contractPath));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw error;
+    }
+
+    throw new Error("contract file must remain readable through final A-04 pre-approval");
+  }
+
+  let rawJson: unknown;
+  try {
+    rawJson = JSON.parse(body.toString("utf8")) as unknown;
+  } catch {
+    throw new Error("contract file must remain schema-valid through final A-04 pre-approval");
+  }
+
+  return {
+    contract: loopContractSchema.parse(rawJson),
+    sha256: createHash("sha256").update(body).digest("hex"),
+  };
+}
+
 const defaultDeps: PrepareDeps = {
   pathExists,
   assertCleanFixture: defaultAssertCleanFixture,
   readCurrentBranch: defaultReadCurrentBranch,
-  readRepoTrackedState: defaultReadRepoTrackedState,
+  createMainVerificationCheckout: defaultCreateMainVerificationCheckout,
   runCommand: defaultRunCommand,
   writeContract: defaultWriteContract,
+  readFrozenContract: defaultReadFrozenContract,
 };
 
 export function validateA04ExecutionPolicy(
@@ -377,28 +428,6 @@ async function runFocusedEvidenceChainRegressionSet(deps: PrepareDeps, repoRoot:
   return runCommandSet(deps, repoRoot, FOCUSED_EVIDENCE_CHAIN_REGRESSION_COMMANDS);
 }
 
-async function assertCleanRepoRootBeforePreflight(deps: PrepareDeps, repoRoot: string): Promise<RepoState> {
-  const beforePreflight = await deps.readRepoTrackedState(repoRoot);
-
-  if (beforePreflight.status !== "") {
-    throw new Error("repo root must have no changes before deterministic A-04 preflight");
-  }
-
-  return beforePreflight;
-}
-
-async function assertRepoRootUnchangedAfterPreflight(
-  deps: PrepareDeps,
-  repoRoot: string,
-  beforePreflight: RepoState,
-): Promise<void> {
-  const afterPreflight = await deps.readRepoTrackedState(repoRoot);
-
-  if (afterPreflight.head !== beforePreflight.head || afterPreflight.status !== beforePreflight.status) {
-    throw new Error("deterministic A-04 preflight must leave the main checkout unchanged");
-  }
-}
-
 async function assertA04FreshnessCheck(
   deps: PrepareDeps,
   options: Pick<A04PrepareOptions, "fixturePath" | "contractPath" | "runDir" | "evidenceDir">,
@@ -428,15 +457,42 @@ async function assertFixtureUnchangedBeforeApproval(
   }
 }
 
+async function assertFrozenContractOnDiskAtFinalGate(
+  deps: PrepareDeps,
+  contractPath: string,
+  expectedSha256: string,
+): Promise<FrozenContract> {
+  let frozenContract: FrozenContract;
+
+  try {
+    frozenContract = await deps.readFrozenContract(contractPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error("contract file must still exist through final A-04 pre-approval");
+    }
+
+    throw error instanceof Error && error.message === "contract file must remain readable through final A-04 pre-approval"
+      ? error
+      : new Error("contract file must remain schema-valid through final A-04 pre-approval");
+  }
+
+  if (frozenContract.sha256 !== expectedSha256) {
+    throw new Error("contract file contents must remain frozen through final A-04 pre-approval");
+  }
+
+  return frozenContract;
+}
+
 async function assertFinalPreApprovalGate(
   deps: PrepareDeps,
-  options: Pick<A04PrepareOptions, "repoRoot" | "fixturePath" | "runDir" | "evidenceDir">,
-  beforePreflight: { repoRoot: RepoState; fixture: RepoState },
-): Promise<void> {
-  await assertRepoRootUnchangedAfterPreflight(deps, options.repoRoot, beforePreflight.repoRoot);
+  options: Pick<A04PrepareOptions, "fixturePath" | "contractPath" | "runDir" | "evidenceDir">,
+  beforePreflight: { fixture: RepoState },
+  expectedSha256: string,
+): Promise<FrozenContract> {
   await assertFixtureUnchangedBeforeApproval(deps, options.fixturePath, beforePreflight.fixture);
   await assertFreshPath(deps, options.runDir, "run directory");
   await assertFreshPath(deps, options.evidenceDir, "evidence directory");
+  return assertFrozenContractOnDiskAtFinalGate(deps, options.contractPath, expectedSha256);
 }
 
 export async function prepareA04(
@@ -447,33 +503,41 @@ export async function prepareA04(
   const executionPolicyOverrides = validateA04ExecutionPolicy(resolvedOptions.executionPolicyOverrides);
   assertNoContractMaterializationOverlap(resolvedOptions);
   await assertMainCheckout(deps, resolvedOptions.repoRoot);
-  const repoRootStateBeforePreflight = await assertCleanRepoRootBeforePreflight(deps, resolvedOptions.repoRoot);
-  const preflightCommands = await runMainDeterministicVerification(deps, resolvedOptions.repoRoot);
-  const fixtureStateBeforeContractRender = await assertA04FreshnessCheck(deps, resolvedOptions);
 
-  const { contract, sha256 } = await deps.writeContract({
-    fixturePath: resolvedOptions.fixturePath,
-    contractPath: resolvedOptions.contractPath,
-    executionPolicyOverrides,
-  });
+  const verificationCheckout = await deps.createMainVerificationCheckout(resolvedOptions.repoRoot);
 
-  preflightCommands.push(...(await runFocusedEvidenceChainRegressionSet(deps, resolvedOptions.repoRoot)));
-  await assertFinalPreApprovalGate(deps, resolvedOptions, {
-    repoRoot: repoRootStateBeforePreflight,
-    fixture: fixtureStateBeforeContractRender,
-  });
+  try {
+    const preflightCommands = await runMainDeterministicVerification(deps, verificationCheckout.path);
+    const fixtureStateBeforeContractRender = await assertA04FreshnessCheck(deps, resolvedOptions);
 
-  return {
-    approvalPackage: buildApprovalPackage({
-      repoRoot: resolvedOptions.repoRoot,
-      contract,
-      contractPath: resolvedOptions.contractPath,
-      contractSha256: sha256,
+    const { sha256 } = await deps.writeContract({
       fixturePath: resolvedOptions.fixturePath,
-      runDir: resolvedOptions.runDir,
-      evidenceDir: resolvedOptions.evidenceDir,
-      adapterConfigPath: resolvedOptions.adapterConfigPath,
-    }),
-    preflightCommands,
-  };
+      contractPath: resolvedOptions.contractPath,
+      executionPolicyOverrides,
+    });
+
+    preflightCommands.push(...(await runFocusedEvidenceChainRegressionSet(deps, verificationCheckout.path)));
+    const frozenContract = await assertFinalPreApprovalGate(
+      deps,
+      resolvedOptions,
+      { fixture: fixtureStateBeforeContractRender },
+      sha256,
+    );
+
+    return {
+      approvalPackage: buildApprovalPackage({
+        repoRoot: resolvedOptions.repoRoot,
+        contract: frozenContract.contract,
+        contractPath: resolvedOptions.contractPath,
+        contractSha256: frozenContract.sha256,
+        fixturePath: resolvedOptions.fixturePath,
+        runDir: resolvedOptions.runDir,
+        evidenceDir: resolvedOptions.evidenceDir,
+        adapterConfigPath: resolvedOptions.adapterConfigPath,
+      }),
+      preflightCommands,
+    };
+  } finally {
+    await verificationCheckout.cleanup();
+  }
 }

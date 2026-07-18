@@ -48,19 +48,25 @@ function buildDeps(input: {
   pathExists?: (path: string) => Promise<boolean>;
   assertCleanFixture?: (fixturePath: string) => Promise<{ head: string; status: string }>;
   readCurrentBranch?: (repoRoot: string) => Promise<string>;
-  readRepoTrackedState?: (repoRoot: string) => Promise<{ head: string; status: string }>;
+  createMainVerificationCheckout?: (repoRoot: string) => Promise<{ path: string; cleanup: () => Promise<void> }>;
   runCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
   writeContract?: (options: {
     fixturePath: string;
     contractPath: string;
     executionPolicyOverrides: typeof A04_APPROVED_EXECUTION_POLICY;
   }) => Promise<{ contract: ReturnType<typeof renderScenario>; sha256: string }>;
+  readFrozenContract?: (contractPath: string) => Promise<{ contract: ReturnType<typeof renderScenario>; sha256: string }>;
 } = {}) {
   return {
     pathExists: input.pathExists ?? (async () => false),
     assertCleanFixture: input.assertCleanFixture ?? (async () => ({ head: "fixture-head", status: "" })),
     readCurrentBranch: input.readCurrentBranch ?? (async () => "main"),
-    readRepoTrackedState: input.readRepoTrackedState ?? (async () => ({ head: "repo-head", status: "" })),
+    createMainVerificationCheckout:
+      input.createMainVerificationCheckout ??
+      (async () => ({
+        path: "/tmp/a04-main-checkout",
+        cleanup: async () => {},
+      })),
     runCommand: input.runCommand ?? (async () => ({ stdout: "", stderr: "" })),
     writeContract:
       input.writeContract ??
@@ -69,6 +75,12 @@ function buildDeps(input: {
           repoPath: fixturePath,
           executionPolicyOverrides,
         }),
+        sha256: "abc123",
+      })),
+    readFrozenContract:
+      input.readFrozenContract ??
+      (async () => ({
+        contract: buildContract(),
         sha256: "abc123",
       })),
   };
@@ -212,9 +224,9 @@ describe("A-04 approval package", () => {
     ).rejects.toThrow(`${label} already exists`);
 
     expect(runCommand.mock.calls).toEqual([
-      ["npm", ["test"], "/repo"],
-      ["npm", ["run", "typecheck"], "/repo"],
-      ["npm", ["run", "build"], "/repo"],
+      ["npm", ["test"], "/tmp/a04-main-checkout"],
+      ["npm", ["run", "typecheck"], "/tmp/a04-main-checkout"],
+      ["npm", ["run", "build"], "/tmp/a04-main-checkout"],
     ]);
   });
 
@@ -263,74 +275,31 @@ describe("A-04 approval package", () => {
     expect(runCommand).not.toHaveBeenCalled();
   });
 
-  it("refuses to start deterministic preflight when repo root already has changes", async () => {
-    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+  it("runs deterministic verification inside an isolated temporary checkout and cleans it up", async () => {
+    const cleanup = vi.fn(async () => {});
+    const createMainVerificationCheckout = vi.fn(async () => ({
+      path: "/tmp/a04-main-checkout",
+      cleanup,
+    }));
+    const runCommand = vi.fn(async (..._args: [string, string[], string]) => ({ stdout: "", stderr: "" }));
 
-    await expect(
-      prepareA04(
-        buildOptions(),
-        buildDeps({
-          readRepoTrackedState: async () => ({ head: "repo-head", status: " M validation/v1/lib/a04.ts" }),
-          runCommand,
-        }),
-      ),
-    ).rejects.toThrow(/repo root must have no changes before deterministic A-04 preflight/);
+    await prepareA04(
+      buildOptions(),
+      buildDeps({
+        createMainVerificationCheckout,
+        runCommand,
+      }),
+    );
 
-    expect(runCommand).not.toHaveBeenCalled();
-  });
-
-  it("fails when deterministic preflight leaves tracked changes in the main checkout", async () => {
-    const writeContract = vi.fn(async () => ({ contract: buildContract(), sha256: "abc123" }));
-    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
-    let repoRootReads = 0;
-
-    await expect(
-      prepareA04(
-        buildOptions(),
-        buildDeps({
-          readRepoTrackedState: async () => {
-            repoRootReads += 1;
-            if (repoRootReads === 1) {
-              return { head: "repo-head", status: "" };
-            }
-
-            return { head: "repo-head", status: " M validation/v1/lib/a04.ts" };
-          },
-          runCommand,
-          writeContract,
-        }),
-      ),
-    ).rejects.toThrow(/deterministic A-04 preflight must leave the main checkout unchanged/);
-
-    expect(runCommand).toHaveBeenCalledTimes(5);
-    expect(writeContract).toHaveBeenCalledTimes(1);
-  });
-
-  it("fails when deterministic preflight creates an untracked file in the main checkout", async () => {
-    const writeContract = vi.fn(async () => ({ contract: buildContract(), sha256: "abc123" }));
-    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
-    let repoRootReads = 0;
-
-    await expect(
-      prepareA04(
-        buildOptions(),
-        buildDeps({
-          readRepoTrackedState: async () => {
-            repoRootReads += 1;
-            if (repoRootReads === 1) {
-              return { head: "repo-head", status: "" };
-            }
-
-            return { head: "repo-head", status: "?? scratch.txt" };
-          },
-          runCommand,
-          writeContract,
-        }),
-      ),
-    ).rejects.toThrow(/deterministic A-04 preflight must leave the main checkout unchanged/);
-
-    expect(runCommand).toHaveBeenCalledTimes(5);
-    expect(writeContract).toHaveBeenCalledTimes(1);
+    expect(createMainVerificationCheckout).toHaveBeenCalledWith("/repo");
+    expect(runCommand.mock.calls.map((call) => call[2])).toEqual([
+      "/tmp/a04-main-checkout",
+      "/tmp/a04-main-checkout",
+      "/tmp/a04-main-checkout",
+      "/tmp/a04-main-checkout",
+      "/tmp/a04-main-checkout",
+    ]);
+    expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("fails when fixture becomes dirty during deterministic preflight", async () => {
@@ -355,6 +324,51 @@ describe("A-04 approval package", () => {
         }),
       ),
     ).rejects.toThrow(/fixture must remain clean through final A-04 pre-approval/);
+
+    expect(runCommand).toHaveBeenCalledTimes(5);
+    expect(writeContract).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails when the frozen contract file is deleted after render", async () => {
+    const writeContract = vi.fn(async () => ({ contract: buildContract(), sha256: "abc123" }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          runCommand,
+          writeContract,
+          readFrozenContract: async () => {
+            const error = new Error("ENOENT") as NodeJS.ErrnoException;
+            error.code = "ENOENT";
+            throw error;
+          },
+        }),
+      ),
+    ).rejects.toThrow(/contract file must still exist through final A-04 pre-approval/);
+
+    expect(runCommand).toHaveBeenCalledTimes(5);
+    expect(writeContract).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails when the frozen contract file contents drift after render", async () => {
+    const writeContract = vi.fn(async () => ({ contract: buildContract(), sha256: "abc123" }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          runCommand,
+          writeContract,
+          readFrozenContract: async () => ({
+            contract: buildContract(),
+            sha256: "drifted-sha256",
+          }),
+        }),
+      ),
+    ).rejects.toThrow(/contract file contents must remain frozen through final A-04 pre-approval/);
 
     expect(runCommand).toHaveBeenCalledTimes(5);
     expect(writeContract).toHaveBeenCalledTimes(1);
@@ -388,6 +402,15 @@ describe("A-04 approval package", () => {
     await prepareA04(
       buildOptions(),
       buildDeps({
+        createMainVerificationCheckout: async () => {
+          steps.push("createCheckout");
+          return {
+            path: "/tmp/a04-main-checkout",
+            cleanup: async () => {
+              steps.push("cleanupCheckout");
+            },
+          };
+        },
         assertCleanFixture: async () => {
           steps.push("fixture");
           return { head: "fixture-head", status: "" };
@@ -410,10 +433,18 @@ describe("A-04 approval package", () => {
             sha256: "abc123",
           };
         },
+        readFrozenContract: async () => {
+          steps.push("readContract");
+          return {
+            contract: buildContract(),
+            sha256: "abc123",
+          };
+        },
       }),
     );
 
     expect(steps).toEqual([
+      "createCheckout",
       "npm test",
       "npm run typecheck",
       "npm run build",
@@ -427,6 +458,8 @@ describe("A-04 approval package", () => {
       "fixture",
       "exists:/repo/.validation-runs/runs/A-04",
       "exists:/repo/.validation-runs/evidence/A-04",
+      "readContract",
+      "cleanupCheckout",
     ]);
   });
 

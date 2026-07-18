@@ -46,7 +46,7 @@ If `npm ci` prints audit or vulnerability output, treat it as observational only
 
 ## A-04 mechanical prepare (no paid call)
 
-Run this command from the repository root while the current checkout is on branch `main`. `prepare-a04.ts` now refuses any other branch so `mainCheckoutMustRemainUnchanged: true` is mechanically true for the approval package.
+Run this command from the repository root while the current checkout is on branch `main`. `prepare-a04.ts` now freezes the approved main revision, runs deterministic verification in an isolated temporary checkout based on that revision, and leaves the operator's main checkout out of the `npm test` / `npm run typecheck` / `npm run build` path.
 
 ```bash
 npx --no-install tsx validation/v1/scripts/prepare-a04.ts \
@@ -62,10 +62,11 @@ npx --no-install tsx validation/v1/scripts/prepare-a04.ts \
 ```
 
 Expected result:
-- main deterministic verification (`npm test`, `npm run typecheck`, `npm run build`) passes first;
+- main deterministic verification (`npm test`, `npm run typecheck`, `npm run build`) passes first inside an isolated temporary checkout based on the verified `main` revision;
 - the A-04 freshness check confirms the fixture is clean and the contract/run/evidence paths are still fresh before contract render;
 - `.validation-runs/contracts/A-04.json` is created once and schema-validates as Scenario A with only the approved A-04 execution-policy fields overridden;
 - the focused evidence-chain regression set runs after contract render and before the final pre-approval gate;
+- the final pre-approval gate re-reads `.validation-runs/contracts/A-04.json` from disk, re-parses it under schema, and recomputes its sha256 so the approval package matches the exact on-disk contract;
 - `.validation-runs/runs/A-04/` and `.validation-runs/evidence/A-04/` still do not exist;
 - stdout prints an approval package containing contract identity, expected file scope, expected diff scope, exact `run-scenario.ts` command, and cost semantics.
 

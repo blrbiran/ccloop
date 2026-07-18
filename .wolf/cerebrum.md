@@ -31,10 +31,11 @@
 - Evidence-first validation harness files for V1 live under `validation/v1/**` with matching focused Vitest coverage under `tests/validation/**`, and the disposable smoke repo root stays under ignored `.validation-runs/` with a strict do-not-overwrite boundary.
 
 - A-04 mechanical preflight is intentionally non-paid: prepare-a04 runs deterministic repo checks first, freezes a contract plus approval package, prints JSON only, and must not create run/evidence directories or invoke run-scenario.
-- A-04 approval is valid only for the fixed envelope `550000/600000/1200000/5000`, and `mainCheckoutMustRemainUnchanged: true` must be backed by tracked repo-root cleanliness checks before and after deterministic preflight.
+- A-04 approval is valid only for the fixed envelope `550000/600000/1200000/5000`, and `mainCheckoutMustRemainUnchanged: true` must be backed by running deterministic verification in an isolated temporary checkout created from the verified `main` revision; git status alone is insufficient because ignored files like `dist/**` can still be rewritten on disk.
 - A-04 approval gating must also mechanically enforce the frozen one-shot Scenario A contract invariants (`autonomyLevel: "L2"`, `maxAttempts: 1`, `worktreeRequired: true`) instead of assuming `renderScenario("A")` never drifts.
 - A-04 pre-approval must compare full repo-root `git status --porcelain` before and after deterministic preflight, re-check fixture HEAD/status immediately before contract write, and reject contract paths nested under run/evidence directories because `mkdir(dirname(contractPath))` can materialize forbidden pre-approval directories.
 - A-04 preparation is now intentionally bound to the `main` checkout and its phase order is explicit: main deterministic verification -> freshness check -> contract render -> focused evidence-chain regressions -> final pre-approval gate.
+- The final A-04 pre-approval gate must re-read the frozen contract file from disk, schema-parse it, and recompute its sha256 before emitting the approval package; in-memory contract data alone is not trustworthy enough for approval output.
 - In `validation/v1/lib/scenarios.ts`, `executionPolicyOverrides` is a Scenario A-only surface; non-A scenarios must reject it at runtime even if a caller bypasses TypeScript.
 
 ## Do-Not-Repeat
