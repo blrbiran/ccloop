@@ -165,3 +165,41 @@
 
 ### Concerns
 - Left the pre-existing unrelated unstaged changes in `.superpowers/sdd/progress.md`, `.superpowers/sdd/task-3-report.md`, `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, `package-lock.json`, and `.wolf/memory.md` out of the fix commit.
+
+
+## Remaining whole-branch review follow-up — 2026-07-18 (main checkout, phase order, Scenario A-only overrides)
+### What changed
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` so `prepareA04(...)` now refuses to proceed unless the current checkout branch is `main`, making the approval-package invariant `mainCheckoutMustRemainUnchanged: true` truthful for the verified checkout.
+- Refactored `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` to encode the binding-spec order directly: main deterministic verification -> A-04 freshness check -> contract render/validation -> focused evidence-chain regression set -> final pre-approval gate.
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/scenarios.ts` so only Scenario A may accept `executionPolicyOverrides`; non-A scenarios now reject that surface at runtime and the TypeScript signature reflects the same constraint.
+- Replaced the old Scenario C override-only regression in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/contracts.test.ts` with non-A rejection coverage, and expanded `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts` to lock the new main-branch gate and explicit spec-phase ordering.
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/README.md` so operator docs now state the `main`-checkout requirement and the exact A-04 phase ordering.
+
+### Exact test commands
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" test -- --run tests/validation/contracts.test.ts tests/validation/prepareA04.test.ts`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run typecheck`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run build`
+
+### Relevant output
+- Focused tests:
+  - `Test Files  2 passed (2)`
+  - `Tests  38 passed (38)`
+- Typecheck:
+  - `tsc --noEmit -p tsconfig.json`
+- Build:
+  - `tsc -p tsconfig.json`
+  - dist CLI wrapper regenerated successfully.
+- During implementation, an intermediate overload-only typing change briefly broke `typecheck`/`build`; this was fixed before the final verification by switching `renderScenario(...)` to a generic conditional signature that preserves union-typed callers while still blocking non-A overrides.
+
+### Files changed for this follow-up
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/scenarios.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/contracts.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/README.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-2-report.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/buglog.json`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/cerebrum.md`
+
+### Concerns
+- Left the pre-existing unrelated unstaged changes in `.superpowers/sdd/progress.md`, `.superpowers/sdd/task-3-report.md`, `.wolf/memory.md`, `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, and `package-lock.json` out of the fix commit.

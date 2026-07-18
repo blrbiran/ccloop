@@ -143,5 +143,48 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-18T19:40:00.000000+00:00"
+  },
+  {
+    "id": "bug-008",
+    "timestamp": "2026-07-18T11:55:42.738023+00:00",
+    "error_message": "Final whole-branch review found that A-04 preparation still verified whichever checkout invoked it, encoded preflight order incorrectly, and still allowed executionPolicyOverrides outside Scenario A.",
+    "file": "validation/v1/lib/a04.ts, validation/v1/lib/scenarios.ts",
+    "root_cause": "prepareA04 still derived its cleanliness invariant from the current repoRoot without requiring branch main, represented main verification plus focused regressions as one preflight list, and renderScenario still exposed executionPolicyOverrides to non-A scenarios.",
+    "fix": "Required prepareA04 to run on branch main, split the A-04 flow into explicit spec phases, restricted executionPolicyOverrides to Scenario A at runtime and in the TypeScript surface, and updated focused tests/docs accordingly.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "main-checkout",
+      "phase-order",
+      "execution-policy"
+    ],
+    "related_bugs": [
+      "bug-007"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T11:55:42.738023+00:00"
+  },
+  {
+    "id": "bug-009",
+    "timestamp": "2026-07-18T11:55:42.738023+00:00",
+    "error_message": "Typecheck/build failed after tightening renderScenario to A-vs-non-A overloads.",
+    "file": "validation/v1/lib/scenarios.ts",
+    "root_cause": "The overload form did not accept existing callers that pass a ScenarioId union, so tests and CLIs that render scenarios via a variable id stopped typechecking.",
+    "fix": "Replaced the overloads with a generic conditional signature so Scenario A keeps override support while union-typed callers still compile and non-A overrides remain rejected.",
+    "tags": [
+      "task-2",
+      "validation",
+      "typecheck",
+      "build-failure",
+      "scenario-rendering",
+      "typing"
+    ],
+    "related_bugs": [
+      "bug-008"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T11:55:42.738023+00:00"
   }
 ]

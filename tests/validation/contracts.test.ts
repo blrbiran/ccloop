@@ -149,21 +149,21 @@ describe("validation scenario rendering", () => {
     expect(renderScenario("C", optionsFor("C")).executionPolicy.partialOutcomeRecoveryWindowMs).toBe(3000);
     expect(renderScenario("D", optionsFor("D")).executionPolicy.partialOutcomeRecoveryWindowMs).toBe(3000);
   });
-  it("renders scenario C with an override-only per-attempt timeout", () => {
-    const contract = renderScenario("C", {
-      repoPath: fixtureRepo,
-      executionPolicyOverrides: {
-        perAttemptTimeoutMs: 4321,
-      },
-    });
-
-    expect(contract.executionPolicy).toMatchObject({
-      maxAttempts: 1,
-      perAttemptTimeoutMs: 4321,
-      totalRuntimeBudgetMs: 600000,
-    });
+  it.each([
+    ["B", { repoPath: fixtureRepo }],
+    ["C", { repoPath: fixtureRepo, timeoutMs: 1234 }],
+    ["D", { repoPath: fixtureRepo, timeoutMs: 1234 }],
+    ["E", { repoPath: fixtureRepo }],
+  ] as const)("rejects execution-policy overrides for non-A scenario %s", (id, options) => {
+    expect(() =>
+      renderScenario(id, {
+        ...options,
+        executionPolicyOverrides: {
+          perAttemptTimeoutMs: 4321,
+        },
+      } as any),
+    ).toThrow(/executionPolicyOverrides are only supported for scenario A/);
   });
-
 
   it("renders scenario E with src-only writes and required tests", () => {
     const contract = renderScenario("E", optionsFor("E"));

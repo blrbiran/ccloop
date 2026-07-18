@@ -18,11 +18,20 @@ export type ExecutionPolicyOverrides = Partial<
   >
 >;
 
-type RenderOptions = {
+type BaseRenderOptions = {
   repoPath: string;
   timeoutMs?: number;
+};
+
+type RenderScenarioAOptions = BaseRenderOptions & {
   executionPolicyOverrides?: ExecutionPolicyOverrides;
 };
+
+type RenderScenarioNonAOptions = BaseRenderOptions & {
+  executionPolicyOverrides?: never;
+};
+
+type RenderOptions = RenderScenarioAOptions | RenderScenarioNonAOptions;
 
 type ScenarioSpec = ScenarioDefinition & {
   successCondition: string;
@@ -252,8 +261,23 @@ export function getScenario(id: ScenarioId): ScenarioDefinition {
   };
 }
 
-export function renderScenario(id: ScenarioId, options: RenderOptions): LoopContract {
+function assertExecutionPolicyOverridesAllowed(
+  id: ScenarioId,
+  options: RenderOptions,
+): ExecutionPolicyOverrides | undefined {
+  if (id !== "A" && options.executionPolicyOverrides !== undefined) {
+    throw new Error("executionPolicyOverrides are only supported for scenario A");
+  }
+
+  return options.executionPolicyOverrides;
+}
+
+export function renderScenario<T extends ScenarioId>(
+  id: T,
+  options: T extends "A" ? RenderScenarioAOptions : RenderScenarioNonAOptions,
+): LoopContract {
   const scenario = scenarioCatalog[id];
+  const executionPolicyOverrides = assertExecutionPolicyOverridesAllowed(id, options);
 
   return loopContractSchema.parse({
     objective: {
@@ -269,7 +293,7 @@ export function renderScenario(id: ScenarioId, options: RenderOptions): LoopCont
       buildTestCommands: [...scenario.buildTestCommands],
       constraints: [...scenario.constraints],
     },
-    executionPolicy: buildExecutionPolicy(id, options.timeoutMs, options.executionPolicyOverrides),
+    executionPolicy: buildExecutionPolicy(id, options.timeoutMs, executionPolicyOverrides),
     safetyPolicy: {
       allowlistPaths: [...scenario.allowlistPaths],
       denylistPaths: [...scenario.denylistPaths],

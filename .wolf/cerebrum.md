@@ -34,6 +34,8 @@
 - A-04 approval is valid only for the fixed envelope `550000/600000/1200000/5000`, and `mainCheckoutMustRemainUnchanged: true` must be backed by tracked repo-root cleanliness checks before and after deterministic preflight.
 - A-04 approval gating must also mechanically enforce the frozen one-shot Scenario A contract invariants (`autonomyLevel: "L2"`, `maxAttempts: 1`, `worktreeRequired: true`) instead of assuming `renderScenario("A")` never drifts.
 - A-04 pre-approval must compare full repo-root `git status --porcelain` before and after deterministic preflight, re-check fixture HEAD/status immediately before contract write, and reject contract paths nested under run/evidence directories because `mkdir(dirname(contractPath))` can materialize forbidden pre-approval directories.
+- A-04 preparation is now intentionally bound to the `main` checkout and its phase order is explicit: main deterministic verification -> freshness check -> contract render -> focused evidence-chain regressions -> final pre-approval gate.
+- In `validation/v1/lib/scenarios.ts`, `executionPolicyOverrides` is a Scenario A-only surface; non-A scenarios must reject it at runtime even if a caller bypasses TypeScript.
 
 ## Do-Not-Repeat
 
@@ -51,6 +53,7 @@
 - [2026-07-18] When searching Markdown literals containing backticks from Bash, avoid double-quoted `rg` patterns because the shell performs command substitution; use Node string checks or single-quoted patterns.
 
 - [2026-07-18] In validation/v1 scenario rendering, never spread runtime `executionPolicyOverrides` directly into the contract; whitelist the four approved fields and keep an `as any` regression test proving blocked fields like `maxAttempts` are ignored.
+- [2026-07-18] When narrowing `renderScenario(...)` by scenario id, do not use separate A/non-A overloads; use a generic conditional signature so existing callers with `ScenarioId` unions still typecheck while non-A overrides remain blocked.
 
 ## Decision Log
 

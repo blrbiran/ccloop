@@ -47,6 +47,7 @@ function buildContract(overrides: Partial<typeof A04_APPROVED_EXECUTION_POLICY> 
 function buildDeps(input: {
   pathExists?: (path: string) => Promise<boolean>;
   assertCleanFixture?: (fixturePath: string) => Promise<{ head: string; status: string }>;
+  readCurrentBranch?: (repoRoot: string) => Promise<string>;
   readRepoTrackedState?: (repoRoot: string) => Promise<{ head: string; status: string }>;
   runCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
   writeContract?: (options: {
@@ -58,6 +59,7 @@ function buildDeps(input: {
   return {
     pathExists: input.pathExists ?? (async () => false),
     assertCleanFixture: input.assertCleanFixture ?? (async () => ({ head: "fixture-head", status: "" })),
+    readCurrentBranch: input.readCurrentBranch ?? (async () => "main"),
     readRepoTrackedState: input.readRepoTrackedState ?? (async () => ({ head: "repo-head", status: "" })),
     runCommand: input.runCommand ?? (async () => ({ stdout: "", stderr: "" })),
     writeContract:
@@ -213,19 +215,6 @@ describe("A-04 approval package", () => {
       ["npm", ["test"], "/repo"],
       ["npm", ["run", "typecheck"], "/repo"],
       ["npm", ["run", "build"], "/repo"],
-      ["npm", ["test", "--", "--run", "tests/validation/contracts.test.ts"], "/repo"],
-      [
-        "npm",
-        [
-          "test",
-          "--",
-          "--run",
-          "tests/runtime/claude/subprocessClaudeAdapter.test.ts",
-          "tests/controller/runLoop.integration.test.ts",
-          "tests/validation/evidence.test.ts",
-        ],
-        "/repo",
-      ],
     ]);
   });
 
@@ -241,6 +230,22 @@ describe("A-04 approval package", () => {
         buildDeps({ runCommand }),
       ),
     ).rejects.toThrow(`contract path must not be inside ${label}`);
+
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it("refuses to prepare A-04 outside branch main", async () => {
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          readCurrentBranch: async () => "feature/a04",
+          runCommand,
+        }),
+      ),
+    ).rejects.toThrow(/A-04 preparation must run from branch main/);
 
     expect(runCommand).not.toHaveBeenCalled();
   });
@@ -298,7 +303,7 @@ describe("A-04 approval package", () => {
     ).rejects.toThrow(/deterministic A-04 preflight must leave the main checkout unchanged/);
 
     expect(runCommand).toHaveBeenCalledTimes(5);
-    expect(writeContract).not.toHaveBeenCalled();
+    expect(writeContract).toHaveBeenCalledTimes(1);
   });
 
   it("fails when deterministic preflight creates an untracked file in the main checkout", async () => {
@@ -325,7 +330,7 @@ describe("A-04 approval package", () => {
     ).rejects.toThrow(/deterministic A-04 preflight must leave the main checkout unchanged/);
 
     expect(runCommand).toHaveBeenCalledTimes(5);
-    expect(writeContract).not.toHaveBeenCalled();
+    expect(writeContract).toHaveBeenCalledTimes(1);
   });
 
   it("fails when fixture becomes dirty during deterministic preflight", async () => {
@@ -352,7 +357,7 @@ describe("A-04 approval package", () => {
     ).rejects.toThrow(/fixture must remain clean through final A-04 pre-approval/);
 
     expect(runCommand).toHaveBeenCalledTimes(5);
-    expect(writeContract).not.toHaveBeenCalled();
+    expect(writeContract).toHaveBeenCalledTimes(1);
   });
 
   it("runs deterministic preflight commands in the required order", async () => {
@@ -374,6 +379,54 @@ describe("A-04 approval package", () => {
       "npm run build",
       "npm test -- --run tests/validation/contracts.test.ts",
       "npm test -- --run tests/runtime/claude/subprocessClaudeAdapter.test.ts tests/controller/runLoop.integration.test.ts tests/validation/evidence.test.ts",
+    ]);
+  });
+
+  it("runs A-04 phases in spec order: main verification, freshness, contract render, focused regressions, final gate", async () => {
+    const steps: string[] = [];
+
+    await prepareA04(
+      buildOptions(),
+      buildDeps({
+        assertCleanFixture: async () => {
+          steps.push("fixture");
+          return { head: "fixture-head", status: "" };
+        },
+        pathExists: async (path) => {
+          steps.push(`exists:${path}`);
+          return false;
+        },
+        runCommand: async (command, args) => {
+          steps.push([command, ...args].join(" "));
+          return { stdout: "", stderr: "" };
+        },
+        writeContract: async ({ fixturePath, executionPolicyOverrides }) => {
+          steps.push("writeContract");
+          return {
+            contract: renderScenario("A", {
+              repoPath: fixturePath,
+              executionPolicyOverrides,
+            }),
+            sha256: "abc123",
+          };
+        },
+      }),
+    );
+
+    expect(steps).toEqual([
+      "npm test",
+      "npm run typecheck",
+      "npm run build",
+      "fixture",
+      "exists:/repo/.validation-runs/contracts/A-04.json",
+      "exists:/repo/.validation-runs/runs/A-04",
+      "exists:/repo/.validation-runs/evidence/A-04",
+      "writeContract",
+      "npm test -- --run tests/validation/contracts.test.ts",
+      "npm test -- --run tests/runtime/claude/subprocessClaudeAdapter.test.ts tests/controller/runLoop.integration.test.ts tests/validation/evidence.test.ts",
+      "fixture",
+      "exists:/repo/.validation-runs/runs/A-04",
+      "exists:/repo/.validation-runs/evidence/A-04",
     ]);
   });
 

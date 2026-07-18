@@ -89,6 +89,7 @@ export type ApprovalPackage = {
 export type PrepareDeps = {
   pathExists: (path: string) => Promise<boolean>;
   assertCleanFixture: (fixturePath: string) => Promise<{ head: string; status: string }>;
+  readCurrentBranch: (repoRoot: string) => Promise<string>;
   readRepoTrackedState: (repoRoot: string) => Promise<RepoState>;
   runCommand: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
   writeContract: (options: Pick<A04PrepareOptions, "fixturePath" | "contractPath" | "executionPolicyOverrides">) => Promise<{
@@ -97,10 +98,13 @@ export type PrepareDeps = {
   }>;
 };
 
-const DETERMINISTIC_PREFLIGHT_COMMANDS: ReadonlyArray<readonly [string, string[]]> = [
+const MAIN_DETERMINISTIC_VERIFICATION_COMMANDS: ReadonlyArray<readonly [string, string[]]> = [
   ["npm", ["test"]],
   ["npm", ["run", "typecheck"]],
   ["npm", ["run", "build"]],
+] as const;
+
+const FOCUSED_EVIDENCE_CHAIN_REGRESSION_COMMANDS: ReadonlyArray<readonly [string, string[]]> = [
   ["npm", ["test", "--", "--run", "tests/validation/contracts.test.ts"]],
   [
     "npm",
@@ -146,6 +150,10 @@ async function defaultAssertCleanFixture(fixturePath: string): Promise<{ head: s
   return { head, status };
 }
 
+async function defaultReadCurrentBranch(repoRoot: string): Promise<string> {
+  return gitOutput(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
+}
+
 async function defaultReadRepoTrackedState(repoRoot: string): Promise<RepoState> {
   const head = await gitOutput(repoRoot, ["rev-parse", "HEAD"]);
   const status = await gitOutput(repoRoot, ["status", "--porcelain"]);
@@ -186,6 +194,7 @@ async function defaultWriteContract(options: Pick<A04PrepareOptions, "fixturePat
 const defaultDeps: PrepareDeps = {
   pathExists,
   assertCleanFixture: defaultAssertCleanFixture,
+  readCurrentBranch: defaultReadCurrentBranch,
   readRepoTrackedState: defaultReadRepoTrackedState,
   runCommand: defaultRunCommand,
   writeContract: defaultWriteContract,
@@ -337,15 +346,35 @@ async function assertFreshPath(deps: PrepareDeps, path: string, label: string): 
   }
 }
 
-async function runDeterministicPreflight(deps: PrepareDeps, repoRoot: string): Promise<string[]> {
+async function assertMainCheckout(deps: PrepareDeps, repoRoot: string): Promise<void> {
+  const currentBranch = await deps.readCurrentBranch(repoRoot);
+
+  if (currentBranch !== "main") {
+    throw new Error(`A-04 preparation must run from branch main (current branch: ${currentBranch})`);
+  }
+}
+
+async function runCommandSet(
+  deps: PrepareDeps,
+  repoRoot: string,
+  commandsToRun: ReadonlyArray<readonly [string, string[]]>,
+): Promise<string[]> {
   const commands: string[] = [];
 
-  for (const [command, args] of DETERMINISTIC_PREFLIGHT_COMMANDS) {
+  for (const [command, args] of commandsToRun) {
     commands.push([command, ...args].join(" "));
     await deps.runCommand(command, [...args], repoRoot);
   }
 
   return commands;
+}
+
+async function runMainDeterministicVerification(deps: PrepareDeps, repoRoot: string): Promise<string[]> {
+  return runCommandSet(deps, repoRoot, MAIN_DETERMINISTIC_VERIFICATION_COMMANDS);
+}
+
+async function runFocusedEvidenceChainRegressionSet(deps: PrepareDeps, repoRoot: string): Promise<string[]> {
+  return runCommandSet(deps, repoRoot, FOCUSED_EVIDENCE_CHAIN_REGRESSION_COMMANDS);
 }
 
 async function assertCleanRepoRootBeforePreflight(deps: PrepareDeps, repoRoot: string): Promise<RepoState> {
@@ -370,6 +399,17 @@ async function assertRepoRootUnchangedAfterPreflight(
   }
 }
 
+async function assertA04FreshnessCheck(
+  deps: PrepareDeps,
+  options: Pick<A04PrepareOptions, "fixturePath" | "contractPath" | "runDir" | "evidenceDir">,
+): Promise<RepoState> {
+  const fixtureState = await deps.assertCleanFixture(options.fixturePath);
+  await assertFreshPath(deps, options.contractPath, "contract path");
+  await assertFreshPath(deps, options.runDir, "run directory");
+  await assertFreshPath(deps, options.evidenceDir, "evidence directory");
+  return fixtureState;
+}
+
 async function assertFixtureUnchangedBeforeApproval(
   deps: PrepareDeps,
   fixturePath: string,
@@ -388,6 +428,17 @@ async function assertFixtureUnchangedBeforeApproval(
   }
 }
 
+async function assertFinalPreApprovalGate(
+  deps: PrepareDeps,
+  options: Pick<A04PrepareOptions, "repoRoot" | "fixturePath" | "runDir" | "evidenceDir">,
+  beforePreflight: { repoRoot: RepoState; fixture: RepoState },
+): Promise<void> {
+  await assertRepoRootUnchangedAfterPreflight(deps, options.repoRoot, beforePreflight.repoRoot);
+  await assertFixtureUnchangedBeforeApproval(deps, options.fixturePath, beforePreflight.fixture);
+  await assertFreshPath(deps, options.runDir, "run directory");
+  await assertFreshPath(deps, options.evidenceDir, "evidence directory");
+}
+
 export async function prepareA04(
   options: A04PrepareOptions,
   deps: PrepareDeps = defaultDeps,
@@ -395,19 +446,21 @@ export async function prepareA04(
   const resolvedOptions = resolvePrepareOptions(options);
   const executionPolicyOverrides = validateA04ExecutionPolicy(resolvedOptions.executionPolicyOverrides);
   assertNoContractMaterializationOverlap(resolvedOptions);
-  const fixtureStateBeforePreflight = await deps.assertCleanFixture(resolvedOptions.fixturePath);
+  await assertMainCheckout(deps, resolvedOptions.repoRoot);
   const repoRootStateBeforePreflight = await assertCleanRepoRootBeforePreflight(deps, resolvedOptions.repoRoot);
-  const preflightCommands = await runDeterministicPreflight(deps, resolvedOptions.repoRoot);
-  await assertRepoRootUnchangedAfterPreflight(deps, resolvedOptions.repoRoot, repoRootStateBeforePreflight);
-  await assertFixtureUnchangedBeforeApproval(deps, resolvedOptions.fixturePath, fixtureStateBeforePreflight);
-  await assertFreshPath(deps, resolvedOptions.contractPath, "contract path");
-  await assertFreshPath(deps, resolvedOptions.runDir, "run directory");
-  await assertFreshPath(deps, resolvedOptions.evidenceDir, "evidence directory");
+  const preflightCommands = await runMainDeterministicVerification(deps, resolvedOptions.repoRoot);
+  const fixtureStateBeforeContractRender = await assertA04FreshnessCheck(deps, resolvedOptions);
 
   const { contract, sha256 } = await deps.writeContract({
     fixturePath: resolvedOptions.fixturePath,
     contractPath: resolvedOptions.contractPath,
     executionPolicyOverrides,
+  });
+
+  preflightCommands.push(...(await runFocusedEvidenceChainRegressionSet(deps, resolvedOptions.repoRoot)));
+  await assertFinalPreApprovalGate(deps, resolvedOptions, {
+    repoRoot: repoRootStateBeforePreflight,
+    fixture: fixtureStateBeforeContractRender,
   });
 
   return {
