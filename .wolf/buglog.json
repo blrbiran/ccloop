@@ -118,5 +118,30 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-18T10:12:21.630539+00:00"
+  },
+  {
+    "id": "bug-007",
+    "timestamp": "2026-07-18T19:40:00.000000+00:00",
+    "error_message": "Final whole-branch review found that A-04 preparation still allowed contract-path overlap to materialize run/evidence dirs, only checked fixture cleanliness before preflight, ignored untracked main-checkout drift, and omitted explicit approval-package fields required by spec.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "prepareA04 only validated tracked repo state once, never rechecked fixture cleanliness before contract creation, did not reject nested contract paths under run/evidence dirs, and left several approval invariants implicit in exactCommand rather than explicit in ApprovalPackage.",
+    "fix": "Added resolved-path overlap rejection for contract-under-run/evidence cases, revalidated fixture HEAD/status before contract write, switched main-checkout checks to full porcelain before/after deterministic preflight, expanded ApprovalPackage with explicit workingDirectory/paths/scenario/attempts/retry/phase/artifact/review-output fields, and added focused regressions.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "path-overlap",
+      "fixture-cleanliness",
+      "untracked-drift",
+      "approval-package"
+    ],
+    "related_bugs": [
+      "bug-004",
+      "bug-005",
+      "bug-006"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T19:40:00.000000+00:00"
   }
 ]

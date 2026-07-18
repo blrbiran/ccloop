@@ -130,3 +130,38 @@
 ### Concerns
 - Left the pre-existing unrelated unstaged changes in `.superpowers/sdd/progress.md`, `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, and `package-lock.json` untouched and out of the fix commit.
 - `.wolf/memory.md` still contains one historical line with literal `\n` escapes; I left it unchanged to keep this fix scoped to the reviewer finding.
+
+
+## Final whole-branch review follow-up — 2026-07-18
+### What changed
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` to reject resolved `contractPath` values nested under `runDir` or `evidenceDir`, preventing `defaultWriteContract()` from materializing forbidden pre-approval directories through `mkdir(dirname(contractPath))`.
+- Added a final fixture cleanliness gate in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` that records fixture HEAD/status before deterministic preflight and re-checks both immediately before contract creation.
+- Switched main-checkout drift detection in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` from tracked-only status to full `git status --porcelain` comparison before and after preflight, so untracked-file drift now rejects approval.
+- Expanded `ApprovalPackage` in `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts` with explicit `workingDirectory`, `paths`, `scenario`, `attempts`, `automaticRetries`, `claudePhases`, `expectedArtifacts`, and `expectedReviewOutputs` fields instead of relying on inference from `exactCommand`.
+- Expanded `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts` with focused regressions for contract-under-runDir, contract-under-evidenceDir, fixture drift during preflight, untracked main-checkout drift, and the explicit approval-package shape.
+
+### Exact test commands
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" test -- --run tests/validation/prepareA04.test.ts`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run typecheck`
+- `npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval" run build`
+
+### Relevant output
+- Focused tests:
+  - `Test Files  1 passed (1)`
+  - `Tests  17 passed (17)`
+- Typecheck:
+  - `tsc --noEmit -p tsconfig.json`
+- Build:
+  - `tsc -p tsconfig.json`
+  - dist CLI wrapper regenerated successfully.
+
+### Files changed for this follow-up
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.superpowers/sdd/task-2-report.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/anatomy.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/cerebrum.md`
+- `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval/.wolf/buglog.json`
+
+### Concerns
+- Left the pre-existing unrelated unstaged changes in `.superpowers/sdd/progress.md`, `.superpowers/sdd/task-3-report.md`, `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`, `package-lock.json`, and `.wolf/memory.md` out of the fix commit.

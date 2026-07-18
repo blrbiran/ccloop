@@ -24,8 +24,8 @@
   - Session action log with short checkpoint entries.
   - Append-only markdown table / low token cost.
 
-- validation/v1/lib/a04.ts — Builds A-04 deterministic preflight results and approval package (~900 tok)
+- validation/v1/lib/a04.ts — Builds A-04 deterministic preflight results, explicit approval packages, and final overlap/cleanliness guards (~1200 tok)
 
 - validation/v1/scripts/prepare-a04.ts — CLI for non-paid A-04 preparation and approval package output (~400 tok)
 
-- tests/validation/prepareA04.test.ts — Covers A-04 preparation command order, approval package fields, and freshness gates (~1100 tok)
+- tests/validation/prepareA04.test.ts — Covers A-04 preparation command order, explicit approval-package fields, overlap guards, and freshness gates (~1500 tok)

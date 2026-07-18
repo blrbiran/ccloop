@@ -33,6 +33,7 @@
 - A-04 mechanical preflight is intentionally non-paid: prepare-a04 runs deterministic repo checks first, freezes a contract plus approval package, prints JSON only, and must not create run/evidence directories or invoke run-scenario.
 - A-04 approval is valid only for the fixed envelope `550000/600000/1200000/5000`, and `mainCheckoutMustRemainUnchanged: true` must be backed by tracked repo-root cleanliness checks before and after deterministic preflight.
 - A-04 approval gating must also mechanically enforce the frozen one-shot Scenario A contract invariants (`autonomyLevel: "L2"`, `maxAttempts: 1`, `worktreeRequired: true`) instead of assuming `renderScenario("A")` never drifts.
+- A-04 pre-approval must compare full repo-root `git status --porcelain` before and after deterministic preflight, re-check fixture HEAD/status immediately before contract write, and reject contract paths nested under run/evidence directories because `mkdir(dirname(contractPath))` can materialize forbidden pre-approval directories.
 
 ## Do-Not-Repeat
 

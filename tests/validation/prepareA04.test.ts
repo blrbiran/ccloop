@@ -8,7 +8,17 @@ import {
 } from "../../validation/v1/lib/a04.js";
 import { renderScenario } from "../../validation/v1/lib/scenarios.js";
 
-function buildOptions(overrides: Partial<typeof A04_APPROVED_EXECUTION_POLICY> = {}) {
+function buildOptions(
+  overrides: Partial<typeof A04_APPROVED_EXECUTION_POLICY> = {},
+  pathOverrides: Partial<{
+    repoRoot: string;
+    fixturePath: string;
+    contractPath: string;
+    runDir: string;
+    evidenceDir: string;
+    adapterConfigPath: string;
+  }> = {},
+) {
   return {
     repoRoot: "/repo",
     fixturePath: "/repo/.validation-runs/fixture-01",
@@ -16,6 +26,7 @@ function buildOptions(overrides: Partial<typeof A04_APPROVED_EXECUTION_POLICY> =
     runDir: "/repo/.validation-runs/runs/A-04",
     evidenceDir: "/repo/.validation-runs/evidence/A-04",
     adapterConfigPath: "/repo/examples/v1/claude-adapter-config.json",
+    ...pathOverrides,
     executionPolicyOverrides: {
       ...A04_APPROVED_EXECUTION_POLICY,
       ...overrides,
@@ -35,6 +46,7 @@ function buildContract(overrides: Partial<typeof A04_APPROVED_EXECUTION_POLICY> 
 
 function buildDeps(input: {
   pathExists?: (path: string) => Promise<boolean>;
+  assertCleanFixture?: (fixturePath: string) => Promise<{ head: string; status: string }>;
   readRepoTrackedState?: (repoRoot: string) => Promise<{ head: string; status: string }>;
   runCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
   writeContract?: (options: {
@@ -45,7 +57,7 @@ function buildDeps(input: {
 } = {}) {
   return {
     pathExists: input.pathExists ?? (async () => false),
-    assertCleanFixture: async () => ({ head: "fixture-head", status: "" }),
+    assertCleanFixture: input.assertCleanFixture ?? (async () => ({ head: "fixture-head", status: "" })),
     readRepoTrackedState: input.readRepoTrackedState ?? (async () => ({ head: "repo-head", status: "" })),
     runCommand: input.runCommand ?? (async () => ({ stdout: "", stderr: "" })),
     writeContract:
@@ -61,8 +73,9 @@ function buildDeps(input: {
 }
 
 describe("A-04 approval package", () => {
-  it("builds a frozen approval package with contract identity and expected scope", () => {
+  it("builds a frozen approval package with explicit scenario, path, and artifact expectations", () => {
     const pkg = buildApprovalPackage({
+      repoRoot: "/repo",
       contract: buildContract(),
       contractPath: "/repo/.validation-runs/contracts/A-04.json",
       contractSha256: "abc123",
@@ -77,6 +90,17 @@ describe("A-04 approval package", () => {
       sha256: "abc123",
       schemaValid: true,
     });
+    expect(pkg.workingDirectory).toBe("/repo");
+    expect(pkg.paths).toEqual({
+      contractPath: "/repo/.validation-runs/contracts/A-04.json",
+      fixturePath: "/repo/.validation-runs/fixture-01",
+      runDir: "/repo/.validation-runs/runs/A-04",
+      evidenceDir: "/repo/.validation-runs/evidence/A-04",
+    });
+    expect(pkg.scenario).toBe("A");
+    expect(pkg.attempts).toBe(1);
+    expect(pkg.automaticRetries).toBe("none");
+    expect(pkg.claudePhases).toEqual(["plan", "execute", "verify"]);
     expect(pkg.expectedFileScope).toEqual(["src/counter.js", "test/counter.test.js"]);
     expect(pkg.expectedDiffScope).toEqual(["src/**", "test/**"]);
     expect(pkg.executionPolicy).toEqual({
@@ -84,6 +108,31 @@ describe("A-04 approval package", () => {
       perAttemptTimeoutMs: 600000,
       totalRuntimeBudgetMs: 1200000,
       partialOutcomeRecoveryWindowMs: 5000,
+    });
+    expect(pkg.expectedArtifacts).toEqual({
+      runDir: [
+        "loop-contract.json",
+        "loop-state.json",
+        "events.jsonl",
+        "attempts/1/plan.json",
+        "attempts/1/execution.json",
+        "attempts/1/verify.json",
+        "attempts/1/diff.patch",
+        "attempts/1/stdout-stderr.log",
+      ],
+      evidenceDir: ["artifacts.json", "observations.json"],
+    });
+    expect(pkg.expectedReviewOutputs).toEqual({
+      verifierType: "agent",
+      requiredChecks: ["npm test"],
+      expectedEvidenceArtifactStatuses: {
+        plan: "PRESENT",
+        execution: "PRESENT",
+        verify: "PRESENT",
+        diff: "PRESENT",
+        log: "PRESENT",
+        requiredChecks: "PRESENT",
+      },
     });
     expect(pkg.exactCommand).toEqual([
       "npx",
@@ -108,6 +157,7 @@ describe("A-04 approval package", () => {
   it("rejects approval packages built from a non-A-04 execution policy", () => {
     expect(() =>
       buildApprovalPackage({
+        repoRoot: "/repo",
         contract: buildContract({ tokenBudget: 1 }),
         contractPath: "/repo/.validation-runs/contracts/A-04.json",
         contractSha256: "abc123",
@@ -124,6 +174,7 @@ describe("A-04 approval package", () => {
 
     expect(() =>
       buildApprovalPackage({
+        repoRoot: "/repo",
         contract: {
           ...contract,
           executionPolicy: {
@@ -178,6 +229,22 @@ describe("A-04 approval package", () => {
     ]);
   });
 
+  it.each([
+    ["run directory", "/repo/.validation-runs/runs/A-04/pre-approval/contract.json"],
+    ["evidence directory", "/repo/.validation-runs/evidence/A-04/pre-approval/contract.json"],
+  ])("rejects contract paths inside the %s", async (label, contractPath) => {
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      prepareA04(
+        buildOptions({}, { contractPath }),
+        buildDeps({ runCommand }),
+      ),
+    ).rejects.toThrow(`contract path must not be inside ${label}`);
+
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
   it("refuses execution policies that do not match the fixed A-04 envelope", async () => {
     const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
 
@@ -191,7 +258,7 @@ describe("A-04 approval package", () => {
     expect(runCommand).not.toHaveBeenCalled();
   });
 
-  it("refuses to start deterministic preflight when repo root already has tracked changes", async () => {
+  it("refuses to start deterministic preflight when repo root already has changes", async () => {
     const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
 
     await expect(
@@ -202,7 +269,7 @@ describe("A-04 approval package", () => {
           runCommand,
         }),
       ),
-    ).rejects.toThrow(/repo root must have no tracked changes before deterministic A-04 preflight/);
+    ).rejects.toThrow(/repo root must have no changes before deterministic A-04 preflight/);
 
     expect(runCommand).not.toHaveBeenCalled();
   });
@@ -229,6 +296,60 @@ describe("A-04 approval package", () => {
         }),
       ),
     ).rejects.toThrow(/deterministic A-04 preflight must leave the main checkout unchanged/);
+
+    expect(runCommand).toHaveBeenCalledTimes(5);
+    expect(writeContract).not.toHaveBeenCalled();
+  });
+
+  it("fails when deterministic preflight creates an untracked file in the main checkout", async () => {
+    const writeContract = vi.fn(async () => ({ contract: buildContract(), sha256: "abc123" }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+    let repoRootReads = 0;
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          readRepoTrackedState: async () => {
+            repoRootReads += 1;
+            if (repoRootReads === 1) {
+              return { head: "repo-head", status: "" };
+            }
+
+            return { head: "repo-head", status: "?? scratch.txt" };
+          },
+          runCommand,
+          writeContract,
+        }),
+      ),
+    ).rejects.toThrow(/deterministic A-04 preflight must leave the main checkout unchanged/);
+
+    expect(runCommand).toHaveBeenCalledTimes(5);
+    expect(writeContract).not.toHaveBeenCalled();
+  });
+
+  it("fails when fixture becomes dirty during deterministic preflight", async () => {
+    const writeContract = vi.fn(async () => ({ contract: buildContract(), sha256: "abc123" }));
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
+    let fixtureReads = 0;
+
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          assertCleanFixture: async () => {
+            fixtureReads += 1;
+            if (fixtureReads === 1) {
+              return { head: "fixture-head", status: "" };
+            }
+
+            return { head: "fixture-head", status: " M src/counter.js" };
+          },
+          runCommand,
+          writeContract,
+        }),
+      ),
+    ).rejects.toThrow(/fixture must remain clean through final A-04 pre-approval/);
 
     expect(runCommand).toHaveBeenCalledTimes(5);
     expect(writeContract).not.toHaveBeenCalled();
@@ -292,6 +413,17 @@ describe("A-04 approval package", () => {
         sha256: "abc123",
         schemaValid: true,
       },
+      workingDirectory: "/repo",
+      paths: {
+        contractPath: "/repo/.validation-runs/contracts/A-04.json",
+        fixturePath: "/repo/.validation-runs/fixture-01",
+        runDir: "/repo/.validation-runs/runs/A-04",
+        evidenceDir: "/repo/.validation-runs/evidence/A-04",
+      },
+      scenario: "A",
+      attempts: 1,
+      automaticRetries: "none",
+      claudePhases: ["plan", "execute", "verify"],
       executionPolicy: {
         tokenBudget: 550000,
         perAttemptTimeoutMs: 600000,
@@ -300,6 +432,31 @@ describe("A-04 approval package", () => {
       },
       expectedFileScope: ["src/counter.js", "test/counter.test.js"],
       expectedDiffScope: ["src/**", "test/**"],
+      expectedArtifacts: {
+        runDir: [
+          "loop-contract.json",
+          "loop-state.json",
+          "events.jsonl",
+          "attempts/1/plan.json",
+          "attempts/1/execution.json",
+          "attempts/1/verify.json",
+          "attempts/1/diff.patch",
+          "attempts/1/stdout-stderr.log",
+        ],
+        evidenceDir: ["artifacts.json", "observations.json"],
+      },
+      expectedReviewOutputs: {
+        verifierType: "agent",
+        requiredChecks: ["npm test"],
+        expectedEvidenceArtifactStatuses: {
+          plan: "PRESENT",
+          execution: "PRESENT",
+          verify: "PRESENT",
+          diff: "PRESENT",
+          log: "PRESENT",
+          requiredChecks: "PRESENT",
+        },
+      },
       exactCommand: ["npx", "--no-install", "tsx", "validation/v1/scripts/run-scenario.ts"],
       usageEvidenceExpectations: ["usage evidence is normalized in artifacts"],
       invariants: {
