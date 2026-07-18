@@ -208,17 +208,37 @@ function resolveTimeoutMs(id: ScenarioId, timeoutMs?: number): number {
   return timeoutMs;
 }
 
+function pickRuntimeExecutionPolicyOverrides(
+  executionPolicyOverrides: ExecutionPolicyOverrides = {},
+): ExecutionPolicyOverrides {
+  return {
+    ...(executionPolicyOverrides.tokenBudget !== undefined
+      ? { tokenBudget: executionPolicyOverrides.tokenBudget }
+      : {}),
+    ...(executionPolicyOverrides.perAttemptTimeoutMs !== undefined
+      ? { perAttemptTimeoutMs: executionPolicyOverrides.perAttemptTimeoutMs }
+      : {}),
+    ...(executionPolicyOverrides.totalRuntimeBudgetMs !== undefined
+      ? { totalRuntimeBudgetMs: executionPolicyOverrides.totalRuntimeBudgetMs }
+      : {}),
+    ...(executionPolicyOverrides.partialOutcomeRecoveryWindowMs !== undefined
+      ? { partialOutcomeRecoveryWindowMs: executionPolicyOverrides.partialOutcomeRecoveryWindowMs }
+      : {}),
+  };
+}
+
 function buildExecutionPolicy(
   id: ScenarioId,
   timeoutMs?: number,
   executionPolicyOverrides: ExecutionPolicyOverrides = {},
 ): LoopContract["executionPolicy"] {
+  const runtimeOverrides = pickRuntimeExecutionPolicyOverrides(executionPolicyOverrides);
   const perAttemptTimeoutMs =
-    executionPolicyOverrides.perAttemptTimeoutMs ?? resolveTimeoutMs(id, timeoutMs);
+    runtimeOverrides.perAttemptTimeoutMs ?? resolveTimeoutMs(id, timeoutMs);
 
   return {
     ...DEFAULT_EXECUTION_POLICY,
-    ...executionPolicyOverrides,
+    ...runtimeOverrides,
     perAttemptTimeoutMs,
   };
 }

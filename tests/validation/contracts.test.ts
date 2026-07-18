@@ -96,6 +96,25 @@ describe("validation scenario rendering", () => {
     });
   });
 
+  it("ignores unapproved runtime execution-policy overrides", () => {
+    const contract = renderScenario("A", {
+      repoPath: fixtureRepo,
+      executionPolicyOverrides: {
+        tokenBudget: 550000,
+        maxAttempts: 99,
+        autonomyLevel: "L4",
+        worktreeRequired: false,
+      } as any,
+    });
+
+    expect(contract.executionPolicy).toMatchObject({
+      autonomyLevel: "L2",
+      maxAttempts: 1,
+      tokenBudget: 550000,
+      worktreeRequired: true,
+    });
+  });
+
   it("rejects non-positive execution-policy overrides", () => {
     expect(() =>
       renderScenario("A", {
