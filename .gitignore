@@ -20,6 +20,8 @@ reference/superpowers/
 __pycache__/
 node_modules/
 
+dist/
+
 # reference
 reference/awesome-loop-engineering
 reference/ccmem

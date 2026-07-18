@@ -8,6 +8,7 @@
 
 <!-- How the user likes things done. Code style, tools, patterns, communication. -->
 - Prefer roadmap/milestone naming as `V1 / V2 / V3`; dislikes `V1.5` because it feels awkward and less clean.
+- 后续与用户讨论 ccloop 时使用中文，除非用户明确要求其他语言。
 
 
 ## Key Learnings
@@ -22,6 +23,10 @@
 - Task briefs may show extensionless example imports, but this TypeScript ESM worktree still expects `.js` import specifiers in source and test files to match the established Vitest/Node convention.
 - Task 7 path policy uses intentionally minimal matching semantics: `pattern/**` means prefix match on that directory, `**` matches anything, denylist checks run before allowlist checks, and max-files overflow triggers a human gate.
 - Task 8 controller orchestration preserves the current attempt worktree on `blocked_waiting_human`, but cleans up retryable and terminal non-human attempts after artifact/state persistence.
+- V1 already covers the core Loop Engineering safety primitives (isolated worktrees, maker/checker separation, explicit stop budgets, durable run evidence); the next reliability boundary is real Claude E2E validation followed by resume/reconciliation before any durable scheduler.
+- Evidence-grade completion must combine independent verifier output, structured artifact validation, required-event completeness, typed termination reasons, and immutable attempt lineage; a completion token or process exit code is only a signal, never sufficient proof.
+- Artifact lifecycle must distinguish mutable staging, validated attempt artifacts, and a sealed evidence bundle; promotion requires manifest validation, final bundles are immutable, cleanup leaves tombstones, and the last recoverable copy cannot be deleted before durable publication is confirmed.
+- Keep evidence-harness concerns separate from V1 product behavior: first derive manifests, terminal summaries, hashes, and cleanup observations from existing runDir artifacts; only promote a mechanism into ccloop after a real run proves a product gap.
 
 - Evidence-first validation harness files for V1 live under `validation/v1/**` with matching focused Vitest coverage under `tests/validation/**`, and the disposable smoke repo root stays under ignored `.validation-runs/` with a strict do-not-overwrite boundary.
 
@@ -34,8 +39,14 @@
 
 - [2026-07-15] When generating TypeScript files via Python in this implementation worktree, double-escape intended `\n` sequences so JSONL/template literals do not become accidental physical newlines.
 - [2026-07-17] When a task brief says to preserve a specific ignore entry from the source checkout, explicitly add or verify that entry in the isolated worktree before claiming the ignore update is complete.
+- [2026-07-18] For non-PDF Read calls, omit `pages` entirely; never pass an empty string. This has recurred despite prior buglog entries.
+- [2026-07-18] Before the session's first Bash call, state the current request and exactly what the command verifies so GateGuard does not block it.
+- [2026-07-18] The available reviewer agent is `ecc:code-reviewer`; the unnamespaced `code-reviewer` type is not registered in this environment.
+- [2026-07-18] Validation CLI tests must create their own temporary Git repositories; never depend on ignored `.validation-runs/fixture-smoke`, which may exist in one worktree and not another. Compare canonical paths with `fs.realpath` on macOS because `/var` resolves through `/private/var`.
 
 ## Decision Log
 
 <!-- Significant technical decisions with rationale. Why X was chosen over Y. -->
 - [2026-07-14] V1 implementation stack: TypeScript CLI. Why: best fit for local orchestration, Claude adapter integration, JSON/JSONL state, and fast iteration in this repository.
+- [2026-07-17] Next milestone uses an evidence-first sequence: manually exercise real Claude success, human-gate, and interrupted/partial-recovery paths before automating them. Why: automation should encode observed runtime behavior rather than assumptions.
+- [2026-07-18] Claude usage evidence is persisted in standard phase artifacts, not a validation sidecar or full raw envelope. Why: controller accounting and audit evidence must stay phase/attempt-bound without retaining unnecessary or potentially sensitive response data.
