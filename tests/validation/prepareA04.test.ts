@@ -1,8 +1,11 @@
-import { resolve } from "node:path";
+import { mkdtemp, mkdir, lstat, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   A04_APPROVED_EXECUTION_POLICY,
   buildA04RunCommand,
+  materializeVerifiedCheckoutDependencies,
   buildApprovalPackage,
   type ReadOnlyInspection,
   prepareA04,
@@ -126,6 +129,30 @@ function buildDeps(input: {
       })),
   };
 }
+
+describe("verified checkout dependency materialization", () => {
+  it("copies node_modules into the verified checkout without leaving a symlink to the main checkout", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-a04-node-modules-"));
+    const repoRoot = join(tempRoot, "repo");
+    const worktreePath = join(tempRoot, "verified-checkout");
+    const sourcePackageDir = join(repoRoot, "node_modules", "demo-package");
+    const sourcePackageFile = join(sourcePackageDir, "index.js");
+    const copiedPackageFile = join(worktreePath, "node_modules", "demo-package", "index.js");
+
+    await mkdir(sourcePackageDir, { recursive: true });
+    await mkdir(worktreePath, { recursive: true });
+    await writeFile(sourcePackageFile, 'module.exports = "source";\n');
+
+    await materializeVerifiedCheckoutDependencies(repoRoot, worktreePath);
+
+    const nodeModulesStats = await lstat(join(worktreePath, "node_modules"));
+    expect(nodeModulesStats.isSymbolicLink()).toBe(false);
+    expect(await readFile(copiedPackageFile, "utf8")).toBe('module.exports = "source";\n');
+
+    await writeFile(sourcePackageFile, 'module.exports = "mutated";\n');
+    expect(await readFile(copiedPackageFile, "utf8")).toBe('module.exports = "source";\n');
+  });
+});
 
 describe("A-04 approval package", () => {
   it("builds a frozen approval package with explicit scenario, path, and artifact expectations", () => {

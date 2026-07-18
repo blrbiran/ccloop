@@ -24,8 +24,8 @@
   - Session action log with short checkpoint entries.
   - Append-only markdown table / low token cost.
 
-- validation/v1/lib/a04.ts — Builds A-04 deterministic preflight results with main-branch gating, spec-6.1 read-only preservation inspection, preserved verified-checkout approval packages, and final overlap/on-disk contract guards (~1800 tok)
+- validation/v1/lib/a04.ts — Builds A-04 deterministic preflight results with main-branch gating, spec-6.1 read-only preservation inspection, preserved verified-checkout approval packages, self-contained dependency materialization, and final overlap/on-disk contract guards (~1900 tok)
 
 - validation/v1/scripts/prepare-a04.ts — CLI for non-paid A-04 preparation and approval package output (~400 tok)
 
-- tests/validation/prepareA04.test.ts — Covers A-04 main-branch gating, read-only inspection, preserved verified checkout binding, spec-locked phase order, explicit approval-package fields, overlap guards, and final on-disk contract gating (~2200 tok)
+- tests/validation/prepareA04.test.ts — Covers A-04 main-branch gating, read-only inspection, preserved verified checkout binding, self-contained dependency copy semantics, spec-locked phase order, explicit approval-package fields, overlap guards, and final on-disk contract gating (~2350 tok)

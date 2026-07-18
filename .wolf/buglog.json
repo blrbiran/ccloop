@@ -209,5 +209,27 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-18T13:00:05.557621+00:00"
+  },
+  {
+    "id": "bug-011",
+    "timestamp": "2026-07-18T13:50:14.999356+00:00",
+    "error_message": "Final A-04 review found the preserved verified checkout still symlinked node_modules back to the main checkout, so later dependency changes could silently change the approved runtime environment.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "defaultCreateMainVerificationCheckout created a symbolic link from the preserved verified checkout's node_modules to the operator checkout instead of materializing local dependencies.",
+    "fix": "Replaced the node_modules symlink with recursive local dependency copying for the verified checkout, added cleanup on copy failure, and added a regression test proving the copied checkout stays independent after source dependency changes.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "verified-checkout",
+      "node_modules",
+      "self-contained-runtime",
+      "review-fix"
+    ],
+    "related_bugs": [
+      "bug-010"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T13:50:14.999356+00:00"
   }
 ]

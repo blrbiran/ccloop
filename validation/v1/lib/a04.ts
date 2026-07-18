@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -324,28 +324,46 @@ async function defaultInspectReadOnlyInspection(repoRoot: string): Promise<ReadO
   };
 }
 
+export async function materializeVerifiedCheckoutDependencies(repoRoot: string, worktreePath: string): Promise<void> {
+  const sourceNodeModulesPath = resolve(repoRoot, "node_modules");
+  if (!(await pathExists(sourceNodeModulesPath))) {
+    return;
+  }
+
+  await cp(sourceNodeModulesPath, resolve(worktreePath, "node_modules"), {
+    recursive: true,
+    dereference: true,
+    force: false,
+    errorOnExist: true,
+  });
+}
+
 async function defaultCreateMainVerificationCheckout(repoRoot: string): Promise<IsolatedVerificationCheckout> {
   const worktreePath = await mkdtemp(join(tmpdir(), "ccloop-a04-main-"));
   await execFileAsync("git", ["-C", repoRoot, "worktree", "add", "--detach", worktreePath, "HEAD"], {
     maxBuffer: 10 * 1024 * 1024,
   });
 
-  const sourceNodeModulesPath = resolve(repoRoot, "node_modules");
-  if (await pathExists(sourceNodeModulesPath)) {
-    await symlink(sourceNodeModulesPath, resolve(worktreePath, "node_modules"));
-  }
-
-  const head = await gitOutput(worktreePath, ["rev-parse", "HEAD"]);
-
-  return {
-    path: worktreePath,
-    head,
-    cleanup: async () => {
-      await execFileAsync("git", ["-C", repoRoot, "worktree", "remove", "--force", worktreePath], {
-        maxBuffer: 10 * 1024 * 1024,
-      });
-    },
+  const cleanup = async () => {
+    await execFileAsync("git", ["-C", repoRoot, "worktree", "remove", "--force", worktreePath], {
+      maxBuffer: 10 * 1024 * 1024,
+    });
   };
+
+  try {
+    await materializeVerifiedCheckoutDependencies(repoRoot, worktreePath);
+
+    const head = await gitOutput(worktreePath, ["rev-parse", "HEAD"]);
+
+    return {
+      path: worktreePath,
+      head,
+      cleanup,
+    };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
 }
 
 async function defaultRunCommand(command: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {

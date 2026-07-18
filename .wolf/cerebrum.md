@@ -2,7 +2,7 @@
 
 > OpenWolf's learning memory. Updated automatically as the AI learns from interactions.
 > Do not edit manually unless correcting an error.
-> Last updated: 2026-07-17
+> Last updated: 2026-07-18
 
 ## User Preferences
 
@@ -37,6 +37,7 @@
 - A-04 preparation is now intentionally bound to the `main` checkout and its phase order is explicit: read-only preservation inspection -> main deterministic verification -> freshness check -> contract render -> focused evidence-chain regressions -> final pre-approval gate.
 - The final A-04 pre-approval gate must re-read the frozen contract file from disk, schema-parse it, and recompute its sha256 before emitting the approval package; in-memory contract data alone is not trustworthy enough for approval output.
 - A-04 approval output must preserve the isolated verified checkout instead of cleaning it up on success, and the emitted `workingDirectory` plus `exactCommand` must target that checkout's `validation/v1/scripts/run-scenario.ts` path so the approved runnable revision cannot drift from the revision that passed deterministic verification.
+- A-04 preserved verified checkouts must materialize their own `node_modules` tree when the source checkout already has dependencies; symlinking back to the operator checkout breaks the approval package's claim that the preserved runnable environment is frozen and mechanically truthful.
 - A-04 spec 6.1 read-only inspection is intentionally lightweight but mandatory: before deterministic verification, confirm the retained `main` checkout, retained `evidence-first-v1` worktree, backup branch, stashes, and preserved `.validation-runs/` recovery evidence are still present and readable.
 - In `validation/v1/lib/scenarios.ts`, `executionPolicyOverrides` is a Scenario A-only surface; non-A scenarios must reject it at runtime even if a caller bypasses TypeScript.
 
