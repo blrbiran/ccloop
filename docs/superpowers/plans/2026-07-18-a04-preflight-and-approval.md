@@ -277,7 +277,7 @@ describe("A-04 approval package", () => {
   });
 
   it("refuses to prepare when run or evidence paths already exist", async () => {
-    const runCommand = vi.fn();
+    const runCommand = vi.fn(async () => ({ stdout: "", stderr: "" }));
 
     await expect(
       prepareA04(
@@ -304,7 +304,24 @@ describe("A-04 approval package", () => {
       ),
     ).rejects.toThrow(/already exists/);
 
-    expect(runCommand).not.toHaveBeenCalled();
+    expect(runCommand.mock.calls).toEqual([
+      ["npm", ["test"], "/repo"],
+      ["npm", ["run", "typecheck"], "/repo"],
+      ["npm", ["run", "build"], "/repo"],
+      ["npm", ["test", "--", "--run", "tests/validation/contracts.test.ts"], "/repo"],
+      [
+        "npm",
+        [
+          "test",
+          "--",
+          "--run",
+          "tests/runtime/claude/subprocessClaudeAdapter.test.ts",
+          "tests/controller/runLoop.integration.test.ts",
+          "tests/validation/evidence.test.ts",
+        ],
+        "/repo",
+      ],
+    ]);
   });
 
   it("runs deterministic preflight commands in the required order", async () => {
@@ -486,8 +503,8 @@ async function defaultWriteContract(options: Pick<A04PrepareOptions, "fixturePat
 
 最后实现 `prepareA04(...)`，顺序必须是：
 1. assert fixture clean；
-2. assert `contractPath`/`runDir`/`evidenceDir` freshness；
-3. 运行 5 条 deterministic commands；
+2. 运行 5 条 deterministic commands；
+3. assert `contractPath`/`runDir`/`evidenceDir` freshness；
 4. 写 contract；
 5. 生成 approval package；
 6. 返回 package + command list。  

@@ -368,6 +368,46 @@ After a successful A-04, continue to B, then use A/B event timestamps to calibra
 - Committed product surface verdict: `continue original branch tightening toward merge`
 - This verdict does not authorize a paid Scenario A invocation.
 
+### 2026-07-19 merge-surface classification
+
+#### Committed changes worth preserving
+- `validation/v1/lib/a04.ts`
+- `validation/v1/lib/scenarios.ts`
+- `validation/v1/scripts/prepare-a04.ts`
+- `tests/validation/prepareA04.test.ts`
+- `tests/validation/contracts.test.ts`
+- `validation/v1/README.md`
+- `docs/handover/ccloop-handover.md`
+- `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`
+
+#### Committed branch-internal changes not intended for `main`
+- `.superpowers/sdd/task-2-report.md`
+- `.superpowers/sdd/task-3-report.md`
+- `.wolf/anatomy.md`
+- `.wolf/buglog.json`
+- `.wolf/cerebrum.md`
+- `.wolf/memory.md`
+
+#### Current uncommitted merge-surface
+- `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`
+
+#### Current uncommitted local-only
+- `.superpowers/sdd/progress.md`
+- `.superpowers/sdd/task-3-report.md`
+- `.wolf/memory.md`
+
+#### Current uncommitted unresolved
+- `package-lock.json`
+
+- Final branch verdict: `preserve branch but add one more tightening pass`
+
+#### Next-step recommendation
+- Keep using `.worktrees/a04-preflight-approval` as the assessment source of truth.
+- Carry only the files listed under committed changes worth preserving toward `main`.
+- Leave branch-internal OpenWolf and `.superpowers/sdd/` files out of the merge surface unless a later review proves one is required.
+- Resolve `package-lock.json` explicitly before any merge/backport decision.
+- Do not run a paid Scenario A call from this branch until a separate approval package is reviewed again.
+
 ## 9. Compact Architecture and Safety Boundaries
 
 ```text
