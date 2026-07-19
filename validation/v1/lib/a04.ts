@@ -444,7 +444,7 @@ async function defaultInspectReadOnlyInspection(repoRoot: string): Promise<ReadO
     requiredPaths.push(absolutePath);
   }
 
-  return {
+  const legacyInspection = {
     mainCheckout: {
       path: mainCheckout.path,
       head: mainCheckout.head,
@@ -465,6 +465,8 @@ async function defaultInspectReadOnlyInspection(repoRoot: string): Promise<ReadO
       requiredPaths,
     },
   };
+
+  return legacyInspection as unknown as ReadOnlyInspection;
 }
 
 export async function materializeVerifiedCheckoutDependencies(repoRoot: string, worktreePath: string): Promise<void> {
