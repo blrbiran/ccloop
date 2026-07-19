@@ -46,6 +46,8 @@
 
 - A-04 path hardening must use `realpath` containment for frozen adapter configs in both the source repo and preserved verified checkout, and freshness checks must use `lstat` semantics so dangling symlinks count as occupied paths rather than fresh destinations.
 
+- A-04 metadata-backed inspection now treats only the four required docs plus the retained backup branch and contradiction checks as hard blockers; retained stashes, the legacy evidence-first worktree, and its preserved `.validation-runs/` tree are soft signals only, so runtime checks must read current approved document text instead of reviving legacy evidence-path dependencies.
+
 ## Do-Not-Repeat
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->

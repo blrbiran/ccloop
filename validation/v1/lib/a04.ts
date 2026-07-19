@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, stat, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -35,15 +35,12 @@ const A04_REQUIRED_RETAINED_STASH_LINES = [
   "On main: pre-local-merge-evidence-first-v1-2026-07-18",
   "On main: pre-merge local changes 2026-07-16",
 ] as const;
-const A04_REQUIRED_PRESERVED_EVIDENCE_PATHS = [
-  "fixture-01",
-  "contracts/A-01.json",
-  "contracts/A-02.json",
-  "contracts/A-03.json",
-  "evidence/A-01/review.json",
-  "evidence/A-02/review.json",
-  "evidence/A-03/review.json",
-] as const;
+const A04_REQUIRED_METADATA_PATHS = {
+  handoverDoc: "docs/handover/ccloop-handover.md",
+  a04BoundarySpec: "docs/superpowers/specs/2026-07-18-a04-preflight-and-stop-boundaries-design.md",
+  a04BoundaryPlan: "docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md",
+  usageEvidenceSpec: "docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md",
+} as const;
 const A04_RUN_SCENARIO_SCRIPT = "validation/v1/scripts/run-scenario.ts";
 
 export const A04_APPROVED_EXECUTION_POLICY: Readonly<Required<ExecutionPolicyOverrides>> = Object.freeze({
@@ -344,6 +341,76 @@ type GitWorktreeEntry = {
   branch?: string;
 };
 
+function contradictionResult(
+  status: ContradictionStatus,
+  sources: string[],
+): { status: ContradictionStatus; sources: string[] } {
+  return { status, sources };
+}
+
+function classifyRequiredSource(_path: string, body: string | null): RequiredSourceStatus {
+  if (body === null) {
+    return "MISSING";
+  }
+
+  return body.length > 0 ? "PRESENT" : "UNREADABLE";
+}
+
+const A04_REQUIRED_SOURCE_LABELS: Record<keyof MetadataInspectionSummary["requiredSources"], string> = {
+  handoverDoc: "handover doc",
+  a04BoundarySpec: "A-04 boundary spec",
+  a04BoundaryPlan: "A-04 boundary plan",
+  usageEvidenceSpec: "usage-evidence spec",
+  backupBranch: "backup branch",
+};
+
+const A04_CONTRADICTION_CHECK_LABELS: Record<keyof MetadataInspectionSummary["contradictionChecks"], string> = {
+  firstRealPaidScenarioA: "first real paid Scenario A",
+  historicalA01ToA03Diagnoses: "historical A-01 through A-03 diagnoses",
+  localDryRunArtifactsNotHistoricalEvidence: "local dry-run artifacts not historical evidence",
+  paidCallStillRequiresExplicitApproval: "paid call still requires explicit approval",
+};
+
+function evaluateContradictions(input: {
+  handoverDoc: string;
+  a04BoundarySpec: string;
+  a04BoundaryPlan: string;
+  usageEvidenceSpec: string;
+}): MetadataInspectionSummary["contradictionChecks"] {
+  const firstRealPaidScenarioA =
+    input.handoverDoc.includes("No successful real-Claude Scenario A exists yet.") &&
+    input.a04BoundarySpec.includes("Prepare one fresh A-04 Scenario A invocation")
+      ? contradictionResult("CONFIRMED", ["handoverDoc", "a04BoundarySpec"])
+      : contradictionResult("INSUFFICIENT", ["handoverDoc", "a04BoundarySpec"]);
+
+  const historicalA01ToA03Diagnoses =
+    input.handoverDoc.includes("Historical verdict: `INCONCLUSIVE / RUNTIME_VARIANCE`") &&
+    input.usageEvidenceSpec.includes("alter A-01, A-02, or A-03 evidence") &&
+    input.usageEvidenceSpec.includes("no migration or historical reconstruction is attempted")
+      ? contradictionResult("CONFIRMED", ["handoverDoc", "usageEvidenceSpec"])
+      : contradictionResult("INSUFFICIENT", ["handoverDoc", "usageEvidenceSpec"]);
+
+  const localDryRunArtifactsNotHistoricalEvidence =
+    input.handoverDoc.includes("These are **not** preserved real-run evidence.") &&
+    input.a04BoundaryPlan.includes("This branch assessment remains non-paid and non-destructive.")
+      ? contradictionResult("CONFIRMED", ["handoverDoc", "a04BoundaryPlan"])
+      : contradictionResult("INSUFFICIENT", ["handoverDoc", "a04BoundaryPlan"]);
+
+  const paidCallStillRequiresExplicitApproval =
+    input.handoverDoc.includes("Every real call requires separate approval.") &&
+    input.a04BoundarySpec.includes("authorize a real Claude call by itself") &&
+    input.usageEvidenceSpec.includes("It remains a separate paid call requiring explicit approval.")
+      ? contradictionResult("CONFIRMED", ["handoverDoc", "a04BoundarySpec", "usageEvidenceSpec"])
+      : contradictionResult("INSUFFICIENT", ["handoverDoc", "a04BoundarySpec", "usageEvidenceSpec"]);
+
+  return {
+    firstRealPaidScenarioA,
+    historicalA01ToA03Diagnoses,
+    localDryRunArtifactsNotHistoricalEvidence,
+    paidCallStillRequiresExplicitApproval,
+  };
+}
+
 function parseGitWorktreeList(output: string): GitWorktreeEntry[] {
   const entries: GitWorktreeEntry[] = [];
   let current: Partial<GitWorktreeEntry> = {};
@@ -389,84 +456,107 @@ function parseGitWorktreeList(output: string): GitWorktreeEntry[] {
   return entries;
 }
 
-async function assertReadablePath(path: string, label: string): Promise<void> {
-  try {
-    await stat(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(`${label} is missing for A-04 read-only inspection`);
+export async function inspectMetadataBackedA04History(repoRoot: string): Promise<MetadataInspectionSummary> {
+  const mainHead = await gitOutput(repoRoot, ["rev-parse", "HEAD"]);
+
+  const readOptionalText = async (path: string): Promise<string | null> => {
+    try {
+      return await readFile(resolve(repoRoot, path), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+
+      throw error;
     }
+  };
 
-    throw new Error(`${label} must remain readable for A-04 read-only inspection`);
-  }
-}
+  const [handoverDoc, a04BoundarySpec, a04BoundaryPlan, usageEvidenceSpec] = await Promise.all([
+    readOptionalText(A04_REQUIRED_METADATA_PATHS.handoverDoc),
+    readOptionalText(A04_REQUIRED_METADATA_PATHS.a04BoundarySpec),
+    readOptionalText(A04_REQUIRED_METADATA_PATHS.a04BoundaryPlan),
+    readOptionalText(A04_REQUIRED_METADATA_PATHS.usageEvidenceSpec),
+  ]);
 
-async function defaultInspectReadOnlyInspection(repoRoot: string): Promise<ReadOnlyInspection> {
-  const worktrees = parseGitWorktreeList(await gitOutput(repoRoot, ["worktree", "list", "--porcelain"]));
-  const mainCheckout = worktrees.find((entry) => entry.branch === "refs/heads/main");
-  if (!mainCheckout) {
-    throw new Error("A-04 read-only inspection requires the main checkout worktree");
-  }
-
-  const evidenceFirstValidationWorktree = worktrees.find((entry) => entry.branch === "refs/heads/evidence-first-v1");
-  if (!evidenceFirstValidationWorktree) {
-    throw new Error("A-04 read-only inspection requires the retained evidence-first-v1 worktree");
-  }
-
-  await assertReadablePath(mainCheckout.path, "main checkout");
-  await assertReadablePath(evidenceFirstValidationWorktree.path, "evidence-first-v1 worktree");
-
-  let backupBranchHead: string;
+  let backupHead: string | undefined;
+  let mergeBaseWithMain: string | undefined;
+  let distinctFromMain = false;
   try {
-    backupBranchHead = await gitOutput(repoRoot, ["rev-parse", "--verify", `refs/heads/${A04_RETAINED_BACKUP_BRANCH}`]);
+    backupHead = await gitOutput(repoRoot, ["rev-parse", "--verify", `refs/heads/${A04_RETAINED_BACKUP_BRANCH}`]);
+    mergeBaseWithMain = await gitOutput(repoRoot, ["merge-base", "HEAD", `refs/heads/${A04_RETAINED_BACKUP_BRANCH}`]);
+    distinctFromMain = backupHead !== mainHead;
   } catch {
-    throw new Error(`A-04 read-only inspection requires retained backup branch ${A04_RETAINED_BACKUP_BRANCH}`);
+    backupHead = undefined;
+    mergeBaseWithMain = undefined;
+    distinctFromMain = false;
   }
 
   const stashLinesOutput = await gitOutput(repoRoot, ["stash", "list"]);
   const stashLines = stashLinesOutput === "" ? [] : stashLinesOutput.split("\n").map((line) => line.trim()).filter(Boolean);
-  const retainedStashes = A04_REQUIRED_RETAINED_STASH_LINES.map((requiredLine) => {
-    const match = stashLines.find((line) => line.includes(requiredLine));
-    if (!match) {
-      throw new Error(`A-04 read-only inspection requires retained stash matching: ${requiredLine}`);
-    }
+  const worktrees = parseGitWorktreeList(await gitOutput(repoRoot, ["worktree", "list", "--porcelain"]));
+  const legacyWorktree = worktrees.find((entry) => entry.branch === "refs/heads/evidence-first-v1");
 
-    return match;
-  });
+  const contradictionChecks = handoverDoc && a04BoundarySpec && a04BoundaryPlan && usageEvidenceSpec
+    ? evaluateContradictions({ handoverDoc, a04BoundarySpec, a04BoundaryPlan, usageEvidenceSpec })
+    : {
+        firstRealPaidScenarioA: contradictionResult("INSUFFICIENT", []),
+        historicalA01ToA03Diagnoses: contradictionResult("INSUFFICIENT", []),
+        localDryRunArtifactsNotHistoricalEvidence: contradictionResult("INSUFFICIENT", []),
+        paidCallStillRequiresExplicitApproval: contradictionResult("INSUFFICIENT", []),
+      };
 
-  const preservedEvidenceTreePath = resolve(evidenceFirstValidationWorktree.path, ".validation-runs");
-  await assertReadablePath(preservedEvidenceTreePath, "preserved .validation-runs evidence tree");
-  const requiredPaths = [];
-
-  for (const relativePath of A04_REQUIRED_PRESERVED_EVIDENCE_PATHS) {
-    const absolutePath = resolve(preservedEvidenceTreePath, relativePath);
-    await assertReadablePath(absolutePath, `preserved evidence path ${relativePath}`);
-    requiredPaths.push(absolutePath);
-  }
-
-  const legacyInspection = {
+  return {
     mainCheckout: {
-      path: mainCheckout.path,
-      head: mainCheckout.head,
+      status: "PRESENT",
+      path: repoRoot,
+      head: mainHead,
       branch: "main",
     },
-    evidenceFirstValidationWorktree: {
-      path: evidenceFirstValidationWorktree.path,
-      head: evidenceFirstValidationWorktree.head,
-      branch: "evidence-first-v1",
+    requiredSources: {
+      handoverDoc: {
+        status: classifyRequiredSource(A04_REQUIRED_METADATA_PATHS.handoverDoc, handoverDoc),
+        path: resolve(repoRoot, A04_REQUIRED_METADATA_PATHS.handoverDoc),
+      },
+      a04BoundarySpec: {
+        status: classifyRequiredSource(A04_REQUIRED_METADATA_PATHS.a04BoundarySpec, a04BoundarySpec),
+        path: resolve(repoRoot, A04_REQUIRED_METADATA_PATHS.a04BoundarySpec),
+      },
+      a04BoundaryPlan: {
+        status: classifyRequiredSource(A04_REQUIRED_METADATA_PATHS.a04BoundaryPlan, a04BoundaryPlan),
+        path: resolve(repoRoot, A04_REQUIRED_METADATA_PATHS.a04BoundaryPlan),
+      },
+      usageEvidenceSpec: {
+        status: classifyRequiredSource(A04_REQUIRED_METADATA_PATHS.usageEvidenceSpec, usageEvidenceSpec),
+        path: resolve(repoRoot, A04_REQUIRED_METADATA_PATHS.usageEvidenceSpec),
+      },
+      backupBranch: {
+        status: backupHead ? "PRESENT" : "MISSING",
+        name: A04_RETAINED_BACKUP_BRANCH,
+        head: backupHead,
+        mergeBaseWithMain,
+        distinctFromMain,
+      },
     },
-    retainedBackupBranch: {
-      name: A04_RETAINED_BACKUP_BRANCH,
-      head: backupBranchHead,
+    softSignals: {
+      retainedStashes: {
+        status: stashLines.length > 0 ? "PRESENT" : "MISSING",
+        matches: stashLines.filter((line) => A04_REQUIRED_RETAINED_STASH_LINES.some((required) => line.includes(required))),
+      },
+      legacyEvidenceWorktree: {
+        status: legacyWorktree ? "PRESENT" : "MISSING",
+        path: resolve(repoRoot, ".worktrees/evidence-first-v1"),
+      },
+      legacyPreservedEvidenceTree: {
+        status: legacyWorktree && (await pathExists(resolve(legacyWorktree.path, ".validation-runs"))) ? "PRESENT" : "MISSING",
+        path: resolve(repoRoot, ".worktrees/evidence-first-v1/.validation-runs"),
+      },
     },
-    retainedStashes,
-    preservedEvidenceTree: {
-      path: preservedEvidenceTreePath,
-      requiredPaths,
-    },
+    contradictionChecks,
   };
+}
 
-  return legacyInspection as unknown as ReadOnlyInspection;
+async function defaultInspectReadOnlyInspection(repoRoot: string): Promise<MetadataInspectionSummary> {
+  return inspectMetadataBackedA04History(repoRoot);
 }
 
 export async function materializeVerifiedCheckoutDependencies(repoRoot: string, worktreePath: string): Promise<void> {
@@ -960,6 +1050,31 @@ export async function prepareA04(
     [resolvedOptions.contractPath],
   );
   const readOnlyInspection = await deps.inspectReadOnlyInspection(resolvedOptions.repoRoot);
+  for (const [key, source] of Object.entries(readOnlyInspection.requiredSources) as [
+    keyof MetadataInspectionSummary["requiredSources"],
+    MetadataInspectionSummary["requiredSources"][keyof MetadataInspectionSummary["requiredSources"]],
+  ][]) {
+    if (source.status !== "PRESENT") {
+      throw new Error(`${A04_REQUIRED_SOURCE_LABELS[key]} must be present for metadata-backed A-04 inspection`);
+    }
+  }
+
+  if (readOnlyInspection.requiredSources.backupBranch.distinctFromMain !== true) {
+    throw new Error("backup branch must remain a distinct history anchor for metadata-backed A-04 inspection");
+  }
+
+  if (!readOnlyInspection.requiredSources.backupBranch.mergeBaseWithMain) {
+    throw new Error("backup branch must remain locally reachable for metadata-backed A-04 inspection");
+  }
+
+  for (const [key, check] of Object.entries(readOnlyInspection.contradictionChecks) as [
+    keyof MetadataInspectionSummary["contradictionChecks"],
+    MetadataInspectionSummary["contradictionChecks"][keyof MetadataInspectionSummary["contradictionChecks"]],
+  ][]) {
+    if (check.status !== "CONFIRMED") {
+      throw new Error(`${A04_CONTRADICTION_CHECK_LABELS[key]} must be mechanically confirmed for metadata-backed A-04 inspection`);
+    }
+  }
   assertAdapterConfigUnderRepoRoot(resolvedOptions.repoRoot, resolvedOptions.adapterConfigPath);
   await assertAdapterConfigResolvesWithinRoot(
     deps,

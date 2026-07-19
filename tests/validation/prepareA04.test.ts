@@ -756,6 +756,93 @@ describe("A-04 approval package", () => {
     expect(createMainVerificationCheckout).not.toHaveBeenCalled();
   });
 
+  it("does not fail when the legacy evidence worktree is missing but required metadata is present", async () => {
+    const result = await prepareA04(
+      buildOptions(),
+      buildDeps({
+        inspectReadOnlyInspection: async () => ({
+          ...buildReadOnlyInspection(),
+          softSignals: {
+            ...buildReadOnlyInspection().softSignals,
+            legacyEvidenceWorktree: {
+              status: "MISSING",
+              path: "/repo/.worktrees/evidence-first-v1",
+            },
+            legacyPreservedEvidenceTree: {
+              status: "MISSING",
+              path: "/repo/.worktrees/evidence-first-v1/.validation-runs",
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(result.approvalPackage.readOnlyInspection.softSignals.legacyEvidenceWorktree.status).toBe("MISSING");
+  });
+
+  it("fails when the usage-evidence spec is missing", async () => {
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          inspectReadOnlyInspection: async () => ({
+            ...buildReadOnlyInspection(),
+            requiredSources: {
+              ...buildReadOnlyInspection().requiredSources,
+              usageEvidenceSpec: {
+                status: "MISSING",
+                path: "/repo/docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md",
+              },
+            },
+          }),
+        }),
+      ),
+    ).rejects.toThrow(/usage-evidence spec/i);
+  });
+
+  it("fails when contradiction checks are insufficient", async () => {
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          inspectReadOnlyInspection: async () => ({
+            ...buildReadOnlyInspection(),
+            contradictionChecks: {
+              ...buildReadOnlyInspection().contradictionChecks,
+              firstRealPaidScenarioA: {
+                status: "INSUFFICIENT",
+                sources: ["handoverDoc"],
+              },
+            },
+          }),
+        }),
+      ),
+    ).rejects.toThrow(/first real paid scenario a/i);
+  });
+
+  it("fails when the backup branch is not a distinct history anchor", async () => {
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          inspectReadOnlyInspection: async () => ({
+            ...buildReadOnlyInspection(),
+            requiredSources: {
+              ...buildReadOnlyInspection().requiredSources,
+              backupBranch: {
+                status: "PRESENT",
+                name: "backup/evidence-first-v1-before-memory-history-cleanup",
+                head: "main-head",
+                mergeBaseWithMain: "main-head",
+                distinctFromMain: false,
+              },
+            },
+          }),
+        }),
+      ),
+    ).rejects.toThrow(/backup branch/i);
+  });
+
   it("preserves the isolated verified checkout so approval stays bound to the verified runnable revision", async () => {
     const cleanup = vi.fn(async () => {});
     const createMainVerificationCheckout = vi.fn(async () => ({

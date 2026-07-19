@@ -323,5 +323,25 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-18T23:22:27+00:00"
+  },
+  {
+    "id": "bug-016",
+    "timestamp": "2026-07-19T09:30:33.993828+00:00",
+    "error_message": "Focused Task 2 metadata suite still passed when usageEvidenceSpec was missing, contradictionChecks were insufficient, or backupBranch was not a distinct anchor.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "prepareA04 trusted inspectReadOnlyInspection output without enforcing requiredSources/contradictionChecks, and the default inspection still returned a legacy read-only bridge cast to MetadataInspectionSummary.",
+    "fix": "Replaced the legacy read-only cast bridge with inspectMetadataBackedA04History, enforced required metadata/backup-anchor/contradiction gates in prepareA04, and mapped failures to human-readable labels so the focused metadata suite blocks on real summary fields.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "metadata-inspection",
+      "focused-test-failure"
+    ],
+    "related_bugs": [
+      "bug-010"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-19T09:35:49.926636+00:00"
   }
 ]
