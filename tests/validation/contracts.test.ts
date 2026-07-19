@@ -55,6 +55,75 @@ describe("validation scenario rendering", () => {
     expect(contract.executionPolicy.tokenBudget).toBe(50000);
   });
 
+  it("renders scenario A with explicit execution-policy overrides", () => {
+    const contract = renderScenario("A", {
+      repoPath: fixtureRepo,
+      executionPolicyOverrides: {
+        tokenBudget: 550000,
+        perAttemptTimeoutMs: 600000,
+        totalRuntimeBudgetMs: 1200000,
+        partialOutcomeRecoveryWindowMs: 5000,
+      },
+    });
+
+    expect(contract.executionPolicy).toMatchObject({
+      maxAttempts: 1,
+      tokenBudget: 550000,
+      perAttemptTimeoutMs: 600000,
+      totalRuntimeBudgetMs: 1200000,
+      partialOutcomeRecoveryWindowMs: 5000,
+    });
+    expect(contract.objective.taskId).toBe("validation-v1-A");
+    expect(contract.context.targetPaths).toEqual(["src/counter.js", "test/counter.test.js"]);
+  });
+
+  it("keeps non-overridden execution-policy fields unchanged", () => {
+    const contract = renderScenario("A", {
+      repoPath: fixtureRepo,
+      executionPolicyOverrides: {
+        tokenBudget: 550000,
+      },
+    });
+
+    expect(contract.executionPolicy).toMatchObject({
+      autonomyLevel: "L2",
+      maxAttempts: 1,
+      tokenBudget: 550000,
+      perAttemptTimeoutMs: 300000,
+      totalRuntimeBudgetMs: 600000,
+      partialOutcomeRecoveryWindowMs: 3000,
+      worktreeRequired: true,
+    });
+  });
+
+  it("ignores unapproved runtime execution-policy overrides", () => {
+    const contract = renderScenario("A", {
+      repoPath: fixtureRepo,
+      executionPolicyOverrides: {
+        tokenBudget: 550000,
+        maxAttempts: 99,
+        autonomyLevel: "L4",
+        worktreeRequired: false,
+      } as any,
+    });
+
+    expect(contract.executionPolicy).toMatchObject({
+      autonomyLevel: "L2",
+      maxAttempts: 1,
+      tokenBudget: 550000,
+      worktreeRequired: true,
+    });
+  });
+
+  it("rejects non-positive execution-policy overrides", () => {
+    expect(() =>
+      renderScenario("A", {
+        repoPath: fixtureRepo,
+        executionPolicyOverrides: { tokenBudget: 0 },
+      }),
+    ).toThrow();
+  });
+
   it("renders scenario B with a denylisted restricted target and skipped verification artifacts", () => {
     const scenario = getScenario("B");
     const contract = renderScenario("B", optionsFor("B"));
@@ -79,6 +148,21 @@ describe("validation scenario rendering", () => {
     expect(renderScenario("D", optionsFor("D")).executionPolicy.totalRuntimeBudgetMs).toBe(600000);
     expect(renderScenario("C", optionsFor("C")).executionPolicy.partialOutcomeRecoveryWindowMs).toBe(3000);
     expect(renderScenario("D", optionsFor("D")).executionPolicy.partialOutcomeRecoveryWindowMs).toBe(3000);
+  });
+  it.each([
+    ["B", { repoPath: fixtureRepo }],
+    ["C", { repoPath: fixtureRepo, timeoutMs: 1234 }],
+    ["D", { repoPath: fixtureRepo, timeoutMs: 1234 }],
+    ["E", { repoPath: fixtureRepo }],
+  ] as const)("rejects execution-policy overrides for non-A scenario %s", (id, options) => {
+    expect(() =>
+      renderScenario(id, {
+        ...options,
+        executionPolicyOverrides: {
+          perAttemptTimeoutMs: 4321,
+        },
+      } as any),
+    ).toThrow(/executionPolicyOverrides are only supported for scenario A/);
   });
 
   it("renders scenario E with src-only writes and required tests", () => {

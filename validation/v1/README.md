@@ -44,6 +44,37 @@ Expected preflight result: tests, typecheck, and build succeed; `claude --versio
 
 If `npm ci` prints audit or vulnerability output, treat it as observational only. It does not authorize `npm audit fix`, `npm audit fix --force`, editing `package.json`, editing `package-lock.json`, or any other dependency change. Stop and report the finding instead.
 
+## A-04 mechanical prepare (no paid call)
+
+Run this command from the repository root while the current checkout is on branch `main`. `prepare-a04.ts` now freezes the approved main revision, runs deterministic verification in an isolated temporary checkout based on that revision, and leaves the operator's main checkout out of the `npm test` / `npm run typecheck` / `npm run build` path.
+
+```bash
+npx --no-install tsx validation/v1/scripts/prepare-a04.ts \
+  --fixture .validation-runs/fixture-01 \
+  --contract .validation-runs/contracts/A-04.json \
+  --run-dir .validation-runs/runs/A-04 \
+  --evidence-dir .validation-runs/evidence/A-04 \
+  --adapter-config examples/v1/claude-adapter-config.json \
+  --token-budget 550000 \
+  --per-attempt-timeout-ms 600000 \
+  --total-runtime-budget-ms 1200000 \
+  --partial-recovery-window-ms 5000
+```
+
+Expected result:
+- a spec 6.1 read-only inspection succeeds first, confirming the retained `main` checkout, retained `evidence-first-v1` worktree, backup branch, stashes, and preserved `.validation-runs/` recovery evidence are still present and readable;
+- main deterministic verification (`npm test`, `npm run typecheck`, `npm run build`) passes next inside an isolated temporary checkout based on the verified `main` revision, with `node_modules` copied locally into that checkout when present so the preserved runtime environment stays self-contained;
+- the A-04 freshness check confirms the fixture is clean and the contract/run/evidence paths are still fresh before contract render;
+- `.validation-runs/contracts/A-04.json` is created once and schema-validates as Scenario A with only the approved A-04 execution-policy fields overridden;
+- the focused evidence-chain regression set runs after contract render and before the final pre-approval gate;
+- the final pre-approval gate re-reads `.validation-runs/contracts/A-04.json` from disk, re-parses it under schema, and recomputes its sha256 before copying that exact contract into the preserved verified checkout;
+- `.validation-runs/runs/A-04/` and `.validation-runs/evidence/A-04/` still do not exist;
+- stdout prints an approval package containing the preserved verified checkout path/head, the read-only inspection results, and an exact command whose runnable `run-scenario.ts` target and `--contract` argument both resolve inside that verified checkout rather than the operator checkout; the preserved checkout does not symlink `node_modules` back to the operator checkout, `--adapter-config` must realpath-resolve under the repo root (including through any symlink target) and realpath-resolve inside that preserved checkout so the approved command cannot drift to an external config, and `mainCheckoutMustRemainUnchanged: true` is backed by a deterministic repo snapshot that catches ignored-file drift such as `dist/**`.
+
+`.validation-runs/contracts/A-04.json` in this worktree is a local non-paid prepare artifact, not preserved real-run evidence.
+Passing focused checks on this branch does not by itself authorize a paid Scenario A call.
+`prepare-a04.ts` must not invoke Claude or create `review.json`.
+
 ## Evidence Files and Status Definitions
 
 The deterministic harness writes these review inputs under each evidence directory:

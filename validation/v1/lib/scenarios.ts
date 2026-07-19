@@ -8,10 +8,30 @@ export type ScenarioDefinition = {
   expectedArtifacts: Record<"plan" | "execution" | "verify" | "diff" | "log" | "requiredChecks", ArtifactExpectation>;
 };
 
-type RenderOptions = {
+export type ExecutionPolicyOverrides = Partial<
+  Pick<
+    LoopContract["executionPolicy"],
+    | "tokenBudget"
+    | "perAttemptTimeoutMs"
+    | "totalRuntimeBudgetMs"
+    | "partialOutcomeRecoveryWindowMs"
+  >
+>;
+
+type BaseRenderOptions = {
   repoPath: string;
   timeoutMs?: number;
 };
+
+type RenderScenarioAOptions = BaseRenderOptions & {
+  executionPolicyOverrides?: ExecutionPolicyOverrides;
+};
+
+type RenderScenarioNonAOptions = BaseRenderOptions & {
+  executionPolicyOverrides?: never;
+};
+
+type RenderOptions = RenderScenarioAOptions | RenderScenarioNonAOptions;
 
 type ScenarioSpec = ScenarioDefinition & {
   successCondition: string;
@@ -197,17 +217,39 @@ function resolveTimeoutMs(id: ScenarioId, timeoutMs?: number): number {
   return timeoutMs;
 }
 
-function buildExecutionPolicy(id: ScenarioId, timeoutMs?: number): LoopContract["executionPolicy"] {
-  const perAttemptTimeoutMs = resolveTimeoutMs(id, timeoutMs);
+function pickRuntimeExecutionPolicyOverrides(
+  executionPolicyOverrides: ExecutionPolicyOverrides = {},
+): ExecutionPolicyOverrides {
+  return {
+    ...(executionPolicyOverrides.tokenBudget !== undefined
+      ? { tokenBudget: executionPolicyOverrides.tokenBudget }
+      : {}),
+    ...(executionPolicyOverrides.perAttemptTimeoutMs !== undefined
+      ? { perAttemptTimeoutMs: executionPolicyOverrides.perAttemptTimeoutMs }
+      : {}),
+    ...(executionPolicyOverrides.totalRuntimeBudgetMs !== undefined
+      ? { totalRuntimeBudgetMs: executionPolicyOverrides.totalRuntimeBudgetMs }
+      : {}),
+    ...(executionPolicyOverrides.partialOutcomeRecoveryWindowMs !== undefined
+      ? { partialOutcomeRecoveryWindowMs: executionPolicyOverrides.partialOutcomeRecoveryWindowMs }
+      : {}),
+  };
+}
 
-  if (id === "C" || id === "D") {
-    return {
-      ...DEFAULT_EXECUTION_POLICY,
-      perAttemptTimeoutMs,
-    };
-  }
+function buildExecutionPolicy(
+  id: ScenarioId,
+  timeoutMs?: number,
+  executionPolicyOverrides: ExecutionPolicyOverrides = {},
+): LoopContract["executionPolicy"] {
+  const runtimeOverrides = pickRuntimeExecutionPolicyOverrides(executionPolicyOverrides);
+  const perAttemptTimeoutMs =
+    runtimeOverrides.perAttemptTimeoutMs ?? resolveTimeoutMs(id, timeoutMs);
 
-  return { ...DEFAULT_EXECUTION_POLICY };
+  return {
+    ...DEFAULT_EXECUTION_POLICY,
+    ...runtimeOverrides,
+    perAttemptTimeoutMs,
+  };
 }
 
 export function getScenario(id: ScenarioId): ScenarioDefinition {
@@ -219,8 +261,23 @@ export function getScenario(id: ScenarioId): ScenarioDefinition {
   };
 }
 
-export function renderScenario(id: ScenarioId, options: RenderOptions): LoopContract {
+function assertExecutionPolicyOverridesAllowed(
+  id: ScenarioId,
+  options: RenderOptions,
+): ExecutionPolicyOverrides | undefined {
+  if (id !== "A" && options.executionPolicyOverrides !== undefined) {
+    throw new Error("executionPolicyOverrides are only supported for scenario A");
+  }
+
+  return options.executionPolicyOverrides;
+}
+
+export function renderScenario<T extends ScenarioId>(
+  id: T,
+  options: T extends "A" ? RenderScenarioAOptions : RenderScenarioNonAOptions,
+): LoopContract {
   const scenario = scenarioCatalog[id];
+  const executionPolicyOverrides = assertExecutionPolicyOverridesAllowed(id, options);
 
   return loopContractSchema.parse({
     objective: {
@@ -236,7 +293,7 @@ export function renderScenario(id: ScenarioId, options: RenderOptions): LoopCont
       buildTestCommands: [...scenario.buildTestCommands],
       constraints: [...scenario.constraints],
     },
-    executionPolicy: buildExecutionPolicy(id, options.timeoutMs),
+    executionPolicy: buildExecutionPolicy(id, options.timeoutMs, executionPolicyOverrides),
     safetyPolicy: {
       allowlistPaths: [...scenario.allowlistPaths],
       denylistPaths: [...scenario.denylistPaths],

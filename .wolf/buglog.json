@@ -1,0 +1,327 @@
+[
+  {
+    "id": "bug-001",
+    "timestamp": "2026-07-18T08:59:09.606855+00:00",
+    "error_message": "Focused contracts test failed because renderScenario ignored executionPolicyOverrides and accepted tokenBudget: 0.",
+    "file": "validation/v1/lib/scenarios.ts",
+    "root_cause": "RenderOptions/buildExecutionPolicy did not accept or merge approved execution-policy override fields, so schema validation only saw defaults.",
+    "fix": "Added ExecutionPolicyOverrides support to renderScenario/buildExecutionPolicy and merged overrides on top of scenario-specific defaults so schema parsing still rejects invalid values.",
+    "tags": [
+      "task-1",
+      "validation",
+      "execution-policy",
+      "contract-rendering",
+      "test-failure"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T08:59:09.606855+00:00"
+  },
+  {
+    "id": "bug-002",
+    "timestamp": "2026-07-18T09:09:27.791946+00:00",
+    "error_message": "Reviewer found that scenarios C/D still threw when only executionPolicyOverrides.perAttemptTimeoutMs was provided.",
+    "file": "validation/v1/lib/scenarios.ts",
+    "root_cause": "buildExecutionPolicy resolved timeoutMs for scenarios C/D before checking executionPolicyOverrides.perAttemptTimeoutMs, so override-only calls still hit the operator-timeout guard.",
+    "fix": "Changed buildExecutionPolicy to compute perAttemptTimeoutMs as override-first and added a regression test proving scenario C renders with only executionPolicyOverrides.perAttemptTimeoutMs.",
+    "tags": [
+      "task-1",
+      "validation",
+      "execution-policy",
+      "override-precedence",
+      "review-fix"
+    ],
+    "related_bugs": [
+      "bug-001"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T09:09:27.791946+00:00"
+  },
+  {
+    "id": "bug-003",
+    "timestamp": "2026-07-18T09:19:05.822893+00:00",
+    "error_message": "Reviewer found that validation/v1/lib/scenarios.ts still spread executionPolicyOverrides directly into executionPolicy, allowing unapproved runtime fields to override maxAttempts, autonomyLevel, or worktreeRequired.",
+    "file": "validation/v1/lib/scenarios.ts",
+    "root_cause": "buildExecutionPolicy merged the caller-supplied executionPolicyOverrides object wholesale, so JS callers or `as any` values could bypass the intended TypeScript-only Pick restriction at runtime.",
+    "fix": "Added an explicit runtime whitelist helper for the four approved override fields and added a regression test proving unapproved fields are ignored when passed via `as any`.",
+    "tags": [
+      "task-1",
+      "validation",
+      "execution-policy",
+      "runtime-whitelist",
+      "review-fix"
+    ],
+    "related_bugs": [
+      "bug-001",
+      "bug-002"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T09:19:05.822893+00:00"
+  },
+  {
+    "id": "bug-004",
+    "timestamp": "2026-07-18T09:38:07.004503+00:00",
+    "error_message": "Focused Task 2 test failed because ../../validation/v1/lib/a04.js did not exist yet.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "The A-04 mechanical preflight helper and CLI had not been implemented, so the new Vitest suite could not load the module under test.",
+    "fix": "Added validation/v1/lib/a04.ts, validation/v1/scripts/prepare-a04.ts, and tests/validation/prepareA04.test.ts to implement the helper, CLI, and locked approval-package/preflight behavior.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "preflight",
+      "tdd-red"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T09:38:07.004503+00:00"
+  },
+  {
+    "id": "bug-005",
+    "timestamp": "2026-07-18T09:58:01.481912+00:00",
+    "error_message": "Reviewer found Task 2 accepted arbitrary positive A-04 execution-policy values and claimed mainCheckoutMustRemainUnchanged without checking tracked repo-root cleanliness.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "prepareA04 passed through any positive override values from scenario rendering and advertised the main-checkout invariant without capturing tracked git status before and after deterministic preflight.",
+    "fix": "Added a fixed A-04 execution-policy validator used by the helper, CLI, and approval-package builder; added repo-root tracked-cleanliness checks around deterministic preflight; expanded focused regression tests for contract/evidence refusal and cleanliness failures.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "execution-policy",
+      "repo-cleanliness"
+    ],
+    "related_bugs": [
+      "bug-004"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T09:58:01.482094+00:00"
+  },
+  {
+    "id": "bug-006",
+    "timestamp": "2026-07-18T10:12:21.630370+00:00",
+    "error_message": "Reviewer found A-04 approval gating still allowed drifted non-one-shot contracts because only the four numeric execution-policy fields were validated.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "The approval helper validated numeric A-04 envelope values but did not mechanically re-check the frozen one-shot contract fields, so maxAttempts/autonomyLevel/worktreeRequired could drift if renderScenario(\"A\") changed.",
+    "fix": "Added explicit approval-gate checks for autonomyLevel=L2, maxAttempts=1, and worktreeRequired=true and added a focused regression test for maxAttempts drift before approval-package generation.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "one-shot",
+      "approval-gate"
+    ],
+    "related_bugs": [
+      "bug-004",
+      "bug-005"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T10:12:21.630539+00:00"
+  },
+  {
+    "id": "bug-007",
+    "timestamp": "2026-07-18T19:40:00.000000+00:00",
+    "error_message": "Final whole-branch review found that A-04 preparation still allowed contract-path overlap to materialize run/evidence dirs, only checked fixture cleanliness before preflight, ignored untracked main-checkout drift, and omitted explicit approval-package fields required by spec.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "prepareA04 only validated tracked repo state once, never rechecked fixture cleanliness before contract creation, did not reject nested contract paths under run/evidence dirs, and left several approval invariants implicit in exactCommand rather than explicit in ApprovalPackage.",
+    "fix": "Added resolved-path overlap rejection for contract-under-run/evidence cases, revalidated fixture HEAD/status before contract write, switched main-checkout checks to full porcelain before/after deterministic preflight, expanded ApprovalPackage with explicit workingDirectory/paths/scenario/attempts/retry/phase/artifact/review-output fields, and added focused regressions.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "path-overlap",
+      "fixture-cleanliness",
+      "untracked-drift",
+      "approval-package"
+    ],
+    "related_bugs": [
+      "bug-004",
+      "bug-005",
+      "bug-006"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T19:40:00.000000+00:00"
+  },
+  {
+    "id": "bug-008",
+    "timestamp": "2026-07-18T11:55:42.738023+00:00",
+    "error_message": "Final whole-branch review found that A-04 preparation still verified whichever checkout invoked it, encoded preflight order incorrectly, and still allowed executionPolicyOverrides outside Scenario A.",
+    "file": "validation/v1/lib/a04.ts, validation/v1/lib/scenarios.ts",
+    "root_cause": "prepareA04 still derived its cleanliness invariant from the current repoRoot without requiring branch main, represented main verification plus focused regressions as one preflight list, and renderScenario still exposed executionPolicyOverrides to non-A scenarios.",
+    "fix": "Required prepareA04 to run on branch main, split the A-04 flow into explicit spec phases, restricted executionPolicyOverrides to Scenario A at runtime and in the TypeScript surface, and updated focused tests/docs accordingly.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "main-checkout",
+      "phase-order",
+      "execution-policy"
+    ],
+    "related_bugs": [
+      "bug-007"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T11:55:42.738023+00:00"
+  },
+  {
+    "id": "bug-009",
+    "timestamp": "2026-07-18T11:55:42.738023+00:00",
+    "error_message": "Typecheck/build failed after tightening renderScenario to A-vs-non-A overloads.",
+    "file": "validation/v1/lib/scenarios.ts",
+    "root_cause": "The overload form did not accept existing callers that pass a ScenarioId union, so tests and CLIs that render scenarios via a variable id stopped typechecking.",
+    "fix": "Replaced the overloads with a generic conditional signature so Scenario A keeps override support while union-typed callers still compile and non-A overrides remain rejected.",
+    "tags": [
+      "task-2",
+      "validation",
+      "typecheck",
+      "build-failure",
+      "scenario-rendering",
+      "typing"
+    ],
+    "related_bugs": [
+      "bug-008"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T11:55:42.738023+00:00"
+  },
+  {
+    "id": "bug-010",
+    "timestamp": "2026-07-18T13:00:05.557461+00:00",
+    "error_message": "Final whole-branch review found that A-04 approval still did not freeze the runnable verified revision and still skipped the spec 6.1 read-only repository/evidence-preservation inspection.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "prepareA04 cleaned up the isolated verification checkout after success, so the emitted approval package still pointed at a drift-prone runnable target, and the flow started directly at deterministic verification without checking retained recovery context.",
+    "fix": "Added a lightweight read-only inspection for the retained main checkout, evidence-first worktree, backup branch, stashes, and preserved .validation-runs evidence; preserved the verified checkout on success; and bound approval-package workingDirectory/exactCommand to that checkout's run-scenario.ts path.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "verified-checkout",
+      "read-only-inspection",
+      "approval-package"
+    ],
+    "related_bugs": [
+      "bug-007",
+      "bug-008"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T13:00:05.557621+00:00"
+  },
+  {
+    "id": "bug-011",
+    "timestamp": "2026-07-18T13:50:14.999356+00:00",
+    "error_message": "Final A-04 review found the preserved verified checkout still symlinked node_modules back to the main checkout, so later dependency changes could silently change the approved runtime environment.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "defaultCreateMainVerificationCheckout created a symbolic link from the preserved verified checkout's node_modules to the operator checkout instead of materializing local dependencies.",
+    "fix": "Replaced the node_modules symlink with recursive local dependency copying for the verified checkout, added cleanup on copy failure, and added a regression test proving the copied checkout stays independent after source dependency changes.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "verified-checkout",
+      "node_modules",
+      "self-contained-runtime",
+      "review-fix"
+    ],
+    "related_bugs": [
+      "bug-010"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T13:50:14.999356+00:00"
+  },
+  {
+    "id": "bug-012",
+    "timestamp": "2026-07-18T14:34:39.707456+00:00",
+    "error_message": "Final A-04 whole-branch review found adapterConfigPath could still escape through repo-internal or verified-checkout symlinks, and freshness checks treated dangling symlinks as non-existent.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "Adapter-config validation only checked lexical containment plus existence, and freshness used stat-style semantics, so symlink targets outside the frozen checkout and dangling symlink occupants were not rejected mechanically.",
+    "fix": "Switched freshness existence detection to lstat semantics and added realpath-based adapter-config containment checks for both the source repo root and preserved verified checkout, with focused regressions for source escape, verified-checkout escape, and dangling contract/run/evidence symlinks.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "symlink",
+      "realpath",
+      "lstat",
+      "freshness"
+    ],
+    "related_bugs": [
+      "bug-011"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T14:34:39.707456+00:00"
+  },
+  {
+    "id": "bug-013",
+    "timestamp": "2026-07-18T14:34:39.707456+00:00",
+    "error_message": "Typecheck/build failed after the new dangling-symlink parameterized test accessed union-only pathOverrides properties directly.",
+    "file": "tests/validation/prepareA04.test.ts",
+    "root_cause": "The refactored test table used a union of object shapes for contractPath/runDir/evidenceDir, but the test body read all three properties without narrowing, which TypeScript correctly rejected.",
+    "fix": "Changed the parameterized dataset to carry the occupiedPath explicitly so the test still targets the right path field without unsafe union property access, then re-ran focused tests, typecheck, and build successfully.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "test",
+      "typecheck",
+      "build-failure",
+      "union-typing"
+    ],
+    "related_bugs": [
+      "bug-012"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T14:34:39.707456+00:00"
+  },
+  {
+    "id": "bug-014",
+    "timestamp": "2026-07-18T22:56:00.000000+00:00",
+    "error_message": "Final whole-branch review found that A-04 still overstated mainCheckoutMustRemainUnchanged and left usageEvidenceExpectations under-specified.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "prepareA04 only gated on branch main plus fixture cleanliness, never captured a repo-root main-checkout HEAD/porcelain baseline before and after prepare, and ApprovalPackage still used weaker usage-evidence wording than the approved A-04 spec.",
+    "fix": "Added repo-root main-checkout state reads before prepare and at the final pre-approval gate with dirty/drift rejection, strengthened usageEvidenceExpectations to match the approved semantics, and added focused regressions for dirty/drifted main checkout plus approval-package shape.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "main-checkout",
+      "usage-evidence",
+      "approval-package"
+    ],
+    "related_bugs": [
+      "bug-007",
+      "bug-008"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T22:56:00.000000+00:00"
+  },
+  {
+    "id": "bug-015",
+    "timestamp": "2026-07-18T23:22:27+00:00",
+    "error_message": "Final A-04 review found that the approved command still consumed the mutable main-checkout contract path and that mainCheckoutMustRemainUnchanged still missed ignored-file drift such as dist/**.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "prepareA04 froze only the contract hash while leaving exactCommand bound to the source-checkout contract path, and the main-checkout invariant compared only git HEAD/porcelain instead of an on-disk snapshot that includes ignored files.",
+    "fix": "Copied the frozen contract into the preserved verified checkout, bound approval-package contractIdentity/exactCommand to that copy, added a deterministic main-checkout filesystem fingerprint with a narrow allowed-mutable exclusion for the contract path, and expanded focused regressions.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "review-fix",
+      "approval-package",
+      "contract-freeze",
+      "ignored-file-drift",
+      "fingerprint"
+    ],
+    "related_bugs": [
+      "bug-010",
+      "bug-014"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-18T23:22:27+00:00"
+  }
+]
