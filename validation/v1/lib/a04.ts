@@ -264,7 +264,7 @@ function shouldExcludeMainCheckoutPath(candidatePath: string, excludedPaths: rea
   return excludedPaths.some((excludedPath) => isSameOrDescendantPath(candidatePath, excludedPath));
 }
 
-async function expandAllowedMutableMainCheckoutPaths(
+export async function expandAllowedMutableMainCheckoutPaths(
   repoRoot: string,
   allowedMutablePaths: readonly string[],
 ): Promise<string[]> {
@@ -283,11 +283,13 @@ async function expandAllowedMutableMainCheckoutPaths(
       if (parentPath === currentPath || !isSameOrDescendantPath(parentPath, repoRoot)) {
         break;
       }
+
+      expandedPaths.add(parentPath);
+
       if (await pathExists(parentPath)) {
         break;
       }
 
-      expandedPaths.add(parentPath);
       currentPath = parentPath;
     }
   }
@@ -300,17 +302,18 @@ async function appendMainCheckoutSnapshotEntries(
   repoRoot: string,
   currentPath: string,
   excludedPaths: readonly string[],
-): Promise<void> {
+): Promise<boolean> {
   const relativePath = currentPath === repoRoot ? "." : relative(repoRoot, currentPath);
   const stats = await lstat(currentPath);
 
   if (stats.isSymbolicLink()) {
     snapshotEntries.push(`symlink	${relativePath}	${stats.mode.toString(8)}	${await readlink(currentPath)}`);
-    return;
+    return true;
   }
 
   if (stats.isDirectory()) {
-    snapshotEntries.push(`dir	${relativePath}`);
+    const childEntries: string[] = [];
+    let hasIncludedChildren = false;
 
     for (const entry of (await readdir(currentPath)).sort()) {
       if (relativePath === "." && entry === ".git") {
@@ -322,10 +325,21 @@ async function appendMainCheckoutSnapshotEntries(
         continue;
       }
 
-      await appendMainCheckoutSnapshotEntries(snapshotEntries, repoRoot, childPath, excludedPaths);
+      hasIncludedChildren = (await appendMainCheckoutSnapshotEntries(childEntries, repoRoot, childPath, excludedPaths)) || hasIncludedChildren;
     }
 
-    return;
+    if (currentPath === repoRoot) {
+      snapshotEntries.push(...childEntries);
+      return hasIncludedChildren;
+    }
+
+    if (!hasIncludedChildren) {
+      return false;
+    }
+
+    snapshotEntries.push(`dir	${relativePath}`);
+    snapshotEntries.push(...childEntries);
+    return true;
   }
 
   if (stats.isFile()) {
@@ -333,13 +347,14 @@ async function appendMainCheckoutSnapshotEntries(
     snapshotEntries.push(
       `file\t${relativePath}\t${stats.mode.toString(8)}\t${body.byteLength}\t${createHash("sha256").update(body).digest("hex")}`,
     );
-    return;
+    return true;
   }
 
   snapshotEntries.push(`other\t${relativePath}\t${stats.mode.toString(8)}\t${stats.size}`);
+  return true;
 }
 
-async function defaultReadMainCheckoutFingerprint(
+export async function defaultReadMainCheckoutFingerprint(
   repoRoot: string,
   allowedMutablePaths: string[],
 ): Promise<string> {

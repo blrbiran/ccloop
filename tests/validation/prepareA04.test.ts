@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   A04_APPROVED_EXECUTION_POLICY,
   buildA04RunCommand,
+  defaultReadMainCheckoutFingerprint,
   materializeVerifiedCheckoutDependencies,
   buildApprovalPackage,
   inspectMetadataBackedA04History,
@@ -848,6 +849,24 @@ describe("A-04 approval package", () => {
     ]);
     expect(runCommand).toHaveBeenCalledTimes(5);
     expect(writeContract).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the main-checkout fingerprint stable when only the approved contract path appears", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-a04-mutable-paths-"));
+    const repoRoot = join(tempRoot, "repo");
+    const validationRunsPath = join(repoRoot, ".validation-runs");
+    const contractsDirPath = join(validationRunsPath, "contracts");
+    const contractPath = join(contractsDirPath, "A-04.json");
+
+    await mkdir(validationRunsPath, { recursive: true });
+
+    const beforeCreate = await defaultReadMainCheckoutFingerprint(repoRoot, [contractPath]);
+
+    await mkdir(contractsDirPath, { recursive: true });
+    await writeFile(contractPath, "{}\n");
+
+    const afterCreate = await defaultReadMainCheckoutFingerprint(repoRoot, [contractPath]);
+    expect(afterCreate).toBe(beforeCreate);
   });
 
   it("rejects adapter configs outside repo root", async () => {
