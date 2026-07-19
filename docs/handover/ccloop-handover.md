@@ -337,6 +337,19 @@ If A-04 yields `FAIL / PRODUCT_DEFECT`, stop scenario progression, preserve evid
 
 After a successful A-04, continue to B, then use A/B event timestamps to calibrate C and D, then run E. Every real call requires separate approval.
 
+### 2026-07-19 merge-readiness baseline
+
+- Reviewed against current Git/filesystem truth instead of stale handover snapshots.
+- `main` reviewed at `3108c5c`.
+- `a04-preflight-approval` committed head reviewed at `c3036dc`.
+- Current local uncommitted files are being classified separately from committed branch value:
+  - `.superpowers/sdd/progress.md`
+  - `.superpowers/sdd/task-3-report.md`
+  - `.wolf/memory.md`
+  - `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`
+  - `package-lock.json`
+- Preserved evidence remains under `.worktrees/evidence-first-v1/.validation-runs/` and has not been rewritten.
+
 ## 9. Compact Architecture and Safety Boundaries
 
 ```text
