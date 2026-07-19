@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -587,6 +587,56 @@ if (request.phase === "plan") { process.stdout.write(JSON.stringify({ summary: "
       tsxBin,
       [
         runScenarioScript,
+        "--scenario",
+        "A",
+        "--contract",
+        contractPath,
+        "--fixture",
+        fixture.repoPath,
+        "--run-dir",
+        runDir,
+        "--evidence-dir",
+        evidenceDir,
+        "--adapter-config",
+        adapterConfigPath,
+      ],
+      { cwd: tempRoot },
+    );
+
+    const invocation = JSON.parse(await readFile(join(evidenceDir, "invocation.json"), "utf8")) as { exitCode: number };
+    expect(invocation.exitCode).toBe(0);
+  });
+
+  it("runs when invoked through a canonical-path alias", async () => {
+    await ensureBuilt();
+    const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-run-scenario-alias-"));
+    const fixtureDir = join(tempRoot, "fixture");
+    const contractPath = join(tempRoot, "scenario-a.json");
+    const adapterScriptPath = join(tempRoot, "alias-claude-runner.mjs");
+    const adapterConfigPath = join(tempRoot, "adapter-config.json");
+    const runDir = join(tempRoot, "run");
+    const evidenceDir = join(tempRoot, "evidence");
+    const aliasedScriptPath = join(tempRoot, "run-scenario-alias.ts");
+    const fixture = await createFixture(templateDir, fixtureDir);
+    const contract = renderScenario("A", { repoPath: fixture.repoPath });
+    await writeFile(contractPath, `${JSON.stringify(contract, null, 2)}
+`);
+    await writeFile(
+      adapterScriptPath,
+      `const chunks = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+const request = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+if (request.phase === "plan") { process.stdout.write(JSON.stringify({ summary: "ok", primaryTargetPaths: ["src/counter.js"] })); } else if (request.phase === "execute") { process.stdout.write(JSON.stringify({ changedFiles: ["src/counter.js"], diffPatch: "diff --git a/src/counter.js b/src/counter.js", commandOutputs: ["edited"], stdoutStderrLog: "ok" })); } else { process.stdout.write(JSON.stringify({ approved: true, rejectCategory: "", primaryTargetPaths: ["src/counter.js"], failingCommand: null, safeToRetry: false, evidence: ["command output | required check passed: npm test"], pauseSignals: [], stopSignals: [] })); }
+`,
+    );
+    await writeFile(adapterConfigPath, `${JSON.stringify({ command: [process.execPath, adapterScriptPath] }, null, 2)}
+`);
+    await symlink(await realpath(runScenarioScript), aliasedScriptPath);
+
+    await execFileAsync(
+      tsxBin,
+      [
+        aliasedScriptPath,
         "--scenario",
         "A",
         "--contract",

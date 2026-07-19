@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -489,8 +489,17 @@ export async function main(argv: string[]): Promise<number> {
   return exitCode;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  void main(process.argv.slice(2)).then((code) => {
-    process.exitCode = code;
-  });
+if (process.argv[1]) {
+  void realpath(process.argv[1])
+    .then((entryPath) => entryPath === fileURLToPath(import.meta.url))
+    .catch(() => false)
+    .then((shouldRunMain) => {
+      if (!shouldRunMain) {
+        return;
+      }
+
+      void main(process.argv.slice(2)).then((code) => {
+        process.exitCode = code;
+      });
+    });
 }
