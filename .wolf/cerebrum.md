@@ -68,6 +68,7 @@
 - [2026-07-18] Before the session's first Bash call, state the current request and exactly what the command verifies so GateGuard does not block it.
 - [2026-07-18] The available reviewer agent is `ecc:code-reviewer`; the unnamespaced `code-reviewer` type is not registered in this environment.
 - [2026-07-18] Validation CLI tests must create their own temporary Git repositories; never depend on ignored `.validation-runs/fixture-smoke`, which may exist in one worktree and not another. Compare canonical paths with `fs.realpath` on macOS because `/var` resolves through `/private/var`.
+- [2026-07-20] Validation CLI entrypoint guards must compare canonical filesystem paths, not raw `import.meta.url` vs `process.argv[1]` URLs. On macOS preserved checkouts under `/var`, the module URL may resolve through `/private/var`; without `realpath`, the script can no-op with exit 0 and produce no artifacts.
 - [2026-07-18] When searching Markdown literals containing backticks from Bash, avoid double-quoted `rg` patterns because the shell performs command substitution; use Node string checks or single-quoted patterns.
 
 - [2026-07-18] In validation/v1 scenario rendering, never spread runtime `executionPolicyOverrides` directly into the contract; whitelist the four approved fields and keep an `as any` regression test proving blocked fields like `maxAttempts` are ignored.
