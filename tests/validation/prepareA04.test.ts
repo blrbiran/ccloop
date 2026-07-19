@@ -49,39 +49,71 @@ function buildContract(overrides: Partial<typeof A04_APPROVED_EXECUTION_POLICY> 
 }
 
 
-function buildReadOnlyInspection(overrides: Partial<ReadOnlyInspection> = {}): ReadOnlyInspection {
+function buildReadOnlyInspection(): ReadOnlyInspection {
   return {
     mainCheckout: {
+      status: "PRESENT",
       path: "/repo",
       head: "main-head",
       branch: "main",
     },
-    evidenceFirstValidationWorktree: {
-      path: "/repo/.worktrees/evidence-first-v1",
-      head: "evidence-head",
-      branch: "evidence-first-v1",
+    requiredSources: {
+      handoverDoc: {
+        status: "PRESENT",
+        path: "/repo/docs/handover/ccloop-handover.md",
+      },
+      a04BoundarySpec: {
+        status: "PRESENT",
+        path: "/repo/docs/superpowers/specs/2026-07-18-a04-preflight-and-stop-boundaries-design.md",
+      },
+      a04BoundaryPlan: {
+        status: "PRESENT",
+        path: "/repo/docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md",
+      },
+      usageEvidenceSpec: {
+        status: "PRESENT",
+        path: "/repo/docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md",
+      },
+      backupBranch: {
+        status: "PRESENT",
+        name: "backup/evidence-first-v1-before-memory-history-cleanup",
+        head: "backup-head",
+        mergeBaseWithMain: "merge-base",
+        distinctFromMain: true,
+      },
     },
-    retainedBackupBranch: {
-      name: "backup/evidence-first-v1-before-memory-history-cleanup",
-      head: "backup-head",
+    softSignals: {
+      retainedStashes: {
+        status: "MISSING",
+        matches: [],
+      },
+      legacyEvidenceWorktree: {
+        status: "MISSING",
+        path: "/repo/.worktrees/evidence-first-v1",
+      },
+      legacyPreservedEvidenceTree: {
+        status: "MISSING",
+        path: "/repo/.worktrees/evidence-first-v1/.validation-runs",
+      },
     },
-    retainedStashes: [
-      "stash@{0}: On main: pre-local-merge-evidence-first-v1-2026-07-18",
-      "stash@{1}: On main: pre-merge local changes 2026-07-16",
-    ],
-    preservedEvidenceTree: {
-      path: "/repo/.worktrees/evidence-first-v1/.validation-runs",
-      requiredPaths: [
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/fixture-01",
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/contracts/A-01.json",
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/contracts/A-02.json",
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/contracts/A-03.json",
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/evidence/A-01/review.json",
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/evidence/A-02/review.json",
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/evidence/A-03/review.json",
-      ],
+    contradictionChecks: {
+      firstRealPaidScenarioA: {
+        status: "CONFIRMED",
+        sources: ["handoverDoc", "a04BoundarySpec"],
+      },
+      historicalA01ToA03Diagnoses: {
+        status: "CONFIRMED",
+        sources: ["handoverDoc", "usageEvidenceSpec"],
+      },
+      localDryRunArtifactsNotHistoricalEvidence: {
+        status: "CONFIRMED",
+        sources: ["handoverDoc", "a04BoundaryPlan"],
+      },
+      paidCallStillRequiresExplicitApproval: {
+        status: "CONFIRMED",
+        sources: ["handoverDoc", "a04BoundarySpec", "usageEvidenceSpec"],
+      },
     },
-    ...overrides,
   };
 }
 
@@ -167,6 +199,25 @@ describe("verified checkout dependency materialization", () => {
 });
 
 describe("A-04 approval package", () => {
+  it("builds an approval package with the metadata-backed inspection summary", () => {
+    const pkg = buildApprovalPackage({
+      verifiedCheckoutPath: "/tmp/a04-main-checkout",
+      verifiedCheckoutHead: "verified-main-head",
+      readOnlyInspection: buildReadOnlyInspection(),
+      contract: buildContract(),
+      contractPath: "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
+      contractSha256: "abc123",
+      fixturePath: "/repo/.validation-runs/fixture-01",
+      runDir: "/repo/.validation-runs/runs/A-04",
+      evidenceDir: "/repo/.validation-runs/evidence/A-04",
+      adapterConfigPath: "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+    });
+
+    expect(pkg.readOnlyInspection.softSignals.legacyEvidenceWorktree.status).toBe("MISSING");
+    expect(pkg.readOnlyInspection.requiredSources.usageEvidenceSpec.status).toBe("PRESENT");
+    expect(pkg.readOnlyInspection.contradictionChecks.paidCallStillRequiresExplicitApproval.status).toBe("CONFIRMED");
+  });
+
   it("builds a frozen approval package with explicit scenario, path, and artifact expectations", () => {
     const pkg = buildApprovalPackage({
       verifiedCheckoutPath: "/tmp/a04-main-checkout",

@@ -73,13 +73,44 @@ type IsolatedVerificationCheckout = {
   cleanup: () => Promise<void>;
 };
 
-export type ReadOnlyInspection = {
-  mainCheckout: { path: string; head: string; branch: "main" };
-  evidenceFirstValidationWorktree: { path: string; head: string; branch: "evidence-first-v1" };
-  retainedBackupBranch: { name: typeof A04_RETAINED_BACKUP_BRANCH; head: string };
-  retainedStashes: string[];
-  preservedEvidenceTree: { path: string; requiredPaths: string[] };
+export type RequiredSourceStatus = "PRESENT" | "MISSING" | "UNREADABLE";
+export type SoftSignalStatus = "PRESENT" | "MISSING" | "UNREADABLE";
+export type ContradictionStatus = "CONFIRMED" | "CONTRADICTORY" | "INSUFFICIENT";
+
+export type MetadataInspectionSummary = {
+  mainCheckout: {
+    status: "PRESENT";
+    path: string;
+    head: string;
+    branch: "main";
+  };
+  requiredSources: {
+    handoverDoc: { status: RequiredSourceStatus; path: string };
+    a04BoundarySpec: { status: RequiredSourceStatus; path: string };
+    a04BoundaryPlan: { status: RequiredSourceStatus; path: string };
+    usageEvidenceSpec: { status: RequiredSourceStatus; path: string };
+    backupBranch: {
+      status: RequiredSourceStatus;
+      name: typeof A04_RETAINED_BACKUP_BRANCH;
+      head?: string;
+      mergeBaseWithMain?: string;
+      distinctFromMain?: boolean;
+    };
+  };
+  softSignals: {
+    retainedStashes: { status: SoftSignalStatus; matches: string[] };
+    legacyEvidenceWorktree: { status: SoftSignalStatus; path: string };
+    legacyPreservedEvidenceTree: { status: SoftSignalStatus; path: string };
+  };
+  contradictionChecks: {
+    firstRealPaidScenarioA: { status: ContradictionStatus; sources: string[] };
+    historicalA01ToA03Diagnoses: { status: ContradictionStatus; sources: string[] };
+    localDryRunArtifactsNotHistoricalEvidence: { status: ContradictionStatus; sources: string[] };
+    paidCallStillRequiresExplicitApproval: { status: ContradictionStatus; sources: string[] };
+  };
 };
+
+export type ReadOnlyInspection = MetadataInspectionSummary;
 
 export type A04PrepareOptions = {
   repoRoot: string;
