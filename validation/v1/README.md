@@ -1,6 +1,6 @@
 # V1 Evidence-First Validation Operator Procedure
 
-Run every command from the repository root on branch `evidence-first-v1`. This procedure uses only the current Task 1-3 TypeScript CLIs plus safe Claude CLI envelope checks. Do not overwrite existing paths, do not delete retained worktrees or historical evidence, and do not launch `claude -p` or the validation harness during preflight.
+Run every command from the repository root. For the non-paid A-04 prepare path below, the current checkout must be on branch `main`. This procedure uses only the current Task 1-3 TypeScript CLIs plus safe Claude CLI envelope checks. Do not overwrite existing paths, do not delete retained metadata anchors or historical records, and do not launch `claude -p` or the validation harness during preflight.
 
 ## Guardrails
 
@@ -61,8 +61,10 @@ npx --no-install tsx validation/v1/scripts/prepare-a04.ts \
   --partial-recovery-window-ms 5000
 ```
 
+A-04 prepare now checks metadata-backed historical context from the current `main` checkout. It no longer requires the deleted `evidence-first-v1` linked worktree or its preserved `.validation-runs/` tree to remain present as hard prerequisites. Fresh local `.validation-runs/**` outputs created during non-paid prepare are not historical preserved evidence and must not be treated as A-01 through A-03 artifacts.
+
 Expected result:
-- a spec 6.1 read-only inspection succeeds first, confirming the retained `main` checkout, retained `evidence-first-v1` worktree, backup branch, stashes, and preserved `.validation-runs/` recovery evidence are still present and readable;
+- a spec 6.1 metadata-backed read-only inspection succeeds first, confirming the current `main` checkout, the required handover/spec/plan documents, the backup branch anchor, and surfacing retained stashes plus any discovered legacy worktree / `.validation-runs/` paths only as soft signals;
 - main deterministic verification (`npm test`, `npm run typecheck`, `npm run build`) passes next inside an isolated temporary checkout based on the verified `main` revision, with `node_modules` copied locally into that checkout when present so the preserved runtime environment stays self-contained;
 - the A-04 freshness check confirms the fixture is clean and the contract/run/evidence paths are still fresh before contract render;
 - `.validation-runs/contracts/A-04.json` is created once and schema-validates as Scenario A with only the approved A-04 execution-policy fields overridden;

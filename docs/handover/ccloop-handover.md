@@ -7,7 +7,7 @@
 ## Executive Summary for Next Agent
 
 1. `main` is at `5b11232` (`add spec and plan`) and currently has one local modification: `.superpowers/sdd/task-1-report.md`.
-2. Preserved real-run evidence still lives only in `.worktrees/evidence-first-v1/.validation-runs/`; do not clean or rewrite it.
+2. The old linked `evidence-first-v1` worktree and its preserved `.validation-runs/` tree are no longer available; treat the required handover/spec/plan docs plus the backup branch as the mechanical A-04 historical anchors instead, and do not fabricate substitute preserved evidence.
 3. The active local follow-up worktree is `.worktrees/a04-preflight-approval` on branch `a04-preflight-approval`; the latest committed head verified in this session is `c3036dc`, but always re-check `git log` and `git status` there before acting.
 4. In that worktree, local non-paid dry-run artifacts already exist: `.validation-runs/fixture-01` and `.validation-runs/contracts/A-04.json`; `.validation-runs/runs/A-04` and `.validation-runs/evidence/A-04` still do not exist.
 5. The intended A-04 envelope remains `550000 / 600000 / 1200000 / 5000`, one attempt, no automatic retries.
@@ -62,14 +62,12 @@
 - No real Claude call has been run from this worktree.
 - This branch has **not** been declared final/clean in this handover. Before merging or using it to support a real paid A-04 invocation, re-review its latest committed state and any remaining local modifications.
 
-### Evidence-first validation worktree
+### Legacy evidence-first validation worktree status
 
-- Path: `/Users/biran/code/skills/loop/ccloop/.worktrees/evidence-first-v1`
-- Branch: `evidence-first-v1`
-- HEAD: `d513e01ab5e2c7689e4170e98c0eb2b8236ced5e` (`docs: record final usage evidence verification`)
-- `main` is ahead of this branch; this worktree remains the home of ignored preserved real-run evidence under `.validation-runs/`.
-- It intentionally contains dirty/untracked SDD reports, copied documents, OpenWolf metadata, and `dist/`. Do not clean, reset, reinitialize, or broadly stage it.
-- Product/runtime work from this branch is already on `main`; preserving the linked worktree is still required because its ignored A-01 through A-03 evidence is not in Git.
+- The old linked worktree path `/Users/biran/code/skills/loop/ccloop/.worktrees/evidence-first-v1` is no longer available.
+- Non-paid A-04 prepare no longer treats that deleted worktree or its old `.validation-runs/` tree as hard prerequisites.
+- Historical context now comes from the required metadata set on `main` plus the local backup branch `backup/evidence-first-v1-before-memory-history-cleanup`.
+- If any stale notes below still reference the deleted path, treat them as historical context only, not an instruction to recreate, depend on, or treat new local `.validation-runs/**` outputs as preserved A-01 through A-03 evidence.
 
 ### Backup branch and sensitive history
 
@@ -148,7 +146,7 @@ Read these before continuing:
 5. `docs/superpowers/specs/2026-07-18-a04-preflight-and-stop-boundaries-design.md`
 6. `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`
 7. `docs/ccloop-v2-review-backlog.md`
-8. `.worktrees/evidence-first-v1/.superpowers/sdd/progress.md`
+8. Historical notes in this handover about the deleted `evidence-first-v1` worktree status
 
 The governing decisions are:
 
@@ -179,7 +177,7 @@ The V2 backlog remains review input, not an approved V2 design or scope commitme
 The authoritative historical task ledger for evidence-first V1 validation remains:
 
 ```text
-.worktrees/evidence-first-v1/.superpowers/sdd/progress.md
+Historical note only: the old linked `evidence-first-v1` worktree had a `.superpowers/sdd/progress.md`, but that path is no longer available in this checkout.
 ```
 
 Recorded outcome there remains:
@@ -250,6 +248,13 @@ Key intended behavior in the A-04 preparation branch is now:
   - rejects path overlaps, symlink escape, contract drift, and final-gate mismatches;
   - must not create `.validation-runs/runs/A-04` or `.validation-runs/evidence/A-04`.
 
+### Metadata-backed A-04 historical context
+
+- The old linked `evidence-first-v1` worktree and its preserved `.validation-runs/` tree are no longer available.
+- A-04 historical context is now reconstructed from current repository metadata and branch history anchors.
+- Historical A-01 through A-03 semantics remain binding even though the old preserved artifact tree is gone.
+- Fresh local `.validation-runs/**` outputs created during prepare remain non-paid dry-run artifacts only.
+
 ## 6. Claude Usage Evidence
 
 The completed usage-evidence increment closes the audit gap that made A-03's historical token total impossible to reconstruct.
@@ -273,9 +278,9 @@ Semantics remain:
 
 Historical A-01 through A-03 artifacts remain immutable and are not retroactively reconstructed.
 
-## 7. Preserved Real-Run Evidence
+## 7. Historical A-01 through A-03 evidence summary
 
-All preserved real-run evidence below is still relative to `.worktrees/evidence-first-v1`. That `.validation-runs/` tree remains the only authoritative preserved real-run evidence set. The A-04 preparation branch's local dry-run artifacts are separate and must not be confused with these preserved records.
+The old `.worktrees/evidence-first-v1/.validation-runs/` tree is no longer available in this checkout, so the sections below are preserved historical summaries rather than live filesystem instructions. They remain binding historical context for A-04, and fresh local `.validation-runs/**` outputs from non-paid prepare must not be confused with preserved A-01 through A-03 evidence.
 
 ### A-01
 
@@ -322,17 +327,9 @@ All preserved real-run evidence below is still relative to `.worktrees/evidence-
 
 There are now **two distinct A-04 states** to keep straight:
 
-### 8.1 Preserved real-run evidence state
+### 8.1 Historical preserved-evidence state
 
-In `.worktrees/evidence-first-v1/.validation-runs/`, A-04 is still **unapproved and unrun**:
-
-```text
-.validation-runs/contracts/A-04.json      absent
-.validation-runs/runs/A-04                absent
-.validation-runs/evidence/A-04            absent
-```
-
-This remains the only state that matters for the eventual real Scenario A invocation.
+Historically, A-04 remained **unapproved and unrun** in the deleted legacy preserved-evidence tree. That historical fact still matters, but the missing tree itself is no longer a hard prerequisite for non-paid A-04 prepare. The mechanical boundary now relies on the required metadata set plus contradiction checks, and fresh local `.validation-runs/**` outputs remain dry-run artifacts only.
 
 ### 8.2 Local non-paid preparation state in `.worktrees/a04-preflight-approval`
 
@@ -416,7 +413,7 @@ After a successful A-04, continue to B, then use A/B event timestamps to calibra
   - `.wolf/memory.md`
   - `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`
   - `package-lock.json`
-- Preserved evidence remains under `.worktrees/evidence-first-v1/.validation-runs/` and has not been rewritten.
+- The deleted legacy preserved-evidence tree is now represented through metadata-backed historical summaries and branch anchors; do not rewrite history and do not treat fresh local `.validation-runs/**` outputs as substitutes.
 
 ### 2026-07-19 committed-surface verdict
 
@@ -532,10 +529,6 @@ git worktree list
 git branch --list 'backup/evidence-first-v1-before-memory-history-cleanup'
 git stash list
 
-git -C .worktrees/evidence-first-v1 status --short
-git -C .worktrees/evidence-first-v1 log -12 --oneline
-git -C .worktrees/evidence-first-v1 show -s --format='%H %s' HEAD
-
 git -C .worktrees/a04-preflight-approval status --short
 git -C .worktrees/a04-preflight-approval log -12 --oneline
 ```
@@ -543,17 +536,16 @@ git -C .worktrees/a04-preflight-approval log -12 --oneline
 Read in order:
 
 1. `docs/handover/ccloop-handover.md`
-2. `.worktrees/evidence-first-v1/.superpowers/sdd/progress.md`
-3. `docs/superpowers/specs/2026-07-17-evidence-first-v1-validation-design.md`
-4. `docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md`
-5. `docs/superpowers/specs/2026-07-18-a04-preflight-and-stop-boundaries-design.md`
+2. `docs/superpowers/specs/2026-07-17-evidence-first-v1-validation-design.md`
+3. `docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md`
+4. `docs/superpowers/specs/2026-07-18-a04-preflight-and-stop-boundaries-design.md`
+5. `docs/superpowers/specs/2026-07-19-a04-metadata-backed-prepare-boundary-design.md`
 6. `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`
-7. `.worktrees/evidence-first-v1/validation/v1/README.md`
-8. `.worktrees/evidence-first-v1/.superpowers/sdd/task-5-report.md`
-9. `.worktrees/evidence-first-v1/.superpowers/sdd/task-5-token-debug.md`
-10. A-02/A-03 review and run artifacts relevant to the A-04 budget decision
-11. `.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts`
-12. `.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts`
+7. `docs/superpowers/plans/2026-07-19-a04-metadata-backed-prepare-boundary.md`
+8. `validation/v1/README.md`
+9. A-01/A-02/A-03 historical summaries in this handover relevant to the A-04 budget decision
+10. `.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts`
+11. `.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts`
 13. `.worktrees/a04-preflight-approval/validation/v1/README.md`
 14. `.worktrees/a04-preflight-approval/.superpowers/sdd/task-2-report.md`
 
@@ -590,14 +582,7 @@ npm test -- --run \
   tests/controller/runLoop.integration.test.ts \
   tests/validation/evidence.test.ts
 
-# Read durable progress
-grep -n '^Task\|^Token\|^Claude usage\|^Legacy\|^History\|^Final' \
-  .worktrees/evidence-first-v1/.superpowers/sdd/progress.md
-
-# Inspect preserved review classifications
-for id in A-01 A-02 A-03; do
-  node -e "const fs=require('fs'); const p='.worktrees/evidence-first-v1/.validation-runs/evidence/'+'$id'+'/review.json'; const x=JSON.parse(fs.readFileSync(p)); console.log('$id', x.scenarioVerdict, x.diagnosis)"
-done
+# Historical preserved-evidence inspection commands from the deleted `evidence-first-v1` worktree are no longer runnable in this checkout. Use the metadata-backed summaries in this handover plus the required spec/plan docs instead.
 
 # Confirm target histories exclude local memory
 if git log main --format='%H' -- .wolf/memory.md | grep -q .; then

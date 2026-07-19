@@ -1,16 +1,105 @@
-import { mkdtemp, mkdir, lstat, readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { chmod, mkdtemp, mkdir, lstat, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import {
   A04_APPROVED_EXECUTION_POLICY,
   buildA04RunCommand,
   materializeVerifiedCheckoutDependencies,
   buildApprovalPackage,
+  inspectMetadataBackedA04History,
   type ReadOnlyInspection,
   prepareA04,
 } from "../../validation/v1/lib/a04.js";
 import { renderScenario } from "../../validation/v1/lib/scenarios.js";
+
+const execFileAsync = promisify(execFile);
+const TEST_GIT_ENV = {
+  ...process.env,
+  GIT_AUTHOR_NAME: "Claude",
+  GIT_AUTHOR_EMAIL: "claude@example.com",
+  GIT_COMMITTER_NAME: "Claude",
+  GIT_COMMITTER_EMAIL: "claude@example.com",
+};
+
+type MetadataInspectionRepoDocs = {
+  handoverDoc: string;
+  a04BoundarySpec: string;
+  a04BoundaryPlan: string;
+  usageEvidenceSpec: string;
+};
+
+const BASE_METADATA_INSPECTION_REPO_DOCS: MetadataInspectionRepoDocs = {
+  handoverDoc: [
+    "No successful real-Claude Scenario A exists yet.",
+    "Task 5 A-01: INCONCLUSIVE — harness failed before controller launch",
+    "Task 5 A-02: INCONCLUSIVE — planning exhausted the 50k token budget",
+    "Task 5 A-03: INCONCLUSIVE — execution completed but 100k exhausted before verify",
+    "Historical verdict: `INCONCLUSIVE / RUNTIME_VARIANCE`",
+    "These are **not** preserved real-run evidence.",
+    "Every real call requires separate approval.",
+  ].join("\n"),
+  a04BoundarySpec: [
+    "Prepare one fresh A-04 Scenario A invocation",
+    "This design governs branch assessment and branch-local tightening only. It does not authorize a paid Scenario A invocation.",
+  ].join("\n"),
+  a04BoundaryPlan: "This branch assessment remains non-paid and non-destructive.\n",
+  usageEvidenceSpec: [
+    "Historical A-01 through A-03 artifacts remain immutable",
+    "The invocation remains unapproved and unrun until separately presented to the user.",
+  ].join("\n"),
+};
+
+async function runGit(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+    env: TEST_GIT_ENV,
+  });
+  return stdout.trim();
+}
+
+async function writeTextFile(filePath: string, body: string): Promise<void> {
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, body);
+}
+
+async function createMetadataInspectionRepo(
+  overrides: Partial<MetadataInspectionRepoDocs> = {},
+): Promise<{ tempRoot: string; repoRoot: string; trackedFilePath: string }> {
+  const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-a04-metadata-inspection-"));
+  const repoRoot = join(tempRoot, "repo");
+  const docs = { ...BASE_METADATA_INSPECTION_REPO_DOCS, ...overrides };
+
+  await mkdir(repoRoot, { recursive: true });
+  await execFileAsync("git", ["init", "--initial-branch=main", repoRoot], { env: TEST_GIT_ENV });
+
+  await writeTextFile(join(repoRoot, "docs", "handover", "ccloop-handover.md"), docs.handoverDoc);
+  await writeTextFile(
+    join(repoRoot, "docs", "superpowers", "specs", "2026-07-18-a04-preflight-and-stop-boundaries-design.md"),
+    docs.a04BoundarySpec,
+  );
+  await writeTextFile(
+    join(repoRoot, "docs", "superpowers", "plans", "2026-07-18-a04-preflight-and-approval.md"),
+    docs.a04BoundaryPlan,
+  );
+  await writeTextFile(
+    join(repoRoot, "docs", "superpowers", "specs", "2026-07-18-claude-usage-evidence-design.md"),
+    docs.usageEvidenceSpec,
+  );
+
+  const trackedFilePath = join(repoRoot, "tracked.txt");
+  await writeFile(trackedFilePath, "seed\n");
+  await runGit(repoRoot, ["add", "tracked.txt", "docs"]);
+  await runGit(repoRoot, ["commit", "-m", "seed metadata"]);
+  await runGit(repoRoot, ["branch", "backup/evidence-first-v1-before-memory-history-cleanup"]);
+
+  await writeFile(trackedFilePath, "main advanced\n");
+  await runGit(repoRoot, ["add", "tracked.txt"]);
+  await runGit(repoRoot, ["commit", "-m", "advance main"]);
+
+  return { tempRoot, repoRoot, trackedFilePath };
+}
 
 function buildOptions(
   overrides: Partial<typeof A04_APPROVED_EXECUTION_POLICY> = {},
@@ -49,39 +138,71 @@ function buildContract(overrides: Partial<typeof A04_APPROVED_EXECUTION_POLICY> 
 }
 
 
-function buildReadOnlyInspection(overrides: Partial<ReadOnlyInspection> = {}): ReadOnlyInspection {
+function buildReadOnlyInspection(): ReadOnlyInspection {
   return {
     mainCheckout: {
+      status: "PRESENT",
       path: "/repo",
       head: "main-head",
       branch: "main",
     },
-    evidenceFirstValidationWorktree: {
-      path: "/repo/.worktrees/evidence-first-v1",
-      head: "evidence-head",
-      branch: "evidence-first-v1",
+    requiredSources: {
+      handoverDoc: {
+        status: "PRESENT",
+        path: "/repo/docs/handover/ccloop-handover.md",
+      },
+      a04BoundarySpec: {
+        status: "PRESENT",
+        path: "/repo/docs/superpowers/specs/2026-07-18-a04-preflight-and-stop-boundaries-design.md",
+      },
+      a04BoundaryPlan: {
+        status: "PRESENT",
+        path: "/repo/docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md",
+      },
+      usageEvidenceSpec: {
+        status: "PRESENT",
+        path: "/repo/docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md",
+      },
+      backupBranch: {
+        status: "PRESENT",
+        name: "backup/evidence-first-v1-before-memory-history-cleanup",
+        head: "backup-head",
+        mergeBaseWithMain: "merge-base",
+        distinctFromMain: true,
+      },
     },
-    retainedBackupBranch: {
-      name: "backup/evidence-first-v1-before-memory-history-cleanup",
-      head: "backup-head",
+    softSignals: {
+      retainedStashes: {
+        status: "MISSING",
+        matches: [],
+      },
+      legacyEvidenceWorktree: {
+        status: "MISSING",
+        path: "/repo/.worktrees/evidence-first-v1",
+      },
+      legacyPreservedEvidenceTree: {
+        status: "MISSING",
+        path: "/repo/.worktrees/evidence-first-v1/.validation-runs",
+      },
     },
-    retainedStashes: [
-      "stash@{0}: On main: pre-local-merge-evidence-first-v1-2026-07-18",
-      "stash@{1}: On main: pre-merge local changes 2026-07-16",
-    ],
-    preservedEvidenceTree: {
-      path: "/repo/.worktrees/evidence-first-v1/.validation-runs",
-      requiredPaths: [
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/fixture-01",
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/contracts/A-01.json",
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/contracts/A-02.json",
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/contracts/A-03.json",
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/evidence/A-01/review.json",
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/evidence/A-02/review.json",
-        "/repo/.worktrees/evidence-first-v1/.validation-runs/evidence/A-03/review.json",
-      ],
+    contradictionChecks: {
+      firstRealPaidScenarioA: {
+        status: "CONFIRMED",
+        sources: ["handoverDoc", "a04BoundarySpec"],
+      },
+      historicalA01ToA03Diagnoses: {
+        status: "CONFIRMED",
+        sources: ["handoverDoc", "usageEvidenceSpec"],
+      },
+      localDryRunArtifactsNotHistoricalEvidence: {
+        status: "CONFIRMED",
+        sources: ["handoverDoc", "a04BoundaryPlan"],
+      },
+      paidCallStillRequiresExplicitApproval: {
+        status: "CONFIRMED",
+        sources: ["handoverDoc", "a04BoundarySpec", "usageEvidenceSpec"],
+      },
     },
-    ...overrides,
   };
 }
 
@@ -142,6 +263,143 @@ function buildDeps(input: {
   };
 }
 
+describe("inspectMetadataBackedA04History", () => {
+  it("uses the brief-specified contradiction phrases for historical diagnoses and paid-call approval", async () => {
+    const { repoRoot } = await createMetadataInspectionRepo();
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.contradictionChecks.historicalA01ToA03Diagnoses).toEqual({
+      status: "CONFIRMED",
+      sources: ["handoverDoc", "usageEvidenceSpec"],
+    });
+    expect(result.contradictionChecks.paidCallStillRequiresExplicitApproval).toEqual({
+      status: "CONFIRMED",
+      sources: ["handoverDoc", "a04BoundarySpec", "usageEvidenceSpec"],
+    });
+  });
+
+  it("marks historical diagnoses contradictory when any canonical A-01 through A-03 diagnosis drifts", async () => {
+    const { repoRoot } = await createMetadataInspectionRepo({
+      handoverDoc: BASE_METADATA_INSPECTION_REPO_DOCS.handoverDoc.replace(
+        "Task 5 A-02: INCONCLUSIVE — planning exhausted the 50k token budget",
+        "Task 5 A-02: PASS — planning exhausted the 50k token budget",
+      ),
+    });
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.contradictionChecks.historicalA01ToA03Diagnoses).toEqual({
+      status: "CONTRADICTORY",
+      sources: ["handoverDoc", "usageEvidenceSpec"],
+    });
+  });
+
+  it("treats retained stashes as present only when a required retained stash matches", async () => {
+    const { repoRoot, trackedFilePath } = await createMetadataInspectionRepo();
+
+    await writeFile(trackedFilePath, "stashed change\n");
+    await runGit(repoRoot, ["stash", "push", "-m", "unrelated stash"]);
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.softSignals.retainedStashes).toEqual({
+      status: "MISSING",
+      matches: [],
+    });
+  });
+
+  it("reports the discovered legacy evidence worktree paths", async () => {
+    const { repoRoot, tempRoot } = await createMetadataInspectionRepo();
+    const legacyWorktreePath = join(tempRoot, "actual-evidence-first-v1");
+
+    await runGit(repoRoot, ["branch", "evidence-first-v1"]);
+    await runGit(repoRoot, ["worktree", "add", legacyWorktreePath, "evidence-first-v1"]);
+
+    const canonicalLegacyWorktreePath = await realpath(legacyWorktreePath);
+    await mkdir(join(canonicalLegacyWorktreePath, ".validation-runs"), { recursive: true });
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.softSignals.legacyEvidenceWorktree).toEqual({
+      status: "PRESENT",
+      path: canonicalLegacyWorktreePath,
+    });
+    expect(result.softSignals.legacyPreservedEvidenceTree).toEqual({
+      status: "PRESENT",
+      path: join(canonicalLegacyWorktreePath, ".validation-runs"),
+    });
+  });
+
+  it("reports an unreadable legacy preserved evidence tree as a soft signal instead of failing inspection", async () => {
+    const { repoRoot, tempRoot } = await createMetadataInspectionRepo();
+    const legacyWorktreePath = join(tempRoot, "actual-evidence-first-v1");
+
+    await runGit(repoRoot, ["branch", "evidence-first-v1"]);
+    await runGit(repoRoot, ["worktree", "add", legacyWorktreePath, "evidence-first-v1"]);
+
+    const canonicalLegacyWorktreePath = await realpath(legacyWorktreePath);
+    const legacyPreservedEvidenceTreePath = join(canonicalLegacyWorktreePath, ".validation-runs");
+    await mkdir(legacyPreservedEvidenceTreePath, { recursive: true });
+
+    const originalMode = (await lstat(canonicalLegacyWorktreePath)).mode & 0o777;
+    await chmod(canonicalLegacyWorktreePath, 0o000);
+
+    try {
+      const result = await inspectMetadataBackedA04History(repoRoot);
+
+      expect(result.softSignals.legacyPreservedEvidenceTree).toEqual({
+        status: "UNREADABLE",
+        path: legacyPreservedEvidenceTreePath,
+      });
+    } finally {
+      await chmod(canonicalLegacyWorktreePath, originalMode);
+    }
+  });
+
+  it("reports unreadable required metadata docs through the summary contract", async () => {
+    const { repoRoot } = await createMetadataInspectionRepo();
+    const unreadableUsageEvidenceSpecPath = join(
+      repoRoot,
+      "docs",
+      "superpowers",
+      "specs",
+      "2026-07-18-claude-usage-evidence-design.md",
+    );
+
+    await rm(unreadableUsageEvidenceSpecPath, { recursive: true, force: true });
+    await mkdir(unreadableUsageEvidenceSpecPath, { recursive: true });
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.requiredSources.usageEvidenceSpec).toEqual({
+      status: "UNREADABLE",
+      path: unreadableUsageEvidenceSpecPath,
+    });
+    expect(result.contradictionChecks.paidCallStillRequiresExplicitApproval.status).toBe("INSUFFICIENT");
+  });
+
+  it("keeps the backup branch present when merge-base reachability is unavailable", async () => {
+    const { repoRoot } = await createMetadataInspectionRepo();
+
+    await runGit(repoRoot, ["branch", "-D", "backup/evidence-first-v1-before-memory-history-cleanup"]);
+    await runGit(repoRoot, ["checkout", "--orphan", "backup/evidence-first-v1-before-memory-history-cleanup"]);
+    await runGit(repoRoot, ["commit", "--allow-empty", "-m", "orphan backup anchor"]);
+    const orphanBackupHead = await runGit(repoRoot, ["rev-parse", "HEAD"]);
+    await runGit(repoRoot, ["checkout", "main"]);
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.requiredSources.backupBranch).toEqual({
+      status: "PRESENT",
+      name: "backup/evidence-first-v1-before-memory-history-cleanup",
+      head: orphanBackupHead,
+      mergeBaseWithMain: undefined,
+      distinctFromMain: true,
+    });
+  });
+});
+
 describe("verified checkout dependency materialization", () => {
   it("copies node_modules into the verified checkout without leaving a symlink to the main checkout", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-a04-node-modules-"));
@@ -167,6 +425,25 @@ describe("verified checkout dependency materialization", () => {
 });
 
 describe("A-04 approval package", () => {
+  it("builds an approval package with the metadata-backed inspection summary", () => {
+    const pkg = buildApprovalPackage({
+      verifiedCheckoutPath: "/tmp/a04-main-checkout",
+      verifiedCheckoutHead: "verified-main-head",
+      readOnlyInspection: buildReadOnlyInspection(),
+      contract: buildContract(),
+      contractPath: "/tmp/a04-main-checkout/.validation-runs/contracts/A-04.json",
+      contractSha256: "abc123",
+      fixturePath: "/repo/.validation-runs/fixture-01",
+      runDir: "/repo/.validation-runs/runs/A-04",
+      evidenceDir: "/repo/.validation-runs/evidence/A-04",
+      adapterConfigPath: "/tmp/a04-main-checkout/examples/v1/claude-adapter-config.json",
+    });
+
+    expect(pkg.readOnlyInspection.softSignals.legacyEvidenceWorktree.status).toBe("MISSING");
+    expect(pkg.readOnlyInspection.requiredSources.usageEvidenceSpec.status).toBe("PRESENT");
+    expect(pkg.readOnlyInspection.contradictionChecks.paidCallStillRequiresExplicitApproval.status).toBe("CONFIRMED");
+  });
+
   it("builds a frozen approval package with explicit scenario, path, and artifact expectations", () => {
     const pkg = buildApprovalPackage({
       verifiedCheckoutPath: "/tmp/a04-main-checkout",
@@ -683,7 +960,7 @@ describe("A-04 approval package", () => {
   });
 
 
-  it("fails read-only inspection before creating the verification checkout", async () => {
+  it("propagates inspection failure before creating the verification checkout", async () => {
     const createMainVerificationCheckout = vi.fn(async () => ({
       path: "/tmp/a04-main-checkout",
       head: "verified-main-head",
@@ -695,14 +972,131 @@ describe("A-04 approval package", () => {
         buildOptions(),
         buildDeps({
           inspectReadOnlyInspection: async () => {
-            throw new Error("A-04 read-only inspection requires retained stash matching: On main: pre-local-merge-evidence-first-v1-2026-07-18");
+            throw new Error("inspection exploded before checkout");
           },
           createMainVerificationCheckout,
         }),
       ),
-    ).rejects.toThrow(/A-04 read-only inspection requires retained stash matching/);
+    ).rejects.toThrow(/inspection exploded before checkout/);
 
     expect(createMainVerificationCheckout).not.toHaveBeenCalled();
+  });
+
+  it("does not fail when retained stashes are missing because they are a soft signal", async () => {
+    const result = await prepareA04(
+      buildOptions(),
+      buildDeps({
+        inspectReadOnlyInspection: async () => ({
+          ...buildReadOnlyInspection(),
+          softSignals: {
+            retainedStashes: {
+              status: "MISSING",
+              matches: [],
+            },
+            legacyEvidenceWorktree: {
+              status: "PRESENT",
+              path: "/repo/.worktrees/evidence-first-v1",
+            },
+            legacyPreservedEvidenceTree: {
+              status: "PRESENT",
+              path: "/repo/.worktrees/evidence-first-v1/.validation-runs",
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(result.approvalPackage.readOnlyInspection.softSignals.retainedStashes.status).toBe("MISSING");
+  });
+
+  it("does not fail when the legacy preserved evidence tree is unreadable because it is a soft signal", async () => {
+    const result = await prepareA04(
+      buildOptions(),
+      buildDeps({
+        inspectReadOnlyInspection: async () => ({
+          ...buildReadOnlyInspection(),
+          softSignals: {
+            retainedStashes: {
+              status: "PRESENT",
+              matches: ["On main: pre-local-merge-evidence-first-v1-2026-07-18"],
+            },
+            legacyEvidenceWorktree: {
+              status: "PRESENT",
+              path: "/repo/.worktrees/evidence-first-v1",
+            },
+            legacyPreservedEvidenceTree: {
+              status: "UNREADABLE",
+              path: "/repo/.worktrees/evidence-first-v1/.validation-runs",
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(result.approvalPackage.readOnlyInspection.softSignals.legacyPreservedEvidenceTree.status).toBe("UNREADABLE");
+  });
+
+  it("fails when the usage-evidence spec is missing", async () => {
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          inspectReadOnlyInspection: async () => ({
+            ...buildReadOnlyInspection(),
+            requiredSources: {
+              ...buildReadOnlyInspection().requiredSources,
+              usageEvidenceSpec: {
+                status: "MISSING",
+                path: "/repo/docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md",
+              },
+            },
+          }),
+        }),
+      ),
+    ).rejects.toThrow(/usage-evidence spec/i);
+  });
+
+  it("fails when contradiction checks are insufficient", async () => {
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          inspectReadOnlyInspection: async () => ({
+            ...buildReadOnlyInspection(),
+            contradictionChecks: {
+              ...buildReadOnlyInspection().contradictionChecks,
+              firstRealPaidScenarioA: {
+                status: "INSUFFICIENT",
+                sources: ["handoverDoc"],
+              },
+            },
+          }),
+        }),
+      ),
+    ).rejects.toThrow(/first real paid scenario a/i);
+  });
+
+  it("fails when the backup branch is not a distinct history anchor", async () => {
+    await expect(
+      prepareA04(
+        buildOptions(),
+        buildDeps({
+          inspectReadOnlyInspection: async () => ({
+            ...buildReadOnlyInspection(),
+            requiredSources: {
+              ...buildReadOnlyInspection().requiredSources,
+              backupBranch: {
+                status: "PRESENT",
+                name: "backup/evidence-first-v1-before-memory-history-cleanup",
+                head: "main-head",
+                mergeBaseWithMain: "main-head",
+                distinctFromMain: false,
+              },
+            },
+          }),
+        }),
+      ),
+    ).rejects.toThrow(/backup branch/i);
   });
 
   it("preserves the isolated verified checkout so approval stays bound to the verified runnable revision", async () => {

@@ -323,5 +323,106 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-18T23:22:27+00:00"
+  },
+  {
+    "id": "bug-016",
+    "timestamp": "2026-07-19T09:30:33.993828+00:00",
+    "error_message": "Focused Task 2 metadata suite still passed when usageEvidenceSpec was missing, contradictionChecks were insufficient, or backupBranch was not a distinct anchor.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "prepareA04 trusted inspectReadOnlyInspection output without enforcing requiredSources/contradictionChecks, and the default inspection still returned a legacy read-only bridge cast to MetadataInspectionSummary.",
+    "fix": "Replaced the legacy read-only cast bridge with inspectMetadataBackedA04History, enforced required metadata/backup-anchor/contradiction gates in prepareA04, and mapped failures to human-readable labels so the focused metadata suite blocks on real summary fields.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "metadata-inspection",
+      "focused-test-failure"
+    ],
+    "related_bugs": [
+      "bug-010"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-19T09:35:49.926636+00:00"
+  },
+  {
+    "id": "bug-017",
+    "timestamp": "2026-07-19T09:51:45.468031+00:00",
+    "error_message": "Task 2 review found metadata-backed A-04 inspection used the wrong contradiction strings, marked retained stashes present for unrelated stash entries, and reported fallback legacy evidence paths instead of the discovered worktree paths.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "evaluateContradictions still matched older alternate fragments instead of the task-brief phrases, retainedStashes.status keyed off any stash line rather than filtered retained matches, and soft-signal path fields ignored the actual discovered legacy worktree location.",
+    "fix": "Updated contradiction checks to use the brief-specified historical/paid-approval text checks, derived retainedStashes.status from retainedStashMatches, reported discovered legacy worktree and .validation-runs paths, and added focused inspection regressions in tests/validation/prepareA04.test.ts.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "metadata-inspection",
+      "review-fix"
+    ],
+    "related_bugs": [
+      "bug-016"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-19T09:51:45.468031+00:00"
+  },
+  {
+    "id": "bug-018",
+    "timestamp": "2026-07-19T10:07:06.058108+00:00",
+    "error_message": "Latest Task 2 metadata re-review found unreadable required docs surfaced as raw filesystem failures and backup-branch presence collapsed to MISSING when merge-base reachability failed.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "Metadata inspection read required docs with a helper that only distinguished ENOENT from successful text reads, and backup-branch inspection wrapped rev-parse and merge-base in one try/catch so any merge-base failure discarded already-known branch presence data.",
+    "fix": "Added a required-metadata reader that maps existing-but-unreadable paths to UNREADABLE, separated backup-branch rev-parse/distinctness from merge-base reachability, and added focused regressions for both edge cases.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "metadata-inspection",
+      "review-fix",
+      "unreadable",
+      "backup-branch"
+    ],
+    "related_bugs": [
+      "bug-016",
+      "bug-017"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-19T10:07:06.058108+00:00"
+  },
+  {
+    "id": "bug-019",
+    "timestamp": "2026-07-19T10:21:07.694340+00:00",
+    "error_message": "Task 3 doc-alignment attempt hit Edit tool isolation errors because shared-checkout absolute paths were used instead of editing the target implementation worktree via Bash.",
+    "file": "validation/v1/README.md, docs/handover/ccloop-handover.md, docs/superpowers/specs/2026-07-18-a04-preflight-and-stop-boundaries-design.md, docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md",
+    "root_cause": "Edit/Write are scoped to the agent's own isolated worktree, so direct edits against the separate task worktree path were rejected.",
+    "fix": "Switched to Bash with absolute target-worktree paths for the Task 3 document updates and recorded the worktree-sync requirement in cerebrum.",
+    "tags": [
+      "task-3",
+      "docs",
+      "openwolf",
+      "tooling",
+      "edit-error"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-19T10:21:07.694506+00:00"
+  },
+  {
+    "id": "bug-020",
+    "timestamp": "2026-07-19T10:22:48.493429+00:00",
+    "error_message": "Task 3 verification command initially used a double-quoted rg pattern containing backticks, so zsh attempted command substitution and printed `command not found: evidence-first-v1`.",
+    "file": "docs/handover/ccloop-handover.md",
+    "root_cause": "The Bash verification command used a double-quoted rg pattern with Markdown backticks, which zsh treats as command substitution.",
+    "fix": "Re-ran verification with a single-quoted pattern and kept Task 3 shell searches free of backtick interpolation.",
+    "tags": [
+      "task-3",
+      "docs",
+      "verification",
+      "bash",
+      "quoting-error"
+    ],
+    "related_bugs": [
+      "bug-019"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-19T10:22:48.493429+00:00"
   }
 ]
