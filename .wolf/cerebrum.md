@@ -49,6 +49,8 @@
 - A-04 metadata-backed inspection now treats only the four required docs plus the retained backup branch and contradiction checks as hard blockers; retained stashes, the legacy evidence-first worktree, and its preserved `.validation-runs/` tree are soft signals only, so runtime checks must read current approved document text instead of reviving legacy evidence-path dependencies.
 - A-04 metadata contradiction checks are literal contract points: `historicalA01ToA03Diagnoses` must use the usage-evidence phrase `Historical A-01 through A-03 artifacts remain immutable`, `paidCallStillRequiresExplicitApproval` must use the approved boundary/approval wording from the brief, retained stash presence comes only from filtered required-stash matches, and legacy soft-signal paths must report the actual discovered worktree location.
 
+- Metadata-backed A-04 inspection must distinguish `UNREADABLE` required docs from `MISSING`, and a present backup branch must remain `PRESENT` even when `merge-base` reachability data is unavailable.
+
 ## Do-Not-Repeat
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->

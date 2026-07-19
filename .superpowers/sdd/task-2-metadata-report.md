@@ -73,3 +73,19 @@ Command:
 npm --prefix /Users/biran/code/skills/loop/ccloop/.worktrees/a04-metadata-boundary test -- --run tests/validation/prepareA04.test.ts
 ```
 Result: PASS (`44/44` tests)
+
+
+## 2026-07-19 Final review edge-case fix
+### Follow-up changes
+1. Changed required metadata reads in `validation/v1/lib/a04.ts` to classify files that exist but cannot be read as `UNREADABLE` in the machine-checkable summary contract instead of throwing raw filesystem errors.
+2. Split retained backup-branch inspection into separate signals for branch presence/distinctness vs. `merge-base` reachability, so a present branch with unavailable reachability data now stays `PRESENT` with `mergeBaseWithMain: undefined`.
+3. Added focused regressions in `tests/validation/prepareA04.test.ts` for both edge cases:
+   - unreadable required metadata document;
+   - present backup branch with unreachable `merge-base`.
+
+### Focused verification
+Command:
+```bash
+npm --prefix /Users/biran/code/skills/loop/ccloop/.worktrees/a04-metadata-boundary test -- --run tests/validation/prepareA04.test.ts
+```
+Result: PASS (`46/46` tests)

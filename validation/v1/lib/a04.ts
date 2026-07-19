@@ -348,12 +348,44 @@ function contradictionResult(
   return { status, sources };
 }
 
-function classifyRequiredSource(_path: string, body: string | null): RequiredSourceStatus {
+function classifyRequiredSource(body: string | null): RequiredSourceStatus {
   if (body === null) {
     return "MISSING";
   }
 
   return body.length > 0 ? "PRESENT" : "UNREADABLE";
+}
+
+type RequiredMetadataSource = {
+  status: RequiredSourceStatus;
+  body: string | null;
+};
+
+async function readRequiredMetadataSource(repoRoot: string, relativePath: string): Promise<RequiredMetadataSource> {
+  const absolutePath = resolve(repoRoot, relativePath);
+
+  try {
+    const body = await readFile(absolutePath, "utf8");
+    return {
+      status: classifyRequiredSource(body),
+      body: body.length > 0 ? body : null,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { status: "MISSING", body: null };
+    }
+
+    try {
+      await lstat(absolutePath);
+      return { status: "UNREADABLE", body: null };
+    } catch (statError) {
+      if ((statError as NodeJS.ErrnoException).code === "ENOENT") {
+        return { status: "MISSING", body: null };
+      }
+
+      return { status: "UNREADABLE", body: null };
+    }
+  }
 }
 
 const A04_REQUIRED_SOURCE_LABELS: Record<keyof MetadataInspectionSummary["requiredSources"], string> = {
@@ -460,36 +492,30 @@ function parseGitWorktreeList(output: string): GitWorktreeEntry[] {
 export async function inspectMetadataBackedA04History(repoRoot: string): Promise<MetadataInspectionSummary> {
   const mainHead = await gitOutput(repoRoot, ["rev-parse", "HEAD"]);
 
-  const readOptionalText = async (path: string): Promise<string | null> => {
-    try {
-      return await readFile(resolve(repoRoot, path), "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return null;
-      }
-
-      throw error;
-    }
-  };
-
   const [handoverDoc, a04BoundarySpec, a04BoundaryPlan, usageEvidenceSpec] = await Promise.all([
-    readOptionalText(A04_REQUIRED_METADATA_PATHS.handoverDoc),
-    readOptionalText(A04_REQUIRED_METADATA_PATHS.a04BoundarySpec),
-    readOptionalText(A04_REQUIRED_METADATA_PATHS.a04BoundaryPlan),
-    readOptionalText(A04_REQUIRED_METADATA_PATHS.usageEvidenceSpec),
+    readRequiredMetadataSource(repoRoot, A04_REQUIRED_METADATA_PATHS.handoverDoc),
+    readRequiredMetadataSource(repoRoot, A04_REQUIRED_METADATA_PATHS.a04BoundarySpec),
+    readRequiredMetadataSource(repoRoot, A04_REQUIRED_METADATA_PATHS.a04BoundaryPlan),
+    readRequiredMetadataSource(repoRoot, A04_REQUIRED_METADATA_PATHS.usageEvidenceSpec),
   ]);
 
   let backupHead: string | undefined;
   let mergeBaseWithMain: string | undefined;
-  let distinctFromMain = false;
+  let distinctFromMain: boolean | undefined;
   try {
     backupHead = await gitOutput(repoRoot, ["rev-parse", "--verify", `refs/heads/${A04_RETAINED_BACKUP_BRANCH}`]);
-    mergeBaseWithMain = await gitOutput(repoRoot, ["merge-base", "HEAD", `refs/heads/${A04_RETAINED_BACKUP_BRANCH}`]);
     distinctFromMain = backupHead !== mainHead;
   } catch {
     backupHead = undefined;
-    mergeBaseWithMain = undefined;
-    distinctFromMain = false;
+    distinctFromMain = undefined;
+  }
+
+  if (backupHead) {
+    try {
+      mergeBaseWithMain = await gitOutput(repoRoot, ["merge-base", "HEAD", `refs/heads/${A04_RETAINED_BACKUP_BRANCH}`]);
+    } catch {
+      mergeBaseWithMain = undefined;
+    }
   }
 
   const stashLinesOutput = await gitOutput(repoRoot, ["stash", "list"]);
@@ -502,14 +528,27 @@ export async function inspectMetadataBackedA04History(repoRoot: string): Promise
   const legacyWorktreePath = legacyWorktree?.path ?? resolve(repoRoot, ".worktrees/evidence-first-v1");
   const legacyPreservedEvidenceTreePath = resolve(legacyWorktreePath, ".validation-runs");
 
-  const contradictionChecks = handoverDoc && a04BoundarySpec && a04BoundaryPlan && usageEvidenceSpec
-    ? evaluateContradictions({ handoverDoc, a04BoundarySpec, a04BoundaryPlan, usageEvidenceSpec })
-    : {
-        firstRealPaidScenarioA: contradictionResult("INSUFFICIENT", []),
-        historicalA01ToA03Diagnoses: contradictionResult("INSUFFICIENT", []),
-        localDryRunArtifactsNotHistoricalEvidence: contradictionResult("INSUFFICIENT", []),
-        paidCallStillRequiresExplicitApproval: contradictionResult("INSUFFICIENT", []),
-      };
+  const contradictionChecks =
+    handoverDoc.status === "PRESENT" &&
+    a04BoundarySpec.status === "PRESENT" &&
+    a04BoundaryPlan.status === "PRESENT" &&
+    usageEvidenceSpec.status === "PRESENT" &&
+    handoverDoc.body !== null &&
+    a04BoundarySpec.body !== null &&
+    a04BoundaryPlan.body !== null &&
+    usageEvidenceSpec.body !== null
+      ? evaluateContradictions({
+          handoverDoc: handoverDoc.body,
+          a04BoundarySpec: a04BoundarySpec.body,
+          a04BoundaryPlan: a04BoundaryPlan.body,
+          usageEvidenceSpec: usageEvidenceSpec.body,
+        })
+      : {
+          firstRealPaidScenarioA: contradictionResult("INSUFFICIENT", []),
+          historicalA01ToA03Diagnoses: contradictionResult("INSUFFICIENT", []),
+          localDryRunArtifactsNotHistoricalEvidence: contradictionResult("INSUFFICIENT", []),
+          paidCallStillRequiresExplicitApproval: contradictionResult("INSUFFICIENT", []),
+        };
 
   return {
     mainCheckout: {
@@ -520,19 +559,19 @@ export async function inspectMetadataBackedA04History(repoRoot: string): Promise
     },
     requiredSources: {
       handoverDoc: {
-        status: classifyRequiredSource(A04_REQUIRED_METADATA_PATHS.handoverDoc, handoverDoc),
+        status: handoverDoc.status,
         path: resolve(repoRoot, A04_REQUIRED_METADATA_PATHS.handoverDoc),
       },
       a04BoundarySpec: {
-        status: classifyRequiredSource(A04_REQUIRED_METADATA_PATHS.a04BoundarySpec, a04BoundarySpec),
+        status: a04BoundarySpec.status,
         path: resolve(repoRoot, A04_REQUIRED_METADATA_PATHS.a04BoundarySpec),
       },
       a04BoundaryPlan: {
-        status: classifyRequiredSource(A04_REQUIRED_METADATA_PATHS.a04BoundaryPlan, a04BoundaryPlan),
+        status: a04BoundaryPlan.status,
         path: resolve(repoRoot, A04_REQUIRED_METADATA_PATHS.a04BoundaryPlan),
       },
       usageEvidenceSpec: {
-        status: classifyRequiredSource(A04_REQUIRED_METADATA_PATHS.usageEvidenceSpec, usageEvidenceSpec),
+        status: usageEvidenceSpec.status,
         path: resolve(repoRoot, A04_REQUIRED_METADATA_PATHS.usageEvidenceSpec),
       },
       backupBranch: {

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, lstat, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, lstat, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -309,6 +309,48 @@ describe("inspectMetadataBackedA04History", () => {
     expect(result.softSignals.legacyPreservedEvidenceTree).toEqual({
       status: "PRESENT",
       path: join(canonicalLegacyWorktreePath, ".validation-runs"),
+    });
+  });
+
+  it("reports unreadable required metadata docs through the summary contract", async () => {
+    const { repoRoot } = await createMetadataInspectionRepo();
+    const unreadableUsageEvidenceSpecPath = join(
+      repoRoot,
+      "docs",
+      "superpowers",
+      "specs",
+      "2026-07-18-claude-usage-evidence-design.md",
+    );
+
+    await rm(unreadableUsageEvidenceSpecPath, { recursive: true, force: true });
+    await mkdir(unreadableUsageEvidenceSpecPath, { recursive: true });
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.requiredSources.usageEvidenceSpec).toEqual({
+      status: "UNREADABLE",
+      path: unreadableUsageEvidenceSpecPath,
+    });
+    expect(result.contradictionChecks.paidCallStillRequiresExplicitApproval.status).toBe("INSUFFICIENT");
+  });
+
+  it("keeps the backup branch present when merge-base reachability is unavailable", async () => {
+    const { repoRoot } = await createMetadataInspectionRepo();
+
+    await runGit(repoRoot, ["branch", "-D", "backup/evidence-first-v1-before-memory-history-cleanup"]);
+    await runGit(repoRoot, ["checkout", "--orphan", "backup/evidence-first-v1-before-memory-history-cleanup"]);
+    await runGit(repoRoot, ["commit", "--allow-empty", "-m", "orphan backup anchor"]);
+    const orphanBackupHead = await runGit(repoRoot, ["rev-parse", "HEAD"]);
+    await runGit(repoRoot, ["checkout", "main"]);
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.requiredSources.backupBranch).toEqual({
+      status: "PRESENT",
+      name: "backup/evidence-first-v1-before-memory-history-cleanup",
+      head: orphanBackupHead,
+      mergeBaseWithMain: undefined,
+      distinctFromMain: true,
     });
   });
 });

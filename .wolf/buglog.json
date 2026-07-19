@@ -363,5 +363,28 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-19T09:51:45.468031+00:00"
+  },
+  {
+    "id": "bug-018",
+    "timestamp": "2026-07-19T10:07:06.058108+00:00",
+    "error_message": "Latest Task 2 metadata re-review found unreadable required docs surfaced as raw filesystem failures and backup-branch presence collapsed to MISSING when merge-base reachability failed.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "Metadata inspection read required docs with a helper that only distinguished ENOENT from successful text reads, and backup-branch inspection wrapped rev-parse and merge-base in one try/catch so any merge-base failure discarded already-known branch presence data.",
+    "fix": "Added a required-metadata reader that maps existing-but-unreadable paths to UNREADABLE, separated backup-branch rev-parse/distinctness from merge-base reachability, and added focused regressions for both edge cases.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "metadata-inspection",
+      "review-fix",
+      "unreadable",
+      "backup-branch"
+    ],
+    "related_bugs": [
+      "bug-016",
+      "bug-017"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-19T10:07:06.058108+00:00"
   }
 ]
