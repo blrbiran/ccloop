@@ -9,6 +9,7 @@
 <!-- How the user likes things done. Code style, tools, patterns, communication. -->
 - Prefer roadmap/milestone naming as `V1 / V2 / V3`; dislikes `V1.5` because it feels awkward and less clean.
 - 后续与用户讨论 ccloop 时使用中文，除非用户明确要求其他语言。
+- 在类似本次这种迭代修复把工作树弄脏、从而阻塞下一步验证时，可以主动创建本地 commit，不必每次都等用户手动提交。
 
 
 ## Key Learnings
