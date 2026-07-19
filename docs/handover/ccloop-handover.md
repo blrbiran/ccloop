@@ -1,8 +1,21 @@
 # ccloop Handover
 
 > Updated: 2026-07-18
-> Scope: merged V1 validation work, Claude usage-evidence hardening, preserved A-01 through A-03 evidence, and the exact A-04 decision point.
-> Snapshot rule: verify every status claim against Git and the filesystem before acting. Current code and immutable evidence override this document if they differ.
+> Scope: merged V1 validation work, Claude usage-evidence hardening, preserved A-01 through A-03 evidence, and the current local A-04 preparation / approval branch state.
+> Snapshot rule: verify every status claim against Git and the filesystem before acting. Current code, committed branch state, and immutable evidence override this document if they differ.
+
+## Executive Summary for Next Agent
+
+1. `main` is at `5b11232` (`add spec and plan`) and currently has one local modification: `.superpowers/sdd/task-1-report.md`.
+2. Preserved real-run evidence still lives only in `.worktrees/evidence-first-v1/.validation-runs/`; do not clean or rewrite it.
+3. The active local follow-up worktree is `.worktrees/a04-preflight-approval` on branch `a04-preflight-approval`; the latest committed head verified in this session is `c3036dc`, but always re-check `git log` and `git status` there before acting.
+4. In that worktree, local non-paid dry-run artifacts already exist: `.validation-runs/fixture-01` and `.validation-runs/contracts/A-04.json`; `.validation-runs/runs/A-04` and `.validation-runs/evidence/A-04` still do not exist.
+5. The intended A-04 envelope remains `550000 / 600000 / 1200000 / 5000`, one attempt, no automatic retries.
+6. No real Claude paid call has been run from the A-04 preparation branch.
+7. Latest known focused verification there passed: `tests/validation/contracts.test.ts` + `tests/validation/prepareA04.test.ts` (55 tests), `npm run typecheck`, `npm run build`.
+8. Backup branch `backup/evidence-first-v1-before-memory-history-cleanup` and both stashes still exist; never delete or publish them.
+9. Before further work, read this handover, then inspect `.worktrees/a04-preflight-approval` git status/log plus `validation/v1/lib/a04.ts`, `tests/validation/prepareA04.test.ts`, `validation/v1/README.md`, and `.superpowers/sdd/task-2-report.md`.
+10. Do not assume the local A-04 preparation branch is final merely because focused tests pass; review its latest committed and uncommitted state before using it for any real paid Scenario A run.
 
 ## 1. Current Repository State
 
@@ -10,19 +23,51 @@
 
 - Path: `/Users/biran/code/skills/loop/ccloop`
 - Branch: `main`
-- HEAD: `3c7cb267129c7337f510d1e59cbe9d00662a121a` (`add backlog / spec and handover docs`)
+- HEAD: `5b11232f3d9ff9e9db19bf5d5104e54ea12064ab` (`add spec and plan`)
 - Local Git currently reports `main == origin/main`.
-- The evidence-first validation implementation, Claude usage-evidence changes, validation documents, and backlog are merged into `main`.
-- Current intentional main-checkout change: `M docs/handover/ccloop-handover.md` from this handover refresh.
-- Do not overwrite, discard, or broadly stage it. Inspect status again before acting; if this refresh has since been committed, the checkout may be clean.
+- Evidence-first validation implementation, Claude usage-evidence changes, and the A-04 spec/plan are present on `main`.
+- Current observed local change in `main`: `M .superpowers/sdd/task-1-report.md`.
+- Do not overwrite, discard, or broadly stage that local report file without review.
+
+### A-04 preparation worktree
+
+- Path: `/Users/biran/code/skills/loop/ccloop/.worktrees/a04-preflight-approval`
+- Branch: `a04-preflight-approval`
+- Merge base with `main`: `5b11232f3d9ff9e9db19bf5d5104e54ea12064ab`
+- Latest committed branch head verified in this session: `c3036dc8892c16648a6c1c021e186ea96595f638` (`fix: freeze A-04 contract and fingerprint checkout`)
+- Recent committed branch history observed in this session:
+  - `c3036dc` `fix: freeze A-04 contract and fingerprint checkout`
+  - `f11735b` `fix: tighten A-04 pre-approval truthfulness`
+  - `afffa6d` `fix: harden A-04 symlink path checks`
+  - `5d1f606` `fix: freeze A-04 adapter config path`
+  - `9e7efa1` `fix: self-contain verified A-04 checkout`
+  - `a28da79` `fix: freeze verified A-04 approval target`
+  - `f7b8908` `fix: finalize A-04 approval truthfulness`
+  - `1973438` `docs: correct Task 2 override chronology`
+  - `5f26268` `fix: align A-04 preflight approval flow`
+  - `9b6fee3` `fix: close final A-04 preflight review gaps`
+  - `5bfd1f8` `fix: make Task 3 memory update surgical`
+  - `6ff39b1` `docs: record A-04 preparation workflow`
+- Local unstaged files currently present in this worktree:
+  - `.superpowers/sdd/progress.md`
+  - `.superpowers/sdd/task-3-report.md`
+  - `.wolf/memory.md`
+  - `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`
+  - `package-lock.json`
+- Local non-paid dry-run artifacts in this worktree currently are:
+  - present: `.validation-runs/fixture-01`
+  - present: `.validation-runs/contracts/A-04.json`
+  - absent: `.validation-runs/runs/A-04`
+  - absent: `.validation-runs/evidence/A-04`
+- No real Claude call has been run from this worktree.
+- This branch has **not** been declared final/clean in this handover. Before merging or using it to support a real paid A-04 invocation, re-review its latest committed state and any remaining local modifications.
 
 ### Evidence-first validation worktree
 
 - Path: `/Users/biran/code/skills/loop/ccloop/.worktrees/evidence-first-v1`
 - Branch: `evidence-first-v1`
 - HEAD: `d513e01ab5e2c7689e4170e98c0eb2b8236ced5e` (`docs: record final usage evidence verification`)
-- `main` is two commits ahead of this branch and the branch has no commits absent from `main`.
-- The worktree remains the home of ignored real-run evidence under `.validation-runs/`.
+- `main` is ahead of this branch; this worktree remains the home of ignored preserved real-run evidence under `.validation-runs/`.
 - It intentionally contains dirty/untracked SDD reports, copied documents, OpenWolf metadata, and `dist/`. Do not clean, reset, reinitialize, or broadly stage it.
 - Product/runtime work from this branch is already on `main`; preserving the linked worktree is still required because its ignored A-01 through A-03 evidence is not in Git.
 
@@ -34,13 +79,14 @@
 - Both sensitive commits are reachable only from the local backup branch.
 - Never push or publish the backup branch. Do not delete it without explicit approval.
 
-### Other linked worktree
+### Other linked worktrees
 
 ```text
+/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a15e1b1541b3b5082  5b11232 [worktree-agent-a15e1b1541b3b5082] locked
 /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a7587a5bdc14743ba  4460fca [worktree-agent-a7587a5bdc14743ba]
 ```
 
-It was created by an earlier subagent. Do not remove it without auditing its state and obtaining approval if removal could affect user data.
+Do not remove either without auditing its state and obtaining approval if removal could affect user data.
 
 ### Stashes
 
@@ -57,15 +103,14 @@ stash@{1}: On main: pre-merge local changes 2026-07-16
 
 ### Verification baseline
 
-Fresh verification on `main` at `3c7cb26`:
+Fresh verification re-run in the A-04 preparation worktree during this handover refresh:
 
-- 13 test files, 114 tests passing;
+- `npm test -- --run tests/validation/contracts.test.ts tests/validation/prepareA04.test.ts` passing (`55` tests);
 - `npm run typecheck` passing;
 - `npm run build` passing;
-- final whole-increment review: `APPROVE`, with no Critical, Important, or Minor findings;
-- target branch history verified free of `.wolf/memory.md`;
-- no real Claude call occurred during usage-evidence implementation or validation;
-- A-04 has not been run.
+- no real Claude call occurred.
+
+Fresh verification on `main` was **not** rerun in this handover refresh. If `main` will be used again as the execution base, re-run `npm test`, `npm run typecheck`, and `npm run build` there before acting.
 
 `npm ci` previously reported 5 dependency vulnerabilities: 3 moderate, 1 high, and 1 critical. This remains observational only. No dependency remediation was authorized; do not run `npm audit fix` or modify dependencies without separate approval.
 
@@ -100,8 +145,10 @@ Read these before continuing:
 2. `docs/superpowers/plans/2026-07-17-evidence-first-v1-validation.md`
 3. `docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md`
 4. `docs/superpowers/plans/2026-07-18-claude-usage-evidence.md`
-5. `docs/ccloop-v2-review-backlog.md`
-6. `.worktrees/evidence-first-v1/.superpowers/sdd/progress.md`
+5. `docs/superpowers/specs/2026-07-18-a04-preflight-and-stop-boundaries-design.md`
+6. `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`
+7. `docs/ccloop-v2-review-backlog.md`
+8. `.worktrees/evidence-first-v1/.superpowers/sdd/progress.md`
 
 The governing decisions are:
 
@@ -114,17 +161,28 @@ The governing decisions are:
 - defer V2 ownership, reconciliation, resume, scheduling, concurrency, and durable publication until evidence-first V1 validation is complete;
 - use models for judgment, not deterministic routing, retries, state transitions, or persistence.
 
-The V2 backlog is review input, not an approved V2 design or scope commitment.
+The current intended A-04 approval envelope is:
+
+```text
+tokenBudget: 550000
+perAttemptTimeoutMs: 600000
+totalRuntimeBudgetMs: 1200000
+partialOutcomeRecoveryWindowMs: 5000
+maxAttempts: 1
+automatic retries: none
+```
+
+The V2 backlog remains review input, not an approved V2 design or scope commitment.
 
 ## 4. Durable Progress
 
-The authoritative task ledger is:
+The authoritative historical task ledger for evidence-first V1 validation remains:
 
 ```text
 .worktrees/evidence-first-v1/.superpowers/sdd/progress.md
 ```
 
-Recorded outcome:
+Recorded outcome there remains:
 
 ```text
 Validation Tasks 1-4: complete
@@ -139,11 +197,16 @@ History privacy cleanup: complete
 Final deterministic verification: 13 files / 114 tests, typecheck/build pass
 ```
 
-Do not redispatch completed tasks. Resume at the Task 5 / A-04 preparation and approval point.
+Additional current-progress facts for the A-04 preparation branch:
+
+- Branch/worktree: `.worktrees/a04-preflight-approval`
+- Merge base with `main`: `5b11232`
+- This branch is a local non-paid A-04 preparation branch and is **not yet declared final in this handover**.
+- Before treating it as authoritative, re-review its latest committed state and any remaining local modifications.
 
 ## 5. Validation Kit
 
-Committed validation files:
+Committed validation files on `main` include:
 
 ```text
 validation/v1/
@@ -159,7 +222,15 @@ validation/v1/
     finalize-review.ts
 ```
 
-Key behavior:
+The A-04 preparation branch additionally contains local committed work (not yet merged to `main`) around:
+
+```text
+validation/v1/lib/a04.ts
+validation/v1/scripts/prepare-a04.ts
+tests/validation/prepareA04.test.ts
+```
+
+Key behavior on `main` remains:
 
 - `create-fixture.ts` creates a disposable one-commit Git repository and refuses overwrite.
 - `render-contract.ts` renders strict A-E contracts and refuses overwrite.
@@ -167,18 +238,17 @@ Key behavior:
 - `finalize-review.ts` writes a human-selected verdict exactly once.
 - Validation CLI tests create their own temporary Git repositories; they no longer depend on ignored `.validation-runs/fixture-smoke` state.
 
-Verdict and diagnosis remain separate:
+Key intended behavior in the A-04 preparation branch is now:
 
-```text
-scenarioVerdict: PASS | FAIL | INCONCLUSIVE
-diagnosis: PRODUCT_DEFECT | RUNTIME_VARIANCE | ENVIRONMENT_FAILURE | CONTRACT_GAP | null
-```
-
-Artifact statuses:
-
-```text
-PRESENT | NOT_PRODUCED | NOT_RUN | MISSING | INVALID
-```
+- `prepare-a04.ts` is a non-paid helper that:
+  - verifies it is being run from branch `main`;
+  - performs a read-only inspection of retained safety context;
+  - freezes the approved `main` revision into a preserved verified checkout;
+  - runs deterministic verification against that verified checkout;
+  - requires `--adapter-config` to resolve under repo root and under the preserved verified checkout;
+  - freezes the rendered A-04 contract into the preserved verified checkout and binds the approval package to that frozen contract copy plus the preserved verified checkout's `run-scenario.ts`;
+  - rejects path overlaps, symlink escape, contract drift, and final-gate mismatches;
+  - must not create `.validation-runs/runs/A-04` or `.validation-runs/evidence/A-04`.
 
 ## 6. Claude Usage Evidence
 
@@ -192,7 +262,7 @@ For each successful Claude-backed plan, execute, or verify result, the standard 
 - `normalizedTotal`;
 - `tokenUsage`, present only when it equals a finite positive `normalizedTotal`.
 
-Semantics:
+Semantics remain:
 
 - finite snake_case wins over the matching camelCase alias;
 - aliases are alternatives and are never double-counted;
@@ -201,29 +271,11 @@ Semantics:
 - interrupted/error fallback partial execution does not invent usage evidence from incomplete stdout;
 - the controller consumes the wrapper-provided `tokenUsage` and does not run a second alias-normalization algorithm.
 
-Deterministic coverage proves:
-
-- alias selection, invalid values, non-finite values, negative/zero totals, and finite-sum overflow;
-- unknown/synthetic secret fields are not persisted;
-- plan, execution, and verify artifacts retain the same totals the controller deducts from the token budget;
-- old artifacts without `usageEvidence` remain readable by the real evidence collector.
-
-Principal commits on `main` include:
-
-```text
-65aaf8b feat: persist Claude usage evidence
-550065f test: cover Claude usage evidence boundaries
-a5fdac7 test: cover negative-total usage evidence case
-675fee3 test: verify Claude usage accounting end to end
-38055b3 test: characterize legacy usage-evidence artifacts
-280ec58 test: isolate validation contract fixtures
-```
-
 Historical A-01 through A-03 artifacts remain immutable and are not retroactively reconstructed.
 
 ## 7. Preserved Real-Run Evidence
 
-All paths below are relative to `.worktrees/evidence-first-v1`. The `.validation-runs/` tree currently contains 98 files. Preserve all of them.
+All preserved real-run evidence below is still relative to `.worktrees/evidence-first-v1`. That `.validation-runs/` tree remains the only authoritative preserved real-run evidence set. The A-04 preparation branch's local dry-run artifacts are separate and must not be confused with these preserved records.
 
 ### A-01
 
@@ -266,56 +318,72 @@ All paths below are relative to `.worktrees/evidence-first-v1`. The `.validation
 - B, C, D, and E have not been run with real Claude.
 - Task 5 remains incomplete.
 
-## 8. A-04 Decision Point
+## 8. Current A-04 State and Decision Point
 
-A-04 has not been approved, rendered, or run. Verified fresh paths are currently absent:
+There are now **two distinct A-04 states** to keep straight:
 
-```text
-.validation-runs/contracts/A-04.json
-.validation-runs/runs/A-04
-.validation-runs/evidence/A-04
-```
+### 8.1 Preserved real-run evidence state
 
-The preserved fixture is:
+In `.worktrees/evidence-first-v1/.validation-runs/`, A-04 is still **unapproved and unrun**:
 
 ```text
-.validation-runs/fixture-01
-HEAD 93a26e6ec721ebe7c675d78819b381b9102da832
-one commit
-clean working tree at the latest check
+.validation-runs/contracts/A-04.json      absent
+.validation-runs/runs/A-04                absent
+.validation-runs/evidence/A-04            absent
 ```
+
+This remains the only state that matters for the eventual real Scenario A invocation.
+
+### 8.2 Local non-paid preparation state in `.worktrees/a04-preflight-approval`
+
+In the separate preparation worktree, local dry-run artifacts now exist:
+
+```text
+.validation-runs/fixture-01               present
+.validation-runs/contracts/A-04.json      present
+.validation-runs/runs/A-04                absent
+.validation-runs/evidence/A-04            absent
+```
+
+These are **not** preserved real-run evidence. They are local preparation artifacts from the non-paid `prepare-a04.ts` path.
 
 ### Recommended next action
 
-Prepare A-04 without making a paid call:
+A new agent taking over should choose **one** of these paths before proceeding:
 
-1. Recheck the fixture is clean and all A-04 paths are absent.
-2. Render a fresh Scenario A contract to `contracts/A-04.json`.
-3. If using a non-default token budget, change only `executionPolicy.tokenBudget` and revalidate through the product schema.
-4. Run all deterministic preflight checks.
-5. Present the exact call and budgets to the user.
-6. Wait for explicit approval before invoking `run-scenario.ts`.
+1. **Finish / verify the A-04 preparation branch**
+   - Re-review the committed branch state in `.worktrees/a04-preflight-approval`.
+   - Confirm which later local commits after `c3036dc` are intended to remain.
+   - Decide whether that branch is now clean enough to merge or cherry-pick back to `main`.
 
-A conservative proposed A-04 envelope is:
+2. **Discard the branch and prepare directly from `main`**
+   - Only if a human explicitly decides not to preserve the branch work.
+   - In that case, re-implement or re-cherry-pick the accepted A-04 preparation flow onto `main` before running any paid Scenario A.
+
+3. **Run a fresh local non-paid prepare after branch cleanup**
+   - Only after deciding which checkout is authoritative.
+   - If the A-04 preparation worktree will be reused, do **not** assume its current `fixture-01` / `contracts/A-04.json` are fresh enough for the next session; verify or rotate them.
+
+### Current intended A-04 approval envelope
+
+The current user-approved intended envelope remains:
 
 ```text
 scenario: A
 attempts: 1
-per-attempt timeout: 300000ms
-total runtime budget: 600000ms
-partial outcome recovery window: 3000ms
-token budget: 550000 (proposal only)
+per-attempt timeout: 600000ms
+total runtime budget: 1200000ms
+partial outcome recovery window: 5000ms
+token budget: 550000
 automatic retries: none
-fresh paths: A-04 only
+maximum Claude-backed phases: 3 (plan / execute / verify)
 ```
 
-The 550,000 token threshold is a proposal, not authorization. It uses A-03's pre-fix reported values as a conservative upper bound while reserving room for verify. `tokenBudget` is a controller stopping threshold based on adapter-reported usage, not a guaranteed API-cost cap.
-
-Before any real call, tell the user that one scenario invocation may launch up to three Claude phases: plan, execute, and verify. Obtain explicit approval for that exact invocation and budget.
+This is still a proposal only, not authorization. `tokenBudget` remains a controller stopping threshold, not an API-cost cap.
 
 ### A-04 success condition
 
-A-04 is successful only if the complete evidence chain agrees:
+For the eventual real Scenario A invocation, success still requires the complete evidence chain:
 
 ```text
 plan -> execute -> controller required checks -> independent verify -> succeeded
@@ -359,7 +427,7 @@ plan   execute   verify
  state, events, artifacts, worktree
 ```
 
-Important boundaries:
+Important boundaries remain:
 
 - The executor cannot declare final success.
 - Controller policy, required checks, and independent verifier evidence determine success.
@@ -380,6 +448,7 @@ Important boundaries:
 - No resume, reconciliation, scheduler, daemon, queue, lease, heartbeat, watchdog, or multi-task coordination exists.
 - Path matching remains intentionally small: exact, `**`, and directory-prefix `/**`.
 - V1 rejects existing run directories instead of resuming them.
+- The A-04 preparation branch is still local and not yet declared final in this handover; verify its latest committed state before treating it as authoritative.
 
 ## 11. Exact Takeover Procedure
 
@@ -395,6 +464,9 @@ git stash list
 git -C .worktrees/evidence-first-v1 status --short
 git -C .worktrees/evidence-first-v1 log -12 --oneline
 git -C .worktrees/evidence-first-v1 show -s --format='%H %s' HEAD
+
+git -C .worktrees/a04-preflight-approval status --short
+git -C .worktrees/a04-preflight-approval log -12 --oneline
 ```
 
 Read in order:
@@ -403,53 +475,45 @@ Read in order:
 2. `.worktrees/evidence-first-v1/.superpowers/sdd/progress.md`
 3. `docs/superpowers/specs/2026-07-17-evidence-first-v1-validation-design.md`
 4. `docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md`
-5. `.worktrees/evidence-first-v1/validation/v1/README.md`
-6. `.worktrees/evidence-first-v1/.superpowers/sdd/task-5-report.md`
-7. `.worktrees/evidence-first-v1/.superpowers/sdd/task-5-token-debug.md`
-8. A-02/A-03 review and run artifacts relevant to the A-04 budget decision
+5. `docs/superpowers/specs/2026-07-18-a04-preflight-and-stop-boundaries-design.md`
+6. `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`
+7. `.worktrees/evidence-first-v1/validation/v1/README.md`
+8. `.worktrees/evidence-first-v1/.superpowers/sdd/task-5-report.md`
+9. `.worktrees/evidence-first-v1/.superpowers/sdd/task-5-token-debug.md`
+10. A-02/A-03 review and run artifacts relevant to the A-04 budget decision
+11. `.worktrees/a04-preflight-approval/validation/v1/lib/a04.ts`
+12. `.worktrees/a04-preflight-approval/tests/validation/prepareA04.test.ts`
+13. `.worktrees/a04-preflight-approval/validation/v1/README.md`
+14. `.worktrees/a04-preflight-approval/.superpowers/sdd/task-2-report.md`
 
-Verify `main` before proceeding:
-
-```bash
-npm test
-npm run typecheck
-npm run build
-```
-
-Expected latest verified state:
-
-```text
-main/origin HEAD: 3c7cb26
-13 test files / 114 tests passing
-typecheck passing
-build passing
-working tree: only this handover refresh may be modified unless it was committed after the snapshot
-```
-
-Then verify A-04 preconditions without running it:
-
-```bash
-git -C .worktrees/evidence-first-v1/.validation-runs/fixture-01 status --short
-
-for path in \
-  .worktrees/evidence-first-v1/.validation-runs/contracts/A-04.json \
-  .worktrees/evidence-first-v1/.validation-runs/runs/A-04 \
-  .worktrees/evidence-first-v1/.validation-runs/evidence/A-04; do
-  test ! -e "$path" || { echo "unexpected existing path: $path"; exit 1; }
-done
-```
-
-Do not create or execute A-04 until the exact contract and budget have been presented and explicitly approved.
+Before doing anything further, decide whether the A-04 preparation branch itself is the next source of truth. If yes, review its latest committed state before touching `main`.
 
 ## 12. Useful Commands
 
 ```bash
-# Main verification
+# Main verification (if main is used again as execution base)
+git -C /Users/biran/code/skills/loop/ccloop status --short
 npm test
 npm run typecheck
 npm run build
 
-# Focused usage-evidence regressions
+# A-04 preparation worktree focused verification
+npm --prefix .worktrees/a04-preflight-approval test -- --run \
+  tests/validation/contracts.test.ts \
+  tests/validation/prepareA04.test.ts
+npm --prefix .worktrees/a04-preflight-approval run typecheck
+npm --prefix .worktrees/a04-preflight-approval run build
+
+# Check local dry-run artifacts in the A-04 preparation worktree
+for path in \
+  .worktrees/a04-preflight-approval/.validation-runs/fixture-01 \
+  .worktrees/a04-preflight-approval/.validation-runs/contracts/A-04.json \
+  .worktrees/a04-preflight-approval/.validation-runs/runs/A-04 \
+  .worktrees/a04-preflight-approval/.validation-runs/evidence/A-04; do
+  test -e "$path" && echo "exists $path" || echo "missing $path"
+done
+
+# Focused usage-evidence regressions on main
 npm test -- --run \
   tests/runtime/claude/subprocessClaudeAdapter.test.ts \
   tests/controller/runLoop.integration.test.ts \
@@ -479,13 +543,15 @@ git stash list
 ## 13. Do Not Do These on Takeover
 
 - Do not run `git clean`, `git reset --hard`, broad `git restore`, or broad `git checkout`.
-- Do not delete `.validation-runs/`, the validation worktree, the agent worktree, the backup branch, or either stash without explicit approval.
+- Do not delete `.validation-runs/`, either validation worktree, either agent worktree, the backup branch, or either stash without explicit approval.
 - Do not push the backup branch; it intentionally preserves sensitive pre-rewrite history.
 - Do not stage with `git add .` or `git add -A`; stage only reviewed files by explicit path.
 - Do not push, open a PR, merge, amend, or rewrite history without explicit instruction.
 - Do not rewrite A-01/A-02/A-03 `review.json` files.
 - Do not call Claude using an old approval or old run ID.
-- Do not render or run A-04 with reused paths.
-- Do not silently choose the proposed 550,000 token budget; obtain exact approval.
+- Do not treat the A-04 preparation branch's local `fixture-01` / `contracts/A-04.json` as preserved real-run evidence.
+- Do not render or run real A-04 with reused preserved-evidence paths.
+- Do not silently choose the proposed `550000` token budget; obtain exact approval.
 - Do not classify a run as PASS because executor-captured tests passed; controller-owned required checks and verifier evidence govern success.
 - Do not begin V2 design until evidence-first A-E validation is complete or the user explicitly changes that priority.
+- Do not assume the local A-04 preparation branch is final merely because its focused tests pass; review its latest committed state before using it as the basis for any real paid Scenario A invocation.
