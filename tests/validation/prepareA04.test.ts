@@ -279,6 +279,22 @@ describe("inspectMetadataBackedA04History", () => {
     });
   });
 
+  it("confirms paid-call approval from the live 2026-07-18 A-04 boundary wording", async () => {
+    const { repoRoot } = await createMetadataInspectionRepo({
+      a04BoundarySpec: [
+        "Prepare one fresh A-04 Scenario A invocation",
+        "Any future real-scenario invocation requires a new explicit approval.",
+      ].join("\n"),
+    });
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.contradictionChecks.paidCallStillRequiresExplicitApproval).toEqual({
+      status: "CONFIRMED",
+      sources: ["handoverDoc", "a04BoundarySpec", "usageEvidenceSpec"],
+    });
+  });
+
   it("marks historical diagnoses contradictory when any canonical A-01 through A-03 diagnosis drifts", async () => {
     const { repoRoot } = await createMetadataInspectionRepo({
       handoverDoc: BASE_METADATA_INSPECTION_REPO_DOCS.handoverDoc.replace(

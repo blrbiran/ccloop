@@ -445,9 +445,10 @@ function evaluateContradictions(input: {
 
   const paidCallStillRequiresExplicitApproval =
     input.handoverDoc.includes("Every real call requires separate approval.") &&
-    input.a04BoundarySpec.includes(
-      "This design governs branch assessment and branch-local tightening only. It does not authorize a paid Scenario A invocation.",
-    ) &&
+    (input.a04BoundarySpec.includes("Any future real-scenario invocation requires a new explicit approval.") ||
+      input.a04BoundarySpec.includes(
+        "This design governs branch assessment and branch-local tightening only. It does not authorize a paid Scenario A invocation.",
+      )) &&
     input.usageEvidenceSpec.includes("The invocation remains unapproved and unrun until separately presented to the user.")
       ? contradictionResult("CONFIRMED", ["handoverDoc", "a04BoundarySpec", "usageEvidenceSpec"])
       : contradictionResult("INSUFFICIENT", ["handoverDoc", "a04BoundarySpec", "usageEvidenceSpec"]);

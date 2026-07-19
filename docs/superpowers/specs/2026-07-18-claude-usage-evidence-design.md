@@ -167,7 +167,8 @@ This increment is complete when:
 - controller token accounting and artifact evidence use one normalization result;
 - alias selection, invalid-value handling, and normalized totals are deterministic;
 - no complete envelope, unknown field, or synthetic secret sentinel is persisted;
+- Historical A-01 through A-03 artifacts remain immutable and are not retroactively reconstructed;
 - historical artifacts remain readable without mutation;
 - focused tests, the full suite, type checking, and build pass;
 - no real Claude call has occurred;
-- the exact A-04 invocation remains unapproved and unrun until separately presented to the user.
+- The invocation remains unapproved and unrun until separately presented to the user.
