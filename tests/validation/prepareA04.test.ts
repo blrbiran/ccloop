@@ -1,16 +1,102 @@
-import { mkdtemp, mkdir, lstat, readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, lstat, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import {
   A04_APPROVED_EXECUTION_POLICY,
   buildA04RunCommand,
   materializeVerifiedCheckoutDependencies,
   buildApprovalPackage,
+  inspectMetadataBackedA04History,
   type ReadOnlyInspection,
   prepareA04,
 } from "../../validation/v1/lib/a04.js";
 import { renderScenario } from "../../validation/v1/lib/scenarios.js";
+
+const execFileAsync = promisify(execFile);
+const TEST_GIT_ENV = {
+  ...process.env,
+  GIT_AUTHOR_NAME: "Claude",
+  GIT_AUTHOR_EMAIL: "claude@example.com",
+  GIT_COMMITTER_NAME: "Claude",
+  GIT_COMMITTER_EMAIL: "claude@example.com",
+};
+
+type MetadataInspectionRepoDocs = {
+  handoverDoc: string;
+  a04BoundarySpec: string;
+  a04BoundaryPlan: string;
+  usageEvidenceSpec: string;
+};
+
+const BASE_METADATA_INSPECTION_REPO_DOCS: MetadataInspectionRepoDocs = {
+  handoverDoc: [
+    "No successful real-Claude Scenario A exists yet.",
+    "Historical verdict: `INCONCLUSIVE / RUNTIME_VARIANCE`",
+    "These are **not** preserved real-run evidence.",
+    "Every real call requires separate approval.",
+  ].join("\n"),
+  a04BoundarySpec: [
+    "Prepare one fresh A-04 Scenario A invocation",
+    "This design governs branch assessment and branch-local tightening only. It does not authorize a paid Scenario A invocation.",
+  ].join("\n"),
+  a04BoundaryPlan: "This branch assessment remains non-paid and non-destructive.\n",
+  usageEvidenceSpec: [
+    "Historical A-01 through A-03 artifacts remain immutable",
+    "The invocation remains unapproved and unrun until separately presented to the user.",
+  ].join("\n"),
+};
+
+async function runGit(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+    env: TEST_GIT_ENV,
+  });
+  return stdout.trim();
+}
+
+async function writeTextFile(filePath: string, body: string): Promise<void> {
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, body);
+}
+
+async function createMetadataInspectionRepo(
+  overrides: Partial<MetadataInspectionRepoDocs> = {},
+): Promise<{ tempRoot: string; repoRoot: string; trackedFilePath: string }> {
+  const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-a04-metadata-inspection-"));
+  const repoRoot = join(tempRoot, "repo");
+  const docs = { ...BASE_METADATA_INSPECTION_REPO_DOCS, ...overrides };
+
+  await mkdir(repoRoot, { recursive: true });
+  await execFileAsync("git", ["init", "--initial-branch=main", repoRoot], { env: TEST_GIT_ENV });
+
+  await writeTextFile(join(repoRoot, "docs", "handover", "ccloop-handover.md"), docs.handoverDoc);
+  await writeTextFile(
+    join(repoRoot, "docs", "superpowers", "specs", "2026-07-18-a04-preflight-and-stop-boundaries-design.md"),
+    docs.a04BoundarySpec,
+  );
+  await writeTextFile(
+    join(repoRoot, "docs", "superpowers", "plans", "2026-07-18-a04-preflight-and-approval.md"),
+    docs.a04BoundaryPlan,
+  );
+  await writeTextFile(
+    join(repoRoot, "docs", "superpowers", "specs", "2026-07-18-claude-usage-evidence-design.md"),
+    docs.usageEvidenceSpec,
+  );
+
+  const trackedFilePath = join(repoRoot, "tracked.txt");
+  await writeFile(trackedFilePath, "seed\n");
+  await runGit(repoRoot, ["add", "tracked.txt", "docs"]);
+  await runGit(repoRoot, ["commit", "-m", "seed metadata"]);
+  await runGit(repoRoot, ["branch", "backup/evidence-first-v1-before-memory-history-cleanup"]);
+
+  await writeFile(trackedFilePath, "main advanced\n");
+  await runGit(repoRoot, ["add", "tracked.txt"]);
+  await runGit(repoRoot, ["commit", "-m", "advance main"]);
+
+  return { tempRoot, repoRoot, trackedFilePath };
+}
 
 function buildOptions(
   overrides: Partial<typeof A04_APPROVED_EXECUTION_POLICY> = {},
@@ -173,6 +259,59 @@ function buildDeps(input: {
     writeVerifiedContract: input.writeVerifiedContract ?? (async () => {}),
   };
 }
+
+describe("inspectMetadataBackedA04History", () => {
+  it("uses the brief-specified contradiction phrases for historical diagnoses and paid-call approval", async () => {
+    const { repoRoot } = await createMetadataInspectionRepo();
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.contradictionChecks.historicalA01ToA03Diagnoses).toEqual({
+      status: "CONFIRMED",
+      sources: ["handoverDoc", "usageEvidenceSpec"],
+    });
+    expect(result.contradictionChecks.paidCallStillRequiresExplicitApproval).toEqual({
+      status: "CONFIRMED",
+      sources: ["handoverDoc", "a04BoundarySpec", "usageEvidenceSpec"],
+    });
+  });
+
+  it("treats retained stashes as present only when a required retained stash matches", async () => {
+    const { repoRoot, trackedFilePath } = await createMetadataInspectionRepo();
+
+    await writeFile(trackedFilePath, "stashed change\n");
+    await runGit(repoRoot, ["stash", "push", "-m", "unrelated stash"]);
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.softSignals.retainedStashes).toEqual({
+      status: "MISSING",
+      matches: [],
+    });
+  });
+
+  it("reports the discovered legacy evidence worktree paths", async () => {
+    const { repoRoot, tempRoot } = await createMetadataInspectionRepo();
+    const legacyWorktreePath = join(tempRoot, "actual-evidence-first-v1");
+
+    await runGit(repoRoot, ["branch", "evidence-first-v1"]);
+    await runGit(repoRoot, ["worktree", "add", legacyWorktreePath, "evidence-first-v1"]);
+
+    const canonicalLegacyWorktreePath = await realpath(legacyWorktreePath);
+    await mkdir(join(canonicalLegacyWorktreePath, ".validation-runs"), { recursive: true });
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.softSignals.legacyEvidenceWorktree).toEqual({
+      status: "PRESENT",
+      path: canonicalLegacyWorktreePath,
+    });
+    expect(result.softSignals.legacyPreservedEvidenceTree).toEqual({
+      status: "PRESENT",
+      path: join(canonicalLegacyWorktreePath, ".validation-runs"),
+    });
+  });
+});
 
 describe("verified checkout dependency materialization", () => {
   it("copies node_modules into the verified checkout without leaving a symlink to the main checkout", async () => {

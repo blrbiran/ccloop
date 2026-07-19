@@ -385,8 +385,7 @@ function evaluateContradictions(input: {
 
   const historicalA01ToA03Diagnoses =
     input.handoverDoc.includes("Historical verdict: `INCONCLUSIVE / RUNTIME_VARIANCE`") &&
-    input.usageEvidenceSpec.includes("alter A-01, A-02, or A-03 evidence") &&
-    input.usageEvidenceSpec.includes("no migration or historical reconstruction is attempted")
+    input.usageEvidenceSpec.includes("Historical A-01 through A-03 artifacts remain immutable")
       ? contradictionResult("CONFIRMED", ["handoverDoc", "usageEvidenceSpec"])
       : contradictionResult("INSUFFICIENT", ["handoverDoc", "usageEvidenceSpec"]);
 
@@ -398,8 +397,10 @@ function evaluateContradictions(input: {
 
   const paidCallStillRequiresExplicitApproval =
     input.handoverDoc.includes("Every real call requires separate approval.") &&
-    input.a04BoundarySpec.includes("authorize a real Claude call by itself") &&
-    input.usageEvidenceSpec.includes("It remains a separate paid call requiring explicit approval.")
+    input.a04BoundarySpec.includes(
+      "This design governs branch assessment and branch-local tightening only. It does not authorize a paid Scenario A invocation.",
+    ) &&
+    input.usageEvidenceSpec.includes("The invocation remains unapproved and unrun until separately presented to the user.")
       ? contradictionResult("CONFIRMED", ["handoverDoc", "a04BoundarySpec", "usageEvidenceSpec"])
       : contradictionResult("INSUFFICIENT", ["handoverDoc", "a04BoundarySpec", "usageEvidenceSpec"]);
 
@@ -493,8 +494,13 @@ export async function inspectMetadataBackedA04History(repoRoot: string): Promise
 
   const stashLinesOutput = await gitOutput(repoRoot, ["stash", "list"]);
   const stashLines = stashLinesOutput === "" ? [] : stashLinesOutput.split("\n").map((line) => line.trim()).filter(Boolean);
+  const retainedStashMatches = stashLines.filter((line) =>
+    A04_REQUIRED_RETAINED_STASH_LINES.some((required) => line.includes(required)),
+  );
   const worktrees = parseGitWorktreeList(await gitOutput(repoRoot, ["worktree", "list", "--porcelain"]));
   const legacyWorktree = worktrees.find((entry) => entry.branch === "refs/heads/evidence-first-v1");
+  const legacyWorktreePath = legacyWorktree?.path ?? resolve(repoRoot, ".worktrees/evidence-first-v1");
+  const legacyPreservedEvidenceTreePath = resolve(legacyWorktreePath, ".validation-runs");
 
   const contradictionChecks = handoverDoc && a04BoundarySpec && a04BoundaryPlan && usageEvidenceSpec
     ? evaluateContradictions({ handoverDoc, a04BoundarySpec, a04BoundaryPlan, usageEvidenceSpec })
@@ -539,16 +545,16 @@ export async function inspectMetadataBackedA04History(repoRoot: string): Promise
     },
     softSignals: {
       retainedStashes: {
-        status: stashLines.length > 0 ? "PRESENT" : "MISSING",
-        matches: stashLines.filter((line) => A04_REQUIRED_RETAINED_STASH_LINES.some((required) => line.includes(required))),
+        status: retainedStashMatches.length > 0 ? "PRESENT" : "MISSING",
+        matches: retainedStashMatches,
       },
       legacyEvidenceWorktree: {
         status: legacyWorktree ? "PRESENT" : "MISSING",
-        path: resolve(repoRoot, ".worktrees/evidence-first-v1"),
+        path: legacyWorktreePath,
       },
       legacyPreservedEvidenceTree: {
-        status: legacyWorktree && (await pathExists(resolve(legacyWorktree.path, ".validation-runs"))) ? "PRESENT" : "MISSING",
-        path: resolve(repoRoot, ".worktrees/evidence-first-v1/.validation-runs"),
+        status: legacyWorktree && (await pathExists(legacyPreservedEvidenceTreePath)) ? "PRESENT" : "MISSING",
+        path: legacyPreservedEvidenceTreePath,
       },
     },
     contradictionChecks,

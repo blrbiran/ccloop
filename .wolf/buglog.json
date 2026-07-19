@@ -343,5 +343,25 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-19T09:35:49.926636+00:00"
+  },
+  {
+    "id": "bug-017",
+    "timestamp": "2026-07-19T09:51:45.468031+00:00",
+    "error_message": "Task 2 review found metadata-backed A-04 inspection used the wrong contradiction strings, marked retained stashes present for unrelated stash entries, and reported fallback legacy evidence paths instead of the discovered worktree paths.",
+    "file": "validation/v1/lib/a04.ts",
+    "root_cause": "evaluateContradictions still matched older alternate fragments instead of the task-brief phrases, retainedStashes.status keyed off any stash line rather than filtered retained matches, and soft-signal path fields ignored the actual discovered legacy worktree location.",
+    "fix": "Updated contradiction checks to use the brief-specified historical/paid-approval text checks, derived retainedStashes.status from retainedStashMatches, reported discovered legacy worktree and .validation-runs paths, and added focused inspection regressions in tests/validation/prepareA04.test.ts.",
+    "tags": [
+      "task-2",
+      "validation",
+      "a04",
+      "metadata-inspection",
+      "review-fix"
+    ],
+    "related_bugs": [
+      "bug-016"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-19T09:51:45.468031+00:00"
   }
 ]
