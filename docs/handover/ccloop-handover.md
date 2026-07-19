@@ -1,21 +1,36 @@
 # ccloop Handover
 
-> Updated: 2026-07-18
-> Scope: merged V1 validation work, Claude usage-evidence hardening, preserved A-01 through A-03 evidence, and the current local A-04 preparation / approval branch state.
+> Updated: 2026-07-19
+> Scope: merged V1 validation work, Claude usage-evidence hardening, metadata-backed A-04 prepare boundary redesign, and the current `main`-based non-paid A-04 preparation state.
 > Snapshot rule: verify every status claim against Git and the filesystem before acting. Current code, committed branch state, and immutable evidence override this document if they differ.
 
 ## Executive Summary for Next Agent
 
-1. `main` is at `5b11232` (`add spec and plan`) and currently has one local modification: `.superpowers/sdd/task-1-report.md`.
-2. The old linked `evidence-first-v1` worktree and its preserved `.validation-runs/` tree are no longer available; treat the required handover/spec/plan docs plus the backup branch as the mechanical A-04 historical anchors instead, and do not fabricate substitute preserved evidence.
-3. The active local follow-up worktree is `.worktrees/a04-preflight-approval` on branch `a04-preflight-approval`; the latest committed head verified in this session is `c3036dc`, but always re-check `git log` and `git status` there before acting.
-4. In that worktree, local non-paid dry-run artifacts already exist: `.validation-runs/fixture-01` and `.validation-runs/contracts/A-04.json`; `.validation-runs/runs/A-04` and `.validation-runs/evidence/A-04` still do not exist.
-5. The intended A-04 envelope remains `550000 / 600000 / 1200000 / 5000`, one attempt, no automatic retries.
-6. No real Claude paid call has been run from the A-04 preparation branch.
-7. Latest known focused verification there passed: `tests/validation/contracts.test.ts` + `tests/validation/prepareA04.test.ts` (55 tests), `npm run typecheck`, `npm run build`.
-8. Backup branch `backup/evidence-first-v1-before-memory-history-cleanup` and both stashes still exist; never delete or publish them.
-9. Before further work, read this handover, then inspect `.worktrees/a04-preflight-approval` git status/log plus `validation/v1/lib/a04.ts`, `tests/validation/prepareA04.test.ts`, `validation/v1/README.md`, and `.superpowers/sdd/task-2-report.md`.
-10. Do not assume the local A-04 preparation branch is final merely because focused tests pass; review its latest committed and uncommitted state before using it for any real paid Scenario A run.
+1. `main` is at `a0c635c` (`remove openwolf related file`) and currently reports clean `main...origin/main` status.
+2. Metadata-backed A-04 prepare is merged on `main`: `validation/v1/lib/a04.ts`, `validation/v1/scripts/prepare-a04.ts`, `tests/validation/prepareA04.test.ts`, and the 2026-07-19 metadata-backed spec/plan are present.
+3. Fresh post-merge verification on `main` passed: `npm test` (`14` files / `171` tests), `npm run typecheck`, and `npm run build`.
+4. The old linked `evidence-first-v1` worktree and its preserved `.validation-runs/` tree are gone; they are no longer hard blockers for non-paid prepare.
+5. Metadata-backed A-04 inspection now hard-blocks only on the required docs plus contradiction checks and the local backup branch `backup/evidence-first-v1-before-memory-history-cleanup`.
+6. In the current live repo state, that backup branch is missing, so fresh non-paid `prepare-a04.ts` now fails on the backup-branch hard blocker instead of the deleted legacy worktree.
+7. Current local dry-run artifacts on `main`: `.validation-runs/fixture-01` exists; `.validation-runs/contracts/A-04.json`, `.validation-runs/runs/A-04`, and `.validation-runs/evidence/A-04` are absent.
+8. No real Claude paid call has been run for Scenario A.
+9. Stashes still exist (`stash@{0}` pre-local-merge-evidence-first-v1-2026-07-18, `stash@{1}` pre-merge local changes 2026-07-16); treat them as soft historical signals only.
+10. Next agent should use this handover plus the 2026-07-19 metadata-backed spec/plan to decide whether to restore the backup branch anchor, relax that hard blocker by design, or stop A-04 prepare here.
+
+## 10-line Handover Executive Summary
+
+1. `main` HEAD: `a0c635c`, clean working tree.
+2. Metadata-backed A-04 prepare boundary is merged on `main`.
+3. Fresh verification passed on `main`: `npm test` (14 files / 171 tests), `typecheck`, `build`.
+4. Old `evidence-first-v1` worktree and preserved `.validation-runs/` tree are gone.
+5. They are now soft signals only, not hard blockers.
+6. Current hard blockers are required metadata docs + contradiction checks + backup branch anchor.
+7. Backup branch `backup/evidence-first-v1-before-memory-history-cleanup` is currently missing in live repo state.
+8. Fresh non-paid `prepare-a04.ts` therefore fails on the backup-branch hard blocker.
+9. `.validation-runs/fixture-01` exists on `main`; `contracts/runs/evidence` for A-04 are still absent.
+10. No real paid Scenario A call has been run.
+
+## 1. Current Repository State
 
 ## 1. Current Repository State
 

@@ -50,6 +50,7 @@
 - A-04 metadata contradiction checks are literal contract points: `historicalA01ToA03Diagnoses` must use the usage-evidence phrase `Historical A-01 through A-03 artifacts remain immutable`, `paidCallStillRequiresExplicitApproval` must use the approved boundary/approval wording from the brief, retained stash presence comes only from filtered required-stash matches, and legacy soft-signal paths must report the actual discovered worktree location.
 
 - Metadata-backed A-04 inspection must distinguish `UNREADABLE` required docs from `MISSING`, and a present backup branch must remain `PRESENT` even when `merge-base` reachability data is unavailable.
+- On live `main`, `prepare-a04.ts` enforces a clean-checkout gate before preflight; after restoring the backup branch anchor, any remaining uncommitted file such as `docs/handover/ccloop-handover.md` blocks non-paid prepare before metadata verification continues.
 
 - Task 3 doc-alignment worktrees may lag approved 2026-07-19 metadata-backed governance docs from the main checkout; sync those tracked spec/plan files before adding supersession references so README/handover/anatomy do not point at missing paths.
 
