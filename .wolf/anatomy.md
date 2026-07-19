@@ -1,39 +1,16 @@
-# Anatomy
+# anatomy.md
 
-- validation/v1/lib/scenarios.ts
-  - Scenario catalog and contract rendering helpers for validation V1, including Scenario A-only execution-policy override enforcement.
-  - ~300 lines / medium token cost.
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-19T10:33:20.918Z
+> Files: 3 tracked | Anatomy hits: 0 | Misses: 0
 
-- tests/validation/contracts.test.ts
-  - Focused Vitest coverage for scenario rendering, non-A override rejection, and render-contract CLI behavior.
-  - ~220 lines / medium token cost.
+## .worktrees/a04-metadata-boundary/.superpowers/sdd/
 
-- .superpowers/sdd/task-1-brief.md
-  - Task 1 brief with exact TDD steps and commit/report requirements.
-  - ~160 lines / low token cost.
+- `progress.md` — Evidence-First V1 SDD Progress (~623 tok)
 
-- .wolf/cerebrum.md
-  - OpenWolf long-term learnings, preferences, and do-not-repeat notes.
-  - ~60 lines / low token cost.
+## docs/superpowers/plans/
 
-- .wolf/buglog.json
-  - Session bug log entries for fixes and failures.
-  - JSON array / low token cost.
+- `2026-07-19-a04-metadata-backed-prepare-boundary.md` — A-04 Metadata-Backed Prepare Boundary Implementation Plan (~8980 tok)
 
-- .wolf/memory.md
-  - Session action log with short checkpoint entries.
-  - Append-only markdown table / low token cost.
+## docs/superpowers/specs/
 
-- validation/v1/lib/a04.ts — Builds A-04 deterministic preflight results with main-branch gating, spec-6.1 read-only preservation inspection, preserved verified-checkout approval packages, self-contained dependency materialization, and final overlap/on-disk contract guards (~1900 tok)
-
-- validation/v1/scripts/prepare-a04.ts — CLI for non-paid A-04 preparation and approval package output (~400 tok)
-
-- tests/validation/prepareA04.test.ts — Covers A-04 main-branch gating, read-only inspection, preserved verified checkout binding, self-contained dependency copy semantics, spec-locked phase order, explicit approval-package fields, overlap guards, and final on-disk contract gating (~2350 tok)
-
-- validation/v1/README.md
-  - Operator-facing validation V1 procedure and A-04 preparation contract, including verified-checkout freezing and symlink/path-safety semantics.
-  - ~330 lines / medium token cost.
-
-- .superpowers/sdd/task-2-report.md
-  - Append-only Task 2 implementation/report log with exact commands, outputs, and follow-up fixes for A-04 preparation.
-  - ~360 lines / medium token cost.
+- `2026-07-19-a04-metadata-backed-prepare-boundary-design.md` — A-04 Metadata-Backed Prepare Boundary Design (~3627 tok)
