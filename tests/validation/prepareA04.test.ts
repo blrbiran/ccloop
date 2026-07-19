@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, mkdir, lstat, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, lstat, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -437,6 +437,28 @@ describe("verified checkout dependency materialization", () => {
 
     await writeFile(sourcePackageFile, 'module.exports = "mutated";\n');
     expect(await readFile(copiedPackageFile, "utf8")).toBe('module.exports = "source";\n');
+  });
+
+  it("preserves internal .bin symlinks so copied executables keep package-relative imports working", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-a04-node-modules-bin-"));
+    const repoRoot = join(tempRoot, "repo");
+    const worktreePath = join(tempRoot, "verified-checkout");
+    const sourcePackageDir = join(repoRoot, "node_modules", "demo-package");
+    const sourceBinDir = join(repoRoot, "node_modules", ".bin");
+    const copiedExecutablePath = join(worktreePath, "node_modules", ".bin", "demo-tool");
+
+    await mkdir(join(sourcePackageDir, "dist"), { recursive: true });
+    await mkdir(sourceBinDir, { recursive: true });
+    await mkdir(worktreePath, { recursive: true });
+    await writeFile(join(sourcePackageDir, "entry.mjs"), 'import "./dist/cli.mjs";\n');
+    await writeFile(join(sourcePackageDir, "dist", "cli.mjs"), 'console.log("copied-ok");\n');
+    await symlink("../demo-package/entry.mjs", join(sourceBinDir, "demo-tool"));
+
+    await materializeVerifiedCheckoutDependencies(repoRoot, worktreePath);
+
+    expect((await lstat(copiedExecutablePath)).isSymbolicLink()).toBe(true);
+    const { stdout } = await execFileAsync(process.execPath, [copiedExecutablePath]);
+    expect(stdout.trim()).toBe("copied-ok");
   });
 });
 

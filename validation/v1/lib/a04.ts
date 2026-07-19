@@ -632,7 +632,7 @@ export async function materializeVerifiedCheckoutDependencies(repoRoot: string, 
 
   await cp(sourceNodeModulesPath, resolve(worktreePath, "node_modules"), {
     recursive: true,
-    dereference: true,
+    dereference: false,
     force: false,
     errorOnExist: true,
   });
