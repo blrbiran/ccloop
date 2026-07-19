@@ -41,6 +41,12 @@ const A04_REQUIRED_METADATA_PATHS = {
   a04BoundaryPlan: "docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md",
   usageEvidenceSpec: "docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md",
 } as const;
+const A04_HISTORICAL_A01_TO_A03_DIAGNOSIS_LINES = [
+  "Task 5 A-01: INCONCLUSIVE — harness failed before controller launch",
+  "Task 5 A-02: INCONCLUSIVE — planning exhausted the 50k token budget",
+  "Task 5 A-03: INCONCLUSIVE — execution completed but 100k exhausted before verify",
+] as const;
+const A04_HISTORICAL_A01_TO_A03_IMMUTABILITY_PHRASE = "Historical A-01 through A-03 artifacts remain immutable";
 const A04_RUN_SCENARIO_SCRIPT = "validation/v1/scripts/run-scenario.ts";
 
 export const A04_APPROVED_EXECUTION_POLICY: Readonly<Required<ExecutionPolicyOverrides>> = Object.freeze({
@@ -207,6 +213,15 @@ async function pathExists(path: string): Promise<boolean> {
     }
 
     throw error;
+  }
+}
+
+async function probeSoftSignalPath(path: string): Promise<SoftSignalStatus> {
+  try {
+    await lstat(path);
+    return "PRESENT";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "MISSING" : "UNREADABLE";
   }
 }
 
@@ -415,11 +430,12 @@ function evaluateContradictions(input: {
       ? contradictionResult("CONFIRMED", ["handoverDoc", "a04BoundarySpec"])
       : contradictionResult("INSUFFICIENT", ["handoverDoc", "a04BoundarySpec"]);
 
-  const historicalA01ToA03Diagnoses =
-    input.handoverDoc.includes("Historical verdict: `INCONCLUSIVE / RUNTIME_VARIANCE`") &&
-    input.usageEvidenceSpec.includes("Historical A-01 through A-03 artifacts remain immutable")
-      ? contradictionResult("CONFIRMED", ["handoverDoc", "usageEvidenceSpec"])
-      : contradictionResult("INSUFFICIENT", ["handoverDoc", "usageEvidenceSpec"]);
+  const historicalDiagnosesConfirmed =
+    A04_HISTORICAL_A01_TO_A03_DIAGNOSIS_LINES.every((line) => input.handoverDoc.includes(line)) &&
+    input.usageEvidenceSpec.includes(A04_HISTORICAL_A01_TO_A03_IMMUTABILITY_PHRASE);
+  const historicalA01ToA03Diagnoses = historicalDiagnosesConfirmed
+    ? contradictionResult("CONFIRMED", ["handoverDoc", "usageEvidenceSpec"])
+    : contradictionResult("CONTRADICTORY", ["handoverDoc", "usageEvidenceSpec"]);
 
   const localDryRunArtifactsNotHistoricalEvidence =
     input.handoverDoc.includes("These are **not** preserved real-run evidence.") &&
@@ -527,6 +543,9 @@ export async function inspectMetadataBackedA04History(repoRoot: string): Promise
   const legacyWorktree = worktrees.find((entry) => entry.branch === "refs/heads/evidence-first-v1");
   const legacyWorktreePath = legacyWorktree?.path ?? resolve(repoRoot, ".worktrees/evidence-first-v1");
   const legacyPreservedEvidenceTreePath = resolve(legacyWorktreePath, ".validation-runs");
+  const legacyPreservedEvidenceTreeStatus = legacyWorktree
+    ? await probeSoftSignalPath(legacyPreservedEvidenceTreePath)
+    : "MISSING";
 
   const contradictionChecks =
     handoverDoc.status === "PRESENT" &&
@@ -592,7 +611,7 @@ export async function inspectMetadataBackedA04History(repoRoot: string): Promise
         path: legacyWorktreePath,
       },
       legacyPreservedEvidenceTree: {
-        status: legacyWorktree && (await pathExists(legacyPreservedEvidenceTreePath)) ? "PRESENT" : "MISSING",
+        status: legacyPreservedEvidenceTreeStatus,
         path: legacyPreservedEvidenceTreePath,
       },
     },

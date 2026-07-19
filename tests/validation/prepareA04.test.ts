@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, lstat, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, lstat, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -34,6 +34,9 @@ type MetadataInspectionRepoDocs = {
 const BASE_METADATA_INSPECTION_REPO_DOCS: MetadataInspectionRepoDocs = {
   handoverDoc: [
     "No successful real-Claude Scenario A exists yet.",
+    "Task 5 A-01: INCONCLUSIVE — harness failed before controller launch",
+    "Task 5 A-02: INCONCLUSIVE — planning exhausted the 50k token budget",
+    "Task 5 A-03: INCONCLUSIVE — execution completed but 100k exhausted before verify",
     "Historical verdict: `INCONCLUSIVE / RUNTIME_VARIANCE`",
     "These are **not** preserved real-run evidence.",
     "Every real call requires separate approval.",
@@ -276,6 +279,22 @@ describe("inspectMetadataBackedA04History", () => {
     });
   });
 
+  it("marks historical diagnoses contradictory when any canonical A-01 through A-03 diagnosis drifts", async () => {
+    const { repoRoot } = await createMetadataInspectionRepo({
+      handoverDoc: BASE_METADATA_INSPECTION_REPO_DOCS.handoverDoc.replace(
+        "Task 5 A-02: INCONCLUSIVE — planning exhausted the 50k token budget",
+        "Task 5 A-02: PASS — planning exhausted the 50k token budget",
+      ),
+    });
+
+    const result = await inspectMetadataBackedA04History(repoRoot);
+
+    expect(result.contradictionChecks.historicalA01ToA03Diagnoses).toEqual({
+      status: "CONTRADICTORY",
+      sources: ["handoverDoc", "usageEvidenceSpec"],
+    });
+  });
+
   it("treats retained stashes as present only when a required retained stash matches", async () => {
     const { repoRoot, trackedFilePath } = await createMetadataInspectionRepo();
 
@@ -310,6 +329,32 @@ describe("inspectMetadataBackedA04History", () => {
       status: "PRESENT",
       path: join(canonicalLegacyWorktreePath, ".validation-runs"),
     });
+  });
+
+  it("reports an unreadable legacy preserved evidence tree as a soft signal instead of failing inspection", async () => {
+    const { repoRoot, tempRoot } = await createMetadataInspectionRepo();
+    const legacyWorktreePath = join(tempRoot, "actual-evidence-first-v1");
+
+    await runGit(repoRoot, ["branch", "evidence-first-v1"]);
+    await runGit(repoRoot, ["worktree", "add", legacyWorktreePath, "evidence-first-v1"]);
+
+    const canonicalLegacyWorktreePath = await realpath(legacyWorktreePath);
+    const legacyPreservedEvidenceTreePath = join(canonicalLegacyWorktreePath, ".validation-runs");
+    await mkdir(legacyPreservedEvidenceTreePath, { recursive: true });
+
+    const originalMode = (await lstat(canonicalLegacyWorktreePath)).mode & 0o777;
+    await chmod(canonicalLegacyWorktreePath, 0o000);
+
+    try {
+      const result = await inspectMetadataBackedA04History(repoRoot);
+
+      expect(result.softSignals.legacyPreservedEvidenceTree).toEqual({
+        status: "UNREADABLE",
+        path: legacyPreservedEvidenceTreePath,
+      });
+    } finally {
+      await chmod(canonicalLegacyWorktreePath, originalMode);
+    }
   });
 
   it("reports unreadable required metadata docs through the summary contract", async () => {
@@ -915,7 +960,7 @@ describe("A-04 approval package", () => {
   });
 
 
-  it("fails read-only inspection before creating the verification checkout", async () => {
+  it("propagates inspection failure before creating the verification checkout", async () => {
     const createMainVerificationCheckout = vi.fn(async () => ({
       path: "/tmp/a04-main-checkout",
       head: "verified-main-head",
@@ -927,30 +972,33 @@ describe("A-04 approval package", () => {
         buildOptions(),
         buildDeps({
           inspectReadOnlyInspection: async () => {
-            throw new Error("A-04 read-only inspection requires retained stash matching: On main: pre-local-merge-evidence-first-v1-2026-07-18");
+            throw new Error("inspection exploded before checkout");
           },
           createMainVerificationCheckout,
         }),
       ),
-    ).rejects.toThrow(/A-04 read-only inspection requires retained stash matching/);
+    ).rejects.toThrow(/inspection exploded before checkout/);
 
     expect(createMainVerificationCheckout).not.toHaveBeenCalled();
   });
 
-  it("does not fail when the legacy evidence worktree is missing but required metadata is present", async () => {
+  it("does not fail when retained stashes are missing because they are a soft signal", async () => {
     const result = await prepareA04(
       buildOptions(),
       buildDeps({
         inspectReadOnlyInspection: async () => ({
           ...buildReadOnlyInspection(),
           softSignals: {
-            ...buildReadOnlyInspection().softSignals,
-            legacyEvidenceWorktree: {
+            retainedStashes: {
               status: "MISSING",
+              matches: [],
+            },
+            legacyEvidenceWorktree: {
+              status: "PRESENT",
               path: "/repo/.worktrees/evidence-first-v1",
             },
             legacyPreservedEvidenceTree: {
-              status: "MISSING",
+              status: "PRESENT",
               path: "/repo/.worktrees/evidence-first-v1/.validation-runs",
             },
           },
@@ -958,7 +1006,34 @@ describe("A-04 approval package", () => {
       }),
     );
 
-    expect(result.approvalPackage.readOnlyInspection.softSignals.legacyEvidenceWorktree.status).toBe("MISSING");
+    expect(result.approvalPackage.readOnlyInspection.softSignals.retainedStashes.status).toBe("MISSING");
+  });
+
+  it("does not fail when the legacy preserved evidence tree is unreadable because it is a soft signal", async () => {
+    const result = await prepareA04(
+      buildOptions(),
+      buildDeps({
+        inspectReadOnlyInspection: async () => ({
+          ...buildReadOnlyInspection(),
+          softSignals: {
+            retainedStashes: {
+              status: "PRESENT",
+              matches: ["On main: pre-local-merge-evidence-first-v1-2026-07-18"],
+            },
+            legacyEvidenceWorktree: {
+              status: "PRESENT",
+              path: "/repo/.worktrees/evidence-first-v1",
+            },
+            legacyPreservedEvidenceTree: {
+              status: "UNREADABLE",
+              path: "/repo/.worktrees/evidence-first-v1/.validation-runs",
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(result.approvalPackage.readOnlyInspection.softSignals.legacyPreservedEvidenceTree.status).toBe("UNREADABLE");
   });
 
   it("fails when the usage-evidence spec is missing", async () => {
