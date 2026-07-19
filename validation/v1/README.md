@@ -71,6 +71,8 @@ Expected result:
 - `.validation-runs/runs/A-04/` and `.validation-runs/evidence/A-04/` still do not exist;
 - stdout prints an approval package containing the preserved verified checkout path/head, the read-only inspection results, and an exact command whose runnable `run-scenario.ts` target and `--contract` argument both resolve inside that verified checkout rather than the operator checkout; the preserved checkout does not symlink `node_modules` back to the operator checkout, `--adapter-config` must realpath-resolve under the repo root (including through any symlink target) and realpath-resolve inside that preserved checkout so the approved command cannot drift to an external config, and `mainCheckoutMustRemainUnchanged: true` is backed by a deterministic repo snapshot that catches ignored-file drift such as `dist/**`.
 
+`.validation-runs/contracts/A-04.json` in this worktree is a local non-paid prepare artifact, not preserved real-run evidence.
+Passing focused checks on this branch does not by itself authorize a paid Scenario A call.
 `prepare-a04.ts` must not invoke Claude or create `review.json`.
 
 ## Evidence Files and Status Definitions

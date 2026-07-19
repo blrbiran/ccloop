@@ -350,6 +350,24 @@ After a successful A-04, continue to B, then use A/B event timestamps to calibra
   - `package-lock.json`
 - Preserved evidence remains under `.worktrees/evidence-first-v1/.validation-runs/` and has not been rewritten.
 
+### 2026-07-19 committed-surface verdict
+
+- Minimum committed-surface review set completed for:
+  - `validation/v1/lib/a04.ts`
+  - `validation/v1/lib/scenarios.ts`
+  - `tests/validation/prepareA04.test.ts`
+  - `tests/validation/contracts.test.ts`
+  - `validation/v1/README.md`
+  - `docs/handover/ccloop-handover.md`
+  - `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`
+- Focused verification rerun:
+  - `tests/validation/contracts.test.ts` — pass
+  - `tests/validation/prepareA04.test.ts` — pass
+  - `npm run typecheck` — pass
+  - `npm run build` — pass
+- Committed product surface verdict: `continue original branch tightening toward merge`
+- This verdict does not authorize a paid Scenario A invocation.
+
 ## 9. Compact Architecture and Safety Boundaries
 
 ```text

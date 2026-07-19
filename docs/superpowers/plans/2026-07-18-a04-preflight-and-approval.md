@@ -8,6 +8,8 @@
 
 **Tech Stack:** TypeScript 5.5、Node.js ESM、Vitest 2、现有 `validation/v1` 脚本、Git、npm。
 
+**Assessment boundary:** This branch assessment remains non-paid and non-destructive.
+
 ## Global Constraints
 
 - 不得触发真实 Claude，不得运行 `validation/v1/scripts/run-scenario.ts` 的 paid call；本计划只实现 A-04 准备与审批前机械化步骤。
