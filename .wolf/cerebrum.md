@@ -51,6 +51,8 @@
 
 - Metadata-backed A-04 inspection must distinguish `UNREADABLE` required docs from `MISSING`, and a present backup branch must remain `PRESENT` even when `merge-base` reachability data is unavailable.
 
+- Task 3 doc-alignment worktrees may lag approved 2026-07-19 metadata-backed governance docs from the main checkout; sync those tracked spec/plan files before adding supersession references so README/handover/anatomy do not point at missing paths.
+
 ## Do-Not-Repeat
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->

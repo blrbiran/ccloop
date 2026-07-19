@@ -1,6 +1,8 @@
 # A-04 Preflight and Approval Preparation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> Superseded in part by `docs/superpowers/specs/2026-07-19-a04-metadata-backed-prepare-boundary-design.md` for the A-04 read-only inspection boundary. The deleted `evidence-first-v1` linked worktree and its preserved `.validation-runs/` tree are no longer hard prerequisites when the required metadata set is present and mechanically consistent.
 
 **Goal:** 在不触发真实 A-04 paid call 的前提下，把 A-04 的 contract freeze、deterministic preflight、approval package 生成和机械化检查步骤实现成可重复执行的本地 CLI 流程。
 

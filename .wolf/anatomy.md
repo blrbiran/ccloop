@@ -37,3 +37,15 @@
 - .superpowers/sdd/task-2-report.md
   - Append-only Task 2 implementation/report log with exact commands, outputs, and follow-up fixes for A-04 preparation.
   - ~360 lines / medium token cost.
+
+- .superpowers/sdd/task-2-metadata-report.md
+  - Task 2 metadata-boundary implementation report covering runtime metadata inspection replacement, blocker semantics, focused verification, and self-review.
+  - ~90 lines / low token cost.
+
+- docs/superpowers/plans/2026-07-19-a04-metadata-backed-prepare-boundary.md
+  - Implementation plan for metadata-backed A-04 inspection and legacy-boundary supersession.
+  - ~6200 tok / medium token cost.
+
+- docs/superpowers/specs/2026-07-19-a04-metadata-backed-prepare-boundary-design.md
+  - Design spec for metadata-backed A-04 historical inspection and hard/soft blocker split.
+  - ~3600 tok / medium token cost.

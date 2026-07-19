@@ -118,15 +118,18 @@ The goal of this run is not minimum spend. The goal is maximum probability of on
 
 No real Claude call may be proposed until the following checklist completes successfully in order.
 
-### 6.1 Read-only repository and evidence check
+### 6.1 Metadata-backed read-only inspection
 
 Inspect without cleaning or resetting:
 
-- the main checkout;
-- the evidence-first validation worktree;
-- the retained backup branch;
-- the retained stashes;
-- the preserved `.validation-runs/` evidence tree.
+- the current `main` checkout;
+- `docs/handover/ccloop-handover.md`;
+- `docs/superpowers/specs/2026-07-18-a04-preflight-and-stop-boundaries-design.md`;
+- `docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md`;
+- `docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md`;
+- local branch `backup/evidence-first-v1-before-memory-history-cleanup`.
+
+Retained stashes, the legacy `evidence-first-v1` linked worktree, and the legacy preserved `.validation-runs/` tree are now soft signals surfaced in the inspection summary rather than hard blockers by themselves.
 
 ### 6.2 Main deterministic verification
 

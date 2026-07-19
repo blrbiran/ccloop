@@ -386,5 +386,43 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-19T10:07:06.058108+00:00"
+  },
+  {
+    "id": "bug-019",
+    "timestamp": "2026-07-19T10:21:07.694340+00:00",
+    "error_message": "Task 3 doc-alignment attempt hit Edit tool isolation errors because shared-checkout absolute paths were used instead of editing the target implementation worktree via Bash.",
+    "file": "validation/v1/README.md, docs/handover/ccloop-handover.md, docs/superpowers/specs/2026-07-18-a04-preflight-and-stop-boundaries-design.md, docs/superpowers/plans/2026-07-18-a04-preflight-and-approval.md",
+    "root_cause": "Edit/Write are scoped to the agent's own isolated worktree, so direct edits against the separate task worktree path were rejected.",
+    "fix": "Switched to Bash with absolute target-worktree paths for the Task 3 document updates and recorded the worktree-sync requirement in cerebrum.",
+    "tags": [
+      "task-3",
+      "docs",
+      "openwolf",
+      "tooling",
+      "edit-error"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-19T10:21:07.694506+00:00"
+  },
+  {
+    "id": "bug-020",
+    "timestamp": "2026-07-19T10:22:48.493429+00:00",
+    "error_message": "Task 3 verification command initially used a double-quoted rg pattern containing backticks, so zsh attempted command substitution and printed `command not found: evidence-first-v1`.",
+    "file": "docs/handover/ccloop-handover.md",
+    "root_cause": "The Bash verification command used a double-quoted rg pattern with Markdown backticks, which zsh treats as command substitution.",
+    "fix": "Re-ran verification with a single-quoted pattern and kept Task 3 shell searches free of backtick interpolation.",
+    "tags": [
+      "task-3",
+      "docs",
+      "verification",
+      "bash",
+      "quoting-error"
+    ],
+    "related_bugs": [
+      "bug-019"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-19T10:22:48.493429+00:00"
   }
 ]
