@@ -6,7 +6,7 @@
 
 ## Executive Summary for Next Agent
 
-1. `main` is at `337ae40` (`update openwolf file`) and the working tree is currently clean.
+1. `main` is at `b5d717f` (`update handover doc`) and the working tree is currently clean.
 2. The accepted real-run review set on `main` is now: `A-04-08 PASS`, `B-02 PASS`, `C-05 PASS`, `D-01 INCONCLUSIVE / CONTRACT_GAP`, `E-01 PASS`.
 3. The critical `run-scenario.ts` macOS `/var` vs `/private/var` zero-exit / no-artifact bug is fixed on `main` (`34eff33`).
 4. `B-01` is preserved but superseded because ECC fact-forcing interfered with the intended human-gate path.
@@ -19,7 +19,7 @@
 
 ## 10-line Handover Executive Summary
 
-1. `main` HEAD: `337ae40`, clean working tree.
+1. `main` HEAD: `b5d717f`, clean working tree.
 2. Accepted results: `A-04-08 PASS`, `B-02 PASS`, `C-05 PASS`, `D-01 INCONCLUSIVE / CONTRACT_GAP`, `E-01 PASS`.
 3. `run-scenario.ts` canonical-path alias bug is fixed on `main`.
 4. `B-01`, `C-01`, `C-02`, `C-03`, and `C-04` remain preserved but are superseded by later accepted runs.
@@ -36,14 +36,15 @@
 
 - Path: `/Users/biran/code/skills/loop/ccloop`
 - Branch: `main`
-- HEAD: `337ae40` (`update openwolf file`)
-- `origin/main` currently matches `337ae40`.
+- HEAD: `b5d717f` (`update handover doc`)
+- `origin/main` currently matches `b5d717f`.
 - Post-validation fix/preference commits on `main` include:
   - `34eff33` `fix: run run-scenario through canonical path aliases`
   - `e2896cc` `chore: record run-scenario alias guard learning`
   - `9b4f17d` `chore: record ECC GateGuard preference`
   - `30e171f` `chore: record OMC disable preference`
   - `337ae40` `update openwolf file`
+  - `b5d717f` `update handover doc`
 - `oh-my-claudecode@omc` was manually re-enabled after the Scenario C experiments and is currently enabled.
 
 ### Backup branch and sensitive history

@@ -5,6 +5,7 @@ Run every command from the repository root. For the non-paid A-04 prepare path b
 ## Guardrails
 
 - Use a fresh literal for every generated path. The examples below use `fixture-01`, `A-01`, `B-01`, `C-01`, `D-01`, and `E-01`.
+- These literals are operator examples, not the accepted final evidence set on `main`. The accepted review files are `A-04-08`, `B-02`, `C-05`, `D-01`, and `E-01`; preserved runs such as `B-01` and `C-01` through `C-04` remain historical but superseded.
 - If any example path already exists, stop and choose a new literal such as `fixture-02` or `A-02`; then reuse that exact literal consistently in the matching contract, run, evidence, and review commands.
 - Never overwrite or clean up `.validation-runs/`, retained worktrees, or earlier evidence.
 - Before every real Claude-backed `run-scenario.ts` invocation, obtain explicit approval for that paid call.

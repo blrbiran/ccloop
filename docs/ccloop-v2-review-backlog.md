@@ -2,8 +2,10 @@
 
 > Status: review input, not an approved V2 design or scope commitment.
 > Created: 2026-07-17
-> Review trigger: after the evidence-first V1 real-run validation has completed.
+> Review trigger: after the evidence-first V1 real-run validation has completed; that condition is now true on `main`, but V2 remains deferred until explicitly prioritized.
+> Current accepted V1 evidence on `main`: `A-04-08 PASS`, `B-02 PASS`, `C-05 PASS`, `D-01 INCONCLUSIVE / CONTRACT_GAP`, `E-01 PASS`.
 > Current validation design: [`docs/superpowers/specs/2026-07-17-evidence-first-v1-validation-design.md`](superpowers/specs/2026-07-17-evidence-first-v1-validation-design.md)
+> Immediate priority: truthful V1 docs/backlog alignment, not new paid runs or implicit V2 kickoff.
 
 ## Purpose
 
