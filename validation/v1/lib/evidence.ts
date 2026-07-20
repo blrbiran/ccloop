@@ -163,6 +163,19 @@ const reviewSchema = z
   })
   .strict();
 
+const executionRecoverySchema = z
+  .object({
+    executeEntered: z.literal(true),
+    worktreeDiffObserved: z.union([z.literal(true), z.literal(false), z.literal("unknown")]),
+    diffPatchCaptured: z.boolean(),
+    stdoutStderrLogCaptured: z.boolean(),
+    changedPathsObserved: z.array(z.string()).nullable(),
+    captureStatus: z.enum(["complete", "partial", "failed"]),
+    cleanupStatus: z.enum(["retained", "removed"]),
+    failureBoundary: z.enum(["timeout", "token_exhausted", "runtime_exhausted"]),
+  })
+  .strict();
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -516,6 +529,7 @@ function matchesPreExecuteExhaustion(
   return (
     artifactStatus.plan === "PRESENT" &&
     artifactStatus.execution === "NOT_PRODUCED" &&
+    artifactStatus.verify === "NOT_RUN" &&
     artifactStatus.diff === "NOT_PRODUCED" &&
     artifactStatus.log === "NOT_PRODUCED" &&
     record.observations.terminalOutcome.status === "exhausted" &&
@@ -528,6 +542,37 @@ function matchesPreExecuteExhaustion(
 
 function hasSufficientRecoverableExecuteEvidence(record: EvidenceRecord, artifactStatus: Partial<Record<ArtifactName, ArtifactStatus>>): boolean {
   return artifactStatus.execution === "PRESENT" || record.executionRecovery.status === "PRESENT";
+}
+
+function formatZodIssues(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => `${issue.path.length > 0 ? issue.path.join(".") : "(root)"}: ${issue.message}`)
+    .join("; ");
+}
+
+function buildExecutionRecoveryRecord(observation: JsonReadResult): EvidenceRecord["executionRecovery"] {
+  if (observation.observation.status !== "PRESENT") {
+    return {
+      status: observation.observation.status,
+      path: observation.observation.path,
+      error: observation.observation.error,
+    };
+  }
+
+  const parsed = executionRecoverySchema.safeParse(observation.value);
+  if (!parsed.success) {
+    return {
+      status: "INVALID",
+      path: observation.observation.path,
+      error: `execution-recovery.json shape invalid: ${formatZodIssues(parsed.error)}`,
+    };
+  }
+
+  return {
+    status: "PRESENT",
+    path: observation.observation.path,
+    value: parsed.data as ExecutionRecovery,
+  };
 }
 
 function hasPassShapeForRecoverableExecuteEvidence(record: EvidenceRecord, artifactStatus: Partial<Record<ArtifactName, ArtifactStatus>>): boolean {
@@ -561,6 +606,10 @@ export function classifyDScenarioBoundary(record: EvidenceRecord): DBoundaryClas
   }
 
   if (hasContradictoryLayerAEvidence(record, artifactStatus, eventTypes)) {
+    return "BOUNDARY_UNRESOLVED";
+  }
+
+  if (record.executionRecovery.status === "INVALID") {
     return "BOUNDARY_UNRESOLVED";
   }
 
@@ -654,15 +703,7 @@ export async function collectEvidence(input: EvidenceInput): Promise<EvidenceRec
     },
     artifacts,
     requiredChecks,
-    executionRecovery: {
-      status: executionRecoveryObservation.observation.status,
-      path: executionRecoveryObservation.observation.path,
-      value:
-        executionRecoveryObservation.observation.status === "PRESENT"
-          ? (executionRecoveryObservation.value as ExecutionRecovery)
-          : undefined,
-      error: executionRecoveryObservation.observation.error,
-    },
+    executionRecovery: buildExecutionRecoveryRecord(executionRecoveryObservation),
     observations: {
       loopContract: loopContract.observation,
       loopState: loopState.observation,

@@ -53,6 +53,7 @@ type SyntheticRunOptions = {
     waitingOnHuman: boolean;
   };
   artifacts?: Partial<Record<"plan" | "execution" | "verify" | "diff" | "log", "present" | "missing">>;
+  verifyContents?: string;
 };
 
 async function createSyntheticRun(options: SyntheticRunOptions): Promise<{ runDir: string; evidenceDir: string }> {
@@ -140,7 +141,8 @@ async function createSyntheticRun(options: SyntheticRunOptions): Promise<{ runDi
   if (artifactMode.verify === "present") {
     await writeFile(
       join(runDir, "attempts", "1", "verify.json"),
-      '{"approved":true,"rejectCategory":"","primaryTargetPaths":["src/counter.js"],"failingCommand":null,"safeToRetry":false,"evidence":["command output | required check passed: npm test"],"pauseSignals":[],"stopSignals":[]}\n',
+      options.verifyContents ??
+        '{"approved":true,"rejectCategory":"","primaryTargetPaths":["src/counter.js"],"failingCommand":null,"safeToRetry":false,"evidence":["command output | required check passed: npm test"],"pauseSignals":[],"stopSignals":[]}\n',
     );
   }
 
@@ -356,6 +358,85 @@ describe("evidence collection", () => {
     });
   });
 
+
+  it("treats malformed execution-recovery.json as BOUNDARY_UNRESOLVED instead of recoverable evidence", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({
+      scenarioId: "D",
+      events: [
+        { type: "attempt_started", at: "2026-07-20T00:00:00.000Z", detail: "attempt 1" },
+        { type: "execute_started", at: "2026-07-20T00:00:01.000Z", detail: "attempt 1 entered execute" },
+        { type: "loop_exhausted", at: "2026-07-20T00:00:05.000Z", detail: "runtime or token budget exhausted" },
+      ],
+      loopState: {
+        status: "exhausted",
+        stopReason: "runtime or token budget exhausted",
+        waitingOnHuman: false,
+      },
+      artifacts: { plan: "present", execution: "missing", verify: "missing", diff: "missing", log: "missing" },
+    });
+
+    await writeFile(
+      join(runDir, "attempts", "1", "execution-recovery.json"),
+      JSON.stringify(
+        {
+          executeEntered: true,
+          worktreeDiffObserved: false,
+          diffPatchCaptured: false,
+          stdoutStderrLogCaptured: false,
+          changedPathsObserved: null,
+          captureStatus: "complete",
+          failureBoundary: "timeout",
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(record.executionRecovery).toMatchObject({
+      status: "INVALID",
+      error: expect.stringMatching(/shape invalid/i),
+    });
+    expect(classifyDScenarioBoundary(record)).toBe("BOUNDARY_UNRESOLVED");
+    expect(mapDBoundaryToReview(classifyDScenarioBoundary(record), record)).toEqual({
+      scenarioVerdict: "INCONCLUSIVE",
+      diagnosis: "CONTRACT_GAP",
+    });
+  });
+
+  it("disqualifies PRE_EXECUTE_EXHAUSTION when verify.json proves later attempt handling began", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({
+      scenarioId: "D",
+      events: [
+        { type: "loop_planning", at: "2026-07-20T00:00:00.000Z", detail: "start" },
+        { type: "loop_exhausted", at: "2026-07-20T00:00:05.000Z", detail: "runtime or token budget exhausted" },
+      ],
+      loopState: {
+        status: "exhausted",
+        stopReason: "runtime or token budget exhausted",
+        waitingOnHuman: false,
+      },
+      artifacts: { plan: "present", execution: "missing", verify: "present", diff: "missing", log: "missing" },
+      verifyContents:
+        '{"approved":false,"rejectCategory":"timeout","primaryTargetPaths":["src/counter.js"],"failingCommand":null,"safeToRetry":true,"evidence":["verification started after execute boundary"],"pauseSignals":[],"stopSignals":[]}\n',
+    });
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(record.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ name: "verify", status: "INVALID" })]));
+    expect(classifyDScenarioBoundary(record)).toBe("BOUNDARY_UNRESOLVED");
+    expect(mapDBoundaryToReview(classifyDScenarioBoundary(record), record)).toEqual({
+      scenarioVerdict: "INCONCLUSIVE",
+      diagnosis: "CONTRACT_GAP",
+    });
+  });
 
   it("maps execute-entered recoverable evidence to PASS only when the stronger no-recoverable-work D shape is satisfied", async () => {
     const { runDir, evidenceDir } = await createSyntheticRun({

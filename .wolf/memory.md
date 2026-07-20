@@ -21,3 +21,7 @@
 | 17:22 | Re-ran focused Task 3 validation in the implementation worktree after correcting environment drift | tests/validation/evidence.test.ts | done | ~120 |
 | 17:24 | Added positive PASS coverage and tightened D PASS shape to full no-recoverable-work contract | validation/v1/lib/evidence.ts, tests/validation/evidence.test.ts | done | ~550 |
 | 17:26 | Wrote Task 3 implementation report for boundary classification and verdict mapping | .superpowers/sdd/task-3-report.md | done | ~700 |
+| 17:39 | Tightened Task 3 D trust-boundary classification for malformed recovery evidence and verify-backed historical disqualification | validation/v1/lib/evidence.ts, tests/validation/evidence.test.ts | done | ~900 |
+| 17:39 | Re-ran focused Task 3 validation evidence coverage after reviewer fix wave | tests/validation/evidence.test.ts | 29 passed | ~120 |
+| 17:39 | Re-ran full Vitest suite after Task 3 reviewer fixes | tests/** | 188 passed | ~150 |
+| 17:39 | Updated Task 3 report and OpenWolf metadata for the reviewer fix wave | .superpowers/sdd/task-3-report.md, .wolf/anatomy.md, .wolf/memory.md, .wolf/cerebrum.md, .wolf/buglog.json | done | ~350 |

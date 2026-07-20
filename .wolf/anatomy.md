@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-20T17:01:53Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-20T17:39:53Z
 > Files: 8 tracked | Anatomy hits: 4 | Misses: 3
 
 ## .wolf/
@@ -41,12 +41,13 @@
 
 ## validation/v1/lib/
 
-- `evidence.ts` — Evidence collection, artifact/observation parsing, D-boundary classification helpers, and review schema validation for validation V1 (~4000 tok)
+- `evidence.ts` — Evidence collection, artifact/observation parsing, D-boundary classification helpers, and trust-boundary validation for `execution-recovery.json`/historical `verify.json` evidence in validation V1 (~4400 tok)
 
 ## tests/validation/
 
-- `evidence.test.ts` — Synthetic evidence fixtures plus validation/evidence regression coverage for artifact collection, D-boundary mapping, and CLI behaviors (~13000 tok)
+- `evidence.test.ts` — Synthetic evidence fixtures plus validation/evidence regression coverage for artifact collection, D-boundary mapping, malformed recovery evidence, verify-backed trust boundaries, and CLI behaviors (~13800 tok)
 
 ## .superpowers/sdd/
 
 - `task-2-report.md` — Task 2 implementation report plus reviewer fix-wave notes, verification results, and self-review for execute boundary recovery evidence (~1700 tok)
+- `task-3-report.md` — Task 3 implementation report plus reviewer fix-wave notes for malformed recovery evidence and historical verify-backed boundary disqualification (~2100 tok)

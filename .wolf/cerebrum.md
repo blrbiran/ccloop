@@ -66,6 +66,8 @@
 - Task 3 evidence-layer classification for scenario D reads only Layer A signals: parsed event types, terminal loop-state shape, and standard artifact presence/absence; `BOUNDARY_UNRESOLVED` stays the only route to `INCONCLUSIVE / CONTRACT_GAP`, and execute-entered PASS requires the stronger no-recoverable-work plus cleanup-and-standard-shape contract.
 - For Task 3 D classification, `execute_started` alone is not sufficient for `EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE`; the evidence layer must also see a complete `execution.json` or controller-owned `execution-recovery.json`, and tests should model that explicitly.
 - When interrupted execute recovery is written, `execution-recovery.json.cleanupStatus` must be finalized from the real cleanup outcome: write the pre-cleanup snapshot first, then keep `retained` on cleanup failure or update it to `removed` only after cleanup succeeds.
+- Task 3 D-boundary classification must schema-validate `execution-recovery.json`; a merely parseable JSON file is not sufficient Layer A recovery evidence, and malformed/shape-invalid recovery must fall back to `BOUNDARY_UNRESOLVED`.
+- Historical `PRE_EXECUTE_EXHAUSTION` also requires `verify.json` to remain absent/`NOT_RUN`; any verify artifact is later Layer A attempt-handling evidence and disqualifies the historical pre-execute classification.
 
 ## Do-Not-Repeat
 
@@ -90,6 +92,7 @@
 - [2026-07-18] For A-04 path safety, do not rely on lexical containment or `stat()`-style existence checks; use `realpath` for adapter-config freeze guarantees and `lstat` for freshness so symlink escapes and dangling symlinks cannot pass pre-approval.
 
 - [2026-07-20] Task briefs may mention Jest-style `--runInBand`, but this repository runs Vitest; use `npm test -- <test-path>` (or another Vitest-supported form) instead of assuming that flag exists.
+- [2026-07-20] For Task 3 D-boundary evidence, never treat a merely parseable `execution-recovery.json` as sufficient; validate the full `ExecutionRecovery` shape and fall back to `BOUNDARY_UNRESOLVED` when malformed or shape-invalid.
 
 ## Decision Log
 

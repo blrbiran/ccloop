@@ -65,3 +65,19 @@ Result:
 ## Concerns
 - No product concerns remain for Task 3.
 - During implementation I twice hit known mechanical pitfalls already recorded in OpenWolf metadata: a test fixture briefly modeled recoverable evidence too weakly, and one Python edit wrote a literal newline into a TypeScript string. Both were corrected immediately, logged in `.wolf/buglog.json`, and are reflected in the final passing verification state.
+
+## Reviewer fix wave — 2026-07-20
+
+### Fix work
+- Tightened `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/validation/v1/lib/evidence.ts` so `execution-recovery.json` is only trusted when it matches the full `ExecutionRecovery` shape; malformed or shape-invalid recovery evidence is now recorded as `INVALID` and forces `BOUNDARY_UNRESOLVED` instead of being counted as sufficient recoverable Layer A evidence.
+- Tightened historical `PRE_EXECUTE_EXHAUSTION` so it now requires `verify.json` to remain `NOT_RUN`; any verify artifact is treated as later Layer A attempt-handling evidence and disqualifies the historical pre-execute reclassification path.
+- Added focused regressions in `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/tests/validation/evidence.test.ts` for both trust-boundary cases: malformed `execution-recovery.json` and verify-backed disqualification of `PRE_EXECUTE_EXHAUSTION`.
+
+### Test results
+- Focused: `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test -- tests/validation/evidence.test.ts` -> `1` file passed, `29` tests passed.
+- Full suite: `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test` -> `14` files passed, `188` tests passed.
+
+### Self-review
+- The fix stayed inside the approved Task 3 scope: `/validation/v1/lib/evidence.ts`, `/tests/validation/evidence.test.ts`, the existing Task 3 report, and required OpenWolf metadata only. No Task 4 review-writing behavior was changed.
+- The trust boundary now matches the approved spec more closely: malformed Layer A recovery evidence no longer upgrades a run into recoverable execute evidence, and historical pre-execute exhaustion no longer ignores `verify.json` as proof that later handling already began.
+- The new regressions are narrowly targeted at the reviewer findings rather than broad refactors, so the fix wave stays surgical and easy to audit.

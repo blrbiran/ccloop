@@ -142,5 +142,43 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-20T17:16:53Z"
+  },
+  {
+    "id": "bug-009",
+    "timestamp": "2026-07-20T17:39:53Z",
+    "error_message": "Malformed or shape-invalid execution-recovery.json was treated as sufficient recoverable evidence in Task 3 D-boundary classification",
+    "file": "validation/v1/lib/evidence.ts",
+    "root_cause": "collectEvidence treated any JSON-parsed execution-recovery.json as PRESENT without validating the ExecutionRecovery schema, so classifyDScenarioBoundary could trust malformed Layer A recovery evidence.",
+    "fix": "Schema-validated execution-recovery.json, surfaced shape-invalid recovery as INVALID, forced invalid recovery evidence to map to BOUNDARY_UNRESOLVED, and added a focused regression test.",
+    "tags": [
+      "task-3",
+      "validation",
+      "execution-recovery",
+      "boundary-classification",
+      "reviewer-fix"
+    ],
+    "related_bugs": [
+      "bug-008"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T17:39:53Z"
+  },
+  {
+    "id": "bug-010",
+    "timestamp": "2026-07-20T17:39:53Z",
+    "error_message": "Historical PRE_EXECUTE_EXHAUSTION classification ignored verify.json and could misclassify runs where later attempt handling had already begun",
+    "file": "validation/v1/lib/evidence.ts",
+    "root_cause": "matchesPreExecuteExhaustion looked only at plan/execution/diff/log plus events, so D evidence with verify.json present could still slip into the historical pre-execute branch even though verify output is Layer A proof of later handling.",
+    "fix": "Required verify to remain NOT_RUN for PRE_EXECUTE_EXHAUSTION and added a regression that verify.json presence forces BOUNDARY_UNRESOLVED for historical D evidence.",
+    "tags": [
+      "task-3",
+      "validation",
+      "verify",
+      "historical-reclassification",
+      "reviewer-fix"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T17:39:53Z"
   }
 ]
