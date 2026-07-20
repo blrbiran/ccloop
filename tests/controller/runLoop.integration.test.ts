@@ -122,6 +122,7 @@ describe("runLoop", () => {
     expect(await readEventTypes(runDir)).toEqual([
       "loop_planning",
       "attempt_started",
+      "execute_started",
       "execution_finished",
       "loop_succeeded",
     ]);
@@ -472,6 +473,7 @@ describe("runLoop", () => {
     expect(await readEventTypes(runDir)).toEqual([
       "loop_planning",
       "attempt_started",
+      "execute_started",
       "loop_blocked_waiting_human",
     ]);
   });
@@ -533,6 +535,7 @@ describe("runLoop", () => {
       expect(await readEventTypes(runDir)).toEqual([
         "loop_planning",
         "attempt_started",
+        "execute_started",
         "loop_blocked_waiting_human",
       ]);
     } finally {
@@ -734,6 +737,7 @@ describe("runLoop", () => {
     expect(await readEventTypes(runDir)).toEqual([
       "loop_planning",
       "attempt_started",
+      "execute_started",
       "execution_finished",
       "loop_cancelled",
     ]);
@@ -787,6 +791,83 @@ describe("runLoop", () => {
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "loop_exhausted"]);
   });
 
+  it("records execute_started before calling adapter.execute", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+    const seenEventsBeforeExecute: string[][] = [];
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        seenEventsBeforeExecute.push(await readEventTypes(context.runDir));
+        return {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        };
+      },
+      async verify() {
+        return {
+          approved: true,
+          rejectCategory: "",
+          primaryTargetPaths: ["src/index.ts"],
+          failingCommand: null,
+          safeToRetry: false,
+          evidence: ["done"],
+          pauseSignals: [],
+          stopSignals: [],
+        };
+      },
+    };
+
+    await runLoop(contract, runDir, adapter);
+
+    expect(seenEventsBeforeExecute).toEqual([["loop_planning", "attempt_started", "execute_started"]]);
+  });
+
+  it("persists execution-recovery.json when execute is entered but returns no result before exhaustion", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 2;\n");
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    await runLoop(contract, runDir, adapter);
+
+    const recovery = JSON.parse(
+      await readFile(join(runDir, "attempts", "1", "execution-recovery.json"), "utf8"),
+    ) as { executeEntered: true; captureStatus: string; cleanupStatus: string };
+
+    expect(recovery.executeEntered).toBe(true);
+    expect(recovery.captureStatus).toBe("partial");
+    expect(recovery.cleanupStatus).toBe("removed");
+  });
+
   it("persists completed plan artifacts when execute timeout yields no adapter result before verify", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
@@ -830,7 +911,7 @@ describe("runLoop", () => {
     expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
     expect(verifyCalled).toBe(false);
     expect(stdout).not.toContain(attemptWorktreePath);
-    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_exhausted"]);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "loop_exhausted"]);
   });
 
 
@@ -891,7 +972,7 @@ describe("runLoop", () => {
     expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
     expect(verifyCalled).toBe(false);
     expect(stdout).not.toContain(attemptWorktreePath);
-    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_exhausted"]);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "loop_exhausted"]);
   });
 
   it("blocks for human input on execute timeout when the adapter returns a partial outcome with gated files", async () => {
@@ -957,7 +1038,7 @@ describe("runLoop", () => {
     expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
     expect(verifyCalled).toBe(false);
     expect(stdout).toContain(attemptWorktreePath);
-    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_blocked_waiting_human"]);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "loop_blocked_waiting_human"]);
   });
 
 
@@ -1019,7 +1100,7 @@ describe("runLoop", () => {
     expect(await pathExists(join(attemptDir, "verify.json"))).toBe(true);
     expect(verifyCalled).toBe(true);
     expect(stdout).not.toContain(attemptWorktreePath);
-    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execution_finished", "loop_succeeded"]);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "execution_finished", "loop_succeeded"]);
   });
 
   it("blocks for human input on execute errors when the adapter returns a partial outcome with gated files", async () => {
@@ -1071,7 +1152,7 @@ describe("runLoop", () => {
     expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
     expect(verifyCalled).toBe(false);
     expect(stdout).toContain(attemptWorktreePath);
-    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_blocked_waiting_human"]);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "loop_blocked_waiting_human"]);
   });
 
   it("treats execute errors without adapter partial outcome as failed even if files changed in the worktree", async () => {
@@ -1116,7 +1197,7 @@ describe("runLoop", () => {
     expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
     expect(verifyCalled).toBe(false);
     expect(stdout).not.toContain(attemptWorktreePath);
-    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "attempt_failed"]);
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "attempt_failed"]);
   });
 
   it("caps phase timeout by the remaining runtime budget", async () => {
@@ -1336,7 +1417,7 @@ describe("runLoop", () => {
       expect(await pathExists(join(attemptDir, "verify.json"))).toBe(false);
       expect(verifyCalled).toBe(false);
       expect(stdout).not.toContain(attemptWorktreePath);
-      expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "loop_exhausted"]);
+      expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "loop_exhausted"]);
     } finally {
       nowSpy.mockRestore();
     }
@@ -1396,6 +1477,7 @@ describe("runLoop", () => {
       expect(await readEventTypes(runDir)).toEqual([
         "loop_planning",
         "attempt_started",
+        "execute_started",
         "execution_finished",
         "loop_exhausted",
       ]);
@@ -1460,6 +1542,7 @@ describe("runLoop", () => {
       expect(await readEventTypes(runDir)).toEqual([
         "loop_planning",
         "attempt_started",
+        "execute_started",
         "execution_finished",
         "loop_succeeded",
         "workspace_cleanup_failed",
@@ -1523,6 +1606,7 @@ describe("runLoop", () => {
       expect(await readEventTypes(runDir)).toEqual([
         "loop_planning",
         "attempt_started",
+        "execute_started",
         "execution_finished",
         "verification_rejected",
         "attempt_failed",
@@ -1701,9 +1785,11 @@ describe("runLoop", () => {
     expect(await readEventTypes(runDir)).toEqual([
       "loop_planning",
       "attempt_started",
+      "execute_started",
       "execution_finished",
       "verification_rejected",
       "attempt_started",
+      "execute_started",
       "execution_finished",
       "loop_blocked_waiting_human",
     ]);

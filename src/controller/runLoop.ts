@@ -8,6 +8,7 @@ import type { LoopContract } from "../contract/schema.js";
 import type {
   AttemptContext,
   AttemptPlan,
+  ExecutionRecovery,
   ExecutionResult,
   RuntimeAdapter,
   VerificationResult,
@@ -389,6 +390,83 @@ async function runPhaseWithTimeout<T>(
   }
 }
 
+function parseChangedPathsFromGitStatus(statusOutput: string): string[] {
+  const entries = statusOutput.split(" ");
+  const paths = new Set<string>();
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+
+    if (entry === "") {
+      continue;
+    }
+
+    const status = entry.slice(0, 2);
+    const path = entry.slice(3);
+
+    if (status.includes("R") || status.includes("C")) {
+      const renamedPath = entries[index + 1] ?? path;
+
+      if (renamedPath !== "") {
+        paths.add(renamedPath);
+      }
+
+      index += 1;
+      continue;
+    }
+
+    if (path !== "") {
+      paths.add(path);
+    }
+  }
+
+  return [...paths];
+}
+
+async function observeChangedPathsBestEffort(worktreePath: string): Promise<string[] | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      { cwd: worktreePath, maxBuffer: 10 * 1024 * 1024 },
+    );
+    return parseChangedPathsFromGitStatus(stdout);
+  } catch {
+    return null;
+  }
+}
+
+function getExecutionFailureBoundary(state: RunState): ExecutionRecovery["failureBoundary"] {
+  if (state.budgetSnapshot.tokenBudgetRemaining === 0) {
+    return "token_exhausted";
+  }
+
+  if (state.budgetSnapshot.timeRemainingMs === 0) {
+    return "runtime_exhausted";
+  }
+
+  return "timeout";
+}
+
+function buildExecutionRecovery(
+  execution: ExecutionResult | null,
+  changedPathsObserved: string[] | null,
+  failureBoundary: ExecutionRecovery["failureBoundary"],
+  cleanupStatus: ExecutionRecovery["cleanupStatus"],
+): ExecutionRecovery {
+  return {
+    executeEntered: true,
+    worktreeDiffObserved:
+      execution === null ? (changedPathsObserved === null ? "unknown" : changedPathsObserved.length > 0) : execution.changedFiles.length > 0,
+    diffPatchCaptured: execution?.diffPatch !== undefined,
+    stdoutStderrLogCaptured: execution?.stdoutStderrLog !== undefined,
+    changedPathsObserved,
+    captureStatus: execution === null ? (changedPathsObserved === null ? "failed" : "partial") : "complete",
+    cleanupStatus,
+    failureBoundary,
+  };
+}
+
 async function writeCompletedAttemptArtifacts(
   runDir: string,
   attempt: number,
@@ -505,6 +583,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       state = transitionRunState(state, "executing");
       await appendTransitionEvent(runDir, state, "attempt_started", `attempt ${attempt}`);
       await writeRunState(runDir, state);
+      await appendTransitionEvent(runDir, state, "execute_started", `attempt ${attempt}`);
 
       const executeTimeoutMs = getPhaseTimeoutMs(contract, state);
       const executeOutcome = await runPhaseWithTimeout(
@@ -521,7 +600,16 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
         execution = executeOutcome.result ?? null;
 
         if (execution === null) {
-          await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+          const changedPathsObserved = await observeChangedPathsBestEffort(worktreePath);
+          await writeAttemptArtifacts(runDir, attempt, {
+            plan,
+            executionRecovery: buildExecutionRecovery(
+              null,
+              changedPathsObserved,
+              getExecutionFailureBoundary(state),
+              "removed",
+            ),
+          });
           state = await persistTerminalState(
             runDir,
             state,
