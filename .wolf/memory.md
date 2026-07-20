@@ -33,3 +33,6 @@
 | 02:05 | Added Task 4 reclassification RED test proving review.json must remain immutable while review-reclassified.json carries explicit boundary metadata | tests/validation/evidence.test.ts | fail -> expected old overwrite guard | ~700 |
 | 02:07 | Implemented Task 4 ReclassifiedReview schema and finalize-review reclassification mode with explicit rule/evidence metadata | validation/v1/lib/evidence.ts, validation/v1/scripts/finalize-review.ts | done | ~1300 |
 | 02:09 | Re-ran focused and full validation after Task 4 reclassification changes; suite, typecheck, and build all passed | tests/validation/evidence.test.ts, tests/**, tsconfig/build outputs | pass | ~500 |
+| 02:21 | Implemented D boundary classification and recovery evidence plan/docs alignment | validation/v1/README.md, docs/handover/ccloop-handover.md, .wolf/anatomy.md, .wolf/memory.md, .wolf/cerebrum.md | done | ~900 |
+| 02:23 | Ran Task 5 focused/full verification and confirmed docs-only alignment did not regress product behavior | tests/persistence/fileStore.test.ts, tests/controller/runLoop.integration.test.ts, tests/validation/evidence.test.ts, npm test, npm run typecheck, npm run build | pass | ~500 |
+| 02:23 | Wrote Task 5 report and prepared scoped docs/handover commit | .superpowers/sdd/task-5-report.md, validation/v1/README.md, docs/handover/ccloop-handover.md | done | ~500 |

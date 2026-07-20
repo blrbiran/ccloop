@@ -175,7 +175,7 @@ Current operator-checkout validation directories:
 - Accepted run: `D-01`
 - Review: `.validation-runs/evidence/D-01/review.json`
 - Final verdict: `INCONCLUSIVE / CONTRACT_GAP`
-- Summary: current persisted evidence records a non-success timeout boundary but cannot distinguish no work from lost recoverable execute progress after the interrupted D attempt.
+- Summary: the accepted historical `review.json` remains `INCONCLUSIVE / CONTRACT_GAP`, but under the implemented 2026-07-20 D-boundary rule its Layer A evidence points to `PRE_EXECUTE_EXHAUSTION`, which maps to `INCONCLUSIVE / RUNTIME_VARIANCE` and should be emitted only as a separate `review-reclassified.json` artifact.
 
 ### Scenario E
 
@@ -240,7 +240,7 @@ V1 currently has accepted evidence for:
 
 ## 7. Known Limitations
 
-- `D-01` remains intentionally `INCONCLUSIVE / CONTRACT_GAP`.
+- `D-01` accepted `review.json` remains `INCONCLUSIVE / CONTRACT_GAP`; under the implemented Layer A rule, any historical reinterpretation should be emitted separately as `review-reclassified.json` targeting `PRE_EXECUTE_EXHAUSTION -> INCONCLUSIVE / RUNTIME_VARIANCE`.
 - Historical A-01 through A-03 usage cannot be reconstructed with the new evidence type.
 - `claudeChildExited` remains `NOT_OBSERVABLE` unless a tracked descendant PID proves it.
 - No resume, reconciliation, scheduler, daemon, queue, lease, heartbeat, watchdog, or multi-task coordination exists.
@@ -254,8 +254,8 @@ Best next-step directions are:
 
 1. **Truthful docs / backlog update pass**
    - Update README, handover references, and backlog/plan surfaces so they reflect the accepted A/B/C/D/E outcomes.
-2. **Optional deeper D analysis only if explicitly requested**
-   - Keep `D-01` as `INCONCLUSIVE / CONTRACT_GAP` unless the human explicitly wants more experimentation.
+2. **Optional historical D reinterpretation only if explicitly requested**
+   - If the human wants the historical D record updated, emit a separate `review-reclassified.json` for `D-01`; do not overwrite `review.json`, and do not schedule a new paid run just to reinterpret the existing Layer A evidence.
 3. **No further paid runs without fresh approval**
    - Any additional real Claude invocation remains opt-in only.
 

@@ -70,6 +70,7 @@
 - Task 4 historical review preservation uses a richer `review-reclassified.json` artifact, not a plain alternate-name `Review`: it must include `original`, `reclassified`, `boundaryClassification`, `ruleVersion`, and exact Layer A `evidenceReferences`, while leaving `review.json` immutable.
 - Historical `PRE_EXECUTE_EXHAUSTION` also requires `verify.json` to remain absent/`NOT_RUN`; any verify artifact is later Layer A attempt-handling evidence and disqualifies the historical pre-execute classification.
 - Historical `PRE_EXECUTE_EXHAUSTION` also requires controller-owned `execution-recovery.json` to remain absent, while execute-entered recoverable classification must consult direct `execution.json` readability rather than Scenario D artifact-status normalization alone.
+- Operator-facing D docs should state the implemented Layer A rule directly: historical reclassification is Layer A-only, `PRE_EXECUTE_EXHAUSTION` maps to `INCONCLUSIVE / RUNTIME_VARIANCE`, and any reinterpretation must be emitted separately so `review.json` remains immutable.
 
 ## Do-Not-Repeat
 

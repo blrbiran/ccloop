@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-20T17:39:53Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-20T18:25:14Z
 > Files: 8 tracked | Anatomy hits: 4 | Misses: 3
 
 ## .wolf/
@@ -21,10 +21,6 @@
 ## tests/persistence/
 
 - `fileStore.test.ts` — Persistence regression coverage for run files and execution recovery artifact writing (~1200 tok)
-
-## .superpowers/sdd/
-
-- `task-1-report.md` — Task 1 implementation, TDD evidence, verification results, self-review, and concerns for the D-scenario boundary classification branch (~1200 tok)
 
 ## src/controller/
 
@@ -53,6 +49,19 @@
 
 ## .superpowers/sdd/
 
+- `task-1-report.md` — Task 1 implementation, TDD evidence, verification results, self-review, and concerns for the D-scenario boundary classification branch (~1200 tok)
 - `task-2-report.md` — Task 2 implementation report plus reviewer fix-wave notes, verification results, and self-review for execute boundary recovery evidence (~1700 tok)
 - `task-3-report.md` — Task 3 implementation report plus reviewer fix-wave notes for malformed recovery evidence and historical verify-backed boundary disqualification (~2100 tok)
 - `task-4-report.md` — Task 4 implementation report covering immutable historical review preservation, explicit reclassification output, verification, and self-review (~1800 tok)
+- `task-5-brief.md` — Task 5 brief for doc/handover alignment, OpenWolf bookkeeping, verification, commit, and reporting requirements (~1400 tok)
+- `task-5-report.md` — Task 5 implementation report covering operator-doc alignment for the implemented D-boundary rule, verification, commit, and self-review (~1600 tok)
+
+## docs/handover/
+
+- `ccloop-handover.md` — Operator handover snapshot for accepted V1 evidence and takeover guidance, now noting the implemented D-01 reclassification target while preserving immutable historical review truth (~5200 tok)
+
+
+## validation/v1/
+
+- `README.md` — Operator guide for evidence-first V1 validation scenarios, now documenting the implemented Scenario D boundary interpretation and immutable reclassification rule (~4200 tok)
+

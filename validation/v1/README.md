@@ -295,17 +295,23 @@ npx --no-install tsx validation/v1/scripts/run-scenario.ts \
   --adapter-config examples/v1/claude-adapter-config.json
 ```
 
-Finalize exactly once after review. Default to `INCONCLUSIVE / CONTRACT_GAP` unless independent evidence proves a recoverable result existed and should have been persisted:
+Finalize exactly once after review, using the evidence-backed D boundary classification and verdict mapping:
 
 ```bash
 npx --no-install tsx validation/v1/scripts/finalize-review.ts \
   --evidence-dir .validation-runs/evidence/D-01 \
   --verdict INCONCLUSIVE \
-  --diagnosis CONTRACT_GAP \
-  --summary "Current persisted evidence cannot distinguish no work from lost recoverable work"
+  --diagnosis <RUNTIME_VARIANCE|CONTRACT_GAP> \
+  --summary "<one-line evidence-backed D conclusion>"
 ```
 
-Expected `D` candidate: plan present, execution, diff, and log are `NOT_PRODUCED`, verification and required checks are `NOT_RUN`, the terminal outcome is non-success, and the main fixture checkout stays clean. Do not infer that the removed worktree contained no changes.
+## Scenario D interpretation
+
+D evidence now distinguishes:
+- `PRE_EXECUTE_EXHAUSTION` — plan persisted, no `attempt_started`, no execute artifacts, exhausted terminal state; maps to `INCONCLUSIVE / RUNTIME_VARIANCE`.
+- `EXECUTE_ENTERED_NO_RECOVERABLE_EVIDENCE` — execute path entered but controller-owned evidence still cannot prove whether recoverable work existed; maps to `INCONCLUSIVE / CONTRACT_GAP`.
+
+Historical D runs may be reclassified from Layer A evidence only. Future D-class runs also persist `execute_started` and `execution-recovery.json`. Historical `review.json` files remain immutable; any reclassification must be emitted separately as `review-reclassified.json`.
 
 ## Scenario E - Deterministic Required-Check Failure
 
