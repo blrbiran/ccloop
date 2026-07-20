@@ -68,6 +68,7 @@
 - When interrupted execute recovery is written, `execution-recovery.json.cleanupStatus` must be finalized from the real cleanup outcome: write the pre-cleanup snapshot first, then keep `retained` on cleanup failure or update it to `removed` only after cleanup succeeds.
 - Task 3 D-boundary classification must schema-validate `execution-recovery.json`; a merely parseable JSON file is not sufficient Layer A recovery evidence, and malformed/shape-invalid recovery must fall back to `BOUNDARY_UNRESOLVED`.
 - Historical `PRE_EXECUTE_EXHAUSTION` also requires `verify.json` to remain absent/`NOT_RUN`; any verify artifact is later Layer A attempt-handling evidence and disqualifies the historical pre-execute classification.
+- Historical `PRE_EXECUTE_EXHAUSTION` also requires controller-owned `execution-recovery.json` to remain absent, while execute-entered recoverable classification must consult direct `execution.json` readability rather than Scenario D artifact-status normalization alone.
 
 ## Do-Not-Repeat
 
@@ -93,6 +94,7 @@
 
 - [2026-07-20] Task briefs may mention Jest-style `--runInBand`, but this repository runs Vitest; use `npm test -- <test-path>` (or another Vitest-supported form) instead of assuming that flag exists.
 - [2026-07-20] For Task 3 D-boundary evidence, never treat a merely parseable `execution-recovery.json` as sufficient; validate the full `ExecutionRecovery` shape and fall back to `BOUNDARY_UNRESOLVED` when malformed or shape-invalid.
+- [2026-07-20] When inserting TypeScript fixtures via Python in this worktree, inspect the written file before running Vitest if the edit contains `"\n"`; a physical newline or duplicated `)` inside the generated string literal will break esbuild before tests collect.
 
 ## Decision Log
 

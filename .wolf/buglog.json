@@ -180,5 +180,26 @@
     "related_bugs": [],
     "occurrences": 1,
     "last_seen": "2026-07-20T17:39:53Z"
+  },
+  {
+    "id": "bug-011",
+    "timestamp": "2026-07-20T01:52:09Z",
+    "error_message": "Transform failed with ERROR: Unterminated string literal / Unexpected \")\" in tests/validation/evidence.test.ts during Task 3 reviewer fix wave 2",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "A Python-written regression test inserted a physical newline into a TypeScript string literal and then a cleanup edit left an extra closing parenthesis, so esbuild failed before test collection.",
+    "fix": "Repaired the generated `\"\\n\"` literal and removed the stray `)` in the new execution-recovery regression, then reran focused and full Vitest suites successfully.",
+    "tags": [
+      "task-3",
+      "validation",
+      "tests",
+      "syntax",
+      "esbuild",
+      "reviewer-fix"
+    ],
+    "related_bugs": [
+      "bug-004"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T01:53:08Z"
   }
 ]

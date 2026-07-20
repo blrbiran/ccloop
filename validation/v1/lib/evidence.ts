@@ -85,6 +85,11 @@ export type EvidenceRecord = {
       path: string;
       error?: string;
     };
+    executionJson: {
+      status: "PRESENT" | "MISSING" | "INVALID";
+      path: string;
+      error?: string;
+    };
     events: {
       status: "PRESENT" | "MISSING" | "INVALID";
       path: string;
@@ -532,6 +537,7 @@ function matchesPreExecuteExhaustion(
     artifactStatus.verify === "NOT_RUN" &&
     artifactStatus.diff === "NOT_PRODUCED" &&
     artifactStatus.log === "NOT_PRODUCED" &&
+    record.executionRecovery.status === "MISSING" &&
     record.observations.terminalOutcome.status === "exhausted" &&
     eventTypes.includes("loop_planning") &&
     eventTypes.includes("loop_exhausted") &&
@@ -540,8 +546,12 @@ function matchesPreExecuteExhaustion(
   );
 }
 
-function hasSufficientRecoverableExecuteEvidence(record: EvidenceRecord, artifactStatus: Partial<Record<ArtifactName, ArtifactStatus>>): boolean {
-  return artifactStatus.execution === "PRESENT" || record.executionRecovery.status === "PRESENT";
+function hasCompleteExecutionJson(record: EvidenceRecord): boolean {
+  return record.observations.executionJson.status === "PRESENT";
+}
+
+function hasSufficientRecoverableExecuteEvidence(record: EvidenceRecord): boolean {
+  return hasCompleteExecutionJson(record) || record.executionRecovery.status === "PRESENT";
 }
 
 function formatZodIssues(error: z.ZodError): string {
@@ -618,7 +628,7 @@ export function classifyDScenarioBoundary(record: EvidenceRecord): DBoundaryClas
   }
 
   if (eventTypes.includes("attempt_started") && eventTypes.includes("execute_started")) {
-    return hasSufficientRecoverableExecuteEvidence(record, artifactStatus)
+    return hasSufficientRecoverableExecuteEvidence(record)
       ? "EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE"
       : "EXECUTE_ENTERED_NO_RECOVERABLE_EVIDENCE";
   }
@@ -673,10 +683,11 @@ export async function collectEvidence(input: EvidenceInput): Promise<EvidenceRec
   await mkdir(input.evidenceDir, { recursive: true });
   const runDirRoot = await resolveRunDirRoot(input.runDir);
 
-  const [artifacts, loopContract, loopState, events, verifyObservation, executionRecoveryObservation, git] = await Promise.all([
+  const [artifacts, loopContract, loopState, executionJson, events, verifyObservation, executionRecoveryObservation, git] = await Promise.all([
     collectArtifacts({ scenario: input.scenario, runDir: input.runDir }),
     readJsonObservation(runDirRoot, join(input.runDir, "loop-contract.json")),
     readJsonObservation(runDirRoot, join(input.runDir, "loop-state.json")),
+    readJsonObservation(runDirRoot, join(input.runDir, "attempts", "1", "execution.json")),
     readEventsObservation(runDirRoot, join(input.runDir, "events.jsonl")),
     readJsonObservation(runDirRoot, join(input.runDir, "attempts", "1", "verify.json")),
     readJsonObservation(runDirRoot, join(input.runDir, "attempts", "1", "execution-recovery.json")),
@@ -707,6 +718,7 @@ export async function collectEvidence(input: EvidenceInput): Promise<EvidenceRec
     observations: {
       loopContract: loopContract.observation,
       loopState: loopState.observation,
+      executionJson: executionJson.observation,
       events: events.observation,
       terminalOutcome: {
         status: typeof loopStateValue?.status === "string" ? loopStateValue.status : null,

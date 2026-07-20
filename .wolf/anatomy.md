@@ -41,11 +41,11 @@
 
 ## validation/v1/lib/
 
-- `evidence.ts` — Evidence collection, artifact/observation parsing, D-boundary classification helpers, and trust-boundary validation for `execution-recovery.json`/historical `verify.json` evidence in validation V1 (~4400 tok)
+- `evidence.ts` — Evidence collection, artifact/observation parsing, D-boundary classification helpers, and trust-boundary validation for `execution-recovery.json`, direct `execution.json` observations, and historical pre-execute disqualifiers in validation V1 (~4700 tok)
 
 ## tests/validation/
 
-- `evidence.test.ts` — Synthetic evidence fixtures plus validation/evidence regression coverage for artifact collection, D-boundary mapping, malformed recovery evidence, verify-backed trust boundaries, and CLI behaviors (~13800 tok)
+- `evidence.test.ts` — Synthetic evidence fixtures plus validation/evidence regression coverage for artifact collection, D-boundary mapping, malformed recovery evidence, verify/recovery-backed trust boundaries, execution-json-only recovery classification, and CLI behaviors (~14600 tok)
 
 ## .superpowers/sdd/
 
