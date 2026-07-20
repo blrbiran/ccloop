@@ -15,6 +15,8 @@ import type { RunState } from "../../src/state/types.js";
 const execFileAsync = promisify(execFile);
 const phaseRunnerPath = fileURLToPath(new URL("../../scripts/claude-phase-runner.mjs", import.meta.url));
 
+const BUDGET_EXHAUSTED_REASON = "runtime or token budget exhausted";
+
 async function createRepo(): Promise<string> {
   const repoDir = await mkdtemp(join(tmpdir(), "ccloop-repo-"));
   await execFileAsync("git", ["init"], { cwd: repoDir });
@@ -866,6 +868,126 @@ describe("runLoop", () => {
     expect(recovery.executeEntered).toBe(true);
     expect(recovery.captureStatus).toBe("partial");
     expect(recovery.cleanupStatus).toBe("removed");
+  });
+
+  it("persists execution-recovery.json when execute aborts by throwing after entry", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 3;\n");
+        await waitForAbort(context.abortSignal);
+        throw new DOMException("The operation was aborted", "AbortError");
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const recovery = JSON.parse(
+      await readFile(join(runDir, "attempts", "1", "execution-recovery.json"), "utf8"),
+    ) as {
+      executeEntered: true;
+      captureStatus: string;
+      cleanupStatus: string;
+      failureBoundary: string;
+      changedPathsObserved: string[] | null;
+    };
+
+    expect(finalState.status).toBe("exhausted");
+    expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON);
+    expect(recovery.executeEntered).toBe(true);
+    expect(recovery.captureStatus).toBe("partial");
+    expect(recovery.cleanupStatus).toBe("removed");
+    expect(recovery.failureBoundary).toBe("runtime_exhausted");
+    expect(recovery.changedPathsObserved).toContain("src/index.ts");
+    expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "loop_exhausted"]);
+  });
+
+  it("records retained cleanupStatus in execution recovery when cleanup fails", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    vi.resetModules();
+    vi.doMock("../../src/workspace/worktreeManager.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/workspace/worktreeManager.js")>(
+        "../../src/workspace/worktreeManager.js",
+      );
+
+      return {
+        ...actual,
+        cleanupAttemptWorkspace: async () => {
+          throw new Error("cleanup exploded");
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 4;\n");
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const finalState = await observedRunLoop(contract, runDir, adapter);
+      const recovery = JSON.parse(
+        await readFile(join(runDir, "attempts", "1", "execution-recovery.json"), "utf8"),
+      ) as {
+        executeEntered: true;
+        captureStatus: string;
+        cleanupStatus: string;
+      };
+
+      expect(finalState.status).toBe("exhausted");
+      expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON);
+      expect(recovery.executeEntered).toBe(true);
+      expect(recovery.captureStatus).toBe("partial");
+      expect(recovery.cleanupStatus).toBe("retained");
+      expect(await readEventTypes(runDir)).toEqual([
+        "loop_planning",
+        "attempt_started",
+        "execute_started",
+        "loop_exhausted",
+        "workspace_cleanup_failed",
+      ]);
+    } finally {
+      vi.doUnmock("../../src/workspace/worktreeManager.js");
+      vi.resetModules();
+    }
   });
 
   it("persists completed plan artifacts when execute timeout yields no adapter result before verify", async () => {

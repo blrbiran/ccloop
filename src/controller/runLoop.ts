@@ -33,6 +33,7 @@ type PhaseOutcome<T> =
       timedOut: true;
       elapsedMs: number;
       result?: T;
+      abortedError?: unknown;
     };
 
 const execFileAsync = promisify(execFile);
@@ -282,21 +283,32 @@ async function appendTransitionEvent(runDir: string, state: RunState, type: stri
   await appendEvent(runDir, { type, at: state.lastTransitionAt, detail });
 }
 
-async function cleanupAttemptWorkspaceBestEffort(
+async function cleanupAttemptWorkspaceWithStatus(
   repoPath: string,
   worktreePath: string,
   runDir: string,
   detail: string,
-): Promise<void> {
+): Promise<ExecutionRecovery["cleanupStatus"]> {
   try {
     await cleanupAttemptWorkspace(repoPath, worktreePath);
+    return "removed";
   } catch (error) {
     await appendEvent(runDir, {
       type: "workspace_cleanup_failed",
       at: new Date().toISOString(),
       detail: `${detail}: ${String(error)}`,
     });
+    return "retained";
   }
+}
+
+async function cleanupAttemptWorkspaceBestEffort(
+  repoPath: string,
+  worktreePath: string,
+  runDir: string,
+  detail: string,
+): Promise<void> {
+  await cleanupAttemptWorkspaceWithStatus(repoPath, worktreePath, runDir, detail);
 }
 
 function getMatchedStopSignal(contract: LoopContract, stopSignals: string[]): string | null {
@@ -377,9 +389,14 @@ async function runPhaseWithTimeout<T>(
         return { timedOut: true, elapsedMs };
       }
 
-      const result = await operationPromise;
-      const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, 0);
-      return { timedOut: true, elapsedMs: timedOutElapsedMs, result };
+      try {
+        const result = await operationPromise;
+        const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, 0);
+        return { timedOut: true, elapsedMs: timedOutElapsedMs, result };
+      } catch (error) {
+        const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, 0);
+        return { timedOut: true, elapsedMs: timedOutElapsedMs, abortedError: error };
+      }
     }
 
     return { timedOut: false, elapsedMs, result: outcome.result };
@@ -601,14 +618,15 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
 
         if (execution === null) {
           const changedPathsObserved = await observeChangedPathsBestEffort(worktreePath);
+          const executionRecovery = buildExecutionRecovery(
+            null,
+            changedPathsObserved,
+            getExecutionFailureBoundary(state),
+            "retained",
+          );
           await writeAttemptArtifacts(runDir, attempt, {
             plan,
-            executionRecovery: buildExecutionRecovery(
-              null,
-              changedPathsObserved,
-              getExecutionFailureBoundary(state),
-              "removed",
-            ),
+            executionRecovery,
           });
           state = await persistTerminalState(
             runDir,
@@ -616,12 +634,23 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
             "exhausted",
             hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("execute", executeTimeoutMs),
           );
-          await cleanupAttemptWorkspaceBestEffort(
+          const cleanupStatus = await cleanupAttemptWorkspaceWithStatus(
             contract.context.repoPath,
             worktreePath,
             runDir,
             "cleanup after terminal decision exhausted",
           );
+
+          if (cleanupStatus !== executionRecovery.cleanupStatus) {
+            await writeAttemptArtifacts(runDir, attempt, {
+              plan,
+              executionRecovery: {
+                ...executionRecovery,
+                cleanupStatus,
+              },
+            });
+          }
+
           return state;
         }
       } else {

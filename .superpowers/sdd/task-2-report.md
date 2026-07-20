@@ -58,3 +58,25 @@ Result:
 ## Concerns
 - No product concerns for Task 2 itself.
 - During RED setup I briefly introduced a malformed TypeScript string literal while inserting the new test with Python; this was corrected immediately, recorded in `.wolf/buglog.json`, and did not affect the final implementation or verification state.
+
+
+## Reviewer fix wave (2026-07-20)
+- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/src/controller/runLoop.ts` so execute timeout recovery also covers the abort-throw path: when the phase times out and the adapter throws after abort instead of returning `null`, the controller now still treats the attempt as execute-entered/no-complete-result and persists `execution-recovery.json` before terminal cleanup.
+- Changed interrupted execute recovery persistence to reflect real cleanup outcome instead of guessing: the controller writes the pre-cleanup recovery snapshot with `cleanupStatus: "retained"`, runs cleanup, and rewrites the artifact to `cleanupStatus: "removed"` only when cleanup actually succeeds.
+- Extended `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/tests/controller/runLoop.integration.test.ts` with focused regressions for:
+  - abort-after-entry execute that throws `AbortError` instead of returning `null`;
+  - interrupted execute recovery when cleanup fails, requiring `cleanupStatus: "retained"` and `workspace_cleanup_failed` evidence.
+
+## Reviewer fix-wave verification
+Focused controller coverage:
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test -- tests/controller/runLoop.integration.test.ts`
+- Result: `Test Files  1 passed (1)` / `Tests  34 passed (34)`
+
+Full suite before commit:
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test`
+- Result: `Test Files  14 passed (14)` / `Tests  180 passed (180)`
+
+## Reviewer fix-wave self-review
+- Scope stayed inside Task 2's approved controller/persistence boundary; no budgets, retry policy, scenario rules, or review artifacts changed.
+- The recovery contract is now stronger in two ways: both abort-return-null and abort-throw execute timeout paths produce controller-owned recovery evidence, and Layer A no longer claims cleanup removal before cleanup outcome is known.
+- The new cleanup-failure regression would fail if `execution-recovery.json` were written once up front with `cleanupStatus: "removed"`, which directly guards against the reviewer-identified contradiction.
