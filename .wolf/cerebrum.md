@@ -56,6 +56,8 @@
 - Metadata-backed A-04 inspection must distinguish `UNREADABLE` required docs from `MISSING`, and a present backup branch must remain `PRESENT` even when `merge-base` reachability data is unavailable.
 - On live `main`, `prepare-a04.ts` enforces a clean-checkout gate before preflight; after restoring the backup branch anchor, any remaining uncommitted file such as `docs/handover/ccloop-handover.md` blocks non-paid prepare before metadata verification continues.
 
+- Historical D-01 evidence shape (`plan` present, no `attempt_started`, `tokenBudgetRemaining: 0`, and only the plan prompt visible in `processes.json`) matches `runLoop.ts`'s post-plan budget-exhausted branch more closely than the execute-timeout branches. That means current evidence most likely points to budget exhaustion before execute launch, even though the accepted `review.json` still remains `INCONCLUSIVE / CONTRACT_GAP` because the persisted D-01 evidence does not explicitly encode that boundary.
+
 - Task 3 doc-alignment worktrees may lag approved 2026-07-19 metadata-backed governance docs from the main checkout; sync those tracked spec/plan files before adding supersession references so README/handover/anatomy do not point at missing paths.
 
 ## Do-Not-Repeat
