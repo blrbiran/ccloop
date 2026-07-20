@@ -27,6 +27,31 @@ const state: RunState = {
 };
 
 describe("fileStore", () => {
+  it("writes execution-recovery.json when execution recovery is present", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    await writeAttemptArtifacts(runDir, 1, {
+      plan: { summary: "plan", primaryTargetPaths: ["src/counter.js"] },
+      executionRecovery: {
+        executeEntered: true,
+        worktreeDiffObserved: true,
+        diffPatchCaptured: false,
+        stdoutStderrLogCaptured: false,
+        changedPathsObserved: ["src/counter.js"],
+        captureStatus: "partial",
+        cleanupStatus: "removed",
+        failureBoundary: "token_exhausted",
+      },
+    });
+
+    const contents = JSON.parse(
+      await readFile(join(runDir, "attempts", "1", "execution-recovery.json"), "utf8"),
+    ) as { executeEntered: true; failureBoundary: string };
+
+    expect(contents.executeEntered).toBe(true);
+    expect(contents.failureBoundary).toBe("token_exhausted");
+  });
+
   it("writes contract, state, events, and attempt artifacts", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     await initializeRunFiles(runDir, contract, state);

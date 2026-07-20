@@ -57,6 +57,17 @@ export type PartialExecutionResult = ExecutionArtifacts & {
 export type ExecutionResult = CompleteExecutionResult | PartialExecutionResult;
 export type ExecutePhaseResult = ExecutionResult | null;
 
+export type ExecutionRecovery = {
+  executeEntered: true;
+  worktreeDiffObserved: true | false | "unknown";
+  diffPatchCaptured: boolean;
+  stdoutStderrLogCaptured: boolean;
+  changedPathsObserved: string[] | null;
+  captureStatus: "complete" | "partial" | "failed";
+  cleanupStatus: "retained" | "removed";
+  failureBoundary: "timeout" | "token_exhausted" | "runtime_exhausted";
+};
+
 export function isPartialExecutionResult(result: ExecutionResult): result is PartialExecutionResult {
   return "completionStatus" in result && result.completionStatus === "partial";
 }

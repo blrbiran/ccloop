@@ -1,6 +1,7 @@
 import { access, appendFile, mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { LoopContract } from "../contract/schema.js";
+import type { ExecutionRecovery } from "../runtime/types.js";
 import type { RunState } from "../state/types.js";
 
 export type RunEvent = {
@@ -15,6 +16,7 @@ export type AttemptArtifacts = {
   verify?: unknown;
   diffPatch?: string;
   stdoutStderrLog?: string;
+  executionRecovery?: ExecutionRecovery;
 };
 
 async function pathExists(path: string): Promise<boolean> {
@@ -97,5 +99,12 @@ export async function writeAttemptArtifacts(runDir: string, attempt: number, art
 
   if (artifacts.stdoutStderrLog !== undefined) {
     await writeFile(join(attemptDir, "stdout-stderr.log"), artifacts.stdoutStderrLog);
+  }
+
+  if (artifacts.executionRecovery !== undefined) {
+    await writeFile(
+      join(attemptDir, "execution-recovery.json"),
+      JSON.stringify(artifacts.executionRecovery, null, 2),
+    );
   }
 }
