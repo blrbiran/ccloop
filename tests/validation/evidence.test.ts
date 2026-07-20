@@ -359,6 +359,33 @@ describe("evidence collection", () => {
     });
   });
 
+  it("treats raw Layer A diff presence as contradictory even when Scenario D normalizes it to INVALID", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({
+      scenarioId: "D",
+      events: [
+        { type: "attempt_started", at: "2026-07-20T00:00:00.000Z", detail: "attempt 1" },
+        { type: "loop_exhausted", at: "2026-07-20T00:00:05.000Z", detail: "runtime or token budget exhausted" },
+      ],
+      loopState: {
+        status: "exhausted",
+        stopReason: "runtime or token budget exhausted",
+        waitingOnHuman: false,
+      },
+      artifacts: { plan: "present", execution: "missing", verify: "missing", diff: "present", log: "missing" },
+    });
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(record.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ name: "diff", status: "INVALID" })]));
+    expect(classifyDScenarioBoundary(record)).toBe("BOUNDARY_UNRESOLVED");
+    expect(mapDBoundaryToReview(classifyDScenarioBoundary(record), record)).toEqual({
+      scenarioVerdict: "INCONCLUSIVE",
+      diagnosis: "CONTRACT_GAP",
+    });
+  });
 
   it("treats malformed execution-recovery.json as BOUNDARY_UNRESOLVED instead of recoverable evidence", async () => {
     const { runDir, evidenceDir } = await createSyntheticRun({

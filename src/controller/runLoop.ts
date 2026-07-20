@@ -407,8 +407,8 @@ async function runPhaseWithTimeout<T>(
   }
 }
 
-function parseChangedPathsFromGitStatus(statusOutput: string): string[] {
-  const entries = statusOutput.split(" ");
+export function parseChangedPathsFromGitStatus(statusOutput: string): string[] {
+  const entries = statusOutput.split("\0");
   const paths = new Set<string>();
 
   for (let index = 0; index < entries.length; index += 1) {
@@ -421,19 +421,12 @@ function parseChangedPathsFromGitStatus(statusOutput: string): string[] {
     const status = entry.slice(0, 2);
     const path = entry.slice(3);
 
-    if (status.includes("R") || status.includes("C")) {
-      const renamedPath = entries[index + 1] ?? path;
-
-      if (renamedPath !== "") {
-        paths.add(renamedPath);
-      }
-
-      index += 1;
-      continue;
-    }
-
     if (path !== "") {
       paths.add(path);
+    }
+
+    if (status.includes("R") || status.includes("C")) {
+      index += 1;
     }
   }
 

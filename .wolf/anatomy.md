@@ -55,6 +55,7 @@
 - `task-4-report.md` — Task 4 implementation report covering immutable historical review preservation, explicit reclassification output, verification, and self-review (~1800 tok)
 - `task-5-brief.md` — Task 5 brief for doc/handover alignment, OpenWolf bookkeeping, verification, commit, and reporting requirements (~1400 tok)
 - `task-5-report.md` — Task 5 implementation report covering operator-doc alignment for the implemented D-boundary rule, verification, commit, and self-review (~1600 tok)
+- `final-branch-fix-report.md` — Final whole-branch review fix report covering the raw Layer A contradiction correction, porcelain -z rename/copy parser fix, focused regressions, verification, and final commit (~1400 tok)
 
 ## docs/handover/
 

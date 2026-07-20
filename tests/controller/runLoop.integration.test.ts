@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
-import { runLoop } from "../../src/controller/runLoop.js";
+import { parseChangedPathsFromGitStatus, runLoop } from "../../src/controller/runLoop.js";
 import { SubprocessClaudeAdapter } from "../../src/runtime/claude/subprocessClaudeAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
@@ -101,6 +101,27 @@ async function pathExists(path: string): Promise<boolean> {
     return false;
   }
 }
+
+describe("parseChangedPathsFromGitStatus", () => {
+  it("returns destination paths for rename and copy porcelain -z records", () => {
+    const statusOutput = [
+      "R  renamed file.ts",
+      "original file.ts",
+      "C  copied file.ts",
+      "source file.ts",
+      " M modified.ts",
+      '?? quote "name".ts',
+      "",
+    ].join("\0");
+
+    expect(parseChangedPathsFromGitStatus(statusOutput)).toEqual([
+      "renamed file.ts",
+      "copied file.ts",
+      "modified.ts",
+      'quote "name".ts',
+    ]);
+  });
+});
 
 describe("runLoop", () => {
   it("succeeds when verification approves", async () => {

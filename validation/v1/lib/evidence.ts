@@ -514,16 +514,32 @@ function getEventTypes(record: EvidenceRecord): string[] {
   return record.observations.events.status === "PRESENT" ? (record.observations.events.types ?? []) : [];
 }
 
+function hasObservedLayerAArtifact(record: EvidenceRecord, artifactName: Extract<ArtifactName, "execution" | "diff" | "log">): boolean {
+  if (artifactName === "execution") {
+    return record.observations.executionJson.status === "PRESENT" || record.observations.executionJson.status === "INVALID";
+  }
+
+  const artifact = record.artifacts.find((candidate) => candidate.name === artifactName);
+  return artifact?.status === "PRESENT" || artifact?.status === "INVALID";
+}
+
 function hasContradictoryLayerAEvidence(
   record: EvidenceRecord,
   artifactStatus: Partial<Record<ArtifactName, ArtifactStatus>>,
   eventTypes: string[],
 ): boolean {
   const terminalStatus = record.observations.terminalOutcome.status;
-  const hasExecutionArtifacts = artifactStatus.execution === "PRESENT" || artifactStatus.diff === "PRESENT" || artifactStatus.log === "PRESENT";
+  const hasObservedExecuteArtifacts =
+    hasObservedLayerAArtifact(record, "execution") ||
+    hasObservedLayerAArtifact(record, "diff") ||
+    hasObservedLayerAArtifact(record, "log");
   const loopReachedExhaustion = eventTypes.includes("loop_exhausted") || terminalStatus === "exhausted";
 
-  if (hasExecutionArtifacts && !eventTypes.includes("attempt_started")) {
+  if (hasObservedExecuteArtifacts && !eventTypes.includes("attempt_started")) {
+    return true;
+  }
+
+  if (hasObservedExecuteArtifacts && eventTypes.includes("attempt_started") && !eventTypes.includes("execute_started")) {
     return true;
   }
 

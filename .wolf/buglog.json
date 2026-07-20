@@ -201,8 +201,8 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-20T01:53:08Z"
-  }
-  ,{
+  },
+  {
     "id": "bug-012",
     "timestamp": "2026-07-20T02:10:30Z",
     "error_message": "finalize-review could only write review.json and refused historical D reclassification once review.json already existed",
@@ -218,5 +218,47 @@
     "related_bugs": [],
     "occurrences": 1,
     "last_seen": "2026-07-20T02:10:30Z"
+  },
+  {
+    "id": "bug-013",
+    "timestamp": "2026-07-20T18:50:39Z",
+    "error_message": "Scenario D contradiction detection missed raw Layer A execute/diff/log files when scenario normalization downgraded them to INVALID",
+    "file": "validation/v1/lib/evidence.ts",
+    "root_cause": "hasContradictoryLayerAEvidence() relied on scenario-normalized artifact statuses, so physically present Layer A artifacts that normalized to INVALID did not count as contradiction evidence.",
+    "fix": "Added raw Layer A observation checks for execution.json, diff.patch, and stdout-stderr.log so contradictory presence now maps to BOUNDARY_UNRESOLVED even when Scenario D marks the artifact INVALID.",
+    "tags": [
+      "validation",
+      "scenario-d",
+      "layer-a",
+      "boundary-classification",
+      "final-review"
+    ],
+    "related_bugs": [
+      "bug-009"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T18:50:39Z"
+  },
+  {
+    "id": "bug-014",
+    "timestamp": "2026-07-20T18:50:39Z",
+    "error_message": "parseChangedPathsFromGitStatus() misparsed porcelain -z rename/copy records and embedded a literal NUL byte in source",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "The helper treated rename/copy records as if the second token were the destination path and used a physical NUL character in the source literal instead of an escaped delimiter.",
+    "fix": "Switched to split(\"\\0\"), kept the current record path as the rename/copy destination, skipped the following source-path token, and added a direct regression test.",
+    "tags": [
+      "controller",
+      "git-status",
+      "parser",
+      "rename",
+      "copy",
+      "final-review"
+    ],
+    "related_bugs": [
+      "bug-005",
+      "bug-006"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T18:50:39Z"
   }
 ]
