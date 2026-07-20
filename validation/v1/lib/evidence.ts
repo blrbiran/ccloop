@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
+import type { ExecutionRecovery } from "../../../src/runtime/types.js";
 import type { ScenarioDefinition } from "./scenarios.js";
 
 export type ArtifactStatus = "PRESENT" | "NOT_PRODUCED" | "NOT_RUN" | "MISSING" | "INVALID";
@@ -63,6 +64,12 @@ export type EvidenceRecord = {
   git: GitObservation;
   processes: EvidenceInput["processes"];
   artifacts: ArtifactRecord[];
+  executionRecovery: {
+    status: "PRESENT" | "MISSING" | "INVALID";
+    path: string;
+    value?: ExecutionRecovery;
+    error?: string;
+  };
   requiredChecks: {
     status: ArtifactStatus;
     error?: string;
@@ -82,6 +89,7 @@ export type EvidenceRecord = {
       status: "PRESENT" | "MISSING" | "INVALID";
       path: string;
       count: number;
+      types?: string[];
       error?: string;
     };
     terminalOutcome: {
@@ -103,6 +111,13 @@ export type Review = {
   reviewedAt: string;
 };
 
+
+export type DBoundaryClassification =
+  | "PRE_EXECUTE_EXHAUSTION"
+  | "EXECUTE_ENTERED_NO_RECOVERABLE_EVIDENCE"
+  | "EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE"
+  | "BOUNDARY_UNRESOLVED";
+
 type JsonObservation = {
   status: "PRESENT" | "MISSING" | "INVALID";
   path: string;
@@ -119,6 +134,7 @@ type EventReadResult = {
     status: "PRESENT" | "MISSING" | "INVALID";
     path: string;
     count: number;
+    types?: string[];
     error?: string;
   };
   entries: unknown[];
@@ -270,8 +286,12 @@ async function readEventsObservation(runDirRoot: string, candidatePath: string):
     }
   }
 
+  const types = entries
+    .map((entry) => (entry && typeof entry === "object" ? (entry as { type?: unknown }).type : undefined))
+    .filter((type): type is string => typeof type === "string");
+
   return {
-    observation: { status: "PRESENT", path: file.path, count: entries.length },
+    observation: { status: "PRESENT", path: file.path, count: entries.length, types },
     entries,
   };
 }
@@ -444,6 +464,142 @@ async function getCleanupOutcome(
   };
 }
 
+function getArtifactStatusMap(record: EvidenceRecord): Partial<Record<ArtifactName, ArtifactStatus>> {
+  return Object.fromEntries(record.artifacts.map((artifact) => [artifact.name, artifact.status])) as Partial<
+    Record<ArtifactName, ArtifactStatus>
+  >;
+}
+
+function getEventTypes(record: EvidenceRecord): string[] {
+  return record.observations.events.status === "PRESENT" ? (record.observations.events.types ?? []) : [];
+}
+
+function hasContradictoryLayerAEvidence(
+  record: EvidenceRecord,
+  artifactStatus: Partial<Record<ArtifactName, ArtifactStatus>>,
+  eventTypes: string[],
+): boolean {
+  const terminalStatus = record.observations.terminalOutcome.status;
+  const hasExecutionArtifacts = artifactStatus.execution === "PRESENT" || artifactStatus.diff === "PRESENT" || artifactStatus.log === "PRESENT";
+  const loopReachedExhaustion = eventTypes.includes("loop_exhausted") || terminalStatus === "exhausted";
+
+  if (hasExecutionArtifacts && !eventTypes.includes("attempt_started")) {
+    return true;
+  }
+
+  if (eventTypes.includes("execute_started") && !eventTypes.includes("attempt_started")) {
+    return true;
+  }
+
+  if (eventTypes.includes("loop_exhausted") && terminalStatus !== null && terminalStatus !== "exhausted") {
+    return true;
+  }
+
+  if (terminalStatus === "exhausted" && eventTypes.some((type) => type === "loop_failed" || type === "loop_succeeded")) {
+    return true;
+  }
+
+  if (loopReachedExhaustion && record.observations.loopState.status !== "PRESENT") {
+    return true;
+  }
+
+  return false;
+}
+
+function matchesPreExecuteExhaustion(
+  record: EvidenceRecord,
+  artifactStatus: Partial<Record<ArtifactName, ArtifactStatus>>,
+  eventTypes: string[],
+): boolean {
+  const allowedEventTypes = new Set(["loop_planning", "loop_exhausted"]);
+
+  return (
+    artifactStatus.plan === "PRESENT" &&
+    artifactStatus.execution === "NOT_PRODUCED" &&
+    artifactStatus.diff === "NOT_PRODUCED" &&
+    artifactStatus.log === "NOT_PRODUCED" &&
+    record.observations.terminalOutcome.status === "exhausted" &&
+    eventTypes.includes("loop_planning") &&
+    eventTypes.includes("loop_exhausted") &&
+    !eventTypes.includes("attempt_started") &&
+    eventTypes.every((type) => allowedEventTypes.has(type))
+  );
+}
+
+function hasSufficientRecoverableExecuteEvidence(record: EvidenceRecord, artifactStatus: Partial<Record<ArtifactName, ArtifactStatus>>): boolean {
+  return artifactStatus.execution === "PRESENT" || record.executionRecovery.status === "PRESENT";
+}
+
+function hasPassShapeForRecoverableExecuteEvidence(record: EvidenceRecord, artifactStatus: Partial<Record<ArtifactName, ArtifactStatus>>): boolean {
+  const executionRecovery = record.executionRecovery.status === "PRESENT" ? record.executionRecovery.value : undefined;
+
+  return (
+    executionRecovery?.executeEntered === true &&
+    executionRecovery.worktreeDiffObserved === false &&
+    executionRecovery.diffPatchCaptured === false &&
+    executionRecovery.stdoutStderrLogCaptured === false &&
+    executionRecovery.changedPathsObserved === null &&
+    executionRecovery.captureStatus === "complete" &&
+    executionRecovery.cleanupStatus === "removed" &&
+    artifactStatus.plan === "PRESENT" &&
+    artifactStatus.execution === "NOT_PRODUCED" &&
+    artifactStatus.verify === "NOT_RUN" &&
+    artifactStatus.diff === "NOT_PRODUCED" &&
+    artifactStatus.log === "NOT_PRODUCED" &&
+    record.requiredChecks.status === "NOT_RUN" &&
+    record.observations.terminalOutcome.status === "exhausted" &&
+    record.observations.cleanupOutcome.status === "WORKTREE_REMOVED"
+  );
+}
+
+export function classifyDScenarioBoundary(record: EvidenceRecord): DBoundaryClassification {
+  const eventTypes = getEventTypes(record);
+  const artifactStatus = getArtifactStatusMap(record);
+
+  if (record.observations.events.status !== "PRESENT" || record.observations.loopState.status !== "PRESENT") {
+    return "BOUNDARY_UNRESOLVED";
+  }
+
+  if (hasContradictoryLayerAEvidence(record, artifactStatus, eventTypes)) {
+    return "BOUNDARY_UNRESOLVED";
+  }
+
+  if (matchesPreExecuteExhaustion(record, artifactStatus, eventTypes)) {
+    return "PRE_EXECUTE_EXHAUSTION";
+  }
+
+  if (eventTypes.includes("attempt_started") && eventTypes.includes("execute_started")) {
+    return hasSufficientRecoverableExecuteEvidence(record, artifactStatus)
+      ? "EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE"
+      : "EXECUTE_ENTERED_NO_RECOVERABLE_EVIDENCE";
+  }
+
+  if (eventTypes.includes("attempt_started")) {
+    return "EXECUTE_ENTERED_NO_RECOVERABLE_EVIDENCE";
+  }
+
+  return "BOUNDARY_UNRESOLVED";
+}
+
+export function mapDBoundaryToReview(
+  boundary: DBoundaryClassification,
+  record: EvidenceRecord,
+): Pick<Review, "scenarioVerdict" | "diagnosis"> {
+  switch (boundary) {
+    case "PRE_EXECUTE_EXHAUSTION":
+      return { scenarioVerdict: "INCONCLUSIVE", diagnosis: "RUNTIME_VARIANCE" };
+    case "EXECUTE_ENTERED_NO_RECOVERABLE_EVIDENCE":
+      return { scenarioVerdict: "INCONCLUSIVE", diagnosis: "CONTRACT_GAP" };
+    case "EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE":
+      return hasPassShapeForRecoverableExecuteEvidence(record, getArtifactStatusMap(record))
+        ? { scenarioVerdict: "PASS", diagnosis: null }
+        : { scenarioVerdict: "FAIL", diagnosis: "PRODUCT_DEFECT" };
+    case "BOUNDARY_UNRESOLVED":
+    default:
+      return { scenarioVerdict: "INCONCLUSIVE", diagnosis: "CONTRACT_GAP" };
+  }
+}
+
 export async function sha256File(path: string): Promise<string> {
   const digest = createHash("sha256");
   digest.update(await readFile(path));
@@ -468,12 +624,13 @@ export async function collectEvidence(input: EvidenceInput): Promise<EvidenceRec
   await mkdir(input.evidenceDir, { recursive: true });
   const runDirRoot = await resolveRunDirRoot(input.runDir);
 
-  const [artifacts, loopContract, loopState, events, verifyObservation, git] = await Promise.all([
+  const [artifacts, loopContract, loopState, events, verifyObservation, executionRecoveryObservation, git] = await Promise.all([
     collectArtifacts({ scenario: input.scenario, runDir: input.runDir }),
     readJsonObservation(runDirRoot, join(input.runDir, "loop-contract.json")),
     readJsonObservation(runDirRoot, join(input.runDir, "loop-state.json")),
     readEventsObservation(runDirRoot, join(input.runDir, "events.jsonl")),
     readJsonObservation(runDirRoot, join(input.runDir, "attempts", "1", "verify.json")),
+    readJsonObservation(runDirRoot, join(input.runDir, "attempts", "1", "execution-recovery.json")),
     collectGitObservation(input.git),
   ]);
 
@@ -497,6 +654,15 @@ export async function collectEvidence(input: EvidenceInput): Promise<EvidenceRec
     },
     artifacts,
     requiredChecks,
+    executionRecovery: {
+      status: executionRecoveryObservation.observation.status,
+      path: executionRecoveryObservation.observation.path,
+      value:
+        executionRecoveryObservation.observation.status === "PRESENT"
+          ? (executionRecoveryObservation.value as ExecutionRecovery)
+          : undefined,
+      error: executionRecoveryObservation.observation.error,
+    },
     observations: {
       loopContract: loopContract.observation,
       loopState: loopState.observation,

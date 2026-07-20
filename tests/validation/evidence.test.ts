@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectArtifacts, collectEvidence, sha256File } from "../../validation/v1/lib/evidence.js";
+import {
+  classifyDScenarioBoundary,
+  collectArtifacts,
+  collectEvidence,
+  mapDBoundaryToReview,
+  sha256File,
+} from "../../validation/v1/lib/evidence.js";
 import { getScenario, renderScenario } from "../../validation/v1/lib/scenarios.js";
 import { createFixture } from "../../validation/v1/scripts/create-fixture.js";
 
@@ -40,6 +46,13 @@ type SyntheticRunOptions = {
   invalidEvents?: boolean;
   omitPlan?: boolean;
   escapePlan?: boolean;
+  events?: Array<{ type: string; at: string; detail: string }>;
+  loopState?: {
+    status: string;
+    stopReason: string;
+    waitingOnHuman: boolean;
+  };
+  artifacts?: Partial<Record<"plan" | "execution" | "verify" | "diff" | "log", "present" | "missing">>;
 };
 
 async function createSyntheticRun(options: SyntheticRunOptions): Promise<{ runDir: string; evidenceDir: string }> {
@@ -55,18 +68,24 @@ async function createSyntheticRun(options: SyntheticRunOptions): Promise<{ runDi
       ? renderScenario(options.scenarioId, { repoPath: "/tmp/fixture", timeoutMs: 1234 })
       : renderScenario(options.scenarioId, { repoPath: "/tmp/fixture" });
 
-  const loopState = {
+  const defaultLoopState = {
     status: options.scenarioId === "A" ? "succeeded" : options.scenarioId === "B" ? "blocked_waiting_human" : "exhausted",
-    currentAttempt: 1,
-    attemptsUsed: 1,
-    lastTransitionAt: "2026-07-17T00:00:00.000Z",
-    waitingOnHuman: options.scenarioId === "B",
     stopReason:
       options.scenarioId === "A"
         ? "success condition satisfied"
         : options.scenarioId === "B"
           ? "denylist match: restricted.txt"
           : "execute phase exceeded per-attempt timeout of 1234ms",
+    waitingOnHuman: options.scenarioId === "B",
+  };
+
+  const loopState = {
+    status: options.loopState?.status ?? defaultLoopState.status,
+    currentAttempt: 1,
+    attemptsUsed: 1,
+    lastTransitionAt: "2026-07-17T00:00:00.000Z",
+    waitingOnHuman: options.loopState?.waitingOnHuman ?? defaultLoopState.waitingOnHuman,
+    stopReason: options.loopState?.stopReason ?? defaultLoopState.stopReason,
     budgetSnapshot: {
       attemptsRemaining: 0,
       timeRemainingMs: 500000,
@@ -81,15 +100,24 @@ async function createSyntheticRun(options: SyntheticRunOptions): Promise<{ runDi
     options.invalidLoopState ? "{not json\n" : `${JSON.stringify(loopState, null, 2)}\n`,
   );
 
+  const defaultEvents = [
+    { type: "attempt_started", at: "2026-07-17T00:00:00.000Z", detail: "attempt 1" },
+    { type: `loop_${loopState.status}`, at: "2026-07-17T00:01:00.000Z", detail: loopState.stopReason },
+  ];
   const eventLines = options.invalidEvents
     ? ['{"type":"attempt_started"}', 'not json']
-    : [
-        JSON.stringify({ type: "attempt_started", at: "2026-07-17T00:00:00.000Z", detail: "attempt 1" }),
-        JSON.stringify({ type: `loop_${loopState.status}`, at: "2026-07-17T00:01:00.000Z", detail: loopState.stopReason }),
-      ];
+    : (options.events ?? defaultEvents).map((event) => JSON.stringify(event));
   await writeFile(join(runDir, "events.jsonl"), `${eventLines.join("\n")}\n`);
 
-  if (!options.omitPlan) {
+  const artifactMode = {
+    plan: options.omitPlan ? "missing" : (options.artifacts?.plan ?? "present"),
+    execution: options.artifacts?.execution ?? (scenario.expectedArtifacts.execution === "PRESENT" ? "present" : "missing"),
+    verify: options.artifacts?.verify ?? (scenario.expectedArtifacts.verify === "PRESENT" ? "present" : "missing"),
+    diff: options.artifacts?.diff ?? (scenario.expectedArtifacts.diff === "PRESENT" ? "present" : "missing"),
+    log: options.artifacts?.log ?? (scenario.expectedArtifacts.log === "PRESENT" ? "present" : "missing"),
+  } as const;
+
+  if (artifactMode.plan === "present") {
     if (options.escapePlan) {
       const outsidePath = join(tempRoot, "outside-plan.json");
       await writeFile(outsidePath, '{"summary":"outside","primaryTargetPaths":[]}\n');
@@ -102,25 +130,25 @@ async function createSyntheticRun(options: SyntheticRunOptions): Promise<{ runDi
     }
   }
 
-  if (scenario.expectedArtifacts.execution === "PRESENT") {
+  if (artifactMode.execution === "present") {
     await writeFile(
       join(runDir, "attempts", "1", "execution.json"),
       '{"changedFiles":["src/counter.js"],"diffPatch":"diff --git a/src/counter.js b/src/counter.js","commandOutputs":["edited"],"stdoutStderrLog":"ok"}\n',
     );
   }
 
-  if (scenario.expectedArtifacts.verify === "PRESENT") {
+  if (artifactMode.verify === "present") {
     await writeFile(
       join(runDir, "attempts", "1", "verify.json"),
       '{"approved":true,"rejectCategory":"","primaryTargetPaths":["src/counter.js"],"failingCommand":null,"safeToRetry":false,"evidence":["command output | required check passed: npm test"],"pauseSignals":[],"stopSignals":[]}\n',
     );
   }
 
-  if (scenario.expectedArtifacts.diff === "PRESENT") {
+  if (artifactMode.diff === "present") {
     await writeFile(join(runDir, "attempts", "1", "diff.patch"), "diff --git a/src/counter.js b/src/counter.js\n");
   }
 
-  if (scenario.expectedArtifacts.log === "PRESENT") {
+  if (artifactMode.log === "present") {
     await writeFile(join(runDir, "attempts", "1", "stdout-stderr.log"), "ok\n");
   }
 
@@ -218,6 +246,207 @@ describe("evidence collection", () => {
     expect(evidence.artifacts).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "execution", status: "NOT_PRODUCED" })]),
     );
+  });
+
+
+  it("classifies plan-only exhausted evidence as PRE_EXECUTE_EXHAUSTION", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({
+      scenarioId: "D",
+      events: [
+        { type: "loop_planning", at: "2026-07-20T00:00:00.000Z", detail: "start" },
+        { type: "loop_exhausted", at: "2026-07-20T00:00:05.000Z", detail: "runtime or token budget exhausted" },
+      ],
+      loopState: {
+        status: "exhausted",
+        stopReason: "runtime or token budget exhausted",
+        waitingOnHuman: false,
+      },
+      artifacts: { plan: "present", execution: "missing", verify: "missing", diff: "missing", log: "missing" },
+    });
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(classifyDScenarioBoundary(record)).toBe("PRE_EXECUTE_EXHAUSTION");
+    expect(record.observations.events).toMatchObject({
+      status: "PRESENT",
+      types: ["loop_planning", "loop_exhausted"],
+    });
+    expect(mapDBoundaryToReview(classifyDScenarioBoundary(record), record)).toEqual({
+      scenarioVerdict: "INCONCLUSIVE",
+      diagnosis: "RUNTIME_VARIANCE",
+    });
+  });
+
+  it("classifies contradictory Layer A evidence as BOUNDARY_UNRESOLVED", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({
+      scenarioId: "D",
+      events: [{ type: "loop_exhausted", at: "2026-07-20T00:00:05.000Z", detail: "runtime or token budget exhausted" }],
+      loopState: { status: "failed", stopReason: "boom", waitingOnHuman: false },
+      artifacts: { plan: "present", execution: "present", verify: "missing", diff: "missing", log: "missing" },
+    });
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(classifyDScenarioBoundary(record)).toBe("BOUNDARY_UNRESOLVED");
+    expect(mapDBoundaryToReview(classifyDScenarioBoundary(record), record)).toEqual({
+      scenarioVerdict: "INCONCLUSIVE",
+      diagnosis: "CONTRACT_GAP",
+    });
+  });
+
+
+  it("maps execute-entered evidence without recoverable proof to INCONCLUSIVE CONTRACT_GAP", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({
+      scenarioId: "D",
+      events: [
+        { type: "attempt_started", at: "2026-07-20T00:00:00.000Z", detail: "attempt 1" },
+        { type: "loop_exhausted", at: "2026-07-20T00:00:05.000Z", detail: "runtime or token budget exhausted" },
+      ],
+      loopState: {
+        status: "exhausted",
+        stopReason: "runtime or token budget exhausted",
+        waitingOnHuman: false,
+      },
+      artifacts: { plan: "present", execution: "missing", verify: "missing", diff: "missing", log: "missing" },
+    });
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(classifyDScenarioBoundary(record)).toBe("EXECUTE_ENTERED_NO_RECOVERABLE_EVIDENCE");
+    expect(mapDBoundaryToReview(classifyDScenarioBoundary(record), record)).toEqual({
+      scenarioVerdict: "INCONCLUSIVE",
+      diagnosis: "CONTRACT_GAP",
+    });
+  });
+
+  it("requires controller-owned recoverable evidence before classifying execute-entered evidence as recoverable", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({
+      scenarioId: "D",
+      events: [
+        { type: "attempt_started", at: "2026-07-20T00:00:00.000Z", detail: "attempt 1" },
+        { type: "execute_started", at: "2026-07-20T00:00:01.000Z", detail: "attempt 1 entered execute" },
+        { type: "loop_exhausted", at: "2026-07-20T00:00:05.000Z", detail: "runtime or token budget exhausted" },
+      ],
+      loopState: {
+        status: "exhausted",
+        stopReason: "runtime or token budget exhausted",
+        waitingOnHuman: false,
+      },
+      artifacts: { plan: "present", execution: "missing", verify: "missing", diff: "missing", log: "missing" },
+    });
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(classifyDScenarioBoundary(record)).toBe("EXECUTE_ENTERED_NO_RECOVERABLE_EVIDENCE");
+    expect(mapDBoundaryToReview(classifyDScenarioBoundary(record), record)).toEqual({
+      scenarioVerdict: "INCONCLUSIVE",
+      diagnosis: "CONTRACT_GAP",
+    });
+  });
+
+
+  it("maps execute-entered recoverable evidence to PASS only when the stronger no-recoverable-work D shape is satisfied", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({
+      scenarioId: "D",
+      events: [
+        { type: "attempt_started", at: "2026-07-20T00:00:00.000Z", detail: "attempt 1" },
+        { type: "execute_started", at: "2026-07-20T00:00:01.000Z", detail: "attempt 1 entered execute" },
+        { type: "loop_exhausted", at: "2026-07-20T00:00:05.000Z", detail: "runtime or token budget exhausted" },
+      ],
+      loopState: {
+        status: "exhausted",
+        stopReason: "runtime or token budget exhausted",
+        waitingOnHuman: false,
+      },
+      artifacts: { plan: "present", execution: "missing", verify: "missing", diff: "missing", log: "missing" },
+    });
+
+    await writeFile(
+      join(runDir, "attempts", "1", "execution-recovery.json"),
+      JSON.stringify(
+        {
+          executeEntered: true,
+          worktreeDiffObserved: false,
+          diffPatchCaptured: false,
+          stdoutStderrLogCaptured: false,
+          changedPathsObserved: null,
+          captureStatus: "complete",
+          cleanupStatus: "removed",
+          failureBoundary: "timeout",
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(classifyDScenarioBoundary(record)).toBe("EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE");
+    expect(mapDBoundaryToReview(classifyDScenarioBoundary(record), record)).toEqual({
+      scenarioVerdict: "PASS",
+      diagnosis: null,
+    });
+  });
+
+  it("does not award PASS for execute-entered recoverable evidence when standard D evidence shape is violated", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({
+      scenarioId: "D",
+      events: [
+        { type: "attempt_started", at: "2026-07-20T00:00:00.000Z", detail: "attempt 1" },
+        { type: "execute_started", at: "2026-07-20T00:00:01.000Z", detail: "attempt 1 entered execute" },
+        { type: "loop_exhausted", at: "2026-07-20T00:00:05.000Z", detail: "runtime or token budget exhausted" },
+      ],
+      loopState: {
+        status: "exhausted",
+        stopReason: "runtime or token budget exhausted",
+        waitingOnHuman: false,
+      },
+      artifacts: { plan: "present", execution: "present", verify: "missing", diff: "missing", log: "missing" },
+    });
+
+    await writeFile(
+      join(runDir, "attempts", "1", "execution-recovery.json"),
+      JSON.stringify(
+        {
+          executeEntered: true,
+          worktreeDiffObserved: true,
+          diffPatchCaptured: false,
+          stdoutStderrLogCaptured: false,
+          changedPathsObserved: ["src/counter.js"],
+          captureStatus: "complete",
+          cleanupStatus: "removed",
+          failureBoundary: "timeout",
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(classifyDScenarioBoundary(record)).toBe("EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE");
+    expect(mapDBoundaryToReview(classifyDScenarioBoundary(record), record)).toEqual({
+      scenarioVerdict: "FAIL",
+      diagnosis: "PRODUCT_DEFECT",
+    });
   });
 
   it("surfaces malformed loop-state.json as INVALID", async () => {

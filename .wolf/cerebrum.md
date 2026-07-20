@@ -2,7 +2,7 @@
 
 > OpenWolf's learning memory. Updated automatically as the AI learns from interactions.
 > Do not edit manually unless correcting an error.
-> Last updated: 2026-07-18
+> Last updated: 2026-07-20
 
 ## User Preferences
 
@@ -60,6 +60,13 @@
 
 - Task 3 doc-alignment worktrees may lag approved 2026-07-19 metadata-backed governance docs from the main checkout; sync those tracked spec/plan files before adding supersession references so README/handover/anatomy do not point at missing paths.
 
+- Some isolated implementation worktrees can contain a placeholder `node_modules/` with no local `.bin/tsx`; in that state, `tests/validation/evidence.test.ts` fails with spawn-ENOENT before exercising product code.
+
+- Task 2 controller evidence now treats `execute_started` as the canonical execute-entry boundary, and interrupted execute exhaustion with no adapter result must persist controller-owned `execution-recovery.json` from a best-effort pre-cleanup git-status probe of the attempt worktree.
+- Task 3 evidence-layer classification for scenario D reads only Layer A signals: parsed event types, terminal loop-state shape, and standard artifact presence/absence; `BOUNDARY_UNRESOLVED` stays the only route to `INCONCLUSIVE / CONTRACT_GAP`, and execute-entered PASS requires the stronger no-recoverable-work plus cleanup-and-standard-shape contract.
+- For Task 3 D classification, `execute_started` alone is not sufficient for `EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE`; the evidence layer must also see a complete `execution.json` or controller-owned `execution-recovery.json`, and tests should model that explicitly.
+- When interrupted execute recovery is written, `execution-recovery.json.cleanupStatus` must be finalized from the real cleanup outcome: write the pre-cleanup snapshot first, then keep `retained` on cleanup failure or update it to `removed` only after cleanup succeeds.
+
 ## Do-Not-Repeat
 
 <!-- Mistakes made and corrected. Each entry prevents the same mistake recurring. -->
@@ -81,6 +88,8 @@
 - [2026-07-18] When narrowing `renderScenario(...)` by scenario id, do not use separate A/non-A overloads; use a generic conditional signature so existing callers with `ScenarioId` unions still typecheck while non-A overrides remain blocked.
 
 - [2026-07-18] For A-04 path safety, do not rely on lexical containment or `stat()`-style existence checks; use `realpath` for adapter-config freeze guarantees and `lstat` for freshness so symlink escapes and dangling symlinks cannot pass pre-approval.
+
+- [2026-07-20] Task briefs may mention Jest-style `--runInBand`, but this repository runs Vitest; use `npm test -- <test-path>` (or another Vitest-supported form) instead of assuming that flag exists.
 
 ## Decision Log
 

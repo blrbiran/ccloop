@@ -1,0 +1,146 @@
+[
+  {
+    "id": "bug-001",
+    "timestamp": "2026-07-20T16:24:44Z",
+    "error_message": "ENOENT: no such file or directory, open \"attempts/1/execution-recovery.json\"",
+    "file": "src/persistence/fileStore.ts",
+    "root_cause": "AttemptArtifacts did not expose controller-owned execution recovery metadata, so writeAttemptArtifacts never persisted execution-recovery.json.",
+    "fix": "Added the ExecutionRecovery runtime type, extended AttemptArtifacts with executionRecovery, persisted attempts/<n>/execution-recovery.json, and added a regression test.",
+    "tags": [
+      "persistence",
+      "execution-recovery",
+      "task-1"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T16:24:44Z"
+  },
+  {
+    "id": "bug-002",
+    "timestamp": "2026-07-20T16:24:44Z",
+    "error_message": "Unknown option `--runInBand`",
+    "file": "tests/persistence/fileStore.test.ts",
+    "root_cause": "The task brief used a Jest-style flag, but this repository runs Vitest and does not support --runInBand.",
+    "fix": "Ran the focused test with the Vitest-compatible command `npm test -- tests/persistence/fileStore.test.ts` instead of using the unsupported flag.",
+    "tags": [
+      "vitest",
+      "test-command",
+      "task-brief"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T16:24:44Z"
+  },
+  {
+    "id": "bug-003",
+    "timestamp": "2026-07-20T16:24:44Z",
+    "error_message": "spawn .../node_modules/.bin/tsx ENOENT during tests/validation/evidence.test.ts",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "The isolated d-scenario-boundary-classification worktree has a placeholder node_modules directory with no local .bin/tsx binary, so validation evidence tests that spawn the worktree-local tsx executable fail before exercising product code.",
+    "fix": "Not fixed in Task 1; recorded as a pre-existing environment issue after the required full-suite run.",
+    "tags": [
+      "full-suite",
+      "validation",
+      "environment",
+      "node_modules",
+      "tsx"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T16:24:44Z"
+  },
+  {
+    "id": "bug-004",
+    "timestamp": "2026-07-20T16:47:14Z",
+    "error_message": "Transform failed with ERROR: Unterminated string literal in tests/controller/runLoop.integration.test.ts",
+    "file": "tests/controller/runLoop.integration.test.ts",
+    "root_cause": "A Python-generated test edit wrote a physical newline into a TypeScript string literal instead of an escaped \\n sequence, so Vitest/esbuild could not parse the file.",
+    "fix": "Replaced the broken multiline literal with an escaped newline string before re-running the focused Task 2 integration tests.",
+    "tags": [
+      "tests",
+      "syntax",
+      "vitest",
+      "task-2"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T16:47:14Z"
+  },
+  {
+    "id": "bug-005",
+    "timestamp": "2026-07-20T16:47:14Z",
+    "error_message": "execute_started missing and execution-recovery.json not written when execute timed out/exhausted without a result",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "The controller entered the execute phase without emitting a dedicated execute boundary event, and the execute timeout path that returned null only persisted plan artifacts instead of a controller-owned recovery observation before cleanup.",
+    "fix": "Emitted execute_started immediately before adapter.execute, captured changed paths from a best-effort git status probe before cleanup, persisted execution-recovery.json for interrupted execute null-result exhaustion paths, and updated integration coverage.",
+    "tags": [
+      "controller",
+      "events",
+      "execution-recovery",
+      "task-2"
+    ],
+    "related_bugs": [
+      "bug-001"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T16:47:14Z"
+  },
+  {
+    "id": "bug-006",
+    "timestamp": "2026-07-20T16:59:34Z",
+    "error_message": "execute-entered abort-throw paths could end failed/attempt_failed without execution-recovery.json, and execution-recovery.json could claim cleanupStatus=\"removed\" before cleanup actually ran",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "runPhaseWithTimeout rethrew post-abort execute errors as PhaseExecutionError, so the controller's interrupted-execute null-result recovery branch only covered abort-return-null. The controller also serialized execution-recovery.json before cleanup and hard-coded cleanupStatus to removed.",
+    "fix": "Captured timed-out aborted errors as no-result timeout outcomes, persisted interrupted execute recovery for abort-throw as well as abort-return-null, and finalized execution-recovery.json cleanupStatus from the actual cleanup result (retained on cleanup failure, removed after successful cleanup).",
+    "tags": [
+      "controller",
+      "execution-recovery",
+      "cleanup",
+      "timeout",
+      "abort",
+      "task-2"
+    ],
+    "related_bugs": [
+      "bug-005"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T16:59:34Z"
+  },
+  {
+    "id": "bug-007",
+    "timestamp": "2026-07-20T17:11:01Z",
+    "error_message": "TypeError: classifyDScenarioBoundary is not a function in tests/validation/evidence.test.ts",
+    "file": "validation/v1/lib/evidence.ts",
+    "root_cause": "Task 3 tests started importing D-boundary helpers before evidence.ts exported them or exposed parsed event types needed for deterministic classification.",
+    "fix": "Added DBoundaryClassification exports, classifyDScenarioBoundary/mapDBoundaryToReview helpers, and event type parsing on evidence observations.",
+    "tags": [
+      "task-3",
+      "validation",
+      "evidence",
+      "vitest"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T17:11:01Z"
+  },
+  {
+    "id": "bug-008",
+    "timestamp": "2026-07-20T17:16:53Z",
+    "error_message": "Task 3 mapping test mis-modeled recoverable execute evidence and failed after the classifier required execution-recovery.json or equivalent controller-owned evidence",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "The test expected EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE from execute_started plus standard artifacts alone, but the approved D-boundary spec requires controller-owned recoverable evidence such as execution-recovery.json when no complete execute result is available.",
+    "fix": "Updated the failing test to write attempts/1/execution-recovery.json before collecting evidence, so the fixture actually exercises the recoverable-evidence branch.",
+    "tags": [
+      "task-3",
+      "validation",
+      "tests",
+      "execution-recovery",
+      "spec-alignment"
+    ],
+    "related_bugs": [
+      "bug-007"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T17:16:53Z"
+  }
+]
