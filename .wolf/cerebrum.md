@@ -12,6 +12,7 @@
 - 在类似本次这种迭代修复把工作树弄脏、从而阻塞下一步验证时，可以主动创建本地 commit，不必每次都等用户手动提交。
 - 后续本项目运行测试、validation script、scenario invocation 时，默认直接使用 `ECC_GATEGUARD=off`；这个 gate 不是必须，只是有人参与时防止 AI 误改文件的辅助机制。
 - 后续本项目运行测试、validation script、scenario invocation 时，也默认直接使用 `DISABLE_OMC=1`，避免 oh-my-claudecode 在 attempt worktree 内写入 `.omc/**` 干扰 validation 场景。
+- 如果只是临时绕开 OMC，优先用 `claude plugin disable oh-my-claudecode ; ... ; claude plugin enable oh-my-claudecode`；如果对 plugin / skill / hooks 完全没有要求，则优先考虑 `claude --bare`。
 
 
 ## Key Learnings
