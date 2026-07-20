@@ -116,6 +116,13 @@ export type Review = {
   reviewedAt: string;
 };
 
+export type ReclassifiedReview = {
+  original: Review;
+  reclassified: Review;
+  boundaryClassification: DBoundaryClassification;
+  ruleVersion: string;
+  evidenceReferences: string[];
+};
 
 export type DBoundaryClassification =
   | "PRE_EXECUTE_EXHAUSTION"
@@ -165,6 +172,21 @@ const reviewSchema = z
     diagnosis: z.enum(["PRODUCT_DEFECT", "RUNTIME_VARIANCE", "ENVIRONMENT_FAILURE", "CONTRACT_GAP"]).nullable(),
     summary: z.string().trim().min(1),
     reviewedAt: z.string().min(1),
+  })
+  .strict();
+
+const reclassifiedReviewSchema = z
+  .object({
+    original: reviewSchema,
+    reclassified: reviewSchema,
+    boundaryClassification: z.enum([
+      "PRE_EXECUTE_EXHAUSTION",
+      "EXECUTE_ENTERED_NO_RECOVERABLE_EVIDENCE",
+      "EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE",
+      "BOUNDARY_UNRESOLVED",
+    ]),
+    ruleVersion: z.string().trim().min(1),
+    evidenceReferences: z.array(z.string().trim().min(1)).min(1),
   })
   .strict();
 
@@ -745,4 +767,8 @@ export async function collectEvidence(input: EvidenceInput): Promise<EvidenceRec
 
 export function validateReview(review: unknown): Review {
   return reviewSchema.parse(review);
+}
+
+export function validateReclassifiedReview(review: unknown): ReclassifiedReview {
+  return reclassifiedReviewSchema.parse(review);
 }

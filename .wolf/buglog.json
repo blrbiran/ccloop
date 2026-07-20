@@ -202,4 +202,21 @@
     "occurrences": 1,
     "last_seen": "2026-07-20T01:53:08Z"
   }
+  ,{
+    "id": "bug-012",
+    "timestamp": "2026-07-20T02:10:30Z",
+    "error_message": "finalize-review could only write review.json and refused historical D reclassification once review.json already existed",
+    "file": "validation/v1/scripts/finalize-review.ts",
+    "root_cause": "The CLI only supported creating review.json and had no separate reclassification artifact schema or arguments, so historical review preservation from the D-boundary spec was impossible.",
+    "fix": "Added ReclassifiedReview validation, a separate review-reclassified.json write path behind explicit reclassification arguments, and regression coverage that preserves the original review.json while recording original/reclassified verdicts, boundary classification, rule version, and Layer A evidence references.",
+    "tags": [
+      "task-4",
+      "validation",
+      "reclassification",
+      "review-artifact"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-20T02:10:30Z"
+  }
 ]

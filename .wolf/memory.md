@@ -30,3 +30,6 @@
 | 01:54 | Re-ran focused Task 3 evidence coverage after reviewer fix wave 2 | tests/validation/evidence.test.ts | 31 passed | ~120 |
 | 01:54 | Re-ran full Vitest suite after Task 3 reviewer fix wave 2 | tests/** | 190 passed | ~150 |
 | 01:55 | Updated Task 3 report and OpenWolf metadata for reviewer fix wave 2 | .superpowers/sdd/task-3-report.md, .wolf/anatomy.md, .wolf/cerebrum.md, .wolf/buglog.json, .wolf/memory.md | done | ~420 |
+| 02:05 | Added Task 4 reclassification RED test proving review.json must remain immutable while review-reclassified.json carries explicit boundary metadata | tests/validation/evidence.test.ts | fail -> expected old overwrite guard | ~700 |
+| 02:07 | Implemented Task 4 ReclassifiedReview schema and finalize-review reclassification mode with explicit rule/evidence metadata | validation/v1/lib/evidence.ts, validation/v1/scripts/finalize-review.ts | done | ~1300 |
+| 02:09 | Re-ran focused and full validation after Task 4 reclassification changes; suite, typecheck, and build all passed | tests/validation/evidence.test.ts, tests/**, tsconfig/build outputs | pass | ~500 |

@@ -41,13 +41,18 @@
 
 ## validation/v1/lib/
 
-- `evidence.ts` — Evidence collection, artifact/observation parsing, D-boundary classification helpers, and trust-boundary validation for `execution-recovery.json`, direct `execution.json` observations, and historical pre-execute disqualifiers in validation V1 (~4700 tok)
+- `evidence.ts` — Evidence collection, artifact/observation parsing, D-boundary classification helpers, trust-boundary validation for `execution-recovery.json`, and `ReclassifiedReview` schema/validation for immutable historical review preservation in validation V1 (~5200 tok)
+
+## validation/v1/scripts/
+
+- `finalize-review.ts` — Validation CLI for writing immutable `review.json` once or explicit `review-reclassified.json` artifacts with original/reclassified reviews, boundary classification, rule version, and Layer A evidence references (~1800 tok)
 
 ## tests/validation/
 
-- `evidence.test.ts` — Synthetic evidence fixtures plus validation/evidence regression coverage for artifact collection, D-boundary mapping, malformed recovery evidence, verify/recovery-backed trust boundaries, execution-json-only recovery classification, and CLI behaviors (~14600 tok)
+- `evidence.test.ts` — Synthetic evidence fixtures plus validation/evidence regression coverage for artifact collection, D-boundary mapping, malformed recovery evidence, verify/recovery-backed trust boundaries, execution-json-only recovery classification, immutable `review-reclassified.json` output, and CLI behaviors (~15200 tok)
 
 ## .superpowers/sdd/
 
 - `task-2-report.md` — Task 2 implementation report plus reviewer fix-wave notes, verification results, and self-review for execute boundary recovery evidence (~1700 tok)
 - `task-3-report.md` — Task 3 implementation report plus reviewer fix-wave notes for malformed recovery evidence and historical verify-backed boundary disqualification (~2100 tok)
+- `task-4-report.md` — Task 4 implementation report covering immutable historical review preservation, explicit reclassification output, verification, and self-review (~1800 tok)

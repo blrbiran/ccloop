@@ -67,6 +67,7 @@
 - For Task 3 D classification, `execute_started` alone is not sufficient for `EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE`; the evidence layer must also see a complete `execution.json` or controller-owned `execution-recovery.json`, and tests should model that explicitly.
 - When interrupted execute recovery is written, `execution-recovery.json.cleanupStatus` must be finalized from the real cleanup outcome: write the pre-cleanup snapshot first, then keep `retained` on cleanup failure or update it to `removed` only after cleanup succeeds.
 - Task 3 D-boundary classification must schema-validate `execution-recovery.json`; a merely parseable JSON file is not sufficient Layer A recovery evidence, and malformed/shape-invalid recovery must fall back to `BOUNDARY_UNRESOLVED`.
+- Task 4 historical review preservation uses a richer `review-reclassified.json` artifact, not a plain alternate-name `Review`: it must include `original`, `reclassified`, `boundaryClassification`, `ruleVersion`, and exact Layer A `evidenceReferences`, while leaving `review.json` immutable.
 - Historical `PRE_EXECUTE_EXHAUSTION` also requires `verify.json` to remain absent/`NOT_RUN`; any verify artifact is later Layer A attempt-handling evidence and disqualifies the historical pre-execute classification.
 - Historical `PRE_EXECUTE_EXHAUSTION` also requires controller-owned `execution-recovery.json` to remain absent, while execute-entered recoverable classification must consult direct `execution.json` readability rather than Scenario D artifact-status normalization alone.
 

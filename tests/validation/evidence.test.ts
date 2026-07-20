@@ -14,6 +14,7 @@ import {
 } from "../../validation/v1/lib/evidence.js";
 import { getScenario, renderScenario } from "../../validation/v1/lib/scenarios.js";
 import { createFixture } from "../../validation/v1/scripts/create-fixture.js";
+import { main as finalizeReviewMain } from "../../validation/v1/scripts/finalize-review.js";
 
 const execFileAsync = promisify(execFile);
 const worktreeRoot = process.cwd();
@@ -743,6 +744,66 @@ describe("evidence collection", () => {
 });
 
 describe("finalize-review CLI", () => {
+  it("writes review-reclassified.json without overwriting review.json", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-finalize-review-"));
+    const evidenceDir = join(tempRoot, "evidence");
+    await mkdir(evidenceDir, { recursive: true });
+    await writeFile(
+      join(evidenceDir, "review.json"),
+      `${JSON.stringify(
+        {
+          scenarioVerdict: "INCONCLUSIVE",
+          diagnosis: "CONTRACT_GAP",
+          summary: "Current persisted evidence cannot distinguish no work from lost recoverable work",
+          reviewedAt: "2026-07-20T00:00:00.000Z",
+        },
+        null,
+        2,
+      )}
+`,
+    );
+
+    const exitCode = await finalizeReviewMain([
+      "--evidence-dir",
+      evidenceDir,
+      "--verdict",
+      "INCONCLUSIVE",
+      "--diagnosis",
+      "RUNTIME_VARIANCE",
+      "--summary",
+      "Reclassified as pre-execute exhaustion",
+      "--reclassify-from",
+      join(evidenceDir, "review.json"),
+      "--boundary-classification",
+      "PRE_EXECUTE_EXHAUSTION",
+      "--rule-version",
+      "2026-07-20-d-boundary-classification-v1",
+      "--evidence-reference",
+      "events.jsonl",
+      "--evidence-reference",
+      "loop-state.json",
+      "--evidence-reference",
+      "attempts/1/plan.json",
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(await readFile(join(evidenceDir, "review.json"), "utf8"))).toMatchObject({
+      diagnosis: "CONTRACT_GAP",
+    });
+    expect(JSON.parse(await readFile(join(evidenceDir, "review-reclassified.json"), "utf8"))).toMatchObject({
+      original: {
+        diagnosis: "CONTRACT_GAP",
+      },
+      reclassified: {
+        diagnosis: "RUNTIME_VARIANCE",
+        summary: "Reclassified as pre-execute exhaustion",
+      },
+      boundaryClassification: "PRE_EXECUTE_EXHAUSTION",
+      ruleVersion: "2026-07-20-d-boundary-classification-v1",
+      evidenceReferences: ["events.jsonl", "loop-state.json", "attempts/1/plan.json"],
+    });
+  });
+
   it("rejects unknown verdicts and diagnoses", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-finalize-review-"));
     const evidenceDir = join(tempRoot, "evidence");
