@@ -1,8 +1,8 @@
 import { access, appendFile, mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { LoopContract } from "../contract/schema.js";
-import type { ExecutionRecovery } from "../runtime/types.js";
-import type { RunState } from "../state/types.js";
+import type { ExecutionRecovery, ReconciliationRecord } from "../runtime/types.js";
+import type { RunBoundaryAnalysis, RunState } from "../state/types.js";
 
 export type RunEvent = {
   type: string;
@@ -78,6 +78,23 @@ export async function writeRunState(runDir: string, state: RunState): Promise<vo
 
 export async function appendEvent(runDir: string, event: RunEvent): Promise<void> {
   await appendFile(join(runDir, "events.jsonl"), `${JSON.stringify(event)}\n`);
+}
+
+export async function writeBoundaryArtifacts(
+  runDir: string,
+  artifacts: {
+    boundaryAnalysis: RunBoundaryAnalysis;
+    reconciliationRecord?: ReconciliationRecord;
+  },
+): Promise<void> {
+  await writeFile(join(runDir, "boundary-analysis.json"), JSON.stringify(artifacts.boundaryAnalysis, null, 2));
+
+  if (artifacts.reconciliationRecord !== undefined) {
+    await writeFile(
+      join(runDir, "reconciliation-record.json"),
+      JSON.stringify(artifacts.reconciliationRecord, null, 2),
+    );
+  }
 }
 
 export async function writeAttemptArtifacts(runDir: string, attempt: number, artifacts: AttemptArtifacts): Promise<void> {

@@ -319,5 +319,26 @@
     "related_bugs": [],
     "occurrences": 1,
     "last_seen": "2026-07-21T13:14:00Z"
+  },
+  {
+    "id": "bug-018",
+    "timestamp": "2026-07-21T16:34:07Z",
+    "error_message": "TypeError: writeBoundaryArtifacts is not a function",
+    "file": "src/persistence/fileStore.ts",
+    "root_cause": "Task 1 introduced the persistence regression test before the boundary artifact helper existed, so the new RED-phase test imported an undefined symbol.",
+    "fix": "Added writeBoundaryArtifacts() together with the new boundary analysis and reconciliation record types so the expected JSON artifacts are persisted.",
+    "tags": [
+      "task-1",
+      "persistence",
+      "boundary-analysis",
+      "reconciliation-record",
+      "tdd"
+    ],
+    "related_bugs": [
+      "bug-001",
+      "bug-002"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-21T16:34:07Z"
   }
 ]

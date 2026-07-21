@@ -68,6 +68,19 @@ export type ExecutionRecovery = {
   failureBoundary: "timeout" | "token_exhausted" | "runtime_exhausted";
 };
 
+export type TakeoverPermission = {
+  allowed: boolean;
+  reason: string;
+};
+
+export type ReconciliationRecord = {
+  staleSuspicionBasis: string[];
+  staleConfirmed: boolean;
+  lastTrustedBoundary: "planning" | "execute" | "verify" | "terminal" | "unknown";
+  conflictingEvidence: string[];
+  takeoverPermission: TakeoverPermission;
+};
+
 export function isPartialExecutionResult(result: ExecutionResult): result is PartialExecutionResult {
   return "completionStatus" in result && result.completionStatus === "partial";
 }
