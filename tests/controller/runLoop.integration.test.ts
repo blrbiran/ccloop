@@ -912,6 +912,39 @@ describe("runLoop", () => {
     expect(seenEventsBeforeExecute).toEqual([["loop_planning", "attempt_started", "execute_started"]]);
   });
 
+  it("writes a deny-by-default reconciliation record when stale suspicion is confirmed", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    await runLoop(contract, runDir, adapter);
+
+    const boundaryAnalysis = JSON.parse(
+      await readFile(join(runDir, "boundary-analysis.json"), "utf8"),
+    ) as { status: string; staleCandidateReason: string | null };
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as { staleConfirmed: boolean; takeoverPermission: { allowed: boolean; reason: string } };
+
+    expect(boundaryAnalysis.status).toBe("stale_candidate");
+    expect(boundaryAnalysis.staleCandidateReason).toBe("execution continuity not trustworthy");
+    expect(reconciliation.staleConfirmed).toBe(true);
+    expect(reconciliation.takeoverPermission.allowed).toBe(false);
+    expect(reconciliation.takeoverPermission.reason).toContain("deny-by-default");
+  });
+
   it("persists execution-recovery.json when execute is entered but returns no result before exhaustion", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));

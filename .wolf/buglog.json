@@ -340,5 +340,27 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-21T16:34:07Z"
+  },
+  {
+    "id": "bug-019",
+    "timestamp": "2026-07-21T18:08:00Z",
+    "error_message": "Task 3 controller initially missed boundary-analysis/reconciliation persistence when execute() returned null without timing out",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "The first Task 3 wiring only covered the timed-out null-result execute branch, but the new integration test exercised the separate direct null-result guard after a non-timeout execute return.",
+    "fix": "Introduced persistBoundaryAnalysis() and invoked it in both the timed-out null-result branch and the direct execution===null guard.",
+    "tags": [
+      "task-3",
+      "controller",
+      "boundary-analysis",
+      "reconciliation-record",
+      "execute-null",
+      "tdd"
+    ],
+    "related_bugs": [
+      "bug-005",
+      "bug-006"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-21T18:08:00Z"
   }
 ]

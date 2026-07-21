@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { appendEvent, initializeRunFiles, writeAttemptArtifacts, writeRunState } from "../persistence/fileStore.js";
+import { appendEvent, initializeRunFiles, writeAttemptArtifacts, writeBoundaryArtifacts, writeRunState } from "../persistence/fileStore.js";
 import { evaluatePathPolicy } from "../policy/pathPolicy.js";
-import { evaluateStopDecision } from "../stop/stopController.js";
+import { evaluateRunBoundary, evaluateStopDecision } from "../stop/stopController.js";
 import { transitionRunState } from "../state/stateMachine.js";
 import type { LoopContract } from "../contract/schema.js";
 import type {
@@ -497,6 +497,38 @@ async function writeCompletedAttemptArtifacts(
   });
 }
 
+async function persistBoundaryAnalysis(runDir: string, state: RunState): Promise<void> {
+  const boundaryAnalysis = evaluateRunBoundary({
+    now: new Date().toISOString(),
+    previous: null,
+    runState: state,
+    observedStrongProgress: false,
+    observedWeakProgress: false,
+    continuitySuspicion: ["execution continuity not trustworthy"],
+  });
+
+  if (boundaryAnalysis.status === "healthy") {
+    return;
+  }
+
+  await writeBoundaryArtifacts(runDir, {
+    boundaryAnalysis,
+    reconciliationRecord:
+      boundaryAnalysis.status === "stale_candidate"
+        ? {
+            staleSuspicionBasis: [boundaryAnalysis.staleCandidateReason ?? "unknown stale suspicion"],
+            staleConfirmed: true,
+            lastTrustedBoundary: "execute",
+            conflictingEvidence: [],
+            takeoverPermission: {
+              allowed: false,
+              reason: "deny-by-default until stronger mechanical takeover conditions exist",
+            },
+          }
+        : undefined,
+  });
+}
+
 async function persistTerminalState(
   runDir: string,
   state: RunState,
@@ -621,6 +653,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
             plan,
             executionRecovery,
           });
+          await persistBoundaryAnalysis(runDir, state);
           state = await persistTerminalState(
             runDir,
             state,
@@ -651,6 +684,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       }
 
       if (execution === null) {
+        await persistBoundaryAnalysis(runDir, state);
         throw new Error("execute phase completed without a result");
       }
 
