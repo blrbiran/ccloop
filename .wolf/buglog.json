@@ -282,5 +282,25 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-21T00:06:26Z"
+  },
+  {
+    "id": "bug-016",
+    "timestamp": "2026-07-21T00:29:15Z",
+    "error_message": "validation/v1/lib/evidence.ts still hard-coded Scenario D attempt artifact reads to attempts/1, so exhausted multi-attempt runs ignored terminal-attempt Layer A evidence under attempts/2+",
+    "file": "validation/v1/lib/evidence.ts",
+    "root_cause": "The evidence layer derived cleanup from loop-state attempt context but continued to build plan/execution/verify/diff/log and execution-recovery paths with a literal attempts/1, so multi-attempt exhausted D runs were classified against the wrong attempt.",
+    "fix": "Resolved the terminal attempt from loop-state currentAttempt/attemptsUsed before attempt-scoped reads, routed all Layer A attempt artifact paths through a shared helper, and added an exhausted attempt-2 regression covering attempts/2/execution-recovery.json.",
+    "tags": [
+      "validation",
+      "scenario-d",
+      "terminal-attempt",
+      "execution-recovery",
+      "final-review"
+    ],
+    "related_bugs": [
+      "bug-015"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-21T00:29:15Z"
   }
 ]

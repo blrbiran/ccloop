@@ -50,3 +50,20 @@
 ## Self-review (follow-up)
 - Scope stayed limited to the D classifier contradiction matrix, focused validation regressions, the requested README example, and required bookkeeping/report files.
 - I did not change A/B/C/E rules, budgets, retry policy, or review immutability semantics.
+
+
+### 5. Terminal-attempt Layer A artifact resolution for Scenario D
+- Updated `collectEvidence(...)` so it resolves the terminal attempt number from `loop-state.json` before reading attempt-scoped Layer A artifacts.
+- Replaced the remaining hard-coded `attempts/1` reads in `validation/v1/lib/evidence.ts` with a shared helper that builds `plan.json`, `execution.json`, `verify.json`, `diff.patch`, `stdout-stderr.log`, and `execution-recovery.json` paths from the resolved terminal attempt.
+- Tightened the attempt resolver to prefer the terminal attempt context from existing run state (`currentAttempt` / `attemptsUsed`) instead of assuming the first attempt.
+- Added a focused regression for a multi-attempt exhausted D-like run whose terminal Layer A evidence lives under `attempts/2/`, proving classification reads `attempts/2/plan.json` and `attempts/2/execution-recovery.json` consistently.
+
+## Verification (terminal-attempt fix)
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test -- tests/validation/evidence.test.ts`
+  - PASS (`36 passed`)
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test`
+  - PASS (`14 files, 196 tests passed`)
+
+## Self-review (terminal-attempt fix)
+- Scope stayed limited to evidence-layer terminal-attempt path resolution, one focused regression, the required final report append, and OpenWolf bookkeeping.
+- I did not change controller behavior, review-writing behavior, or scenario rules.

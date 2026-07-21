@@ -154,16 +154,16 @@ type EventReadResult = {
 
 type ArtifactSpec = {
   name: ArtifactName;
-  relativePath: string;
+  fileName: string;
   kind: "json" | "text";
 };
 
 const artifactSpecs: ArtifactSpec[] = [
-  { name: "plan", relativePath: join("attempts", "1", "plan.json"), kind: "json" },
-  { name: "execution", relativePath: join("attempts", "1", "execution.json"), kind: "json" },
-  { name: "verify", relativePath: join("attempts", "1", "verify.json"), kind: "json" },
-  { name: "diff", relativePath: join("attempts", "1", "diff.patch"), kind: "text" },
-  { name: "log", relativePath: join("attempts", "1", "stdout-stderr.log"), kind: "text" },
+  { name: "plan", fileName: "plan.json", kind: "json" },
+  { name: "execution", fileName: "execution.json", kind: "json" },
+  { name: "verify", fileName: "verify.json", kind: "json" },
+  { name: "diff", fileName: "diff.patch", kind: "text" },
+  { name: "log", fileName: "stdout-stderr.log", kind: "text" },
 ];
 
 const reviewSchema = z
@@ -347,14 +347,19 @@ function getExpectedArtifactStatus(
   return observedExists ? "INVALID" : expected;
 }
 
+function getAttemptArtifactPath(runDir: string, attemptNumber: number, fileName: string): string {
+  return join(runDir, "attempts", String(attemptNumber), fileName);
+}
+
 async function buildArtifactRecord(
   runDirRoot: string,
   runDir: string,
+  attemptNumber: number,
   scenario: ScenarioDefinition,
   spec: ArtifactSpec,
 ): Promise<ArtifactRecord> {
   const expected = scenario.expectedArtifacts[spec.name];
-  const candidatePath = join(runDir, spec.relativePath);
+  const candidatePath = getAttemptArtifactPath(runDir, attemptNumber, spec.fileName);
   const file = await readContainedFile(runDirRoot, candidatePath);
 
   if (file.status === "MISSING") {
@@ -466,19 +471,19 @@ function buildRequiredChecksRecord(
       };
 }
 
+function readPositiveAttemptNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
+}
+
 function getAttemptNumber(loopStateValue: unknown): number {
-  if (
-    loopStateValue &&
-    typeof loopStateValue === "object" &&
-    typeof (loopStateValue as { currentAttempt?: unknown }).currentAttempt === "number"
-  ) {
-    const attempt = (loopStateValue as { currentAttempt: number }).currentAttempt;
-    if (Number.isInteger(attempt) && attempt > 0) {
-      return attempt;
-    }
+  if (!loopStateValue || typeof loopStateValue !== "object") {
+    return 1;
   }
 
-  return 1;
+  const currentAttempt = readPositiveAttemptNumber((loopStateValue as { currentAttempt?: unknown }).currentAttempt);
+  const attemptsUsed = readPositiveAttemptNumber((loopStateValue as { attemptsUsed?: unknown }).attemptsUsed);
+
+  return Math.max(currentAttempt ?? 0, attemptsUsed ?? 0, 1);
 }
 
 async function getCleanupOutcome(
@@ -709,9 +714,16 @@ export async function sha256File(path: string): Promise<string> {
   return digest.digest("hex");
 }
 
-export async function collectArtifacts(input: { scenario: ScenarioDefinition; runDir: string }): Promise<ArtifactRecord[]> {
+export async function collectArtifacts(input: {
+  scenario: ScenarioDefinition;
+  runDir: string;
+  attemptNumber?: number;
+}): Promise<ArtifactRecord[]> {
   const runDirRoot = await resolveRunDirRoot(input.runDir);
-  return await Promise.all(artifactSpecs.map((spec) => buildArtifactRecord(runDirRoot, input.runDir, input.scenario, spec)));
+  const attemptNumber = input.attemptNumber ?? 1;
+  return await Promise.all(
+    artifactSpecs.map((spec) => buildArtifactRecord(runDirRoot, input.runDir, attemptNumber, input.scenario, spec)),
+  );
 }
 
 export async function collectGitObservation(input: GitObservationInput): Promise<GitObservation> {
@@ -727,19 +739,22 @@ export async function collectEvidence(input: EvidenceInput): Promise<EvidenceRec
   await mkdir(input.evidenceDir, { recursive: true });
   const runDirRoot = await resolveRunDirRoot(input.runDir);
 
-  const [artifacts, loopContract, loopState, executionJson, events, verifyObservation, executionRecoveryObservation, git] = await Promise.all([
-    collectArtifacts({ scenario: input.scenario, runDir: input.runDir }),
+  const [loopContract, loopState, events, git] = await Promise.all([
     readJsonObservation(runDirRoot, join(input.runDir, "loop-contract.json")),
     readJsonObservation(runDirRoot, join(input.runDir, "loop-state.json")),
-    readJsonObservation(runDirRoot, join(input.runDir, "attempts", "1", "execution.json")),
     readEventsObservation(runDirRoot, join(input.runDir, "events.jsonl")),
-    readJsonObservation(runDirRoot, join(input.runDir, "attempts", "1", "verify.json")),
-    readJsonObservation(runDirRoot, join(input.runDir, "attempts", "1", "execution-recovery.json")),
     collectGitObservation(input.git),
   ]);
 
   const loopStateValue = loopState.value as { status?: unknown; stopReason?: unknown; waitingOnHuman?: unknown } | undefined;
   const attemptNumber = getAttemptNumber(loopState.value);
+  const [artifacts, executionJson, verifyObservation, executionRecoveryObservation] = await Promise.all([
+    collectArtifacts({ scenario: input.scenario, runDir: input.runDir, attemptNumber }),
+    readJsonObservation(runDirRoot, getAttemptArtifactPath(input.runDir, attemptNumber, "execution.json")),
+    readJsonObservation(runDirRoot, getAttemptArtifactPath(input.runDir, attemptNumber, "verify.json")),
+    readJsonObservation(runDirRoot, getAttemptArtifactPath(input.runDir, attemptNumber, "execution-recovery.json")),
+  ]);
+
   const requiredChecks = buildRequiredChecksRecord(input.scenario, verifyObservation, readDeclaredRequiredChecks(loopContract.value));
   const cleanupOutcome = await getCleanupOutcome(input.runDir, attemptNumber, events.entries);
 

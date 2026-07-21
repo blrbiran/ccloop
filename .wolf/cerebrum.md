@@ -73,6 +73,7 @@
 - Operator-facing D docs should state the implemented Layer A rule directly: historical reclassification is Layer A-only, `PRE_EXECUTE_EXHAUSTION` maps to `INCONCLUSIVE / RUNTIME_VARIANCE`, and any reinterpretation must be emitted separately so `review.json` remains immutable.
 - Scenario D contradiction checks must use raw Layer A artifact observation, not only scenario-normalized artifact statuses; a physically present `execution.json`, `diff.patch`, or `stdout-stderr.log` that normalizes to `INVALID` is still contradiction evidence for `BOUNDARY_UNRESOLVED`.
 - Scenario D contradiction checks must also treat controller-owned `execution-recovery.json` presence as Layer A boundary evidence; if recovery is present without `attempt_started`, or without `execute_started` after `attempt_started`, classification must be `BOUNDARY_UNRESOLVED`.
+- Scenario D evidence collection must resolve the terminal attempt from `loop-state.json` (`currentAttempt` / `attemptsUsed`) before reading Layer A attempt artifacts; hard-coding `attempts/1` drops exhausted attempt-2+ `plan.json` and `execution-recovery.json` evidence.
 - `git status --porcelain=v1 -z` rename/copy records arrive as `to\0from\0`; when collecting changed destination paths, keep the current entry path and skip the following source-path token.
 
 ## Do-Not-Repeat

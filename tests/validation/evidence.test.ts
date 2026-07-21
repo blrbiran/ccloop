@@ -47,6 +47,7 @@ type SyntheticRunOptions = {
   invalidEvents?: boolean;
   omitPlan?: boolean;
   escapePlan?: boolean;
+  attemptNumber?: number;
   events?: Array<{ type: string; at: string; detail: string }>;
   loopState?: {
     status: string;
@@ -62,7 +63,9 @@ async function createSyntheticRun(options: SyntheticRunOptions): Promise<{ runDi
   const runDir = join(tempRoot, "run");
   const evidenceDir = join(tempRoot, "evidence");
   const scenario = getScenario(options.scenarioId);
-  await mkdir(join(runDir, "attempts", "1"), { recursive: true });
+  const attemptNumber = options.attemptNumber ?? 1;
+  const attemptDir = join(runDir, "attempts", String(attemptNumber));
+  await mkdir(attemptDir, { recursive: true });
   await mkdir(join(runDir, "worktrees"), { recursive: true });
 
   const contract =
@@ -83,8 +86,8 @@ async function createSyntheticRun(options: SyntheticRunOptions): Promise<{ runDi
 
   const loopState = {
     status: options.loopState?.status ?? defaultLoopState.status,
-    currentAttempt: 1,
-    attemptsUsed: 1,
+    currentAttempt: attemptNumber,
+    attemptsUsed: attemptNumber,
     lastTransitionAt: "2026-07-17T00:00:00.000Z",
     waitingOnHuman: options.loopState?.waitingOnHuman ?? defaultLoopState.waitingOnHuman,
     stopReason: options.loopState?.stopReason ?? defaultLoopState.stopReason,
@@ -103,7 +106,7 @@ async function createSyntheticRun(options: SyntheticRunOptions): Promise<{ runDi
   );
 
   const defaultEvents = [
-    { type: "attempt_started", at: "2026-07-17T00:00:00.000Z", detail: "attempt 1" },
+    { type: "attempt_started", at: "2026-07-17T00:00:00.000Z", detail: `attempt ${attemptNumber}` },
     { type: `loop_${loopState.status}`, at: "2026-07-17T00:01:00.000Z", detail: loopState.stopReason },
   ];
   const eventLines = options.invalidEvents
@@ -123,10 +126,10 @@ async function createSyntheticRun(options: SyntheticRunOptions): Promise<{ runDi
     if (options.escapePlan) {
       const outsidePath = join(tempRoot, "outside-plan.json");
       await writeFile(outsidePath, '{"summary":"outside","primaryTargetPaths":[]}\n');
-      await symlink(outsidePath, join(runDir, "attempts", "1", "plan.json"));
+      await symlink(outsidePath, join(attemptDir, "plan.json"));
     } else {
       await writeFile(
-        join(runDir, "attempts", "1", "plan.json"),
+        join(attemptDir, "plan.json"),
         '{"summary":"edit src/counter.js","primaryTargetPaths":["src/counter.js"]}\n',
       );
     }
@@ -134,25 +137,25 @@ async function createSyntheticRun(options: SyntheticRunOptions): Promise<{ runDi
 
   if (artifactMode.execution === "present") {
     await writeFile(
-      join(runDir, "attempts", "1", "execution.json"),
+      join(attemptDir, "execution.json"),
       '{"changedFiles":["src/counter.js"],"diffPatch":"diff --git a/src/counter.js b/src/counter.js","commandOutputs":["edited"],"stdoutStderrLog":"ok"}\n',
     );
   }
 
   if (artifactMode.verify === "present") {
     await writeFile(
-      join(runDir, "attempts", "1", "verify.json"),
+      join(attemptDir, "verify.json"),
       options.verifyContents ??
         '{"approved":true,"rejectCategory":"","primaryTargetPaths":["src/counter.js"],"failingCommand":null,"safeToRetry":false,"evidence":["command output | required check passed: npm test"],"pauseSignals":[],"stopSignals":[]}\n',
     );
   }
 
   if (artifactMode.diff === "present") {
-    await writeFile(join(runDir, "attempts", "1", "diff.patch"), "diff --git a/src/counter.js b/src/counter.js\n");
+    await writeFile(join(attemptDir, "diff.patch"), "diff --git a/src/counter.js b/src/counter.js\n");
   }
 
   if (artifactMode.log === "present") {
-    await writeFile(join(runDir, "attempts", "1", "stdout-stderr.log"), "ok\n");
+    await writeFile(join(attemptDir, "stdout-stderr.log"), "ok\n");
   }
 
   return { runDir, evidenceDir };
@@ -681,6 +684,66 @@ describe("evidence collection", () => {
     });
   });
 
+  it("reads terminal attempt D evidence from attempt 2 instead of assuming attempt 1", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({
+      scenarioId: "D",
+      attemptNumber: 2,
+      events: [
+        { type: "attempt_started", at: "2026-07-20T00:00:00.000Z", detail: "attempt 2" },
+        { type: "execute_started", at: "2026-07-20T00:00:01.000Z", detail: "attempt 2 entered execute" },
+        { type: "loop_exhausted", at: "2026-07-20T00:00:05.000Z", detail: "runtime or token budget exhausted" },
+      ],
+      loopState: {
+        status: "exhausted",
+        stopReason: "runtime or token budget exhausted",
+        waitingOnHuman: false,
+      },
+      artifacts: { plan: "present", execution: "missing", verify: "missing", diff: "missing", log: "missing" },
+    });
+
+    await writeFile(
+      join(runDir, "attempts", "2", "execution-recovery.json"),
+      JSON.stringify(
+        {
+          executeEntered: true,
+          worktreeDiffObserved: false,
+          diffPatchCaptured: false,
+          stdoutStderrLogCaptured: false,
+          changedPathsObserved: null,
+          captureStatus: "complete",
+          cleanupStatus: "removed",
+          failureBoundary: "timeout",
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(record.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "plan",
+          status: "PRESENT",
+          path: expect.stringMatching(/attempts\/2\/plan\.json$/),
+        }),
+      ]),
+    );
+    expect(record.executionRecovery).toMatchObject({
+      status: "PRESENT",
+      path: expect.stringMatching(/attempts\/2\/execution-recovery\.json$/),
+    });
+    expect(classifyDScenarioBoundary(record)).toBe("EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE");
+    expect(mapDBoundaryToReview(classifyDScenarioBoundary(record), record)).toEqual({
+      scenarioVerdict: "PASS",
+      diagnosis: null,
+    });
+  });
+
   it("does not award PASS for execute-entered recoverable evidence when standard D evidence shape is violated", async () => {
     const { runDir, evidenceDir } = await createSyntheticRun({
       scenarioId: "D",
@@ -785,9 +848,10 @@ describe("evidence collection", () => {
   it("accepts legacy attempt artifacts that omit usageEvidence", async () => {
     const runDir = join(worktreeRoot, "tests", "fixtures", "legacy-attempt-artifacts");
     const evidenceDir = await mkdtemp(join(tmpdir(), "ccloop-evidence-legacy-"));
-    const planPath = join(runDir, "attempts", "1", "plan.json");
-    const executionPath = join(runDir, "attempts", "1", "execution.json");
-    const verifyPath = join(runDir, "attempts", "1", "verify.json");
+    const attemptDir = join(runDir, "attempts", "1");
+    const planPath = join(attemptDir, "plan.json");
+    const executionPath = join(attemptDir, "execution.json");
+    const verifyPath = join(attemptDir, "verify.json");
 
     const [planSha, executionSha, verifySha, plan, execution, verify, evidence] = await Promise.all([
       sha256File(planPath),
@@ -1370,10 +1434,11 @@ if (request.phase === "plan") { process.stdout.write(JSON.stringify({ summary: "
     const evidenceDir = join(tempRoot, "evidence");
     const adapterConfigPath = join(worktreeRoot, "examples", "v1", "claude-adapter-config.json");
     const fixture = await createFixture(templateDir, fixtureDir);
-    await mkdir(join(runDir, "attempts", "1"), { recursive: true });
+    const attemptDir = join(runDir, "attempts", "1");
+    await mkdir(attemptDir, { recursive: true });
     await writeFile(join(runDir, "loop-state.json"), '{"status":"succeeded"}\n');
     await writeFile(join(runDir, "events.jsonl"), '{"type":"loop_succeeded"}\n');
-    await writeFile(join(runDir, "attempts", "1", "plan.json"), '{"summary":"stale"}\n');
+    await writeFile(join(attemptDir, "plan.json"), '{"summary":"stale"}\n');
     await writeFile(contractPath, `${JSON.stringify(renderScenario("A", { repoPath: fixture.repoPath }), null, 2)}\n`);
 
     await expect(
@@ -1400,7 +1465,7 @@ if (request.phase === "plan") { process.stdout.write(JSON.stringify({ summary: "
 
     expect(await pathExists(join(evidenceDir, "invocation.json"))).toBe(false);
     expect(await pathExists(evidenceDir)).toBe(false);
-    expect(await readFile(join(runDir, "attempts", "1", "plan.json"), "utf8")).toContain("stale");
+    expect(await readFile(join(attemptDir, "plan.json"), "utf8")).toContain("stale");
   });
 
   it("rejects a fixture path that does not match the rendered contract repoPath", async () => {

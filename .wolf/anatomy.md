@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-20T18:25:14Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-21T00:29:15Z
 > Files: 8 tracked | Anatomy hits: 4 | Misses: 3
 
 ## .wolf/
@@ -37,7 +37,7 @@
 
 ## validation/v1/lib/
 
-- `evidence.ts` — Evidence collection, artifact/observation parsing, D-boundary classification helpers, raw/recovery-backed Layer A contradiction checks, trust-boundary validation for `execution-recovery.json`, and `ReclassifiedReview` schema/validation for immutable historical review preservation in validation V1 (~5400 tok)
+- `evidence.ts` — Evidence collection, artifact/observation parsing, D-boundary classification helpers, raw/recovery-backed Layer A contradiction checks, trust-boundary validation for `execution-recovery.json`, terminal-attempt attempt-path resolution for Scenario D evidence, and `ReclassifiedReview` schema/validation for immutable historical review preservation in validation V1 (~5600 tok)
 
 ## validation/v1/scripts/
 
@@ -45,7 +45,7 @@
 
 ## tests/validation/
 
-- `evidence.test.ts` — Synthetic evidence fixtures plus validation/evidence regression coverage for artifact collection, D-boundary mapping, recovery-backed contradiction cases, malformed recovery evidence, verify/recovery-backed trust boundaries, execution-json-only recovery classification, immutable `review-reclassified.json` output, and CLI behaviors (~15600 tok)
+- `evidence.test.ts` — Synthetic evidence fixtures plus validation/evidence regression coverage for artifact collection, D-boundary mapping, recovery-backed contradiction cases, malformed recovery evidence, verify/recovery-backed trust boundaries, terminal-attempt attempt-2 recovery classification, execution-json-only recovery classification, immutable `review-reclassified.json` output, and CLI behaviors (~16000 tok)
 
 ## .superpowers/sdd/
 
@@ -55,7 +55,7 @@
 - `task-4-report.md` — Task 4 implementation report covering immutable historical review preservation, explicit reclassification output, verification, and self-review (~1800 tok)
 - `task-5-brief.md` — Task 5 brief for doc/handover alignment, OpenWolf bookkeeping, verification, commit, and reporting requirements (~1400 tok)
 - `task-5-report.md` — Task 5 implementation report covering operator-doc alignment for the implemented D-boundary rule, verification, commit, and self-review (~1600 tok)
-- `final-branch-fix-report.md` — Final whole-branch review fix report covering the raw Layer A contradiction correction, recovery-backed contradiction follow-up, porcelain -z rename/copy parser fix, focused regressions, verification, and final commit (~1800 tok)
+- `final-branch-fix-report.md` — Final whole-branch review fix report covering the raw Layer A contradiction correction, recovery-backed contradiction follow-up, porcelain -z rename/copy parser fix, terminal-attempt evidence-path correction, focused regressions, verification, and final commit (~2300 tok)
 
 ## docs/handover/
 
