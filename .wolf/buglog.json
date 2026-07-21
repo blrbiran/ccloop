@@ -260,5 +260,27 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-20T18:50:39Z"
+  },
+  {
+    "id": "bug-015",
+    "timestamp": "2026-07-21T00:06:26Z",
+    "error_message": "Scenario D contradiction detection ignored controller-owned execution-recovery.json presence and could misclassify contradictory event chains as EXECUTE_ENTERED_NO_RECOVERABLE_EVIDENCE",
+    "file": "validation/v1/lib/evidence.ts",
+    "root_cause": "hasContradictoryLayerAEvidence() only treated raw execution/diff/log artifacts as Layer A contradiction evidence, so valid execution-recovery.json could coexist with missing attempt/execute boundary events without forcing BOUNDARY_UNRESOLVED.",
+    "fix": "Counted controller-owned execution-recovery.json presence as Layer A boundary evidence in the contradiction matrix, added focused regressions for missing attempt_started and missing execute_started event chains, and documented the operator reclassification flow.",
+    "tags": [
+      "validation",
+      "scenario-d",
+      "execution-recovery",
+      "layer-a",
+      "boundary-classification",
+      "final-review"
+    ],
+    "related_bugs": [
+      "bug-009",
+      "bug-013"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-21T00:06:26Z"
   }
 ]

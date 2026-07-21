@@ -305,6 +305,22 @@ npx --no-install tsx validation/v1/scripts/finalize-review.ts \
   --summary "<one-line evidence-backed D conclusion>"
 ```
 
+If you later reclassify a historical D run from Layer A evidence, run a separate finalize command against the existing evidence directory. This writes `review-reclassified.json` and leaves the accepted `review.json` unchanged:
+
+```bash
+npx --no-install tsx validation/v1/scripts/finalize-review.ts \
+  --evidence-dir .validation-runs/evidence/D-01 \
+  --verdict INCONCLUSIVE \
+  --diagnosis RUNTIME_VARIANCE \
+  --summary "Reclassified as pre-execute exhaustion from Layer A evidence" \
+  --reclassify-from .validation-runs/evidence/D-01/review.json \
+  --boundary-classification PRE_EXECUTE_EXHAUSTION \
+  --rule-version 2026-07-20-d-boundary-classification-v1 \
+  --evidence-reference events.jsonl \
+  --evidence-reference loop-state.json \
+  --evidence-reference attempts/1/plan.json
+```
+
 ## Scenario D interpretation
 
 D evidence now distinguishes:

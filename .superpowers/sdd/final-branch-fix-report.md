@@ -28,3 +28,25 @@
 ## Notes
 - I did not reopen unrelated branch surfaces.
 - `.superpowers/sdd/progress.md` had unrelated pre-existing modifications and was intentionally left out of the scoped fix set.
+
+
+## Follow-up Fixes
+
+### 3. `execution-recovery.json` contradiction handling in Scenario D
+- Strengthened `hasContradictoryLayerAEvidence(...)` so controller-owned `execution-recovery.json` counts as Layer A boundary evidence alongside raw execute/diff/log observation.
+- This now forces `BOUNDARY_UNRESOLVED` when recovery evidence exists without `attempt_started`, or with `attempt_started` but without `execute_started`, keeping those event-chain contradictions out of `EXECUTE_ENTERED_NO_RECOVERABLE_EVIDENCE`.
+- Added two focused regressions covering both recovery-backed contradiction shapes.
+
+### 4. README historical reclassification example
+- Added a concise operator-facing `finalize-review.ts` example for historical D reclassification.
+- Documented the explicit `--reclassify-from` flow and that it writes `review-reclassified.json` instead of overwriting `review.json`.
+
+## Verification (follow-up)
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test -- tests/validation/evidence.test.ts`
+  - PASS (`35 passed`)
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test`
+  - PASS (`14 files, 195 tests passed`)
+
+## Self-review (follow-up)
+- Scope stayed limited to the D classifier contradiction matrix, focused validation regressions, the requested README example, and required bookkeeping/report files.
+- I did not change A/B/C/E rules, budgets, retry policy, or review immutability semantics.

@@ -6,8 +6,8 @@
 ## .wolf/
 
 - `anatomy.md` — OpenWolf file index for this worktree with short summaries of the files touched in Task 1 (~350 tok)
-- `buglog.json` — Append-only log of fixes and test/environment failures discovered while implementing Task 1 (~900 tok)
-- `cerebrum.md` — Learned project preferences and do-not-repeat notes, including the Vitest command and worktree dependency layout gotchas (~5000 tok)
+- `buglog.json` — Append-only log of fixes and test/environment failures discovered across the D-boundary implementation and final review fix waves (~1100 tok)
+- `cerebrum.md` — Learned project preferences and do-not-repeat notes, including the Vitest command, worktree dependency layout gotchas, and Scenario D recovery-boundary contradiction rules (~5200 tok)
 - `memory.md` — Session checkpoint log for this worktree's Task 1 implementation steps (~350 tok)
 
 ## src/runtime/
@@ -37,7 +37,7 @@
 
 ## validation/v1/lib/
 
-- `evidence.ts` — Evidence collection, artifact/observation parsing, D-boundary classification helpers, trust-boundary validation for `execution-recovery.json`, and `ReclassifiedReview` schema/validation for immutable historical review preservation in validation V1 (~5200 tok)
+- `evidence.ts` — Evidence collection, artifact/observation parsing, D-boundary classification helpers, raw/recovery-backed Layer A contradiction checks, trust-boundary validation for `execution-recovery.json`, and `ReclassifiedReview` schema/validation for immutable historical review preservation in validation V1 (~5400 tok)
 
 ## validation/v1/scripts/
 
@@ -45,7 +45,7 @@
 
 ## tests/validation/
 
-- `evidence.test.ts` — Synthetic evidence fixtures plus validation/evidence regression coverage for artifact collection, D-boundary mapping, malformed recovery evidence, verify/recovery-backed trust boundaries, execution-json-only recovery classification, immutable `review-reclassified.json` output, and CLI behaviors (~15200 tok)
+- `evidence.test.ts` — Synthetic evidence fixtures plus validation/evidence regression coverage for artifact collection, D-boundary mapping, recovery-backed contradiction cases, malformed recovery evidence, verify/recovery-backed trust boundaries, execution-json-only recovery classification, immutable `review-reclassified.json` output, and CLI behaviors (~15600 tok)
 
 ## .superpowers/sdd/
 
@@ -55,7 +55,7 @@
 - `task-4-report.md` — Task 4 implementation report covering immutable historical review preservation, explicit reclassification output, verification, and self-review (~1800 tok)
 - `task-5-brief.md` — Task 5 brief for doc/handover alignment, OpenWolf bookkeeping, verification, commit, and reporting requirements (~1400 tok)
 - `task-5-report.md` — Task 5 implementation report covering operator-doc alignment for the implemented D-boundary rule, verification, commit, and self-review (~1600 tok)
-- `final-branch-fix-report.md` — Final whole-branch review fix report covering the raw Layer A contradiction correction, porcelain -z rename/copy parser fix, focused regressions, verification, and final commit (~1400 tok)
+- `final-branch-fix-report.md` — Final whole-branch review fix report covering the raw Layer A contradiction correction, recovery-backed contradiction follow-up, porcelain -z rename/copy parser fix, focused regressions, verification, and final commit (~1800 tok)
 
 ## docs/handover/
 
@@ -64,5 +64,5 @@
 
 ## validation/v1/
 
-- `README.md` — Operator guide for evidence-first V1 validation scenarios, now documenting the implemented Scenario D boundary interpretation and immutable reclassification rule (~4200 tok)
+- `README.md` — Operator guide for evidence-first V1 validation scenarios, now documenting the implemented D-boundary rule, immutable reclassification rule, and explicit `review-reclassified.json` command flow (~4500 tok)
 

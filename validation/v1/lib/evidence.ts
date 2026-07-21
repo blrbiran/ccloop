@@ -533,13 +533,19 @@ function hasContradictoryLayerAEvidence(
     hasObservedLayerAArtifact(record, "execution") ||
     hasObservedLayerAArtifact(record, "diff") ||
     hasObservedLayerAArtifact(record, "log");
+  const hasObservedExecuteBoundaryEvidence =
+    hasObservedExecuteArtifacts || record.executionRecovery.status === "PRESENT";
   const loopReachedExhaustion = eventTypes.includes("loop_exhausted") || terminalStatus === "exhausted";
 
-  if (hasObservedExecuteArtifacts && !eventTypes.includes("attempt_started")) {
+  if (hasObservedExecuteBoundaryEvidence && !eventTypes.includes("attempt_started")) {
     return true;
   }
 
-  if (hasObservedExecuteArtifacts && eventTypes.includes("attempt_started") && !eventTypes.includes("execute_started")) {
+  if (
+    hasObservedExecuteBoundaryEvidence &&
+    eventTypes.includes("attempt_started") &&
+    !eventTypes.includes("execute_started")
+  ) {
     return true;
   }
 
