@@ -362,5 +362,26 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-21T18:08:00Z"
+  },
+  {
+    "id": "bug-020",
+    "timestamp": "2026-07-21T18:48:00Z",
+    "error_message": "Cannot read properties of undefined (reading 'status') for observations.reconciliationRecord in tests/validation/evidence.test.ts",
+    "file": "validation/v1/lib/evidence.ts",
+    "root_cause": "The evidence layer did not read or schema-validate controller-owned boundary-analysis.json and reconciliation-record.json, so the new observation field was absent and malformed reconciliation artifacts could not be surfaced as INVALID.",
+    "fix": "Added boundary-analysis and reconciliation-record observations in collectEvidence, validated both JSON shapes with zod, and recorded malformed reconciliation records as INVALID instead of trusted data.",
+    "tags": [
+      "task-4",
+      "validation",
+      "boundary-analysis",
+      "reconciliation-record",
+      "tdd"
+    ],
+    "related_bugs": [
+      "bug-018",
+      "bug-019"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-21T18:48:00Z"
   }
 ]

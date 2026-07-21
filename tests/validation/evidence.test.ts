@@ -790,6 +790,23 @@ describe("evidence collection", () => {
     });
   });
 
+  it("marks malformed reconciliation-record.json as INVALID instead of trusting it", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const evidenceDir = await mkdtemp(join(tmpdir(), "ccloop-evidence-"));
+    await mkdir(join(runDir, "attempts", "1"), { recursive: true });
+    await writeFile(join(runDir, "loop-state.json"), JSON.stringify({ status: "failed" }));
+    await writeFile(join(runDir, "events.jsonl"), "");
+    await writeFile(join(runDir, "boundary-analysis.json"), JSON.stringify({ status: "stale_candidate" }));
+    await writeFile(join(runDir, "reconciliation-record.json"), JSON.stringify({ staleConfirmed: "yes" }));
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(record.observations.reconciliationRecord.status).toBe("INVALID");
+  });
+
   it("surfaces malformed loop-state.json as INVALID", async () => {
     const { runDir, evidenceDir } = await createSyntheticRun({ scenarioId: "A", invalidLoopState: true });
     const evidence = await collectEvidence({
