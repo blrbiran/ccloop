@@ -302,5 +302,22 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-21T00:29:15Z"
+  },
+  {
+    "id": "bug-017",
+    "timestamp": "2026-07-21T13:14:00Z",
+    "error_message": "docs/handover/ccloop-handover.md contained duplicated takeover sections and stale repository facts",
+    "file": "docs/handover/ccloop-handover.md",
+    "root_cause": "The handover accumulated historical updates without a full current-truth rewrite, so duplicate sections and outdated HEAD/state statements remained in the operator-facing takeover document.",
+    "fix": "Rewrote the handover as a single-copy current-truth document aligned to the verified main HEAD, accepted A/B/C/D/E review artifacts, preserved evidence boundaries, and current validation README guidance.",
+    "tags": [
+      "docs",
+      "handover",
+      "truth-alignment",
+      "task-1"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-21T13:14:00Z"
   }
 ]
