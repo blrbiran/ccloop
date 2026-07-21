@@ -48,6 +48,15 @@ export type RunBoundaryAnalysis = {
   staleCandidateReason: string | null;
 };
 
+export type BoundaryEvaluationInput = {
+  now: string;
+  previous: RunBoundaryAnalysis | null;
+  runState: RunState;
+  observedStrongProgress: boolean;
+  observedWeakProgress: boolean;
+  continuitySuspicion: string[];
+};
+
 export type StopDecision = {
   kind: "retryable" | "succeeded" | "blocked_waiting_human" | "exhausted" | "cancelled" | "failed";
   reason: string;

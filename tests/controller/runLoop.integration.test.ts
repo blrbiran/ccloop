@@ -9,6 +9,7 @@ import { parseChangedPathsFromGitStatus, runLoop } from "../../src/controller/ru
 import { SubprocessClaudeAdapter } from "../../src/runtime/claude/subprocessClaudeAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
+import { evaluateRunBoundary } from "../../src/stop/stopController.js";
 import type { RuntimeAdapter } from "../../src/runtime/types.js";
 import type { RunState } from "../../src/state/types.js";
 
@@ -101,6 +102,65 @@ async function pathExists(path: string): Promise<boolean> {
     return false;
   }
 }
+
+function makeRunState(status: RunState["status"]): RunState {
+  return {
+    status,
+    currentAttempt: 1,
+    attemptsUsed: 1,
+    lastTransitionAt: "2026-07-21T10:00:00.000Z",
+    waitingOnHuman: false,
+    stopReason: null,
+    budgetSnapshot: {
+      attemptsRemaining: 2,
+      timeRemainingMs: 5_000,
+      tokenBudgetRemaining: 1_000,
+    },
+    recentFailures: [],
+  };
+}
+
+describe("evaluateRunBoundary", () => {
+  it("routes to no_progress when strong progress stops and weak progress is exhausted without stale evidence", () => {
+    const result = evaluateRunBoundary({
+      now: "2026-07-21T10:10:00.000Z",
+      previous: {
+        status: "weakly_progressing",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: null,
+        staleCandidateReason: null,
+      },
+      runState: makeRunState("executing"),
+      observedStrongProgress: false,
+      observedWeakProgress: false,
+      continuitySuspicion: [],
+    });
+
+    expect(result.status).toBe("no_progress");
+    expect(result.suspectReason).toBe("weak progress exhausted without strong progress");
+  });
+
+  it("routes to stale_candidate when continuity suspicion outranks generic no-progress", () => {
+    const result = evaluateRunBoundary({
+      now: "2026-07-21T10:10:00.000Z",
+      previous: {
+        status: "suspect",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: null,
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: null,
+      },
+      runState: makeRunState("executing"),
+      observedStrongProgress: false,
+      observedWeakProgress: false,
+      continuitySuspicion: ["state freshness mismatch"],
+    });
+
+    expect(result.status).toBe("stale_candidate");
+    expect(result.staleCandidateReason).toContain("state freshness mismatch");
+  });
+});
 
 describe("parseChangedPathsFromGitStatus", () => {
   it("returns destination paths for rename and copy porcelain -z records", () => {

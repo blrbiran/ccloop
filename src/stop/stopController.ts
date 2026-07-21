@@ -1,4 +1,10 @@
-import type { FailureFingerprint, StopDecision, StopDecisionInput } from "../state/types.js";
+import type {
+  BoundaryEvaluationInput,
+  FailureFingerprint,
+  RunBoundaryAnalysis,
+  StopDecision,
+  StopDecisionInput,
+} from "../state/types.js";
 
 function isRepeatedFailure(previous: FailureFingerprint | undefined, current: StopDecisionInput["verifier"]): boolean {
   if (!previous) {
@@ -9,6 +15,46 @@ function isRepeatedFailure(previous: FailureFingerprint | undefined, current: St
   const sameFailingCommand = previous.failingCommand === current.failingCommand;
 
   return previous.rejectCategory === current.rejectCategory && (sameTargetPaths || sameFailingCommand);
+}
+
+export function evaluateRunBoundary(input: BoundaryEvaluationInput): RunBoundaryAnalysis {
+  if (input.observedStrongProgress) {
+    return {
+      status: "healthy",
+      strongProgressAt: input.now,
+      weakProgressAt: input.previous?.weakProgressAt ?? null,
+      suspectReason: null,
+      staleCandidateReason: null,
+    };
+  }
+
+  if (input.continuitySuspicion.length > 0) {
+    return {
+      status: "stale_candidate",
+      strongProgressAt: input.previous?.strongProgressAt ?? null,
+      weakProgressAt: input.previous?.weakProgressAt ?? null,
+      suspectReason: "healthy window exceeded",
+      staleCandidateReason: input.continuitySuspicion.join("; "),
+    };
+  }
+
+  if (input.observedWeakProgress) {
+    return {
+      status: "weakly_progressing",
+      strongProgressAt: input.previous?.strongProgressAt ?? null,
+      weakProgressAt: input.now,
+      suspectReason: null,
+      staleCandidateReason: null,
+    };
+  }
+
+  return {
+    status: "no_progress",
+    strongProgressAt: input.previous?.strongProgressAt ?? null,
+    weakProgressAt: input.previous?.weakProgressAt ?? null,
+    suspectReason: "weak progress exhausted without strong progress",
+    staleCandidateReason: null,
+  };
 }
 
 export function evaluateStopDecision(input: StopDecisionInput): StopDecision {
