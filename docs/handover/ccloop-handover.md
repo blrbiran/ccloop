@@ -1,34 +1,34 @@
 # ccloop Handover
 
-> Updated: 2026-07-20
+> Updated: 2026-07-21
 > Scope: post-validation handover for the accepted evidence-first V1 A/B/C/D/E outcomes on `main`, plus the current repo/plugin state needed for a clean takeover.
 > Snapshot rule: verify every status claim against Git and the filesystem before acting. Current code, committed branch state, and immutable evidence override this document if they differ.
 
 ## Executive Summary for Next Agent
 
-1. `main` is at `b5d717f` (`update handover doc`) and the working tree is currently clean.
-2. The accepted real-run review set on `main` is now: `A-04-08 PASS`, `B-02 PASS`, `C-05 PASS`, `D-01 INCONCLUSIVE / CONTRACT_GAP`, `E-01 PASS`.
+1. `main` is at `be63e41` (`do not track .wolf/cerebrum.md`) and the working tree is currently clean after merging the D-boundary implementation branch back locally.
+2. The accepted real-run review set on `main` remains: `A-04-08 PASS`, `B-02 PASS`, `C-05 PASS`, `D-01 INCONCLUSIVE / CONTRACT_GAP`, `E-01 PASS`.
 3. The critical `run-scenario.ts` macOS `/var` vs `/private/var` zero-exit / no-artifact bug is fixed on `main` (`34eff33`).
 4. `B-01` is preserved but superseded because ECC fact-forcing interfered with the intended human-gate path.
 5. `C-01` and `C-02` are preserved but superseded because `.omc/**` writes from oh-my-claudecode caused allowlist misses.
 6. `C-03` and `C-04` are preserved but superseded because their timeouts were too short to prove the full partial-progress recovery boundary.
-7. `C-05` is the accepted Scenario C reference run: timeout occurred after both `src/partial-note.txt` and `src/counter.js` changes were durably captured.
-8. `D-01` remains intentionally `INCONCLUSIVE / CONTRACT_GAP`; do not silently reinterpret it as PASS or FAIL.
+7. The 2026-07-21 merge added D-boundary product/docs support on `main`: `execute_started`, `execution-recovery.json`, immutable `review-reclassified.json`, raw Layer A contradiction handling, and terminal-attempt evidence-path resolution.
+8. `D-01` accepted `review.json` still remains `INCONCLUSIVE / CONTRACT_GAP`; under the implemented Layer A rule, any reinterpretation must be emitted separately as `review-reclassified.json` targeting `PRE_EXECUTE_EXHAUSTION -> INCONCLUSIVE / RUNTIME_VARIANCE`.
 9. The fixture checkout remains `.validation-runs/fixture-01` at HEAD `becebbabc29ece8bb47f1c93e92479cf20e485b1`, still clean after all accepted runs.
 10. Future validation-sensitive runs should assume `ECC_GATEGUARD=off`; OMC sometimes needs stronger bypass than `DISABLE_OMC=1` (temporary plugin disable/enable or `claude --bare`).
 
 ## 10-line Handover Executive Summary
 
-1. `main` HEAD: `b5d717f`, clean working tree.
-2. Accepted results: `A-04-08 PASS`, `B-02 PASS`, `C-05 PASS`, `D-01 INCONCLUSIVE / CONTRACT_GAP`, `E-01 PASS`.
-3. `run-scenario.ts` canonical-path alias bug is fixed on `main`.
-4. `B-01`, `C-01`, `C-02`, `C-03`, and `C-04` remain preserved but are superseded by later accepted runs.
-5. Fixture checkout: `.validation-runs/fixture-01`, HEAD `becebbabc29ece8bb47f1c93e92479cf20e485b1`, still clean.
-6. Backup branch `backup/evidence-first-v1-before-memory-history-cleanup` still exists and must not be pushed or deleted.
-7. Stashes remain as soft historical signals only.
-8. Default validation-run posture now includes `ECC_GATEGUARD=off`; OMC may need temporary plugin disable or `claude --bare`.
-9. `oh-my-claudecode@omc` is currently enabled again after validation.
-10. Next agent should focus on truthful docs/backlog updates; any new paid run is opt-in only.
+1. `main` HEAD: `be63e41`, clean working tree.
+2. Accepted results still are `A-04-08 PASS`, `B-02 PASS`, `C-05 PASS`, `D-01 INCONCLUSIVE / CONTRACT_GAP`, `E-01 PASS`.
+3. Main now includes D-boundary implementation commits through `2ea857f`, plus follow-up cleanup in `be63e41`.
+4. `D-01 review.json` is still immutable; use `review-reclassified.json` if the human explicitly wants the historical reinterpretation recorded.
+5. `execute_started` and `execution-recovery.json` now exist in product code for future D-like runs.
+6. D-boundary classification now uses raw Layer A contradiction checks and the terminal attempt's artifacts, not hard-coded `attempts/1`.
+7. `B-01`, `C-01`, `C-02`, `C-03`, and `C-04` remain preserved but are superseded by later accepted runs.
+8. Fixture checkout: `.validation-runs/fixture-01`, HEAD `becebbabc29ece8bb47f1c93e92479cf20e485b1`, still clean.
+9. Backup branch and stashes still exist and remain off-limits without explicit approval.
+10. No new paid run is implied by this merge; any further real Claude invocation remains opt-in only.
 
 ## 1. Current Repository State
 
@@ -36,9 +36,19 @@
 
 - Path: `/Users/biran/code/skills/loop/ccloop`
 - Branch: `main`
-- HEAD: `b5d717f` (`update handover doc`)
-- `origin/main` currently matches `b5d717f`.
-- Post-validation fix/preference commits on `main` include:
+- HEAD: `be63e41` (`do not track .wolf/cerebrum.md`)
+- `origin/main` currently matches `be63e41`.
+- Main now also includes the merged 2026-07-21 D-boundary implementation chain:
+  - `29500c6` `add execution recovery persistence`
+  - `d5cfc8c` `fix execute recovery evidence edge cases`
+  - `c71befa` `fix D recoverable evidence classification`
+  - `47dfbda` `feat: preserve historical reviews during reclassification`
+  - `73d89f5` `docs: align D boundary classification guidance`
+  - `78c88d9` `fix: close final branch review findings`
+  - `78aeab2` `fix: close D recovery contradiction gap`
+  - `2ea857f` `fix: read D evidence from terminal attempt`
+  - `be63e41` `do not track .wolf/cerebrum.md`
+- Earlier post-validation fix/preference commits on `main` still include:
   - `34eff33` `fix: run run-scenario through canonical path aliases`
   - `e2896cc` `chore: record run-scenario alias guard learning`
   - `9b4f17d` `chore: record ECC GateGuard preference`
@@ -209,6 +219,14 @@ These runs remain important historical evidence, but they are not the accepted f
 - The reliable OMC workaround for validation-sensitive real runs was temporary plugin disable / re-enable, or `claude --bare` when plugin/skill/hook behavior is unnecessary.
 - OMC was re-enabled after the experiments completed.
 
+### D-boundary implementation now landed on main
+
+- `src/controller/runLoop.ts` now emits `execute_started` before `adapter.execute(...)`, persists `execution-recovery.json` for execute-entered/no-complete-result paths, finalizes `cleanupStatus` from the real cleanup outcome, and correctly parses porcelain `-z` rename/copy paths.
+- `validation/v1/lib/evidence.ts` now implements D-boundary classification (`PRE_EXECUTE_EXHAUSTION`, `EXECUTE_ENTERED_NO_RECOVERABLE_EVIDENCE`, `EXECUTE_ENTERED_WITH_RECOVERABLE_EVIDENCE`, `BOUNDARY_UNRESOLVED`) using raw Layer A contradiction checks, schema-validated `execution-recovery.json`, and terminal-attempt artifact resolution instead of hard-coded `attempts/1`.
+- `validation/v1/scripts/finalize-review.ts` now preserves accepted `review.json` immutability and writes explicit `review-reclassified.json` artifacts with original/reclassified review payloads, boundary classification, rule version, and Layer A evidence references.
+- `tests/controller/runLoop.integration.test.ts` and `tests/validation/evidence.test.ts` now cover the execute-started boundary, abort-return-null and abort-throw recovery paths, cleanup-failure recovery semantics, malformed recovery evidence, contradiction cases, execution-json-only recoverable evidence, and terminal-attempt (`attempts/2`) D classification.
+- After the merge to `main`, a one-off `ENOENT` failure in `tests/controller/runLoop.integration.test.ts` did not reproduce; the merged `main` subsequently passed the focused failing test, the full controller suite, and full `npm test` (`196/196`).
+
 ### Collaboration defaults
 
 - Use Chinese when discussing ccloop unless explicitly asked otherwise.
@@ -223,8 +241,61 @@ V1 currently has accepted evidence for:
 - Scenario A success path (`PASS`)
 - Scenario B pre-verification human gate (`PASS`)
 - Scenario C partial-progress recoverability (`PASS`)
-- Scenario D interrupted-execute ambiguity (`INCONCLUSIVE / CONTRACT_GAP`)
+- Scenario D accepted historical review still at `INCONCLUSIVE / CONTRACT_GAP`, with implemented product support for future D boundary classification and separate historical reinterpretation output
 - Scenario E deterministic required-check failure control (`PASS`)
+
+The important state change since the last handover is that the D-boundary implementation itself is now merged on `main`; what remains optional is whether the human wants to emit a separate `review-reclassified.json` for historical `D-01`.
+
+No new paid run was performed as part of landing this D-boundary work.
+
+## 5.1 Short merge summary for another agent
+
+The 2026-07-21 merge to `main` landed:
+- controller-side `execute_started` and `execution-recovery.json` support,
+- evidence-layer D boundary classification with raw Layer A contradiction handling,
+- immutable historical reclassification via `review-reclassified.json`,
+- operator-doc/handover alignment for the implemented D rule.
+
+This merge did **not** change the accepted A/B/C/E review outcomes and did **not** overwrite the accepted `D-01 review.json`.
+
+A transient merged-main test failure (`ENOENT` opening `attempts/1/plan.json` in one controller integration test) was investigated immediately after merge, did not reproduce in focused reruns, and the merged `main` then passed full `npm test` (`196/196`).
+
+Future follow-up, if any, should start from the merged `main` state rather than from the deleted implementation worktree/branch.
+
+## 6. Governing Boundaries That Still Matter
+
+- exercise real Claude behavior before adding automation;
+- change product code only for a confirmed `FAIL / PRODUCT_DEFECT`;
+- require explicit approval before every real Claude invocation;
+- use fresh contract, run, and evidence paths for every invocation;
+- never retry a real scenario automatically;
+- the executor cannot declare final success;
+- controller policy, required checks, and independent verifier evidence determine success;
+- `blocked_waiting_human` is terminal in V1; there is no resume;
+- never reuse, delete, or overwrite historical `.validation-runs/` evidence.
+
+## 7. Known Limitations
+
+- `D-01` accepted `review.json` remains `INCONCLUSIVE / CONTRACT_GAP`; under the implemented Layer A rule, any historical reinterpretation should be emitted separately as `review-reclassified.json` targeting `PRE_EXECUTE_EXHAUSTION -> INCONCLUSIVE / RUNTIME_VARIANCE`.
+- Historical A-01 through A-03 usage cannot be reconstructed with the new evidence type.
+- `claudeChildExited` remains `NOT_OBSERVABLE` unless a tracked descendant PID proves it.
+- No resume, reconciliation, scheduler, daemon, queue, lease, heartbeat, watchdog, or multi-task coordination exists.
+- OMC interference can still affect validation-sensitive runs unless the stronger bypass strategy is used.
+
+## 8. Recommended Next-Step Focus for Another Agent
+
+A takeover agent should now assume the core A/B/C/D/E evidence-first V1 validation goal is substantially complete.
+
+Best next-step directions are:
+
+1. **Truthful docs / backlog update pass**
+   - Update README, handover references, and backlog/plan surfaces so they reflect the accepted A/B/C/D/E outcomes.
+2. **Optional historical D reinterpretation only if explicitly requested**
+   - If the human wants the historical D record updated, emit a separate `review-reclassified.json` for `D-01`; do not overwrite `review.json`, and do not schedule a new paid run just to reinterpret the existing Layer A evidence.
+3. **No further paid runs without fresh approval**
+   - Any additional real Claude invocation remains opt-in only.
+
+## 9. Exact Takeover Procedure
 
 ## 6. Governing Boundaries That Still Matter
 
