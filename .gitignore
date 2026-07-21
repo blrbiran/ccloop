@@ -1,6 +1,8 @@
-.omc/
-
-.ccmem/
+.omc
+.omo
+.omx
+.ccmem
+.codegraph
 
 # openwolf
 .wolf/buglog.json
@@ -10,11 +12,6 @@
 .wolf/anatomy.md
 .wolf/daemon.log
 .wolf/cerebrum.md
-
-reference/academic-research-skills/
-reference/ECC/
-reference/Supervisor-Skills/
-reference/superpowers/
 
 .worktrees/
 .claude/worktrees/
