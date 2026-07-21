@@ -1,82 +1,72 @@
-# Task 2 Report — Emit `execute_started` and recover interrupted execute boundaries
+# Task 2 Report — Rewrite the backlog as a current-truth decision backlog
 
 ## What I implemented
-- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/src/controller/runLoop.ts` to emit `execute_started` immediately after `attempt_started` state persistence and immediately before `adapter.execute(...)`.
-- Added controller-local recovery helpers in `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/src/controller/runLoop.ts` to:
-  - infer execute failure boundary from the post-phase budget snapshot,
-  - probe the attempt worktree with a best-effort `git status --porcelain=v1 -z --untracked-files=all` before cleanup,
-  - persist `execution-recovery.json` when execute was entered but timed out/exhausted without returning a complete `execution.json`.
-- Extended `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/tests/controller/runLoop.integration.test.ts` with two new Task 2 regressions:
-  - `records execute_started before calling adapter.execute`
-  - `persists execution-recovery.json when execute is entered but returns no result before exhaustion`
-- Updated existing controller integration expectations so event sequences now include `execute_started` everywhere execute is actually entered.
+- Rewrote `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-adce08f8baf2066b5/docs/ccloop-v2-review-backlog.md` from the old candidate-table/reference-notes format into the required current-truth decision backlog structure.
+- Kept the approved header truths verbatim: `A-04-08 PASS`, `B-02 PASS`, `C-05 PASS`, `D-01 INCONCLUSIVE / CONTRACT_GAP`, and `E-01 PASS`.
+- Replaced the old archival sections (`## Candidate Review Table`, `## Reference Notes`, `## V2 Review Checklist`) with the required sections:
+  - `## Purpose`
+  - `## Review Principles`
+  - `## V1 truthful-docs follow-ups`
+  - `## V2 candidates`
+  - `## Explicitly not now`
+- Kept every retained item in the required field format:
+  - `- Priority:`
+  - `- Decision:`
+  - `- Why:`
+  - `- Evidence:`
+  - `- Next step:`
+- Preserved the D-01 evidence boundary by keeping accepted history as `INCONCLUSIVE / CONTRACT_GAP` and adding an explicit not-now item forbidding backlog cleanup from rewriting that accepted history.
+- Narrowed the V2 section to current-truth candidates that survived review:
+  - stop / no-progress / stale-run boundaries before scheduler work;
+  - ownership and reconciliation before resume / adopt;
+  - workflow / scheduled execution only after ownership and reconciliation are explicit;
+  - handoff support as inspectable evidence rather than implicit resume;
+  - memory only as a scoped support system.
 
-## TDD evidence
-### RED
-Command:
-- `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test -- tests/controller/runLoop.integration.test.ts`
+## What I tested and test results
+### Step 1 reference review
+Ran the task-brief searches to confirm the old backlog shape and pull reference signals.
 
-Observed failing output after fixing an intermediate test-literal typo:
-- `records execute_started before calling adapter.execute` failed because `execute_started` was missing.
-- `persists execution-recovery.json when execute is entered but returns no result before exhaustion` failed with `ENOENT` for `attempts/1/execution-recovery.json`.
+Commands used:
+- `rg -n '^## |^### |^\| ' docs/ccloop-v2-review-backlog.md`
+- `rg -n 'stop|stale|resume|reconcil|ownership|workflow|schedule|memory|handoff|no-progress' ...`
 
-Why RED was expected:
-- Task 1 added persistence support only; controller logic still did not emit the execute-entry event or write recovery artifacts on interrupted execute null-result paths.
+Results:
+- Confirmed the source backlog still used the older candidate-table / reference-notes structure.
+- Confirmed the reference set contains signals for stop boundaries, workflow/scheduling, handoff, ownership/reconciliation, and memory.
 
-### GREEN
-Command:
-- `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test -- tests/controller/runLoop.integration.test.ts`
+### Step 3 backlog verification
+Ran the required structural verification.
+
+Command used:
+- Python assertion script from the task brief plus:
+- `rg -n "ADOPT|MODIFY|REJECT|STILL_DEFER|## V1 truthful-docs follow-ups|## V2 candidates|## Explicitly not now" docs/ccloop-v2-review-backlog.md`
+
+Results:
+- Python script printed: `backlog structure ok`
+- `rg` showed the required top-level sections and explicit decision labels.
+
+### Diff hygiene
+Command used:
+- `git diff --check -- docs/ccloop-v2-review-backlog.md`
 
 Result:
-- `Test Files  1 passed (1)`
-- `Tests  32 passed (32)`
+- No diff-formatting problems were reported.
 
-## Full verification before commit
-Command:
-- `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test`
+## Files changed
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-adce08f8baf2066b5/docs/ccloop-v2-review-backlog.md`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-adce08f8baf2066b5/.superpowers/sdd/task-2-report.md`
+- `/Users/biran/code/skills/loop/ccloop/.superpowers/sdd/task-2-report.md`
 
-Result:
-- `Test Files  14 passed (14)`
-- `Tests  178 passed (178)`
+## Commits created
+- `6bbefa9 docs: rewrite truth-aligned review backlog`
 
-## Files changed for Task 2
-- `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/src/controller/runLoop.ts`
-- `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/tests/controller/runLoop.integration.test.ts`
-- `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/.superpowers/sdd/task-2-report.md`
-- `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/.wolf/anatomy.md`
-- `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/.wolf/buglog.json`
-- `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/.wolf/cerebrum.md`
-- `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/.wolf/memory.md`
+## Self-review findings
+- The rewrite stays within the approved Task 2 boundary: backlog doc only, no product-code changes.
+- The new backlog is materially shorter and now expresses decisions against current V1 truth instead of preserving a historical idea archive.
+- The retained items are grounded in current truth plus reviewed references, and the backlog does not present reference systems as approved ccloop roadmap.
+- The accepted D-01 boundary was preserved exactly as requested.
+- I did not run any real Claude scenario or touch `.validation-runs/**` evidence.
 
-## Self-review
-- Scope stayed inside the approved Task 2 boundary: controller behavior plus controller integration coverage only.
-- The execute-entry event is emitted exactly at the intended boundary: after entering executing state and before `adapter.execute(...)` is invoked.
-- Interrupted execute recovery uses the smallest practical controller-owned probe already available in the repo context: a best-effort git status read against the attempt worktree before cleanup.
-- Existing behavior outside the approved Task 2 boundary was not refactored.
-- I left pre-existing unrelated worktree edits in `.superpowers/sdd/progress.md` and `.wolf/cerebrum.md` untouched.
-
-## Concerns
-- No product concerns for Task 2 itself.
-- During RED setup I briefly introduced a malformed TypeScript string literal while inserting the new test with Python; this was corrected immediately, recorded in `.wolf/buglog.json`, and did not affect the final implementation or verification state.
-
-
-## Reviewer fix wave (2026-07-20)
-- Updated `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/src/controller/runLoop.ts` so execute timeout recovery also covers the abort-throw path: when the phase times out and the adapter throws after abort instead of returning `null`, the controller now still treats the attempt as execute-entered/no-complete-result and persists `execution-recovery.json` before terminal cleanup.
-- Changed interrupted execute recovery persistence to reflect real cleanup outcome instead of guessing: the controller writes the pre-cleanup recovery snapshot with `cleanupStatus: "retained"`, runs cleanup, and rewrites the artifact to `cleanupStatus: "removed"` only when cleanup actually succeeds.
-- Extended `/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification/tests/controller/runLoop.integration.test.ts` with focused regressions for:
-  - abort-after-entry execute that throws `AbortError` instead of returning `null`;
-  - interrupted execute recovery when cleanup fails, requiring `cleanupStatus: "retained"` and `workspace_cleanup_failed` evidence.
-
-## Reviewer fix-wave verification
-Focused controller coverage:
-- `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test -- tests/controller/runLoop.integration.test.ts`
-- Result: `Test Files  1 passed (1)` / `Tests  34 passed (34)`
-
-Full suite before commit:
-- `ECC_GATEGUARD=off DISABLE_OMC=1 npm --prefix "/Users/biran/code/skills/loop/ccloop/.worktrees/d-scenario-boundary-classification" test`
-- Result: `Test Files  14 passed (14)` / `Tests  180 passed (180)`
-
-## Reviewer fix-wave self-review
-- Scope stayed inside Task 2's approved controller/persistence boundary; no budgets, retry policy, scenario rules, or review artifacts changed.
-- The recovery contract is now stronger in two ways: both abort-return-null and abort-throw execute timeout paths produce controller-owned recovery evidence, and Layer A no longer claims cleanup removal before cleanup outcome is known.
-- The new cleanup-failure regression would fail if `execution-recovery.json` were written once up front with `cleanupStatus: "removed"`, which directly guards against the reviewer-identified contradiction.
+## Issues or concerns
+- The isolated worktree does not contain a local `reference/ccmem/` subtree; I treated `/Users/biran/code/skills/loop/ccloop/reference/ccmem/` in the repository root as read-only reference input when evaluating the memory item.

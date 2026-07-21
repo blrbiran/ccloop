@@ -18,3 +18,5 @@ Task 4: complete (rewritten commits 675fee3..a5478ad, 13 files/113 tests + typec
 Legacy artifact compatibility: complete (commit 38055b3; real evidence reader accepts artifacts without usageEvidence; 20 evidence tests + typecheck pass)
 History privacy cleanup: complete (backup/evidence-first-v1-before-memory-history-cleanup preserves pre-rewrite state; target branch drops 73fa00e/e0d3fb1; local .wolf/memory.md and 98 validation files preserved; no push)
 Final post-rewrite verification: complete (13 files/114 tests pass; typecheck/build pass; final review approved; no real Claude call; A-04 unapproved/unrun)
+Task 1: complete (commits 1eaefcb..beeb6a2, review clean; OpenWolf ignored-file updates verified locally and treated as non-diff bookkeeping)
+Task 2: complete (commits beeb6a2..bf444de, review clean; task-scoped diff corrected in execution worktree)
