@@ -6,7 +6,7 @@
 
 ## Executive Summary for Next Agent
 
-1. `main` HEAD: `1eaefcb`.
+1. Verify the current `main` HEAD with Git before acting; this handover reflects the post-docs/backlog truth-alignment baseline rather than a permanent branch snapshot.
 2. Accepted results remain `A-04-08 PASS`, `B-02 PASS`, `C-05 PASS`, `D-01 INCONCLUSIVE / CONTRACT_GAP`, `E-01 PASS`.
 3. `D-01 review.json` remains immutable; any reinterpretation belongs in a separate `review-reclassified.json`.
 4. The D-boundary implementation is already merged on `main`; no new paid run is implied by this docs pass.
@@ -16,14 +16,14 @@
 
 - Path: `/Users/biran/code/skills/loop/ccloop`
 - Branch: `main`
-- HEAD: `1eaefcb`
-- State: the verified `main` snapshot for this pass was clean before the handover rewrite; in this docs-only worktree the only intentional drift is this handover edit.
+- HEAD: verify with `git rev-parse --short HEAD` before acting.
+- State: verify the current `main` checkout status with Git before acting; this handover does not treat a prior clean snapshot as permanent truth.
 - Preserved backup branch: `backup/evidence-first-v1-before-memory-history-cleanup`
 - Preserved stashes:
   - `stash@{0}: pre-local-merge-evidence-first-v1-2026-07-18`
   - `stash@{1}: pre-merge local changes 2026-07-16`
 - Preserved fixture checkout: `.validation-runs/fixture-01` at `becebbabc29ece8bb47f1c93e92479cf20e485b1`
-- Accepted review artifacts live under `/Users/biran/code/skills/loop/ccloop/.validation-runs/evidence/`; this docs worktree is documentation-only and does not materialize `.validation-runs/` locally.
+- Accepted review artifacts live under `.validation-runs/evidence/` in the repository checkout and remain the immutable accepted evidence set for takeover.
 
 ## Accepted Evidence Set
 
@@ -54,7 +54,7 @@
 
 ## Recommended Next-Step Focus
 
-1. Finish truthful docs / backlog alignment.
+1. Keep truthful docs / backlog surfaces aligned with the accepted V1 evidence set.
 2. Only emit `review-reclassified.json` for `D-01` if a human explicitly asks.
 3. Do not schedule or run a new paid scenario without fresh approval.
 
