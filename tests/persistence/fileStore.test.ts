@@ -2,7 +2,15 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { initializeRunFiles, appendEvent, writeAttemptArtifacts, writeBoundaryArtifacts, writeRunState } from "../../src/persistence/fileStore.js";
+import {
+  appendEvent,
+  initializeRunFiles,
+  writeAttemptArtifacts,
+  writeBoundaryArtifacts,
+  writeOwnerRecord,
+  writeOwnerTransferRecord,
+  writeRunState,
+} from "../../src/persistence/fileStore.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import type { RunState } from "../../src/state/types.js";
 
@@ -27,6 +35,54 @@ const state: RunState = {
 };
 
 describe("fileStore", () => {
+  it("writes owner-record.json with current epoch and process instance", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    await writeOwnerRecord(runDir, {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current",
+      supersededByEpoch: null,
+    });
+
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+      currentOwnerEpoch: number;
+      currentProcessInstanceId: string;
+      ownerStatus: string;
+    };
+
+    expect(owner.currentOwnerEpoch).toBe(1);
+    expect(owner.currentProcessInstanceId).toBe("pid:12345");
+    expect(owner.ownerStatus).toBe("current");
+  });
+
+  it("writes owner-transfer.json with prior and new epochs", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    await writeOwnerTransferRecord(runDir, {
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      priorProcessInstanceId: "pid:12345",
+      newProcessInstanceId: "pid:67890",
+      transferredAt: "2026-07-22T10:05:00.000Z",
+      reason: "owner lost after reconciliation",
+      eligibleForContinuation: true,
+    });
+
+    const transfer = JSON.parse(await readFile(join(runDir, "owner-transfer.json"), "utf8")) as {
+      priorOwnerEpoch: number;
+      newOwnerEpoch: number;
+      eligibleForContinuation: boolean;
+    };
+
+    expect(transfer.priorOwnerEpoch).toBe(1);
+    expect(transfer.newOwnerEpoch).toBe(2);
+    expect(transfer.eligibleForContinuation).toBe(true);
+  });
+
   it("writes execution-recovery.json when execution recovery is present", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
 
@@ -66,12 +122,16 @@ describe("fileStore", () => {
       reconciliationRecord: {
         staleSuspicionBasis: ["healthy window exceeded", "state freshness mismatch"],
         staleConfirmed: true,
+        ownershipVerdict: "OWNER_LOST",
         lastTrustedBoundary: "execute",
         conflictingEvidence: [],
         takeoverPermission: {
           allowed: false,
           reason: "ownership not yet mechanically proven",
         },
+        priorOwnerEpoch: 1,
+        newOwnerEpoch: 2,
+        eligibleForContinuation: true,
       },
     });
 

@@ -1,5 +1,5 @@
 import type { LoopContract } from "../contract/schema.js";
-import type { RunState } from "../state/types.js";
+import type { OwnerStatus, RunState } from "../state/types.js";
 
 export type AttemptContext = {
   contract: LoopContract;
@@ -73,12 +73,42 @@ export type TakeoverPermission = {
   reason: string;
 };
 
+export type OwnershipVerdict =
+  | "OWNER_VALID"
+  | "OWNER_LOST"
+  | "OWNER_SUPERSEDED"
+  | "OWNER_UNDECIDABLE";
+
+export type OwnerRecord = {
+  runId: string;
+  logicalSessionId: string;
+  currentOwnerEpoch: number;
+  currentProcessInstanceId: string;
+  lastAffirmedAt: string;
+  ownerStatus: OwnerStatus;
+  supersededByEpoch: number | null;
+};
+
+export type OwnerTransferRecord = {
+  priorOwnerEpoch: number;
+  newOwnerEpoch: number;
+  priorProcessInstanceId: string;
+  newProcessInstanceId: string;
+  transferredAt: string;
+  reason: string;
+  eligibleForContinuation: true;
+};
+
 export type ReconciliationRecord = {
   staleSuspicionBasis: string[];
   staleConfirmed: boolean;
+  ownershipVerdict: OwnershipVerdict;
   lastTrustedBoundary: "planning" | "execute" | "verify" | "terminal" | "unknown";
   conflictingEvidence: string[];
   takeoverPermission: TakeoverPermission;
+  priorOwnerEpoch: number | null;
+  newOwnerEpoch: number | null;
+  eligibleForContinuation: boolean;
 };
 
 export function isPartialExecutionResult(result: ExecutionResult): result is PartialExecutionResult {

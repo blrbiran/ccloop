@@ -1,7 +1,12 @@
 import { access, appendFile, mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { LoopContract } from "../contract/schema.js";
-import type { ExecutionRecovery, ReconciliationRecord } from "../runtime/types.js";
+import type {
+  ExecutionRecovery,
+  OwnerRecord,
+  OwnerTransferRecord,
+  ReconciliationRecord,
+} from "../runtime/types.js";
 import type { RunBoundaryAnalysis, RunState } from "../state/types.js";
 
 export type RunEvent = {
@@ -95,6 +100,14 @@ export async function writeBoundaryArtifacts(
       JSON.stringify(artifacts.reconciliationRecord, null, 2),
     );
   }
+}
+
+export async function writeOwnerRecord(runDir: string, ownerRecord: OwnerRecord): Promise<void> {
+  await writeFile(join(runDir, "owner-record.json"), JSON.stringify(ownerRecord, null, 2));
+}
+
+export async function writeOwnerTransferRecord(runDir: string, transferRecord: OwnerTransferRecord): Promise<void> {
+  await writeFile(join(runDir, "owner-transfer.json"), JSON.stringify(transferRecord, null, 2));
 }
 
 export async function writeAttemptArtifacts(runDir: string, attempt: number, artifacts: AttemptArtifacts): Promise<void> {

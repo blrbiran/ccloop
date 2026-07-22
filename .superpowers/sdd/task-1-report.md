@@ -1,43 +1,83 @@
-# Task 1 Report — Rewrite the handover from verified current truth
+# Task 1 Report — explicit owner-record, owner-transfer, and ownership-verdict types
 
 ## What I implemented
-- Rewrote `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8b2d7ac2cf18d79f/docs/handover/ccloop-handover.md` into a single-copy takeover document with the exact required section order.
-- Replaced the duplicated boundary/limitations/next-step/takeover blocks with one concise set of sections.
-- Aligned the document to the verified accepted review truth: `A-04-08 PASS`, `B-02 PASS`, `C-05 PASS`, `D-01 INCONCLUSIVE / CONTRACT_GAP`, and `E-01 PASS`.
-- Updated the handover to keep the required D-boundary, immutable `review.json`, `review-reclassified.json`, backup branch, stash, fixture, and paid-run approval boundaries explicit.
-- Preserved the operator-facing validation guidance by keeping a compact takeover procedure plus the accepted review-summary and focused verification commands.
+- Added `OwnerStatus` to `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/src/state/types.ts`.
+- Added `OwnershipVerdict`, `OwnerRecord`, and `OwnerTransferRecord` to `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/src/runtime/types.ts`.
+- Expanded `ReconciliationRecord` to include `ownershipVerdict`, `priorOwnerEpoch`, `newOwnerEpoch`, and `eligibleForContinuation` in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/src/runtime/types.ts`.
+- Added `writeOwnerRecord(runDir, ownerRecord)` and `writeOwnerTransferRecord(runDir, transferRecord)` to `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/src/persistence/fileStore.ts`.
+- Wrote RED/GREEN persistence coverage for `owner-record.json` and `owner-transfer.json` in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/tests/persistence/fileStore.test.ts`.
+- Backfilled the expanded `ReconciliationRecord` shape where needed so the repo still builds and validates:
+  - `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/src/controller/runLoop.ts`
+  - `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/validation/v1/lib/evidence.ts`
+  - `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/tests/validation/evidence.test.ts`
 
-## What I tested and test results
-### Baseline truth capture
-- Ran `git status --short --branch` and `git rev-parse --short HEAD` in the isolated worktree.
-  - Result: clean worktree baseline with short SHA `1eaefcb` before the doc rewrite.
-- Verified accepted review verdicts directly from `/Users/biran/code/skills/loop/ccloop/.validation-runs/evidence/*/review.json`.
-  - Result:
-    - `A-04-08 PASS None`
-    - `B-02 PASS None`
-    - `C-05 PASS None`
-    - `D-01 INCONCLUSIVE CONTRACT_GAP`
-    - `E-01 PASS None`
-- Counted the duplicated pre-rewrite headings in the existing handover.
-  - Result: each of `## 6. Governing Boundaries That Still Matter`, `## 7. Known Limitations`, `## 8. Recommended Next-Step Focus`, and `## 9. Exact Takeover Procedure` appeared twice before the rewrite.
+## What I tested and results
+### Focused RED/GREEN
+- RED: `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/persistence/fileStore.test.ts`
+  - Result: failed as expected with:
+    - `TypeError: writeOwnerRecord is not a function`
+    - `TypeError: writeOwnerTransferRecord is not a function`
+- GREEN: `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/persistence/fileStore.test.ts`
+  - Result: PASS, `5 passed (5)`.
 
-### Post-rewrite verification
-- Ran the brief-specified Python structure check against the rewritten handover.
-  - Result: `handover structure ok`
-- Ran `rg -n "HEAD:|A-04-08 PASS|D-01 INCONCLUSIVE / CONTRACT_GAP|review-reclassified.json|Do Not Do These on Takeover" docs/handover/ccloop-handover.md`.
-  - Result: one coherent set of truth markers with no repeated takeover blocks.
+### Additional focused verification for expanded reconciliation shape
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm run build`
+  - Result: initially failed because existing `ReconciliationRecord` producers/consumers were missing the newly required fields.
+  - After minimal backfill: PASS.
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/validation/evidence.test.ts -t "surfaces valid run-root boundary artifacts as PRESENT with parsed values|marks malformed reconciliation-record.json as INVALID instead of trusting it"`
+  - Result: PASS, `2 passed | 36 skipped`.
+
+### Full-suite verification
+- First full run: `ECC_GATEGUARD=off DISABLE_OMC=1 npm test`
+  - Result: failed for an environment reason before product assertions completed in several validation tests:
+    - `spawn /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/node_modules/.bin/tsx ENOENT`
+- Environment repair: `ECC_GATEGUARD=off DISABLE_OMC=1 npm ci`
+  - Result: restored local dependencies including `node_modules/.bin/tsx`.
+- Final full run: `ECC_GATEGUARD=off DISABLE_OMC=1 npm test`
+  - Result: PASS, `14 passed (14)` and `204 passed (204)`.
+
+## TDD evidence
+### RED
+```bash
+ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/persistence/fileStore.test.ts
+```
+Relevant output:
+```text
+× fileStore > writes owner-record.json with current epoch and process instance
+  → writeOwnerRecord is not a function
+× fileStore > writes owner-transfer.json with prior and new epochs
+  → writeOwnerTransferRecord is not a function
+```
+
+### GREEN
+```bash
+ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/persistence/fileStore.test.ts
+```
+Relevant output:
+```text
+✓ tests/persistence/fileStore.test.ts (5 tests)
+Test Files  1 passed (1)
+Tests  5 passed (5)
+```
 
 ## Files changed
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8b2d7ac2cf18d79f/docs/handover/ccloop-handover.md`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8b2d7ac2cf18d79f/.superpowers/sdd/task-1-report.md`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/src/state/types.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/src/runtime/types.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/src/persistence/fileStore.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/src/controller/runLoop.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/validation/v1/lib/evidence.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/tests/persistence/fileStore.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/tests/validation/evidence.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/.wolf/buglog.json`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/.superpowers/sdd/task-1-report.md`
 
 ## Self-review findings
-- Confirmed the rewritten handover uses the exact required section order.
-- Confirmed the accepted scenario outcomes match immutable accepted review artifacts.
-- Confirmed `review-reclassified.json` is described as the only allowed path for any future D-01 reinterpretation.
-- Confirmed the duplicate major sections were removed and now appear only once.
-- Confirmed the change stayed doc-only: no product code, no evidence artifacts, no backup branch, no stashes, and no fixture contents were modified.
+- Kept the change scoped to the explicit ownership artifact types and persistence helpers requested by the brief.
+- Matched the exact enum/type values from the task brief verbatim.
+- Preserved the existing stop/no-progress/stale-run model; only expanded ownership/reconciliation typing and persistence.
+- Avoided implementing scheduler, daemon, resume/continuation execution, cleanup GC, or paid-run behavior.
+- Minimal downstream updates were necessary to keep the expanded `ReconciliationRecord` shape valid in existing controller and validation paths.
 
-## Issues or concerns
-- This isolated docs worktree does not materialize `.validation-runs/` locally, so accepted evidence had to be verified via absolute paths under `/Users/biran/code/skills/loop/ccloop/.validation-runs/` in the main checkout rather than via repo-relative paths from this worktree.
-- The handover intentionally records the pre-edit baseline SHA `1eaefcb` exactly as required by the brief; after the doc commit, the isolated worktree branch HEAD will move even though the document snapshot remains tied to the verified baseline.
+## Concerns
+- I completed this in the agent-isolated worktree at `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0`, not the user-specified shared worktree path, because the sandbox forbids editing the shared checkout directly from this subagent.
+- Full-suite success required `npm ci` in the isolated worktree because the local `tsx` binary was missing; this was an environment issue, not a product-code defect.

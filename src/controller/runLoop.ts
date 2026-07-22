@@ -564,12 +564,16 @@ async function persistBoundaryAnalysis(
                 ? boundaryEvidence.continuitySuspicion
                 : [boundaryAnalysis.staleCandidateReason ?? "unknown stale suspicion"],
             staleConfirmed: true,
+            ownershipVerdict: "OWNER_UNDECIDABLE",
             lastTrustedBoundary: "execute",
             conflictingEvidence: boundaryEvidence.conflictingEvidence,
             takeoverPermission: {
               allowed: false,
               reason: "deny-by-default until stronger mechanical takeover conditions exist",
             },
+            priorOwnerEpoch: null,
+            newOwnerEpoch: null,
+            eligibleForContinuation: false,
           }
         : undefined,
   });

@@ -426,5 +426,48 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-22T13:09:34Z"
+  },
+  {
+    "id": "bug-023",
+    "timestamp": "2026-07-22T16:59:09Z",
+    "error_message": "writeOwnerRecord is not a function and writeOwnerTransferRecord is not a function in tests/persistence/fileStore.test.ts",
+    "file": "src/persistence/fileStore.ts",
+    "root_cause": "Task 1 added RED persistence coverage before explicit owner artifact types and JSON writer helpers existed, and the expanded reconciliation record shape had not yet been backfilled at all producer/consumer sites.",
+    "fix": "Added OwnerStatus, OwnershipVerdict, OwnerRecord, and OwnerTransferRecord types, added writeOwnerRecord() and writeOwnerTransferRecord(), expanded ReconciliationRecord with ownership fields, and updated controller/evidence schema fixtures to match the new required shape.",
+    "tags": [
+      "task-1",
+      "ownership",
+      "reconciliation",
+      "persistence",
+      "tdd"
+    ],
+    "related_bugs": [
+      "bug-018",
+      "bug-020"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T16:59:09Z"
+  },
+  {
+    "id": "bug-024",
+    "timestamp": "2026-07-22T16:59:09Z",
+    "error_message": "npm test failed with spawn /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/node_modules/.bin/tsx ENOENT during Task 1 full verification",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "The isolated Task 1 worktree did not yet have a local node_modules/.bin/tsx binary, so run-scenario CLI tests failed before exercising product behavior.",
+    "fix": "Ran npm ci in the worktree to restore local dependencies and the tsx binary, then reran the full Vitest suite successfully.",
+    "tags": [
+      "task-1",
+      "verification",
+      "validation",
+      "environment",
+      "node_modules",
+      "tsx"
+    ],
+    "related_bugs": [
+      "bug-003",
+      "bug-022"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T16:59:09Z"
   }
 ]

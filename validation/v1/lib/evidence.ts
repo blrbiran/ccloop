@@ -230,6 +230,7 @@ const reconciliationRecordSchema = z
   .object({
     staleSuspicionBasis: z.array(z.string()).min(1),
     staleConfirmed: z.boolean(),
+    ownershipVerdict: z.enum(["OWNER_VALID", "OWNER_LOST", "OWNER_SUPERSEDED", "OWNER_UNDECIDABLE"]),
     lastTrustedBoundary: z.enum(["planning", "execute", "verify", "terminal", "unknown"]),
     conflictingEvidence: z.array(z.string()),
     takeoverPermission: z
@@ -238,6 +239,9 @@ const reconciliationRecordSchema = z
         reason: z.string().trim().min(1),
       })
       .strict(),
+    priorOwnerEpoch: z.number().int().nullable(),
+    newOwnerEpoch: z.number().int().nullable(),
+    eligibleForContinuation: z.boolean(),
   })
   .strict();
 

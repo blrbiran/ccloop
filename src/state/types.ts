@@ -48,6 +48,8 @@ export type RunBoundaryAnalysis = {
   staleCandidateReason: string | null;
 };
 
+export type OwnerStatus = "current" | "lost" | "unknown";
+
 export type BoundaryEvaluationInput = {
   now: string;
   previous: RunBoundaryAnalysis | null;
