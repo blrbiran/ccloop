@@ -912,7 +912,7 @@ describe("runLoop", () => {
     expect(seenEventsBeforeExecute).toEqual([["loop_planning", "attempt_started", "execute_started"]]);
   });
 
-  it("writes a deny-by-default reconciliation record when stale suspicion is confirmed", async () => {
+  it("writes no_progress without a reconciliation record for a non-stale null execute result", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const contract = createContract(repoPath);
@@ -933,16 +933,12 @@ describe("runLoop", () => {
 
     const boundaryAnalysis = JSON.parse(
       await readFile(join(runDir, "boundary-analysis.json"), "utf8"),
-    ) as { status: string; staleCandidateReason: string | null };
-    const reconciliation = JSON.parse(
-      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
-    ) as { staleConfirmed: boolean; takeoverPermission: { allowed: boolean; reason: string } };
+    ) as { status: string; staleCandidateReason: string | null; suspectReason: string | null };
 
-    expect(boundaryAnalysis.status).toBe("stale_candidate");
-    expect(boundaryAnalysis.staleCandidateReason).toBe("execution continuity not trustworthy");
-    expect(reconciliation.staleConfirmed).toBe(true);
-    expect(reconciliation.takeoverPermission.allowed).toBe(false);
-    expect(reconciliation.takeoverPermission.reason).toContain("deny-by-default");
+    expect(boundaryAnalysis.status).toBe("no_progress");
+    expect(boundaryAnalysis.staleCandidateReason).toBeNull();
+    expect(boundaryAnalysis.suspectReason).toBe("weak progress exhausted without strong progress");
+    expect(await pathExists(join(runDir, "reconciliation-record.json"))).toBe(false);
   });
 
   it("persists execution-recovery.json when execute is entered but returns no result before exhaustion", async () => {
@@ -984,7 +980,7 @@ describe("runLoop", () => {
     expect(recovery.cleanupStatus).toBe("removed");
   });
 
-  it("persists execution-recovery.json when execute aborts by throwing after entry", async () => {
+  it("writes stale reconciliation conflicting evidence when execute aborts after changing files", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -1022,6 +1018,16 @@ describe("runLoop", () => {
       failureBoundary: string;
       changedPathsObserved: string[] | null;
     };
+    const boundaryAnalysis = JSON.parse(
+      await readFile(join(runDir, "boundary-analysis.json"), "utf8"),
+    ) as { status: string; staleCandidateReason: string | null };
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as {
+      staleSuspicionBasis: string[];
+      conflictingEvidence: string[];
+      staleConfirmed: boolean;
+    };
 
     expect(finalState.status).toBe("exhausted");
     expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON);
@@ -1030,6 +1036,12 @@ describe("runLoop", () => {
     expect(recovery.cleanupStatus).toBe("removed");
     expect(recovery.failureBoundary).toBe("runtime_exhausted");
     expect(recovery.changedPathsObserved).toContain("src/index.ts");
+    expect(boundaryAnalysis.status).toBe("stale_candidate");
+    expect(boundaryAnalysis.staleCandidateReason).toContain("src/index.ts");
+    expect(reconciliation.staleConfirmed).toBe(true);
+    expect(reconciliation.staleSuspicionBasis[0]).toContain("src/index.ts");
+    expect(reconciliation.conflictingEvidence.length).toBeGreaterThan(0);
+    expect(reconciliation.conflictingEvidence.join(" ")).toContain("src/index.ts");
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "loop_exhausted"]);
   });
 
