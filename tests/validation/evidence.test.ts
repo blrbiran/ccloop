@@ -790,6 +790,69 @@ describe("evidence collection", () => {
     });
   });
 
+  it("surfaces valid run-root boundary artifacts as PRESENT with parsed values", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({ scenarioId: "D" });
+    const boundaryAnalysis = {
+      status: "stale_candidate",
+      strongProgressAt: "2026-07-21T00:00:00.000Z",
+      weakProgressAt: "2026-07-21T00:05:00.000Z",
+      suspectReason: "missing strong progress signal",
+      staleCandidateReason: "run exceeded stale threshold",
+    };
+    const reconciliationRecord = {
+      staleSuspicionBasis: ["no verify progress", "boundary age exceeded threshold"],
+      staleConfirmed: false,
+      lastTrustedBoundary: "verify",
+      conflictingEvidence: [],
+      takeoverPermission: {
+        allowed: false,
+        reason: "human review required before takeover",
+      },
+    };
+
+    await writeFile(join(runDir, "boundary-analysis.json"), JSON.stringify(boundaryAnalysis, null, 2) + "\n");
+    await writeFile(join(runDir, "reconciliation-record.json"), JSON.stringify(reconciliationRecord, null, 2) + "\n");
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(record.observations.boundaryAnalysis).toMatchObject({
+      status: "PRESENT",
+      value: boundaryAnalysis,
+    });
+    expect(record.observations.reconciliationRecord).toMatchObject({
+      status: "PRESENT",
+      value: reconciliationRecord,
+    });
+  });
+
+  it("marks malformed reconciliation-record.json as INVALID instead of trusting it", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({ scenarioId: "D" });
+    const boundaryAnalysis = {
+      status: "stale_candidate",
+      strongProgressAt: "2026-07-21T00:00:00.000Z",
+      weakProgressAt: "2026-07-21T00:05:00.000Z",
+      suspectReason: "missing strong progress signal",
+      staleCandidateReason: "run exceeded stale threshold",
+    };
+
+    await writeFile(join(runDir, "boundary-analysis.json"), JSON.stringify(boundaryAnalysis, null, 2) + "\n");
+    await writeFile(join(runDir, "reconciliation-record.json"), JSON.stringify({ staleConfirmed: "yes" }, null, 2) + "\n");
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(record.observations.boundaryAnalysis).toMatchObject({
+      status: "PRESENT",
+      value: boundaryAnalysis,
+    });
+    expect(record.observations.reconciliationRecord.status).toBe("INVALID");
+  });
+
   it("surfaces malformed loop-state.json as INVALID", async () => {
     const { runDir, evidenceDir } = await createSyntheticRun({ scenarioId: "A", invalidLoopState: true });
     const evidence = await collectEvidence({

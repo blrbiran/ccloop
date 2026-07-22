@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { appendEvent, initializeRunFiles, writeAttemptArtifacts, writeRunState } from "../persistence/fileStore.js";
+import { appendEvent, initializeRunFiles, writeAttemptArtifacts, writeBoundaryArtifacts, writeRunState } from "../persistence/fileStore.js";
 import { evaluatePathPolicy } from "../policy/pathPolicy.js";
-import { evaluateStopDecision } from "../stop/stopController.js";
+import { evaluateRunBoundary, evaluateStopDecision } from "../stop/stopController.js";
 import { transitionRunState } from "../state/stateMachine.js";
 import type { LoopContract } from "../contract/schema.js";
 import type {
@@ -477,6 +477,44 @@ function buildExecutionRecovery(
   };
 }
 
+function buildBoundaryEvidence(executionRecovery: ExecutionRecovery | null): {
+  continuitySuspicion: string[];
+  conflictingEvidence: string[];
+} {
+  if (executionRecovery === null) {
+    return {
+      continuitySuspicion: [],
+      conflictingEvidence: [],
+    };
+  }
+
+  if (executionRecovery.changedPathsObserved !== null && executionRecovery.changedPathsObserved.length > 0) {
+    const changedPathsSummary = executionRecovery.changedPathsObserved.join(", ");
+    return {
+      continuitySuspicion: [`interrupted execute left changed paths in the attempt worktree: ${changedPathsSummary}`],
+      conflictingEvidence: [
+        `changed paths observed after interrupted execute: ${changedPathsSummary}`,
+        `execution recovery captured ${executionRecovery.failureBoundary} with cleanup ${executionRecovery.cleanupStatus}`,
+      ],
+    };
+  }
+
+  if (executionRecovery.worktreeDiffObserved === true) {
+    return {
+      continuitySuspicion: ["interrupted execute left worktree differences in the attempt worktree"],
+      conflictingEvidence: [
+        "worktree differences observed after interrupted execute",
+        `execution recovery captured ${executionRecovery.failureBoundary} with cleanup ${executionRecovery.cleanupStatus}`,
+      ],
+    };
+  }
+
+  return {
+    continuitySuspicion: [],
+    conflictingEvidence: [],
+  };
+}
+
 async function writeCompletedAttemptArtifacts(
   runDir: string,
   attempt: number,
@@ -494,6 +532,46 @@ async function writeCompletedAttemptArtifacts(
     verify: verification,
     diffPatch: execution?.diffPatch,
     stdoutStderrLog: execution?.stdoutStderrLog,
+  });
+}
+
+async function persistBoundaryAnalysis(
+  runDir: string,
+  state: RunState,
+  executionRecovery?: ExecutionRecovery,
+): Promise<void> {
+  const boundaryEvidence = buildBoundaryEvidence(executionRecovery ?? null);
+  const boundaryAnalysis = evaluateRunBoundary({
+    now: new Date().toISOString(),
+    previous: null,
+    runState: state,
+    observedStrongProgress: false,
+    observedWeakProgress: boundaryEvidence.conflictingEvidence.length > 0,
+    continuitySuspicion: boundaryEvidence.continuitySuspicion,
+  });
+
+  if (boundaryAnalysis.status === "healthy") {
+    return;
+  }
+
+  await writeBoundaryArtifacts(runDir, {
+    boundaryAnalysis,
+    reconciliationRecord:
+      boundaryAnalysis.status === "stale_candidate"
+        ? {
+            staleSuspicionBasis:
+              boundaryEvidence.continuitySuspicion.length > 0
+                ? boundaryEvidence.continuitySuspicion
+                : [boundaryAnalysis.staleCandidateReason ?? "unknown stale suspicion"],
+            staleConfirmed: true,
+            lastTrustedBoundary: "execute",
+            conflictingEvidence: boundaryEvidence.conflictingEvidence,
+            takeoverPermission: {
+              allowed: false,
+              reason: "deny-by-default until stronger mechanical takeover conditions exist",
+            },
+          }
+        : undefined,
   });
 }
 
@@ -621,6 +699,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
             plan,
             executionRecovery,
           });
+          await persistBoundaryAnalysis(runDir, state, executionRecovery);
           state = await persistTerminalState(
             runDir,
             state,
@@ -651,6 +730,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       }
 
       if (execution === null) {
+        await persistBoundaryAnalysis(runDir, state);
         throw new Error("execute phase completed without a result");
       }
 

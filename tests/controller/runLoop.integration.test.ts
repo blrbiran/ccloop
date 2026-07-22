@@ -9,6 +9,7 @@ import { parseChangedPathsFromGitStatus, runLoop } from "../../src/controller/ru
 import { SubprocessClaudeAdapter } from "../../src/runtime/claude/subprocessClaudeAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
+import { evaluateRunBoundary } from "../../src/stop/stopController.js";
 import type { RuntimeAdapter } from "../../src/runtime/types.js";
 import type { RunState } from "../../src/state/types.js";
 
@@ -101,6 +102,65 @@ async function pathExists(path: string): Promise<boolean> {
     return false;
   }
 }
+
+function makeRunState(status: RunState["status"]): RunState {
+  return {
+    status,
+    currentAttempt: 1,
+    attemptsUsed: 1,
+    lastTransitionAt: "2026-07-21T10:00:00.000Z",
+    waitingOnHuman: false,
+    stopReason: null,
+    budgetSnapshot: {
+      attemptsRemaining: 2,
+      timeRemainingMs: 5_000,
+      tokenBudgetRemaining: 1_000,
+    },
+    recentFailures: [],
+  };
+}
+
+describe("evaluateRunBoundary", () => {
+  it("routes to no_progress when strong progress stops and weak progress is exhausted without stale evidence", () => {
+    const result = evaluateRunBoundary({
+      now: "2026-07-21T10:10:00.000Z",
+      previous: {
+        status: "weakly_progressing",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: null,
+        staleCandidateReason: null,
+      },
+      runState: makeRunState("executing"),
+      observedStrongProgress: false,
+      observedWeakProgress: false,
+      continuitySuspicion: [],
+    });
+
+    expect(result.status).toBe("no_progress");
+    expect(result.suspectReason).toBe("weak progress exhausted without strong progress");
+  });
+
+  it("routes to stale_candidate when continuity suspicion outranks generic no-progress", () => {
+    const result = evaluateRunBoundary({
+      now: "2026-07-21T10:10:00.000Z",
+      previous: {
+        status: "suspect",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: null,
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: null,
+      },
+      runState: makeRunState("executing"),
+      observedStrongProgress: false,
+      observedWeakProgress: false,
+      continuitySuspicion: ["state freshness mismatch"],
+    });
+
+    expect(result.status).toBe("stale_candidate");
+    expect(result.staleCandidateReason).toContain("state freshness mismatch");
+  });
+});
 
 describe("parseChangedPathsFromGitStatus", () => {
   it("returns destination paths for rename and copy porcelain -z records", () => {
@@ -852,6 +912,35 @@ describe("runLoop", () => {
     expect(seenEventsBeforeExecute).toEqual([["loop_planning", "attempt_started", "execute_started"]]);
   });
 
+  it("writes no_progress without a reconciliation record for a non-stale null execute result", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    await runLoop(contract, runDir, adapter);
+
+    const boundaryAnalysis = JSON.parse(
+      await readFile(join(runDir, "boundary-analysis.json"), "utf8"),
+    ) as { status: string; staleCandidateReason: string | null; suspectReason: string | null };
+
+    expect(boundaryAnalysis.status).toBe("no_progress");
+    expect(boundaryAnalysis.staleCandidateReason).toBeNull();
+    expect(boundaryAnalysis.suspectReason).toBe("weak progress exhausted without strong progress");
+    expect(await pathExists(join(runDir, "reconciliation-record.json"))).toBe(false);
+  });
+
   it("persists execution-recovery.json when execute is entered but returns no result before exhaustion", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
@@ -891,7 +980,7 @@ describe("runLoop", () => {
     expect(recovery.cleanupStatus).toBe("removed");
   });
 
-  it("persists execution-recovery.json when execute aborts by throwing after entry", async () => {
+  it("writes stale reconciliation conflicting evidence when execute aborts after changing files", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -929,6 +1018,16 @@ describe("runLoop", () => {
       failureBoundary: string;
       changedPathsObserved: string[] | null;
     };
+    const boundaryAnalysis = JSON.parse(
+      await readFile(join(runDir, "boundary-analysis.json"), "utf8"),
+    ) as { status: string; staleCandidateReason: string | null };
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as {
+      staleSuspicionBasis: string[];
+      conflictingEvidence: string[];
+      staleConfirmed: boolean;
+    };
 
     expect(finalState.status).toBe("exhausted");
     expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON);
@@ -937,6 +1036,12 @@ describe("runLoop", () => {
     expect(recovery.cleanupStatus).toBe("removed");
     expect(recovery.failureBoundary).toBe("runtime_exhausted");
     expect(recovery.changedPathsObserved).toContain("src/index.ts");
+    expect(boundaryAnalysis.status).toBe("stale_candidate");
+    expect(boundaryAnalysis.staleCandidateReason).toContain("src/index.ts");
+    expect(reconciliation.staleConfirmed).toBe(true);
+    expect(reconciliation.staleSuspicionBasis[0]).toContain("src/index.ts");
+    expect(reconciliation.conflictingEvidence.length).toBeGreaterThan(0);
+    expect(reconciliation.conflictingEvidence.join(" ")).toContain("src/index.ts");
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "loop_exhausted"]);
   });
 

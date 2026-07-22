@@ -99,6 +99,12 @@ Use the evidence collector's exact status vocabulary when reading `artifacts.jso
 
 `artifacts.json` also contains `requiredChecks.status`, which uses the same vocabulary.
 
+Boundary-layer operator notes:
+- `boundary-analysis.json` is a controller-owned run-level progress/stale analysis artifact.
+- `reconciliation-record.json` is a controller-owned stale-reconciliation audit artifact.
+- `stale-confirmed` does not itself authorize continuation; auto-takeover remains deny-by-default unless a later ownership/resume design explicitly proves the stronger conditions.
+- stale detection and reconciliation do not authorize cleanup or historical evidence rewrites.
+
 ## Verdict and Diagnosis Definitions
 
 `finalize-review.ts` accepts the following review values:

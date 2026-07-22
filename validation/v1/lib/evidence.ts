@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
-import type { ExecutionRecovery } from "../../../src/runtime/types.js";
+import type { ExecutionRecovery, ReconciliationRecord } from "../../../src/runtime/types.js";
+import type { RunBoundaryAnalysis } from "../../../src/state/types.js";
 import type { ScenarioDefinition } from "./scenarios.js";
 
 export type ArtifactStatus = "PRESENT" | "NOT_PRODUCED" | "NOT_RUN" | "MISSING" | "INVALID";
@@ -83,6 +84,18 @@ export type EvidenceRecord = {
     loopState: {
       status: "PRESENT" | "MISSING" | "INVALID";
       path: string;
+      error?: string;
+    };
+    boundaryAnalysis: {
+      status: "PRESENT" | "MISSING" | "INVALID";
+      path: string;
+      value?: RunBoundaryAnalysis;
+      error?: string;
+    };
+    reconciliationRecord: {
+      status: "PRESENT" | "MISSING" | "INVALID";
+      path: string;
+      value?: ReconciliationRecord;
       error?: string;
     };
     executionJson: {
@@ -202,6 +215,37 @@ const executionRecoverySchema = z
     failureBoundary: z.enum(["timeout", "token_exhausted", "runtime_exhausted"]),
   })
   .strict();
+
+const boundaryAnalysisSchema = z
+  .object({
+    status: z.enum(["healthy", "weakly_progressing", "suspect", "no_progress", "stale_candidate", "stale_confirmed"]),
+    strongProgressAt: z.string().nullable(),
+    weakProgressAt: z.string().nullable(),
+    suspectReason: z.string().nullable(),
+    staleCandidateReason: z.string().nullable(),
+  })
+  .strict();
+
+const reconciliationRecordSchema = z
+  .object({
+    staleSuspicionBasis: z.array(z.string()).min(1),
+    staleConfirmed: z.boolean(),
+    lastTrustedBoundary: z.enum(["planning", "execute", "verify", "terminal", "unknown"]),
+    conflictingEvidence: z.array(z.string()),
+    takeoverPermission: z
+      .object({
+        allowed: z.boolean(),
+        reason: z.string().trim().min(1),
+      })
+      .strict(),
+  })
+  .strict();
+
+function formatZodIssues(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => `${issue.path.length > 0 ? issue.path.join(".") : "(root)"}: ${issue.message}`)
+    .join("; ");
+}
 
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -349,6 +393,10 @@ function getExpectedArtifactStatus(
 
 function getAttemptArtifactPath(runDir: string, attemptNumber: number, fileName: string): string {
   return join(runDir, "attempts", String(attemptNumber), fileName);
+}
+
+function getBoundaryArtifactPath(runDir: string, fileName: string): string {
+  return join(runDir, fileName);
 }
 
 async function buildArtifactRecord(
@@ -603,10 +651,54 @@ function hasSufficientRecoverableExecuteEvidence(record: EvidenceRecord): boolea
   return hasCompleteExecutionJson(record) || record.executionRecovery.status === "PRESENT";
 }
 
-function formatZodIssues(error: z.ZodError): string {
-  return error.issues
-    .map((issue) => `${issue.path.length > 0 ? issue.path.join(".") : "(root)"}: ${issue.message}`)
-    .join("; ");
+function buildBoundaryAnalysisRecord(observation: JsonReadResult): EvidenceRecord["observations"]["boundaryAnalysis"] {
+  if (observation.observation.status !== "PRESENT") {
+    return {
+      status: observation.observation.status,
+      path: observation.observation.path,
+      error: observation.observation.error,
+    };
+  }
+
+  const parsed = boundaryAnalysisSchema.safeParse(observation.value);
+  if (!parsed.success) {
+    return {
+      status: "INVALID",
+      path: observation.observation.path,
+      error: `boundary-analysis.json shape invalid: ${formatZodIssues(parsed.error)}`,
+    };
+  }
+
+  return {
+    status: "PRESENT",
+    path: observation.observation.path,
+    value: parsed.data as RunBoundaryAnalysis,
+  };
+}
+
+function buildReconciliationRecord(observation: JsonReadResult): EvidenceRecord["observations"]["reconciliationRecord"] {
+  if (observation.observation.status !== "PRESENT") {
+    return {
+      status: observation.observation.status,
+      path: observation.observation.path,
+      error: observation.observation.error,
+    };
+  }
+
+  const parsed = reconciliationRecordSchema.safeParse(observation.value);
+  if (!parsed.success) {
+    return {
+      status: "INVALID",
+      path: observation.observation.path,
+      error: `reconciliation-record.json shape invalid: ${formatZodIssues(parsed.error)}`,
+    };
+  }
+
+  return {
+    status: "PRESENT",
+    path: observation.observation.path,
+    value: parsed.data as ReconciliationRecord,
+  };
 }
 
 function buildExecutionRecoveryRecord(observation: JsonReadResult): EvidenceRecord["executionRecovery"] {
@@ -739,9 +831,11 @@ export async function collectEvidence(input: EvidenceInput): Promise<EvidenceRec
   await mkdir(input.evidenceDir, { recursive: true });
   const runDirRoot = await resolveRunDirRoot(input.runDir);
 
-  const [loopContract, loopState, events, git] = await Promise.all([
+  const [loopContract, loopState, boundaryAnalysisObservation, reconciliationRecordObservation, events, git] = await Promise.all([
     readJsonObservation(runDirRoot, join(input.runDir, "loop-contract.json")),
     readJsonObservation(runDirRoot, join(input.runDir, "loop-state.json")),
+    readJsonObservation(runDirRoot, getBoundaryArtifactPath(input.runDir, "boundary-analysis.json")),
+    readJsonObservation(runDirRoot, getBoundaryArtifactPath(input.runDir, "reconciliation-record.json")),
     readEventsObservation(runDirRoot, join(input.runDir, "events.jsonl")),
     collectGitObservation(input.git),
   ]);
@@ -755,6 +849,8 @@ export async function collectEvidence(input: EvidenceInput): Promise<EvidenceRec
     readJsonObservation(runDirRoot, getAttemptArtifactPath(input.runDir, attemptNumber, "execution-recovery.json")),
   ]);
 
+  const boundaryAnalysis = buildBoundaryAnalysisRecord(boundaryAnalysisObservation);
+  const reconciliationRecord = buildReconciliationRecord(reconciliationRecordObservation);
   const requiredChecks = buildRequiredChecksRecord(input.scenario, verifyObservation, readDeclaredRequiredChecks(loopContract.value));
   const cleanupOutcome = await getCleanupOutcome(input.runDir, attemptNumber, events.entries);
 
@@ -777,6 +873,8 @@ export async function collectEvidence(input: EvidenceInput): Promise<EvidenceRec
     observations: {
       loopContract: loopContract.observation,
       loopState: loopState.observation,
+      boundaryAnalysis,
+      reconciliationRecord,
       executionJson: executionJson.observation,
       events: events.observation,
       terminalOutcome: {

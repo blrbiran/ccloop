@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { initializeRunFiles, appendEvent, writeAttemptArtifacts, writeRunState } from "../../src/persistence/fileStore.js";
+import { initializeRunFiles, appendEvent, writeAttemptArtifacts, writeBoundaryArtifacts, writeRunState } from "../../src/persistence/fileStore.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import type { RunState } from "../../src/state/types.js";
 
@@ -50,6 +50,41 @@ describe("fileStore", () => {
 
     expect(contents.executeEntered).toBe(true);
     expect(contents.failureBoundary).toBe("token_exhausted");
+  });
+
+  it("writes boundary-analysis and reconciliation records when present", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis: {
+        status: "stale_confirmed",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: "continuity evidence missing",
+      },
+      reconciliationRecord: {
+        staleSuspicionBasis: ["healthy window exceeded", "state freshness mismatch"],
+        staleConfirmed: true,
+        lastTrustedBoundary: "execute",
+        conflictingEvidence: [],
+        takeoverPermission: {
+          allowed: false,
+          reason: "ownership not yet mechanically proven",
+        },
+      },
+    });
+
+    const analysis = JSON.parse(
+      await readFile(join(runDir, "boundary-analysis.json"), "utf8"),
+    ) as { status: string };
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as { staleConfirmed: boolean; takeoverPermission: { allowed: boolean } };
+
+    expect(analysis.status).toBe("stale_confirmed");
+    expect(reconciliation.staleConfirmed).toBe(true);
+    expect(reconciliation.takeoverPermission.allowed).toBe(false);
   });
 
   it("writes contract, state, events, and attempt artifacts", async () => {

@@ -32,6 +32,31 @@ export type RunState = {
   recentFailures: FailureFingerprint[];
 };
 
+export type RunBoundaryStatus =
+  | "healthy"
+  | "weakly_progressing"
+  | "suspect"
+  | "no_progress"
+  | "stale_candidate"
+  | "stale_confirmed";
+
+export type RunBoundaryAnalysis = {
+  status: RunBoundaryStatus;
+  strongProgressAt: string | null;
+  weakProgressAt: string | null;
+  suspectReason: string | null;
+  staleCandidateReason: string | null;
+};
+
+export type BoundaryEvaluationInput = {
+  now: string;
+  previous: RunBoundaryAnalysis | null;
+  runState: RunState;
+  observedStrongProgress: boolean;
+  observedWeakProgress: boolean;
+  continuitySuspicion: string[];
+};
+
 export type StopDecision = {
   kind: "retryable" | "succeeded" | "blocked_waiting_human" | "exhausted" | "cancelled" | "failed";
   reason: string;

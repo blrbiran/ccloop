@@ -319,5 +319,112 @@
     "related_bugs": [],
     "occurrences": 1,
     "last_seen": "2026-07-21T13:14:00Z"
+  },
+  {
+    "id": "bug-018",
+    "timestamp": "2026-07-21T16:34:07Z",
+    "error_message": "TypeError: writeBoundaryArtifacts is not a function",
+    "file": "src/persistence/fileStore.ts",
+    "root_cause": "Task 1 introduced the persistence regression test before the boundary artifact helper existed, so the new RED-phase test imported an undefined symbol.",
+    "fix": "Added writeBoundaryArtifacts() together with the new boundary analysis and reconciliation record types so the expected JSON artifacts are persisted.",
+    "tags": [
+      "task-1",
+      "persistence",
+      "boundary-analysis",
+      "reconciliation-record",
+      "tdd"
+    ],
+    "related_bugs": [
+      "bug-001",
+      "bug-002"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-21T16:34:07Z"
+  },
+  {
+    "id": "bug-019",
+    "timestamp": "2026-07-21T18:08:00Z",
+    "error_message": "Task 3 controller initially missed boundary-analysis/reconciliation persistence when execute() returned null without timing out",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "The first Task 3 wiring only covered the timed-out null-result execute branch, but the new integration test exercised the separate direct null-result guard after a non-timeout execute return.",
+    "fix": "Introduced persistBoundaryAnalysis() and invoked it in both the timed-out null-result branch and the direct execution===null guard.",
+    "tags": [
+      "task-3",
+      "controller",
+      "boundary-analysis",
+      "reconciliation-record",
+      "execute-null",
+      "tdd"
+    ],
+    "related_bugs": [
+      "bug-005",
+      "bug-006"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-21T18:08:00Z"
+  },
+  {
+    "id": "bug-020",
+    "timestamp": "2026-07-21T18:48:00Z",
+    "error_message": "Cannot read properties of undefined (reading 'status') for observations.reconciliationRecord in tests/validation/evidence.test.ts",
+    "file": "validation/v1/lib/evidence.ts",
+    "root_cause": "The evidence layer did not read or schema-validate controller-owned boundary-analysis.json and reconciliation-record.json, so the new observation field was absent and malformed reconciliation artifacts could not be surfaced as INVALID.",
+    "fix": "Added boundary-analysis and reconciliation-record observations in collectEvidence, validated both JSON shapes with zod, and recorded malformed reconciliation records as INVALID instead of trusted data.",
+    "tags": [
+      "task-4",
+      "validation",
+      "boundary-analysis",
+      "reconciliation-record",
+      "tdd"
+    ],
+    "related_bugs": [
+      "bug-018",
+      "bug-019"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-21T18:48:00Z"
+  },
+  {
+    "id": "bug-021",
+    "timestamp": "2026-07-22T13:04:44Z",
+    "error_message": "validation/v1/README.md and docs/handover/ccloop-handover.md did not describe boundary-analysis.json, reconciliation-record.json, deny-by-default auto-takeover, or cleanup/evidence-rewrite limits for stale-confirmed runs",
+    "file": "validation/v1/README.md",
+    "root_cause": "Operator-facing docs were still aligned to earlier D-boundary guidance and had not been updated for the new run-level boundary-analysis and stale-reconciliation artifacts or their deny-by-default limits.",
+    "fix": "Added concise operator-facing boundary artifact and stale-limit guidance to validation/v1/README.md and docs/handover/ccloop-handover.md without implying scheduler, resume, cleanup, or unattended execution support.",
+    "tags": [
+      "task-5",
+      "docs",
+      "boundary-analysis",
+      "reconciliation-record",
+      "handover",
+      "operator-guidance"
+    ],
+    "related_bugs": [
+      "bug-017",
+      "bug-020"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T13:04:44Z"
+  },
+  {
+    "id": "bug-022",
+    "timestamp": "2026-07-22T13:09:34Z",
+    "error_message": "npm test failed with spawn /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ae841ac651a4c4076/node_modules/.bin/tsx ENOENT during Task 5 full verification",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "The isolated Task 5 worktree did not yet have a local node_modules/.bin/tsx binary, so run-scenario CLI tests that spawn the worktree-local tsx executable failed before exercising product behavior.",
+    "fix": "Ran npm ci in the worktree to restore local dependencies and the tsx binary, then reran full verification successfully.",
+    "tags": [
+      "task-5",
+      "verification",
+      "validation",
+      "environment",
+      "node_modules",
+      "tsx"
+    ],
+    "related_bugs": [
+      "bug-003"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T13:09:34Z"
   }
 ]
