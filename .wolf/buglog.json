@@ -512,5 +512,25 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-22T17:24:59Z"
+  },
+  {
+    "id": "bug-027",
+    "timestamp": "2026-07-22T18:00:14Z",
+    "error_message": "Task 2 ownership evaluation let supporting continuity evidence return OWNER_VALID even when persisted owner truth no longer supported the owner, and ignored explicit owner record supersede/loss fields as direct truth.",
+    "file": "src/ownership/ownerController.ts",
+    "root_cause": "evaluateOwnership() checked Layer B continuity before controller-owned persisted truth and only used knownSupersedingEpoch/persistedOwnerStillSupported as indirect proxies, so contradictory evidence could override Layer A and the persisted owner record was not acting as the source of truth.",
+    "fix": "Reordered evaluateOwnership() to respect ownerRecord.supersededByEpoch and ownerRecord.ownerStatus before supporting evidence, treated unconfirmed external supersede claims and persisted-truth-versus-supporting-evidence contradictions as OWNER_UNDECIDABLE, and added focused regressions for contradictory support, persisted-only supersede, and persisted lost-status conflicts.",
+    "tags": [
+      "task-2",
+      "ownership",
+      "reviewer-fix",
+      "persisted-truth",
+      "deny-by-default"
+    ],
+    "related_bugs": [
+      "bug-025"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T18:00:14Z"
   }
 ]

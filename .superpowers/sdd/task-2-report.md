@@ -97,3 +97,30 @@ Tests 4 passed (4)
 
 ## Concerns
 - Full-suite success required a local `npm ci` because this isolated worktree initially lacked `node_modules/.bin/tsx`. After restoring dependencies, the suite passed cleanly.
+
+## Reviewer fix — persisted ownership truth precedence
+- Updated `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a6ad7c880d542af0f/src/ownership/ownerController.ts` so `evaluateOwnership()` now treats controller-owned persisted owner truth as authoritative before any Layer B continuity support.
+- `ownerRecord.supersededByEpoch` now directly drives `OWNER_SUPERSEDED`, and conflicting supersede claims resolve deny-by-default to `OWNER_UNDECIDABLE` instead of trusting non-persisted evidence.
+- `ownerRecord.ownerStatus` is now read directly:
+  - `"unknown"` yields `OWNER_UNDECIDABLE`;
+  - `"lost"` can yield `OWNER_LOST` only when persisted support and supporting continuity evidence do not contradict that record and the last trusted boundary is known;
+  - contradictory persisted truth vs supporting evidence now resolves to `OWNER_UNDECIDABLE` rather than `OWNER_VALID`.
+- Unconfirmed `knownSupersedingEpoch` claims no longer override a persisted current owner record; without persisted supersede confirmation, the function denies by default with `OWNER_UNDECIDABLE`.
+- `applyOwnerEpochTransfer()` remains pure transfer-only logic and was not broadened beyond epoch rotation plus transfer-record emission.
+
+## Reviewer-fix test evidence
+Command:
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/ownership/ownerController.test.ts`
+
+Result:
+- Passed.
+- Relevant output:
+  - `✓ tests/ownership/ownerController.test.ts (8 tests)`
+  - `Tests 8 passed (8)`
+
+## Reviewer-fix regressions added
+- contradictory persisted-truth-vs-supporting-evidence case does not return `OWNER_VALID`
+- persisted owner record alone indicating supersede returns `OWNER_SUPERSEDED`
+- unconfirmed external superseding claim without persisted confirmation returns `OWNER_UNDECIDABLE`
+- persisted lost-status plus supporting continuity contradiction returns `OWNER_UNDECIDABLE`
+- existing owner-loss and atomic transfer coverage remains green
