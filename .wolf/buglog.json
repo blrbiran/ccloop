@@ -383,5 +383,48 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-21T18:48:00Z"
+  },
+  {
+    "id": "bug-021",
+    "timestamp": "2026-07-22T13:04:44Z",
+    "error_message": "validation/v1/README.md and docs/handover/ccloop-handover.md did not describe boundary-analysis.json, reconciliation-record.json, deny-by-default auto-takeover, or cleanup/evidence-rewrite limits for stale-confirmed runs",
+    "file": "validation/v1/README.md",
+    "root_cause": "Operator-facing docs were still aligned to earlier D-boundary guidance and had not been updated for the new run-level boundary-analysis and stale-reconciliation artifacts or their deny-by-default limits.",
+    "fix": "Added concise operator-facing boundary artifact and stale-limit guidance to validation/v1/README.md and docs/handover/ccloop-handover.md without implying scheduler, resume, cleanup, or unattended execution support.",
+    "tags": [
+      "task-5",
+      "docs",
+      "boundary-analysis",
+      "reconciliation-record",
+      "handover",
+      "operator-guidance"
+    ],
+    "related_bugs": [
+      "bug-017",
+      "bug-020"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T13:04:44Z"
+  },
+  {
+    "id": "bug-022",
+    "timestamp": "2026-07-22T13:09:34Z",
+    "error_message": "npm test failed with spawn /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ae841ac651a4c4076/node_modules/.bin/tsx ENOENT during Task 5 full verification",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "The isolated Task 5 worktree did not yet have a local node_modules/.bin/tsx binary, so run-scenario CLI tests that spawn the worktree-local tsx executable failed before exercising product behavior.",
+    "fix": "Ran npm ci in the worktree to restore local dependencies and the tsx binary, then reran full verification successfully.",
+    "tags": [
+      "task-5",
+      "verification",
+      "validation",
+      "environment",
+      "node_modules",
+      "tsx"
+    ],
+    "related_bugs": [
+      "bug-003"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T13:09:34Z"
   }
 ]

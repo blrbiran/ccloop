@@ -38,6 +38,10 @@
 - The D-boundary implementation is already on `main`: `execute_started`, controller-owned `execution-recovery.json`, Layer A contradiction handling, terminal-attempt evidence-path resolution, and separate `review-reclassified.json` output all landed before this docs pass.
 - `validation/v1/scripts/run-scenario.ts` now canonicalizes the invoked script path, which closes the macOS `/var` vs `/private/var` zero-exit / no-artifact bug.
 - Validation-sensitive commands should default to `ECC_GATEGUARD=off` and `DISABLE_OMC=1`; if OMC still interferes, temporarily disable the plugin or use `claude --bare`.
+- `boundary-analysis.json` is a controller-owned run-level progress/stale analysis artifact.
+- `reconciliation-record.json` is a controller-owned stale-reconciliation audit artifact.
+- `stale-confirmed` does not itself authorize continuation; auto-takeover remains deny-by-default unless a later ownership/resume design explicitly proves the stronger conditions.
+- stale detection and reconciliation do not authorize cleanup or historical evidence rewrites.
 
 ## Governing Boundaries That Still Matter
 
