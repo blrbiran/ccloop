@@ -1,54 +1,67 @@
-# Task 3 Report — Persist reconciliation records and deny-by-default takeover gating in the controller
+# Task 3 Report — Wire owner-record initialization and strict reconciliation verdicts into the controller
 
 ## What I implemented
-- Added the missing boundary-layer types in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/src/state/types.ts` and `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/src/runtime/types.ts` so this isolated worktree can represent `RunBoundaryAnalysis`, `BoundaryEvaluationInput`, `TakeoverPermission`, and `ReconciliationRecord`.
-- Added `evaluateRunBoundary(...)` to `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/src/stop/stopController.ts` using the task-brief routing and exact stale-candidate reason behavior.
-- Added `writeBoundaryArtifacts(...)` to `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/src/persistence/fileStore.ts` to persist `boundary-analysis.json` and optional `reconciliation-record.json`.
-- Updated `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/src/controller/runLoop.ts` to write controller-owned stale reconciliation artifacts on the execute-entered/null-result stale path, with:
-  - `continuitySuspicion: ["execution continuity not trustworthy"]`
-  - `staleConfirmed: true`
-  - `lastTrustedBoundary: "execute"`
-  - `takeoverPermission.allowed: false`
-  - `takeoverPermission.reason: "deny-by-default until stronger mechanical takeover conditions exist"`
-- Added the focused controller regression in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/tests/controller/runLoop.integration.test.ts` to assert the reconciliation record exists and is deny-by-default.
+- Initialized `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ab72c7a2627895357/owner-record.json` at run start from controller-owned state in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ab72c7a2627895357/src/controller/runLoop.ts`.
+- Wired stale reconciliation in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ab72c7a2627895357/src/controller/runLoop.ts` through `evaluateOwnership(...)` from `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ab72c7a2627895357/src/ownership/ownerController.ts` instead of hard-coded placeholder ownership fields.
+- Persisted strict reconciliation fields on stale paths:
+  - `ownershipVerdict`
+  - `priorOwnerEpoch`
+  - `newOwnerEpoch`
+  - `eligibleForContinuation`
+- Kept scope read-first and deny-by-default:
+  - no owner transfer
+  - no resume/continuation behavior
+  - no scheduler/daemon behavior
+- Added focused controller integration coverage in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ab72c7a2627895357/tests/controller/runLoop.integration.test.ts` for:
+  - owner-record initialization
+  - `OWNER_UNDECIDABLE` on stale execute interruption with changed-path continuity evidence
+  - deterministic `OWNER_LOST` on stale execute interruption with no changed paths and no rescuing continuity evidence
 
 ## What I tested and results
-### RED
+### Focused RED
 Command:
 - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/controller/runLoop.integration.test.ts`
 
 Result:
-- Failed as expected with `ENOENT: no such file or directory, open '.../reconciliation-record.json'` in the new Task 3 integration test.
+- Failed as expected.
+- Relevant failures included:
+  - `ENOENT ... owner-record.json`
+  - `expected null to be 1` for `priorOwnerEpoch`
+  - `ENOENT ... reconciliation-record.json`
 
-### GREEN
+### Focused GREEN
 Command:
 - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/controller/runLoop.integration.test.ts`
 
 Result:
-- Passed: `Test Files  1 passed (1)` and `Tests  36 passed (36)`.
+- Passed: `Test Files  1 passed (1)` and `Tests  41 passed (41)`.
+
+### Full suite
+Commands:
+- `npm ci`
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm test`
+
+Result:
+- After restoring the missing local `node_modules/.bin/tsx` via `npm ci`, the full suite passed.
+- Final result: `Test Files  15 passed (15)` and `Tests  215 passed (215)`.
 
 ## TDD evidence
-- RED: the new controller integration test failed before implementation because `reconciliation-record.json` was not written.
-- GREEN: after wiring boundary evaluation and persistence into the controller stale path, the focused controller test file passed.
+- RED: the new controller tests failed before implementation because the controller did not initialize `owner-record.json` and stale reconciliation did not yet persist strict ownership verdict metadata.
+- GREEN: after wiring owner-record initialization and ownership evaluation into stale reconciliation, the focused controller integration suite passed unchanged.
 
 ## Files changed
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/src/controller/runLoop.ts`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/src/persistence/fileStore.ts`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/src/runtime/types.ts`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/src/state/types.ts`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/src/stop/stopController.ts`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/tests/controller/runLoop.integration.test.ts`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/.superpowers/sdd/task-3-report.md`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/.wolf/anatomy.md`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/.wolf/cerebrum.md`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/.wolf/memory.md`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a191b0f378c241cf2/.wolf/buglog.json`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ab72c7a2627895357/src/controller/runLoop.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ab72c7a2627895357/tests/controller/runLoop.integration.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ab72c7a2627895357/.wolf/buglog.json`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ab72c7a2627895357/.superpowers/sdd/task-3-report.md`
 
 ## Self-review findings
-- The controller change is surgical: it only adds stale reconciliation persistence on the execute-null stale path and does not add scheduler, resume/adopt, ownership, fencing, lease, heartbeat, cleanup policy, or paid Claude behavior.
-- Accepted historical evidence boundaries are preserved because this task only writes new controller-owned artifacts; it does not rewrite historical review/evidence files.
-- In this isolated worktree, Task 1 and Task 2 prerequisites were not present, so I had to add the minimal type/helper/persistence pieces locally before the controller wiring could compile and pass the requested test.
-- The implementation currently writes stale reconciliation artifacts for execute-null stale handling, which matches the new focused controller test and the task brief’s minimal example.
+- The controller change stayed surgical: only the run-start owner-record write and stale reconciliation wiring changed.
+- Ownership truth remains controller-owned and explicit; process/worktree observations are still only supporting evidence.
+- `OWNER_UNDECIDABLE` remains deny-by-default when changed-path continuity evidence exists.
+- `OWNER_LOST` is only emitted on the deterministic stale path where continuity observation completed and found no changed paths or rescuing evidence.
+- `eligibleForContinuation` is persisted as `false` everywhere in this task, so no transfer or resume behavior leaked in.
 
-## Issues or concerns
-- Concern: the isolated Task 3 worktree was missing the expected prerequisite Task 1/2 symbols, so the final diff is broader than the ideal brief-only three-file change. The added prerequisite pieces are still minimal and directly required for this worktree to build and test.
+## Concerns
+- No product-scope concerns.
+- Verification required one environment repair (`npm ci`) because the worktree initially lacked a local `tsx` binary for validation CLI tests; this was resolved before the final full-suite run.

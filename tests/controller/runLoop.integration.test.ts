@@ -1045,6 +1045,139 @@ describe("runLoop", () => {
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "loop_exhausted"]);
   });
 
+  it("writes owner-record.json when a run is initialized", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+
+    const adapter = new ScriptedAdapter([
+      {
+        plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+        execution: {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        },
+        verification: {
+          approved: true,
+          rejectCategory: "",
+          primaryTargetPaths: ["src/index.ts"],
+          failingCommand: null,
+          safeToRetry: false,
+          evidence: ["pass"],
+          pauseSignals: [],
+          stopSignals: [],
+        },
+      },
+    ]);
+
+    await runLoop(contract, runDir, adapter);
+
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+      currentOwnerEpoch: number;
+      ownerStatus: string;
+    };
+
+    expect(owner.currentOwnerEpoch).toBe(1);
+    expect(owner.ownerStatus).toBe("current");
+  });
+
+  it("writes an OWNER_UNDECIDABLE reconciliation record on a stale path without granting continuation", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 2;\n");
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    await runLoop(contract, runDir, adapter);
+
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as {
+      ownershipVerdict: string;
+      priorOwnerEpoch: number | null;
+      newOwnerEpoch: number | null;
+      eligibleForContinuation: boolean;
+      takeoverPermission: { allowed: boolean };
+    };
+
+    expect(reconciliation.ownershipVerdict).toBe("OWNER_UNDECIDABLE");
+    expect(reconciliation.priorOwnerEpoch).toBe(1);
+    expect(reconciliation.newOwnerEpoch).toBeNull();
+    expect(reconciliation.eligibleForContinuation).toBe(false);
+    expect(reconciliation.takeoverPermission.allowed).toBe(false);
+  });
+
+  it("writes an OWNER_LOST reconciliation record only when persisted owner support is absent and continuity evidence does not rescue it", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 3;\n");
+        await execFileAsync("git", ["checkout", "--", "src/index.ts"], { cwd: context.worktreePath });
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    await runLoop(contract, runDir, adapter);
+
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as {
+      ownershipVerdict: string;
+      priorOwnerEpoch: number | null;
+      newOwnerEpoch: number | null;
+      eligibleForContinuation: boolean;
+      takeoverPermission: { allowed: boolean };
+    };
+
+    expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
+    expect(reconciliation.priorOwnerEpoch).toBe(1);
+    expect(reconciliation.newOwnerEpoch).toBeNull();
+    expect(reconciliation.eligibleForContinuation).toBe(false);
+    expect(reconciliation.takeoverPermission.allowed).toBe(true);
+  });
+
   it("records retained cleanupStatus in execution recovery when cleanup fails", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));

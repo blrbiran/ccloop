@@ -532,5 +532,71 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-22T18:00:14Z"
+  },
+  {
+    "id": "bug-028",
+    "timestamp": "2026-07-22T23:40:26Z",
+    "error_message": "Task 3 controller integration tests failed because owner-record.json was never initialized and stale reconciliation records did not carry strict ownership verdict fields or a deterministic OWNER_LOST path.",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "runLoop initialized only loop state/events and the stale reconciliation path still hard-coded a deny-only placeholder record, so controller-owned ownership truth was never persisted at run start and stale reconciliation never delegated verdict calculation to evaluateOwnership().",
+    "fix": "Initialized owner-record.json at run start, passed the persisted owner record into stale reconciliation, evaluated strict ownership verdicts from controller-owned evidence, persisted ownershipVerdict/priorOwnerEpoch/newOwnerEpoch/eligibleForContinuation, and added controller integration coverage for owner-record initialization plus OWNER_UNDECIDABLE versus OWNER_LOST stale paths.",
+    "tags": [
+      "task-3",
+      "controller",
+      "ownership",
+      "reconciliation",
+      "tdd"
+    ],
+    "related_bugs": [
+      "bug-023",
+      "bug-025",
+      "bug-027"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T23:40:26Z"
+  },
+  {
+    "id": "bug-029",
+    "timestamp": "2026-07-22T23:40:26Z",
+    "error_message": "Transform failed with ERROR: The symbol \"inferPersistedOwnerStillSupported\" has already been declared in src/controller/runLoop.ts",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "An intermediate Task 3 edit added a second helper with the same name instead of replacing the earlier placeholder, so esbuild stopped before the focused controller suite could run.",
+    "fix": "Removed the stale duplicate helper declaration and reran the focused controller integration suite to confirm the controller wiring compiled and passed.",
+    "tags": [
+      "task-3",
+      "controller",
+      "syntax",
+      "esbuild",
+      "duplicate-declaration"
+    ],
+    "related_bugs": [
+      "bug-028"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T23:40:26Z"
+  },
+  {
+    "id": "bug-030",
+    "timestamp": "2026-07-22T23:40:26Z",
+    "error_message": "npm test failed with spawn /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ab72c7a2627895357/node_modules/.bin/tsx ENOENT during Task 3 full verification",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "The current Task 3 worktree had no local node_modules/.bin/tsx binary, so validation CLI tests that spawn the worktree-local tsx executable failed before reaching product logic.",
+    "fix": "Ran npm ci in the current worktree to restore local dependencies and the tsx binary, then reran the full Vitest suite successfully.",
+    "tags": [
+      "task-3",
+      "verification",
+      "validation",
+      "environment",
+      "node_modules",
+      "tsx"
+    ],
+    "related_bugs": [
+      "bug-003",
+      "bug-022",
+      "bug-024",
+      "bug-026"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T23:40:26Z"
   }
 ]

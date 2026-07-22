@@ -1,20 +1,29 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { appendEvent, initializeRunFiles, writeAttemptArtifacts, writeBoundaryArtifacts, writeRunState } from "../persistence/fileStore.js";
+import {
+  appendEvent,
+  initializeRunFiles,
+  writeAttemptArtifacts,
+  writeBoundaryArtifacts,
+  writeOwnerRecord,
+  writeRunState,
+} from "../persistence/fileStore.js";
 import { evaluatePathPolicy } from "../policy/pathPolicy.js";
 import { evaluateRunBoundary, evaluateStopDecision } from "../stop/stopController.js";
 import { transitionRunState } from "../state/stateMachine.js";
 import type { LoopContract } from "../contract/schema.js";
+import { evaluateOwnership } from "../ownership/ownerController.js";
 import type {
   AttemptContext,
   AttemptPlan,
   ExecutionRecovery,
   ExecutionResult,
+  OwnerRecord,
   RuntimeAdapter,
   VerificationResult,
 } from "../runtime/types.js";
 import { isPartialExecutionResult } from "../runtime/types.js";
-import type { FailureFingerprint, RunState, StopDecision } from "../state/types.js";
+import type { FailureFingerprint, LastTrustedBoundary, RunState, StopDecision } from "../state/types.js";
 import { cleanupAttemptWorkspace, createAttemptWorkspace } from "../workspace/worktreeManager.js";
 
 export type { AttemptContext } from "../runtime/types.js";
@@ -480,39 +489,97 @@ function buildExecutionRecovery(
 function buildBoundaryEvidence(executionRecovery: ExecutionRecovery | null): {
   continuitySuspicion: string[];
   conflictingEvidence: string[];
+  currentProcessStillTrusted: boolean;
+  supportingContinuityEvidence: string[];
+  lastTrustedBoundary: LastTrustedBoundary;
+  continuityObservationComplete: boolean;
 } {
   if (executionRecovery === null) {
     return {
       continuitySuspicion: [],
       conflictingEvidence: [],
+      currentProcessStillTrusted: false,
+      supportingContinuityEvidence: [],
+      lastTrustedBoundary: "execute",
+      continuityObservationComplete: false,
     };
   }
 
   if (executionRecovery.changedPathsObserved !== null && executionRecovery.changedPathsObserved.length > 0) {
     const changedPathsSummary = executionRecovery.changedPathsObserved.join(", ");
+    const changedPathsEvidence = `changed paths observed after interrupted execute: ${changedPathsSummary}`;
     return {
       continuitySuspicion: [`interrupted execute left changed paths in the attempt worktree: ${changedPathsSummary}`],
       conflictingEvidence: [
-        `changed paths observed after interrupted execute: ${changedPathsSummary}`,
+        changedPathsEvidence,
         `execution recovery captured ${executionRecovery.failureBoundary} with cleanup ${executionRecovery.cleanupStatus}`,
       ],
+      currentProcessStillTrusted: false,
+      supportingContinuityEvidence: [changedPathsEvidence],
+      lastTrustedBoundary: "execute",
+      continuityObservationComplete: true,
     };
   }
 
   if (executionRecovery.worktreeDiffObserved === true) {
+    const worktreeDiffEvidence = "worktree differences observed after interrupted execute";
     return {
       continuitySuspicion: ["interrupted execute left worktree differences in the attempt worktree"],
       conflictingEvidence: [
-        "worktree differences observed after interrupted execute",
+        worktreeDiffEvidence,
         `execution recovery captured ${executionRecovery.failureBoundary} with cleanup ${executionRecovery.cleanupStatus}`,
       ],
+      currentProcessStillTrusted: false,
+      supportingContinuityEvidence: [worktreeDiffEvidence],
+      lastTrustedBoundary: "execute",
+      continuityObservationComplete: true,
+    };
+  }
+
+  if (executionRecovery.changedPathsObserved === null) {
+    return {
+      continuitySuspicion: ["interrupted execute could not be mechanically reconciled because changed-path observation failed"],
+      conflictingEvidence: ["changed-path observation failed after interrupted execute"],
+      currentProcessStillTrusted: false,
+      supportingContinuityEvidence: [],
+      lastTrustedBoundary: "execute",
+      continuityObservationComplete: false,
     };
   }
 
   return {
-    continuitySuspicion: [],
+    continuitySuspicion: ["interrupted execute exhausted without changed paths or continuity evidence"],
     conflictingEvidence: [],
+    currentProcessStillTrusted: false,
+    supportingContinuityEvidence: [],
+    lastTrustedBoundary: "execute",
+    continuityObservationComplete: true,
   };
+}
+
+function inferPersistedOwnerStillSupported(
+  boundaryEvidence: ReturnType<typeof buildBoundaryEvidence>,
+  _boundaryAnalysis: ReturnType<typeof evaluateRunBoundary>,
+): boolean {
+  return !boundaryEvidence.continuityObservationComplete;
+}
+
+function buildInitialOwnerRecord(contract: LoopContract, state: RunState): OwnerRecord {
+  return {
+    runId: contract.objective.taskId,
+    logicalSessionId: `${contract.objective.taskId}:${state.lastTransitionAt}`,
+    currentOwnerEpoch: 1,
+    currentProcessInstanceId: `pid:${process.pid}`,
+    lastAffirmedAt: state.lastTransitionAt,
+    ownerStatus: "current",
+    supersededByEpoch: null,
+  };
+}
+
+function buildTakeoverReason(allowed: boolean): string {
+  return allowed
+    ? "strict owner-loss conditions satisfied; continuation still requires a later transfer step"
+    : "deny-by-default until strict owner-loss and transfer conditions are fully met";
 }
 
 async function writeCompletedAttemptArtifacts(
@@ -538,6 +605,7 @@ async function writeCompletedAttemptArtifacts(
 async function persistBoundaryAnalysis(
   runDir: string,
   state: RunState,
+  ownerRecord: OwnerRecord,
   executionRecovery?: ExecutionRecovery,
 ): Promise<void> {
   const boundaryEvidence = buildBoundaryEvidence(executionRecovery ?? null);
@@ -554,6 +622,17 @@ async function persistBoundaryAnalysis(
     return;
   }
 
+  const persistedOwnerStillSupported = inferPersistedOwnerStillSupported(boundaryEvidence, boundaryAnalysis);
+  const ownership = evaluateOwnership({
+    ownerRecord,
+    persistedOwnerStillSupported,
+    boundaryAnalysis,
+    currentProcessStillTrusted: boundaryEvidence.currentProcessStillTrusted,
+    supportingContinuityEvidence: boundaryEvidence.supportingContinuityEvidence,
+    knownSupersedingEpoch: null,
+    lastTrustedBoundary: boundaryEvidence.lastTrustedBoundary,
+  });
+
   await writeBoundaryArtifacts(runDir, {
     boundaryAnalysis,
     reconciliationRecord:
@@ -564,14 +643,14 @@ async function persistBoundaryAnalysis(
                 ? boundaryEvidence.continuitySuspicion
                 : [boundaryAnalysis.staleCandidateReason ?? "unknown stale suspicion"],
             staleConfirmed: true,
-            ownershipVerdict: "OWNER_UNDECIDABLE",
-            lastTrustedBoundary: "execute",
+            ownershipVerdict: ownership.verdict,
+            lastTrustedBoundary: ownership.lastTrustedBoundary,
             conflictingEvidence: boundaryEvidence.conflictingEvidence,
             takeoverPermission: {
-              allowed: false,
-              reason: "deny-by-default until stronger mechanical takeover conditions exist",
+              allowed: ownership.takeoverAllowed,
+              reason: buildTakeoverReason(ownership.takeoverAllowed),
             },
-            priorOwnerEpoch: null,
+            priorOwnerEpoch: ownerRecord.currentOwnerEpoch,
             newOwnerEpoch: null,
             eligibleForContinuation: false,
           }
@@ -593,7 +672,9 @@ async function persistTerminalState(
 
 export async function runLoop(contract: LoopContract, runDir: string, adapter: RuntimeAdapter): Promise<RunState> {
   let state = transitionRunState(initialState(contract), "planning");
+  const ownerRecord = buildInitialOwnerRecord(contract, state);
   await initializeRunFiles(runDir, contract, state);
+  await writeOwnerRecord(runDir, ownerRecord);
   await appendTransitionEvent(runDir, state, "loop_planning", "run initialized and ready to plan");
 
   while (true) {
@@ -703,7 +784,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
             plan,
             executionRecovery,
           });
-          await persistBoundaryAnalysis(runDir, state, executionRecovery);
+          await persistBoundaryAnalysis(runDir, state, ownerRecord, executionRecovery);
           state = await persistTerminalState(
             runDir,
             state,
@@ -734,7 +815,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       }
 
       if (execution === null) {
-        await persistBoundaryAnalysis(runDir, state);
+        await persistBoundaryAnalysis(runDir, state, ownerRecord);
         throw new Error("execute phase completed without a result");
       }
 
