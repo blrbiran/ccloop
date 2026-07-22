@@ -469,5 +469,48 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-22T16:59:09Z"
+  },
+  {
+    "id": "bug-025",
+    "timestamp": "2026-07-22T17:22:49Z",
+    "error_message": "Failed to load url ../../src/ownership/ownerController.js in tests/ownership/ownerController.test.ts. Does the file exist?",
+    "file": "src/ownership/ownerController.ts",
+    "root_cause": "Task 2 added RED ownership tests before the pure ownership controller module existed, so Vitest could not resolve the new import.",
+    "fix": "Added src/ownership/ownerController.ts with evaluateOwnership() and applyOwnerEpochTransfer(), plus the OwnershipEvaluation input/output types in src/state/types.ts, then reran the focused test successfully.",
+    "tags": [
+      "task-2",
+      "ownership",
+      "tdd",
+      "missing-module"
+    ],
+    "related_bugs": [
+      "bug-018",
+      "bug-023"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T17:22:49Z"
+  },
+  {
+    "id": "bug-026",
+    "timestamp": "2026-07-22T17:24:59Z",
+    "error_message": "npm test failed with spawn /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8f2d273ff438a98f/node_modules/.bin/tsx ENOENT during Task 2 full verification",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "The isolated Task 2 worktree initially had no local node_modules/.bin/tsx binary, so validation CLI tests that spawn the worktree-local tsx executable failed before reaching product logic.",
+    "fix": "Ran npm ci in the current worktree to restore local dependencies and the tsx binary, then reran the full Vitest suite successfully.",
+    "tags": [
+      "task-2",
+      "verification",
+      "validation",
+      "environment",
+      "node_modules",
+      "tsx"
+    ],
+    "related_bugs": [
+      "bug-003",
+      "bug-022",
+      "bug-024"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T17:24:59Z"
   }
 ]

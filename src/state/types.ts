@@ -1,3 +1,5 @@
+import type { OwnerRecord, OwnershipVerdict } from "../runtime/types.js";
+
 export type RunStatus =
   | "queued"
   | "planning"
@@ -49,6 +51,25 @@ export type RunBoundaryAnalysis = {
 };
 
 export type OwnerStatus = "current" | "lost" | "unknown";
+
+export type LastTrustedBoundary = "planning" | "execute" | "verify" | "terminal" | "unknown";
+
+export type OwnershipEvaluationInput = {
+  ownerRecord: OwnerRecord;
+  persistedOwnerStillSupported: boolean;
+  boundaryAnalysis: RunBoundaryAnalysis;
+  currentProcessStillTrusted: boolean;
+  supportingContinuityEvidence: string[];
+  knownSupersedingEpoch: number | null;
+  lastTrustedBoundary: LastTrustedBoundary;
+};
+
+export type OwnershipEvaluation = {
+  verdict: OwnershipVerdict;
+  reasons: string[];
+  takeoverAllowed: boolean;
+  lastTrustedBoundary: LastTrustedBoundary;
+};
 
 export type BoundaryEvaluationInput = {
   now: string;
