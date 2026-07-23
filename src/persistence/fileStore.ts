@@ -1,4 +1,4 @@
-import { access, appendFile, mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { LoopContract } from "../contract/schema.js";
 import type {
@@ -102,16 +102,64 @@ export async function writeBoundaryArtifacts(
   }
 }
 
-export async function writeOwnerRecord(runDir: string, ownerRecord: OwnerRecord): Promise<void> {
-  await writeFile(join(runDir, "owner-record.json"), JSON.stringify(ownerRecord, null, 2));
+const OWNER_RECORD_FILE = "owner-record.json";
+const OWNER_TRANSFER_FILE = "owner-transfer.json";
+const OWNER_RECORD_TEMP_FILE = ".owner-record.publish.tmp";
+const OWNER_TRANSFER_TEMP_FILE = ".owner-transfer.publish.tmp";
+const OWNER_RECORD_PENDING_FILE = ".owner-record.pending.json";
+const OWNER_TRANSFER_PENDING_FILE = ".owner-transfer.pending.json";
+const OWNER_TRANSFER_MARKER_FILE = ".owner-transfer.transaction.json";
+const OWNER_TRANSFER_LOCK_FILE = ".owner-transfer.lock";
+
+type OwnerTransferTransactionMarker = {
+  version: 1;
+  stagedAt: string;
+  finalizeOrder: [typeof OWNER_TRANSFER_FILE, typeof OWNER_RECORD_FILE];
+};
+
+type OwnerTransferPaths = {
+  ownerPath: string;
+  transferPath: string;
+  ownerTempPath: string;
+  transferTempPath: string;
+  ownerPendingPath: string;
+  transferPendingPath: string;
+  transactionMarkerPath: string;
+  lockPath: string;
+};
+
+type OwnerTransferLockRecord = {
+  holderProcessInstanceId: string;
+  acquiredAt: string;
+};
+
+function getOwnerTransferPaths(runDir: string): OwnerTransferPaths {
+  return {
+    ownerPath: join(runDir, OWNER_RECORD_FILE),
+    transferPath: join(runDir, OWNER_TRANSFER_FILE),
+    ownerTempPath: join(runDir, OWNER_RECORD_TEMP_FILE),
+    transferTempPath: join(runDir, OWNER_TRANSFER_TEMP_FILE),
+    ownerPendingPath: join(runDir, OWNER_RECORD_PENDING_FILE),
+    transferPendingPath: join(runDir, OWNER_TRANSFER_PENDING_FILE),
+    transactionMarkerPath: join(runDir, OWNER_TRANSFER_MARKER_FILE),
+    lockPath: join(runDir, OWNER_TRANSFER_LOCK_FILE),
+  };
 }
 
-export async function readOwnerRecord(runDir: string): Promise<OwnerRecord> {
-  return JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as OwnerRecord;
+async function writeJsonFile(path: string, value: unknown): Promise<void> {
+  await writeFile(path, JSON.stringify(value, null, 2));
+}
+
+async function readOwnerRecordRaw(runDir: string): Promise<OwnerRecord> {
+  return JSON.parse(await readFile(join(runDir, OWNER_RECORD_FILE), "utf8")) as OwnerRecord;
+}
+
+export async function writeOwnerRecord(runDir: string, ownerRecord: OwnerRecord): Promise<void> {
+  await writeJsonFile(join(runDir, OWNER_RECORD_FILE), ownerRecord);
 }
 
 export async function writeOwnerTransferRecord(runDir: string, transferRecord: OwnerTransferRecord): Promise<void> {
-  await writeFile(join(runDir, "owner-transfer.json"), JSON.stringify(transferRecord, null, 2));
+  await writeJsonFile(join(runDir, OWNER_TRANSFER_FILE), transferRecord);
 }
 
 export class OwnerTransferPreconditionError extends Error {
@@ -135,67 +183,186 @@ function sameOwnerRecord(left: OwnerRecord, right: OwnerRecord): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function parsePid(processInstanceId: string): number | null {
+  const match = /^pid:(\d+)$/.exec(processInstanceId);
+  return match === null ? null : Number.parseInt(match[1], 10);
+}
+
+function isProcessActive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") {
+      return false;
+    }
+
+    return true;
+  }
+}
+
+async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<boolean> {
+  const { lockPath, ownerPendingPath, transferPendingPath, transactionMarkerPath } = getOwnerTransferPaths(runDir);
+  let lockContents = "";
+
+  try {
+    lockContents = await readFile(lockPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return true;
+    }
+
+    throw error;
+  }
+
+  try {
+    const parsed = JSON.parse(lockContents) as Partial<OwnerTransferLockRecord>;
+    const pid = parsed.holderProcessInstanceId ? parsePid(parsed.holderProcessInstanceId) : null;
+
+    if (pid !== null && isProcessActive(pid)) {
+      return false;
+    }
+  } catch {
+    const hasStagedArtifacts =
+      await pathExists(transactionMarkerPath)
+      || await pathExists(ownerPendingPath)
+      || await pathExists(transferPendingPath);
+
+    if (!hasStagedArtifacts) {
+      return false;
+    }
+  }
+
+  await safeUnlink(lockPath);
+  return true;
+}
+
+async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () => Promise<void> }> {
+  const { lockPath } = getOwnerTransferPaths(runDir);
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const handle = await open(lockPath, "wx");
+
+      try {
+        await handle.writeFile(
+          JSON.stringify(
+            {
+              holderProcessInstanceId: `pid:${process.pid}`,
+              acquiredAt: new Date().toISOString(),
+            } satisfies OwnerTransferLockRecord,
+            null,
+            2,
+          ),
+        );
+      } catch (error) {
+        await handle.close();
+        await safeUnlink(lockPath);
+        throw error;
+      }
+
+      return {
+        release: async () => {
+          await handle.close();
+          await safeUnlink(lockPath);
+        },
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+
+      if (!(await tryRecoverStaleOwnerTransferLock(runDir))) {
+        throw new OwnerTransferPreconditionError("owner transfer already in progress");
+      }
+    }
+  }
+
+  throw new OwnerTransferPreconditionError("owner transfer already in progress");
+}
+
+async function cleanupOwnerTransferStagingWithoutMarker(runDir: string): Promise<void> {
+  const { ownerPendingPath, transferPendingPath, ownerTempPath, transferTempPath } = getOwnerTransferPaths(runDir);
+  await safeUnlink(ownerPendingPath);
+  await safeUnlink(transferPendingPath);
+  await safeUnlink(ownerTempPath);
+  await safeUnlink(transferTempPath);
+}
+
+async function finalizePendingOwnerTransfer(runDir: string): Promise<void> {
+  const paths = getOwnerTransferPaths(runDir);
+  const ownerRecord = JSON.parse(await readFile(paths.ownerPendingPath, "utf8")) as OwnerRecord;
+  const transferRecord = JSON.parse(await readFile(paths.transferPendingPath, "utf8")) as OwnerTransferRecord;
+
+  try {
+    await safeUnlink(paths.transferTempPath);
+    await safeUnlink(paths.ownerTempPath);
+    await writeJsonFile(paths.transferTempPath, transferRecord);
+    await rename(paths.transferTempPath, paths.transferPath);
+    await writeJsonFile(paths.ownerTempPath, ownerRecord);
+    await rename(paths.ownerTempPath, paths.ownerPath);
+    await safeUnlink(paths.transactionMarkerPath);
+    await safeUnlink(paths.transferPendingPath);
+    await safeUnlink(paths.ownerPendingPath);
+  } catch (error) {
+    await safeUnlink(paths.transferTempPath);
+    await safeUnlink(paths.ownerTempPath);
+    throw error;
+  }
+}
+
+async function recoverInterruptedOwnerTransfer(runDir: string, options?: { lockHeld?: boolean }): Promise<void> {
+  const paths = getOwnerTransferPaths(runDir);
+
+  if (!(await pathExists(paths.transactionMarkerPath))) {
+    if (options?.lockHeld) {
+      await cleanupOwnerTransferStagingWithoutMarker(runDir);
+    }
+    return;
+  }
+
+  if (!options?.lockHeld && await pathExists(paths.lockPath) && !(await tryRecoverStaleOwnerTransferLock(runDir))) {
+    return;
+  }
+
+  await finalizePendingOwnerTransfer(runDir);
+}
+
+export async function readOwnerRecord(runDir: string): Promise<OwnerRecord> {
+  await recoverInterruptedOwnerTransfer(runDir);
+  return readOwnerRecordRaw(runDir);
+}
+
 export async function writeOwnerTransferArtifacts(
   runDir: string,
   expectedOwnerRecord: OwnerRecord,
   ownerRecord: OwnerRecord,
   transferRecord: OwnerTransferRecord,
 ): Promise<void> {
-  const persistedOwnerRecord = await readOwnerRecord(runDir);
-
-  if (!sameOwnerRecord(persistedOwnerRecord, expectedOwnerRecord)) {
-    throw new OwnerTransferPreconditionError("persisted owner record changed before owner transfer could be applied");
-  }
-
-  const transferPath = join(runDir, "owner-transfer.json");
-  const ownerPath = join(runDir, "owner-record.json");
-  const transferTempPath = join(runDir, "owner-transfer.json.tmp");
-  const ownerTempPath = join(runDir, "owner-record.json.tmp");
-  const previousTransferPath = join(runDir, "owner-transfer.json.previous");
-  const hadPreviousTransfer = await pathExists(transferPath);
-
-  await safeUnlink(transferTempPath);
-  await safeUnlink(ownerTempPath);
-  await safeUnlink(previousTransferPath);
+  const lock = await acquireOwnerTransferLock(runDir);
 
   try {
-    if (hadPreviousTransfer) {
-      await rename(transferPath, previousTransferPath);
+    await recoverInterruptedOwnerTransfer(runDir, { lockHeld: true });
+    const persistedOwnerRecord = await readOwnerRecordRaw(runDir);
+
+    if (!sameOwnerRecord(persistedOwnerRecord, expectedOwnerRecord)) {
+      throw new OwnerTransferPreconditionError("persisted owner record changed before owner transfer could be applied");
     }
 
-    await writeFile(transferTempPath, JSON.stringify(transferRecord, null, 2));
-    await rename(transferTempPath, transferPath);
-    await writeFile(ownerTempPath, JSON.stringify(ownerRecord, null, 2));
-    await rename(ownerTempPath, ownerPath);
-    await safeUnlink(previousTransferPath).catch(() => undefined);
-  } catch (error) {
-    await safeUnlink(transferTempPath);
-    await safeUnlink(ownerTempPath);
+    const paths = getOwnerTransferPaths(runDir);
+    const marker: OwnerTransferTransactionMarker = {
+      version: 1,
+      stagedAt: transferRecord.transferredAt,
+      finalizeOrder: [OWNER_TRANSFER_FILE, OWNER_RECORD_FILE],
+    };
 
-    const currentOwnerRecord = await readOwnerRecord(runDir);
-    const ownerStillExpected = sameOwnerRecord(currentOwnerRecord, expectedOwnerRecord);
-    const transferPresent = await pathExists(transferPath);
-    const previousTransferPresent = await pathExists(previousTransferPath);
-
-    if (ownerStillExpected) {
-      if (transferPresent) {
-        await safeUnlink(transferPath);
-      }
-
-      if (hadPreviousTransfer && previousTransferPresent) {
-        await rename(previousTransferPath, transferPath);
-      } else {
-        await safeUnlink(previousTransferPath);
-      }
-    } else if (!transferPresent) {
-      await writeOwnerRecord(runDir, expectedOwnerRecord);
-
-      if (hadPreviousTransfer && previousTransferPresent) {
-        await rename(previousTransferPath, transferPath);
-      }
-    }
-
-    throw error;
+    await writeJsonFile(paths.transferPendingPath, transferRecord);
+    await writeJsonFile(paths.ownerPendingPath, ownerRecord);
+    await writeJsonFile(paths.transactionMarkerPath, marker);
+    await finalizePendingOwnerTransfer(runDir);
+  } finally {
+    await lock.release();
   }
 }
 

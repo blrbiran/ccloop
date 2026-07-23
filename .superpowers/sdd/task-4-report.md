@@ -88,3 +88,27 @@
   - transfer still occurs only on controller-owned `OWNER_LOST + takeoverAllowed`
   - `eligibleForContinuation: true` still appears only on successful transfer
   - no same-step resume execution was added
+
+## Review-fix follow-up 2 (2026-07-23)
+- Closed the remaining Task 4 blockers surgically in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a62867739a9597163/src/persistence/fileStore.ts` and `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a62867739a9597163/src/controller/runLoop.ts`:
+  - added an exclusive per-run transfer lock file (`.owner-transfer.lock`) acquired with `open(..., "wx")`
+  - moved the persisted-owner precondition check into the locked `writeOwnerTransferArtifacts(...)` critical section so stale callers now fail there instead of winning a TOCTOU race
+  - staged `.owner-transfer.pending.json`, `.owner-record.pending.json`, and `.owner-transfer.transaction.json` before final publish
+  - finalized in deterministic `owner-transfer.json` then `owner-record.json` order and taught `readOwnerRecord(...)` / future transfers to reconcile interrupted staged publishes
+  - simplified `persistOwnerTransfer(...)` so it delegates compare-and-publish authority to the locked persistence helper instead of doing an extra pre-check outside the critical section
+- Added focused regressions in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a62867739a9597163/tests/persistence/fileStore.test.ts` covering:
+  - live transfer-lock rejection
+  - stale expected-owner rejection inside the locked section
+  - interrupted publish recovery on the next read path
+  - stale-lock recovery with staged artifacts
+  - malformed-lock recovery only when staged artifacts exist
+  - half-published transfer visibility plus later recovery after owner-record finalization failure
+  - cleanup of staging/lock files after successful publish
+- Focused verification:
+  - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/controller/runLoop.integration.test.ts tests/persistence/fileStore.test.ts`
+  - PASS (`69/69`)
+- Successful-path contract remains unchanged:
+  - transfer still occurs only on controller-owned `OWNER_LOST + takeoverAllowed`
+  - `eligibleForContinuation: true` still appears only on successful transfer
+  - no same-step resume execution was added
+  - controller transfer path still appends `owner_epoch_transferred` only after successful publish

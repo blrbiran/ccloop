@@ -584,10 +584,6 @@ function buildTakeoverReason(allowed: boolean): string {
     : "deny-by-default until strict owner-loss and transfer conditions are fully met";
 }
 
-function sameOwnerTruth(left: OwnerRecord, right: OwnerRecord): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 async function persistOwnerTransfer(
   runDir: string,
   expectedOwnerRecord: OwnerRecord,
@@ -595,14 +591,8 @@ async function persistOwnerTransfer(
   at: string,
   reason: string,
 ): Promise<{ ownerRecord: OwnerRecord; eligibleForContinuation: true }> {
-  const persistedOwnerRecord = await readOwnerRecord(runDir);
-
-  if (!sameOwnerTruth(persistedOwnerRecord, expectedOwnerRecord)) {
-    throw new OwnerTransferPreconditionError("persisted owner truth changed before transfer eligibility could be established");
-  }
-
-  const transfer = applyOwnerEpochTransfer(persistedOwnerRecord, nextProcessInstanceId, at, reason);
-  await writeOwnerTransferArtifacts(runDir, persistedOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord);
+  const transfer = applyOwnerEpochTransfer(expectedOwnerRecord, nextProcessInstanceId, at, reason);
+  await writeOwnerTransferArtifacts(runDir, expectedOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord);
   await appendEvent(runDir, {
     type: "owner_epoch_transferred",
     at,

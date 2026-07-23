@@ -646,5 +646,29 @@
     "related_bugs": ["bug-032"],
     "occurrences": 1,
     "last_seen": "2026-07-23T21:14:08Z"
+  },
+  {
+    "id": "bug-035",
+    "timestamp": "2026-07-23T13:51:19Z",
+    "error_message": "Task 4 owner transfer still published owner-record.json and owner-transfer.json through separate final renames and still allowed a TOCTOU window between the stale-owner precondition check and final publish.",
+    "file": "src/persistence/fileStore.ts",
+    "root_cause": "The first reviewer fix still validated transfer eligibility outside a serialized critical section and had no staged transaction marker or read-path recovery, so a second controller or crash could leave stale success or half-published artifacts.",
+    "fix": "Added an exclusive per-run .owner-transfer.lock, moved the persisted-truth precondition check into the locked writeOwnerTransferArtifacts() critical section, staged pending owner/transfer files plus .owner-transfer.transaction.json, finalized in deterministic transfer-then-owner order, and taught readOwnerRecord()/new transfers to recover interrupted publishes.",
+    "tags": ["task-4", "persistence", "concurrency", "crash-recovery", "ownership", "reviewer-fix"],
+    "related_bugs": ["bug-034"],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T13:51:19Z"
+  },
+  {
+    "id": "bug-036",
+    "timestamp": "2026-07-23T13:51:19Z",
+    "error_message": "Focused Task 4 persistence regressions initially failed with ReferenceError: writeFile is not defined and overlapping stale owner-transfer assertions after the second review-fix edit wave.",
+    "file": "tests/persistence/fileStore.test.ts",
+    "root_cause": "The expanded regression set introduced direct staging-file setup without importing writeFile, and iterative edits left duplicated/obsolete assertions from the earlier rollback-based persistence contract.",
+    "fix": "Imported writeFile, rewrote the owner-transfer persistence regressions around the new lock and transaction-recovery contract, removed duplicate stale blocks, and reran the focused Task 4 suites successfully.",
+    "tags": ["task-4", "tests", "tdd", "reviewer-fix", "vitest"],
+    "related_bugs": ["bug-035"],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T13:51:19Z"
   }
 ]
