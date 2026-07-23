@@ -1554,8 +1554,8 @@ describe("runLoop", () => {
       expect(reconciliation.takeoverPermission.reason).toBe(
         "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
       );
-      expect(reconciliation.staleSuspicionBasis[0]).toContain("src/index.ts");
-      expect(reconciliation.conflictingEvidence.join(" ")).toContain("src/index.ts");
+      expect(reconciliation.staleSuspicionBasis).toEqual(["owner transfer already published"]);
+      expect(reconciliation.conflictingEvidence).toEqual([]);
       expect(reconciliation.lastTrustedBoundary).toBe("execute");
       expect(finalState.status).toBe("exhausted");
       expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON);

@@ -1183,8 +1183,8 @@ describe("fileStore", () => {
     expect(reconciliation.takeoverPermission.reason).toBe(
       "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
     );
-    expect(reconciliation.staleSuspicionBasis).toEqual(["continuity evidence missing"]);
-    expect(reconciliation.conflictingEvidence).toEqual(["changed paths observed after interrupted execute: src/index.ts"]);
+    expect(reconciliation.staleSuspicionBasis).toEqual(["owner transfer already published"]);
+    expect(reconciliation.conflictingEvidence).toEqual([]);
     expect(reconciliation.lastTrustedBoundary).toBe("execute");
   });
 

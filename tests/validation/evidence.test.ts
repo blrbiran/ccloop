@@ -802,16 +802,12 @@ describe("evidence collection", () => {
     const reconciliationRecord = {
       staleSuspicionBasis: ["no verify progress", "boundary age exceeded threshold"],
       staleConfirmed: false,
-      ownershipVerdict: "OWNER_UNDECIDABLE",
       lastTrustedBoundary: "verify",
       conflictingEvidence: [],
       takeoverPermission: {
         allowed: false,
         reason: "human review required before takeover",
       },
-      priorOwnerEpoch: null,
-      newOwnerEpoch: null,
-      eligibleForContinuation: false,
     };
 
     await writeFile(join(runDir, "boundary-analysis.json"), JSON.stringify(boundaryAnalysis, null, 2) + "\n");

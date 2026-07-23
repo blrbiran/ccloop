@@ -87,15 +87,17 @@ export async function appendEvent(runDir: string, event: RunEvent): Promise<void
 
 function buildSuccessfulReconciliationFromTransfer(
   currentRecord: ReconciliationRecord | undefined,
-  ownerRecord: OwnerRecord,
   ownerTransferRecord: OwnerTransferRecord,
 ): ReconciliationRecord {
   return {
-    staleSuspicionBasis: currentRecord?.staleSuspicionBasis ?? ["continuity evidence missing"],
-    staleConfirmed: currentRecord?.staleConfirmed ?? true,
+    staleSuspicionBasis:
+      currentRecord?.takeoverPermission.allowed === true
+        ? currentRecord.staleSuspicionBasis
+        : ["owner transfer already published"],
+    staleConfirmed: true,
     ownershipVerdict: "OWNER_LOST",
-    lastTrustedBoundary: currentRecord?.lastTrustedBoundary ?? "execute",
-    conflictingEvidence: currentRecord?.conflictingEvidence ?? [],
+    lastTrustedBoundary: "execute",
+    conflictingEvidence: [],
     takeoverPermission: {
       allowed: true,
       reason:
@@ -109,6 +111,170 @@ function buildSuccessfulReconciliationFromTransfer(
   };
 }
 
+function isSuccessfulReconciliationForTransfer(
+  reconciliationRecord: ReconciliationRecord,
+  ownerTransferRecord: OwnerTransferRecord,
+): boolean {
+  return (
+    reconciliationRecord.eligibleForContinuation
+    && reconciliationRecord.ownershipVerdict === "OWNER_LOST"
+    && reconciliationRecord.priorOwnerEpoch === ownerTransferRecord.priorOwnerEpoch
+    && reconciliationRecord.newOwnerEpoch === ownerTransferRecord.newOwnerEpoch
+  );
+}
+
+function isLoserDowngradeAttempt(
+  nextReconciliationRecord: ReconciliationRecord,
+  ownerTransferRecord: OwnerTransferRecord,
+): boolean {
+  return (
+    (nextReconciliationRecord.priorOwnerEpoch === ownerTransferRecord.priorOwnerEpoch
+      || nextReconciliationRecord.priorOwnerEpoch === ownerTransferRecord.newOwnerEpoch)
+    && nextReconciliationRecord.newOwnerEpoch === null
+    && nextReconciliationRecord.eligibleForContinuation === false
+  );
+}
+
+function transferRepresentsPublishedWinner(
+  ownerRecord: OwnerRecord,
+  ownerTransferRecord: OwnerTransferRecord,
+): boolean {
+  return (
+    ownerTransferRecord.eligibleForContinuation === true
+    && ownerRecord.currentOwnerEpoch === ownerTransferRecord.newOwnerEpoch
+    && ownerRecord.currentProcessInstanceId === ownerTransferRecord.newProcessInstanceId
+  );
+}
+
+function shouldSynthesizeSuccessfulReconciliation(
+  persistedReconciliationRecord: ReconciliationRecord | undefined,
+  nextReconciliationRecord: ReconciliationRecord,
+  ownerTransferRecord: OwnerTransferRecord,
+): boolean {
+  return (
+    persistedReconciliationRecord === undefined
+    && isLoserDowngradeAttempt(nextReconciliationRecord, ownerTransferRecord)
+  );
+}
+
+function shouldPreserveExistingSuccessfulReconciliation(
+  persistedReconciliationRecord: ReconciliationRecord | undefined,
+  nextReconciliationRecord: ReconciliationRecord,
+  ownerTransferRecord: OwnerTransferRecord,
+): boolean {
+  return (
+    persistedReconciliationRecord !== undefined
+    && isSuccessfulReconciliationForTransfer(persistedReconciliationRecord, ownerTransferRecord)
+    && isLoserDowngradeAttempt(nextReconciliationRecord, ownerTransferRecord)
+  );
+}
+
+function shouldPreserveExistingReconciliationRecord(
+  persistedReconciliationRecord: ReconciliationRecord | undefined,
+  nextReconciliationRecord: ReconciliationRecord,
+  ownerTransferRecord: OwnerTransferRecord,
+): boolean {
+  return (
+    persistedReconciliationRecord !== undefined
+    && isSuccessfulReconciliationForTransfer(persistedReconciliationRecord, ownerTransferRecord)
+    && (isLoserDowngradeAttempt(nextReconciliationRecord, ownerTransferRecord)
+      || shouldSynthesizeSuccessfulReconciliation(undefined, nextReconciliationRecord, ownerTransferRecord))
+  );
+}
+
+function shouldProtectSuccessfulTransferTruth(
+  persistedOwnerRecord: OwnerRecord,
+  persistedOwnerTransferRecord: OwnerTransferRecord,
+  persistedReconciliationRecord: ReconciliationRecord | undefined,
+  nextReconciliationRecord: ReconciliationRecord,
+): boolean {
+  return (
+    transferRepresentsPublishedWinner(persistedOwnerRecord, persistedOwnerTransferRecord)
+    && (shouldPreserveExistingReconciliationRecord(
+      persistedReconciliationRecord,
+      nextReconciliationRecord,
+      persistedOwnerTransferRecord,
+    )
+      || shouldSynthesizeSuccessfulReconciliation(
+        persistedReconciliationRecord,
+        nextReconciliationRecord,
+        persistedOwnerTransferRecord,
+      ))
+  );
+}
+
+function resolveSuccessfulReconciliation(
+  persistedReconciliationRecord: ReconciliationRecord | undefined,
+  nextReconciliationRecord: ReconciliationRecord,
+  ownerTransferRecord: OwnerTransferRecord,
+): ReconciliationRecord {
+  if (
+    persistedReconciliationRecord !== undefined
+    && isSuccessfulReconciliationForTransfer(persistedReconciliationRecord, ownerTransferRecord)
+  ) {
+    return persistedReconciliationRecord;
+  }
+
+  return buildSuccessfulReconciliationFromTransfer(nextReconciliationRecord, ownerTransferRecord);
+}
+
+function preserveSuccessfulReconciliationIfNeededFromArtifacts(
+  persistedOwnerRecord: OwnerRecord,
+  persistedOwnerTransferRecord: OwnerTransferRecord,
+  persistedReconciliationRecord: ReconciliationRecord | undefined,
+  nextReconciliationRecord: ReconciliationRecord,
+): ReconciliationRecord {
+  if (
+    !shouldProtectSuccessfulTransferTruth(
+      persistedOwnerRecord,
+      persistedOwnerTransferRecord,
+      persistedReconciliationRecord,
+      nextReconciliationRecord,
+    )
+  ) {
+    return nextReconciliationRecord;
+  }
+
+  return resolveSuccessfulReconciliation(
+    persistedReconciliationRecord,
+    nextReconciliationRecord,
+    persistedOwnerTransferRecord,
+  );
+}
+
+async function readPersistedReconciliationRecord(runDir: string): Promise<ReconciliationRecord | undefined> {
+  try {
+    return JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as ReconciliationRecord;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readPersistedSuccessfulTransferArtifacts(
+  runDir: string,
+): Promise<
+  | {
+      ownerRecord: OwnerRecord;
+      ownerTransferRecord: OwnerTransferRecord;
+      reconciliationRecord: ReconciliationRecord | undefined;
+    }
+  | null
+> {
+  try {
+    const [ownerRecord, ownerTransferRecord, reconciliationRecord] = await Promise.all([
+      readOwnerRecord(runDir),
+      readOwnerTransferRecordRaw(runDir),
+      readPersistedReconciliationRecord(runDir),
+    ]);
+
+    return { ownerRecord, ownerTransferRecord, reconciliationRecord };
+  } catch {
+    return null;
+  }
+}
+
 async function preserveSuccessfulReconciliationIfNeeded(
   runDir: string,
   nextReconciliationRecord: ReconciliationRecord,
@@ -117,62 +283,20 @@ async function preserveSuccessfulReconciliationIfNeeded(
     return nextReconciliationRecord;
   }
 
-  let persistedOwnerRecord: OwnerRecord;
-  let persistedOwnerTransferRecord: OwnerTransferRecord;
-  let persistedReconciliationRecord: ReconciliationRecord | undefined;
-
-  try {
-    [persistedOwnerRecord, persistedOwnerTransferRecord] = await Promise.all([
-      readOwnerRecord(runDir),
-      readOwnerTransferRecordRaw(runDir),
-    ]);
-  } catch {
+  const persistedArtifacts = await readPersistedSuccessfulTransferArtifacts(runDir);
+  if (persistedArtifacts === null) {
     return nextReconciliationRecord;
   }
 
-  try {
-    persistedReconciliationRecord = JSON.parse(
-      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
-    ) as ReconciliationRecord;
-  } catch {
-    persistedReconciliationRecord = undefined;
-  }
-
-  const transferRepresentsPublishedWinner =
-    persistedOwnerTransferRecord.eligibleForContinuation === true
-    && persistedOwnerRecord.currentOwnerEpoch === persistedOwnerTransferRecord.newOwnerEpoch
-    && persistedOwnerRecord.currentProcessInstanceId === persistedOwnerTransferRecord.newProcessInstanceId;
-
-  if (!transferRepresentsPublishedWinner) {
-    return nextReconciliationRecord;
-  }
-
-  const isLoserDowngradeAttempt =
-    (nextReconciliationRecord.priorOwnerEpoch === persistedOwnerTransferRecord.priorOwnerEpoch
-      || nextReconciliationRecord.priorOwnerEpoch === persistedOwnerTransferRecord.newOwnerEpoch)
-    && nextReconciliationRecord.newOwnerEpoch === null
-    && nextReconciliationRecord.eligibleForContinuation === false;
-
-  if (!isLoserDowngradeAttempt) {
-    return nextReconciliationRecord;
-  }
-
-  if (
-    persistedReconciliationRecord !== undefined
-    && persistedReconciliationRecord.eligibleForContinuation
-    && persistedReconciliationRecord.ownershipVerdict === "OWNER_LOST"
-    && persistedReconciliationRecord.priorOwnerEpoch === persistedOwnerTransferRecord.priorOwnerEpoch
-    && persistedReconciliationRecord.newOwnerEpoch === persistedOwnerTransferRecord.newOwnerEpoch
-  ) {
-    return persistedReconciliationRecord;
-  }
-
-  return buildSuccessfulReconciliationFromTransfer(
+  return preserveSuccessfulReconciliationIfNeededFromArtifacts(
+    persistedArtifacts.ownerRecord,
+    persistedArtifacts.ownerTransferRecord,
+    persistedArtifacts.reconciliationRecord,
     nextReconciliationRecord,
-    persistedOwnerRecord,
-    persistedOwnerTransferRecord,
   );
 }
+
+
 
 export async function writeBoundaryArtifacts(
   runDir: string,
