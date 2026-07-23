@@ -26,3 +26,7 @@ Task 3: complete (commits 5f4fd55..3b5e533, review clean; corrected replay used 
 Task 4: complete (commits 3b5e533..d532c33, review clean; added positive boundary-artifact coverage and narrowed malformed reconciliation test)
 Task 5: complete (commits d532c33..265d3c1, review clean; docs aligned and full verification passed after local npm ci in task worktree)
 Whole-branch review: approved (one medium follow-up: reconcile cleanupStatus consistency between execution-recovery.json and reconciliation-record.json after cleanup success)
+
+Ownership Task 1: complete (commits e93f167..f819009, review clean)
+Ownership Task 2: complete (commits 84bd66a..4572286, review clean; report-path inconsistency noted as non-blocking)
+Ownership Task 3: complete (commits 35bf977..7277188, review clean after two fix rounds)

@@ -85,34 +85,89 @@ export async function appendEvent(runDir: string, event: RunEvent): Promise<void
   await appendFile(join(runDir, "events.jsonl"), `${JSON.stringify(event)}\n`);
 }
 
-async function shouldPreserveSuccessfulReconciliation(
+function buildSuccessfulReconciliationFromTransfer(
+  currentRecord: ReconciliationRecord | undefined,
+  ownerRecord: OwnerRecord,
+  ownerTransferRecord: OwnerTransferRecord,
+): ReconciliationRecord {
+  return {
+    staleSuspicionBasis: currentRecord?.staleSuspicionBasis ?? ["continuity evidence missing"],
+    staleConfirmed: currentRecord?.staleConfirmed ?? true,
+    ownershipVerdict: "OWNER_LOST",
+    lastTrustedBoundary: currentRecord?.lastTrustedBoundary ?? "execute",
+    conflictingEvidence: currentRecord?.conflictingEvidence ?? [],
+    takeoverPermission: {
+      allowed: true,
+      reason: currentRecord?.takeoverPermission.reason ?? "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
+    },
+    priorOwnerEpoch: ownerTransferRecord.priorOwnerEpoch,
+    newOwnerEpoch: ownerTransferRecord.newOwnerEpoch,
+    eligibleForContinuation: true,
+  };
+}
+
+async function preserveSuccessfulReconciliationIfNeeded(
   runDir: string,
   nextReconciliationRecord: ReconciliationRecord,
-): Promise<boolean> {
+): Promise<ReconciliationRecord> {
   if (nextReconciliationRecord.eligibleForContinuation) {
-    return false;
+    return nextReconciliationRecord;
   }
 
-  let persistedReconciliationRecord: ReconciliationRecord;
+  let persistedOwnerRecord: OwnerRecord;
   let persistedOwnerTransferRecord: OwnerTransferRecord;
+  let persistedReconciliationRecord: ReconciliationRecord | undefined;
 
   try {
-    [persistedReconciliationRecord, persistedOwnerTransferRecord] = await Promise.all([
-      JSON.parse(await readFile(join(runDir, "reconciliation-record.json"), "utf8")) as ReconciliationRecord,
+    [persistedOwnerRecord, persistedOwnerTransferRecord] = await Promise.all([
+      readOwnerRecord(runDir),
       readOwnerTransferRecordRaw(runDir),
     ]);
   } catch {
-    return false;
+    return nextReconciliationRecord;
   }
 
-  return (
-    persistedReconciliationRecord.eligibleForContinuation
+  try {
+    persistedReconciliationRecord = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as ReconciliationRecord;
+  } catch {
+    persistedReconciliationRecord = undefined;
+  }
+
+  const transferRepresentsPublishedWinner =
+    persistedOwnerTransferRecord.eligibleForContinuation === true
+    && persistedOwnerRecord.currentOwnerEpoch === persistedOwnerTransferRecord.newOwnerEpoch
+    && persistedOwnerRecord.currentProcessInstanceId === persistedOwnerTransferRecord.newProcessInstanceId;
+
+  if (!transferRepresentsPublishedWinner) {
+    return nextReconciliationRecord;
+  }
+
+  const isLoserDowngradeAttempt =
+    (nextReconciliationRecord.priorOwnerEpoch === persistedOwnerTransferRecord.priorOwnerEpoch
+      || nextReconciliationRecord.priorOwnerEpoch === persistedOwnerTransferRecord.newOwnerEpoch)
+    && nextReconciliationRecord.newOwnerEpoch === null
+    && nextReconciliationRecord.eligibleForContinuation === false;
+
+  if (!isLoserDowngradeAttempt) {
+    return nextReconciliationRecord;
+  }
+
+  if (
+    persistedReconciliationRecord !== undefined
+    && persistedReconciliationRecord.eligibleForContinuation
     && persistedReconciliationRecord.ownershipVerdict === "OWNER_LOST"
     && persistedReconciliationRecord.priorOwnerEpoch === persistedOwnerTransferRecord.priorOwnerEpoch
     && persistedReconciliationRecord.newOwnerEpoch === persistedOwnerTransferRecord.newOwnerEpoch
-    && nextReconciliationRecord.priorOwnerEpoch === persistedOwnerTransferRecord.newOwnerEpoch
-    && nextReconciliationRecord.newOwnerEpoch === null
-    && persistedOwnerTransferRecord.eligibleForContinuation === true
+  ) {
+    return persistedReconciliationRecord;
+  }
+
+  return buildSuccessfulReconciliationFromTransfer(
+    nextReconciliationRecord,
+    persistedOwnerRecord,
+    persistedOwnerTransferRecord,
   );
 }
 
@@ -126,13 +181,14 @@ export async function writeBoundaryArtifacts(
   await writeFile(join(runDir, "boundary-analysis.json"), JSON.stringify(artifacts.boundaryAnalysis, null, 2));
 
   if (artifacts.reconciliationRecord !== undefined) {
-    if (await shouldPreserveSuccessfulReconciliation(runDir, artifacts.reconciliationRecord)) {
-      return;
-    }
+    const reconciliationRecord = await preserveSuccessfulReconciliationIfNeeded(
+      runDir,
+      artifacts.reconciliationRecord,
+    );
 
     await writeFile(
       join(runDir, "reconciliation-record.json"),
-      JSON.stringify(artifacts.reconciliationRecord, null, 2),
+      JSON.stringify(reconciliationRecord, null, 2),
     );
   }
 }

@@ -1031,6 +1031,15 @@ describe("fileStore", () => {
   it("preserves a successful reconciliation record when a loser later tries to downgrade it", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
 
+    await writeOwnerRecord(runDir, {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 2,
+      currentProcessInstanceId: "pid:winner",
+      lastAffirmedAt: "2026-07-23T00:00:01.000Z",
+      ownerStatus: "current",
+      supersededByEpoch: null,
+    });
     await writeOwnerTransferRecord(runDir, {
       priorOwnerEpoch: 1,
       newOwnerEpoch: 2,
@@ -1087,6 +1096,152 @@ describe("fileStore", () => {
         newOwnerEpoch: null,
         eligibleForContinuation: false,
       },
+    });
+
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as {
+      ownershipVerdict: string;
+      priorOwnerEpoch: number | null;
+      newOwnerEpoch: number | null;
+      eligibleForContinuation: boolean;
+      takeoverPermission: { allowed: boolean };
+    };
+
+    expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
+    expect(reconciliation.priorOwnerEpoch).toBe(1);
+    expect(reconciliation.newOwnerEpoch).toBe(2);
+    expect(reconciliation.eligibleForContinuation).toBe(true);
+    expect(reconciliation.takeoverPermission.allowed).toBe(true);
+  });
+
+  it("synthesizes a successful reconciliation view when winner transfer truth exists before any success reconciliation is written", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    await writeOwnerRecord(runDir, {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 2,
+      currentProcessInstanceId: "pid:winner",
+      lastAffirmedAt: "2026-07-23T00:00:01.000Z",
+      ownerStatus: "current",
+      supersededByEpoch: null,
+    });
+    await writeOwnerTransferRecord(runDir, {
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      priorProcessInstanceId: "pid:12345",
+      newProcessInstanceId: "pid:winner",
+      transferredAt: "2026-07-23T00:00:01.000Z",
+      reason: "owner lost after reconciliation",
+      eligibleForContinuation: true,
+    });
+
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis: {
+        status: "stale_candidate",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: "continuity evidence missing",
+      },
+      reconciliationRecord: {
+        staleSuspicionBasis: ["continuity evidence missing"],
+        staleConfirmed: true,
+        ownershipVerdict: "OWNER_UNDECIDABLE",
+        lastTrustedBoundary: "execute",
+        conflictingEvidence: ["changed paths observed after interrupted execute: src/index.ts"],
+        takeoverPermission: {
+          allowed: false,
+          reason: "deny-by-default until strict owner-loss and transfer conditions are fully met",
+        },
+        priorOwnerEpoch: 2,
+        newOwnerEpoch: null,
+        eligibleForContinuation: false,
+      },
+    });
+
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as {
+      staleSuspicionBasis: string[];
+      staleConfirmed: boolean;
+      ownershipVerdict: string;
+      lastTrustedBoundary: string;
+      conflictingEvidence: string[];
+      takeoverPermission: { allowed: boolean; reason: string };
+      priorOwnerEpoch: number | null;
+      newOwnerEpoch: number | null;
+      eligibleForContinuation: boolean;
+    };
+
+    expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
+    expect(reconciliation.priorOwnerEpoch).toBe(1);
+    expect(reconciliation.newOwnerEpoch).toBe(2);
+    expect(reconciliation.eligibleForContinuation).toBe(true);
+    expect(reconciliation.takeoverPermission.allowed).toBe(true);
+    expect(reconciliation.staleSuspicionBasis).toEqual(["continuity evidence missing"]);
+    expect(reconciliation.conflictingEvidence).toEqual(["changed paths observed after interrupted execute: src/index.ts"]);
+    expect(reconciliation.lastTrustedBoundary).toBe("execute");
+  });
+
+  it("preserves a synthesized winner reconciliation view against a later loser downgrade", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    await writeOwnerRecord(runDir, {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 2,
+      currentProcessInstanceId: "pid:winner",
+      lastAffirmedAt: "2026-07-23T00:00:01.000Z",
+      ownerStatus: "current",
+      supersededByEpoch: null,
+    });
+    await writeOwnerTransferRecord(runDir, {
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      priorProcessInstanceId: "pid:12345",
+      newProcessInstanceId: "pid:winner",
+      transferredAt: "2026-07-23T00:00:01.000Z",
+      reason: "owner lost after reconciliation",
+      eligibleForContinuation: true,
+    });
+
+    const loserDowngrade = {
+      staleSuspicionBasis: ["continuity evidence missing"],
+      staleConfirmed: true,
+      ownershipVerdict: "OWNER_UNDECIDABLE" as const,
+      lastTrustedBoundary: "execute" as const,
+      conflictingEvidence: ["changed paths observed after interrupted execute: src/index.ts"],
+      takeoverPermission: {
+        allowed: false,
+        reason: "deny-by-default until strict owner-loss and transfer conditions are fully met",
+      },
+      priorOwnerEpoch: 2,
+      newOwnerEpoch: null,
+      eligibleForContinuation: false,
+    };
+
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis: {
+        status: "stale_candidate",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: "continuity evidence missing",
+      },
+      reconciliationRecord: loserDowngrade,
+    });
+
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis: {
+        status: "stale_candidate",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: "continuity evidence missing",
+      },
+      reconciliationRecord: loserDowngrade,
     });
 
     const reconciliation = JSON.parse(
