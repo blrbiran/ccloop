@@ -72,3 +72,19 @@
 - No product-scope concerns remain.
 - Full-suite verification required a local environment repair because this agent worktree initially lacked `node_modules/.bin/tsx`; I restored the worktree-local path with a symlink to the repository-root binary and reran successfully.
 - I created worktree-local OpenWolf bookkeeping files (`.wolf/anatomy.md`, `.wolf/cerebrum.md`, `.wolf/memory.md`) because this checkout did not include them; they are auxiliary and not part of the product change set.
+
+## Review-fix follow-up (2026-07-23)
+- Addressed the reviewer’s two Task 4 blockers surgically in this worktree:
+  - `persistOwnerTransfer(...)` now re-reads persisted `owner-record.json` immediately before transfer, refuses the transfer if persisted truth no longer matches the expected pre-transfer owner state, and derives the next epoch from that fresh persisted record.
+  - `writeOwnerTransferArtifacts(...)` no longer does a plain two-write sequence. It now writes `owner-transfer.json` through a temp-file/rename path first, updates `owner-record.json` last through its own temp-file/rename path, and performs best-effort rollback/restore so ordinary owner-write failures do not leave owner truth advanced without a transfer audit.
+- Added focused regressions for:
+  - pre-transfer persisted-truth mismatch rejection in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-abe1f6d0ed9949c19/tests/persistence/fileStore.test.ts`
+  - rollback/restore when owner-record temp persistence fails after transfer audit staging in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-abe1f6d0ed9949c19/tests/persistence/fileStore.test.ts`
+  - controller transfer path re-reading persisted owner truth and refusing continuation when another controller already changed owner truth in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-abe1f6d0ed9949c19/tests/controller/runLoop.integration.test.ts`
+- Focused verification:
+  - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/controller/runLoop.integration.test.ts tests/persistence/fileStore.test.ts`
+  - PASS (`51/51`)
+- Successful-path contract remains unchanged:
+  - transfer still occurs only on controller-owned `OWNER_LOST + takeoverAllowed`
+  - `eligibleForContinuation: true` still appears only on successful transfer
+  - no same-step resume execution was added

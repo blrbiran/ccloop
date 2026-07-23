@@ -634,5 +634,17 @@
     "related_bugs": ["bug-003", "bug-022", "bug-024", "bug-026", "bug-030"],
     "occurrences": 1,
     "last_seen": "2026-07-23T09:05:30Z"
+  },
+  {
+    "id": "bug-034",
+    "timestamp": "2026-07-23T21:14:08Z",
+    "error_message": "Task 4 owner transfer could advance from stale in-memory owner truth and plain sequential writes could leave owner-record.json ahead of owner-transfer.json on ordinary failures.",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "persistOwnerTransfer() derived the next epoch from a cached owner record with no compare-and-swap against freshly persisted truth, and writeOwnerTransferArtifacts() only performed a plain owner-record then owner-transfer write sequence.",
+    "fix": "Re-read owner-record.json immediately before transfer, refused transfer when persisted truth changed, derived the next epoch from the fresh persisted record, rewrote owner transfer persistence to use temp-file/rename plus rollback/restore logic with owner truth written last, and added focused controller/persistence regressions.",
+    "tags": ["task-4", "controller", "persistence", "ownership", "atomicity", "concurrency", "reviewer-fix"],
+    "related_bugs": ["bug-032"],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T21:14:08Z"
   }
 ]

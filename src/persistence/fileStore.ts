@@ -1,4 +1,4 @@
-import { access, appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { LoopContract } from "../contract/schema.js";
 import type {
@@ -114,13 +114,89 @@ export async function writeOwnerTransferRecord(runDir: string, transferRecord: O
   await writeFile(join(runDir, "owner-transfer.json"), JSON.stringify(transferRecord, null, 2));
 }
 
+export class OwnerTransferPreconditionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OwnerTransferPreconditionError";
+  }
+}
+
+async function safeUnlink(path: string): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+function sameOwnerRecord(left: OwnerRecord, right: OwnerRecord): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export async function writeOwnerTransferArtifacts(
   runDir: string,
+  expectedOwnerRecord: OwnerRecord,
   ownerRecord: OwnerRecord,
   transferRecord: OwnerTransferRecord,
 ): Promise<void> {
-  await writeOwnerRecord(runDir, ownerRecord);
-  await writeOwnerTransferRecord(runDir, transferRecord);
+  const persistedOwnerRecord = await readOwnerRecord(runDir);
+
+  if (!sameOwnerRecord(persistedOwnerRecord, expectedOwnerRecord)) {
+    throw new OwnerTransferPreconditionError("persisted owner record changed before owner transfer could be applied");
+  }
+
+  const transferPath = join(runDir, "owner-transfer.json");
+  const ownerPath = join(runDir, "owner-record.json");
+  const transferTempPath = join(runDir, "owner-transfer.json.tmp");
+  const ownerTempPath = join(runDir, "owner-record.json.tmp");
+  const previousTransferPath = join(runDir, "owner-transfer.json.previous");
+  const hadPreviousTransfer = await pathExists(transferPath);
+
+  await safeUnlink(transferTempPath);
+  await safeUnlink(ownerTempPath);
+  await safeUnlink(previousTransferPath);
+
+  try {
+    if (hadPreviousTransfer) {
+      await rename(transferPath, previousTransferPath);
+    }
+
+    await writeFile(transferTempPath, JSON.stringify(transferRecord, null, 2));
+    await rename(transferTempPath, transferPath);
+    await writeFile(ownerTempPath, JSON.stringify(ownerRecord, null, 2));
+    await rename(ownerTempPath, ownerPath);
+    await safeUnlink(previousTransferPath).catch(() => undefined);
+  } catch (error) {
+    await safeUnlink(transferTempPath);
+    await safeUnlink(ownerTempPath);
+
+    const currentOwnerRecord = await readOwnerRecord(runDir);
+    const ownerStillExpected = sameOwnerRecord(currentOwnerRecord, expectedOwnerRecord);
+    const transferPresent = await pathExists(transferPath);
+    const previousTransferPresent = await pathExists(previousTransferPath);
+
+    if (ownerStillExpected) {
+      if (transferPresent) {
+        await safeUnlink(transferPath);
+      }
+
+      if (hadPreviousTransfer && previousTransferPresent) {
+        await rename(previousTransferPath, transferPath);
+      } else {
+        await safeUnlink(previousTransferPath);
+      }
+    } else if (!transferPresent) {
+      await writeOwnerRecord(runDir, expectedOwnerRecord);
+
+      if (hadPreviousTransfer && previousTransferPresent) {
+        await rename(previousTransferPath, transferPath);
+      }
+    }
+
+    throw error;
+  }
 }
 
 export async function writeAttemptArtifacts(runDir: string, attempt: number, artifacts: AttemptArtifacts): Promise<void> {

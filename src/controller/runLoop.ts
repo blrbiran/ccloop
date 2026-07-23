@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import {
   appendEvent,
   initializeRunFiles,
+  OwnerTransferPreconditionError,
   readOwnerRecord,
   writeAttemptArtifacts,
   writeBoundaryArtifacts,
@@ -583,15 +584,25 @@ function buildTakeoverReason(allowed: boolean): string {
     : "deny-by-default until strict owner-loss and transfer conditions are fully met";
 }
 
+function sameOwnerTruth(left: OwnerRecord, right: OwnerRecord): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 async function persistOwnerTransfer(
   runDir: string,
-  ownerRecord: OwnerRecord,
+  expectedOwnerRecord: OwnerRecord,
   nextProcessInstanceId: string,
   at: string,
   reason: string,
 ): Promise<{ ownerRecord: OwnerRecord; eligibleForContinuation: true }> {
-  const transfer = applyOwnerEpochTransfer(ownerRecord, nextProcessInstanceId, at, reason);
-  await writeOwnerTransferArtifacts(runDir, transfer.nextOwnerRecord, transfer.transferRecord);
+  const persistedOwnerRecord = await readOwnerRecord(runDir);
+
+  if (!sameOwnerTruth(persistedOwnerRecord, expectedOwnerRecord)) {
+    throw new OwnerTransferPreconditionError("persisted owner truth changed before transfer eligibility could be established");
+  }
+
+  const transfer = applyOwnerEpochTransfer(persistedOwnerRecord, nextProcessInstanceId, at, reason);
+  await writeOwnerTransferArtifacts(runDir, persistedOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord);
   await appendEvent(runDir, {
     type: "owner_epoch_transferred",
     at,
@@ -642,37 +653,50 @@ async function persistBoundaryAnalysis(
     return;
   }
 
-  const ownerRecord = await readOwnerRecord(runDir);
-  const persistedOwnerStillSupported = derivePersistedOwnerStillSupported(ownerRecord);
-  const supportingContinuityEvidence =
-    persistedOwnerStillSupported && boundaryEvidence.continuityObservationComplete
-      ? []
-      : boundaryEvidence.supportingContinuityEvidence;
-  const ownership = evaluateOwnership({
-    ownerRecord,
-    persistedOwnerStillSupported,
-    boundaryAnalysis,
-    currentProcessStillTrusted: boundaryEvidence.currentProcessStillTrusted,
-    supportingContinuityEvidence,
-    knownSupersedingEpoch: null,
-    lastTrustedBoundary: boundaryEvidence.lastTrustedBoundary,
-  });
+  const evaluateOwnershipFor = (persistedOwnerRecord: OwnerRecord) => {
+    const persistedOwnerStillSupported = derivePersistedOwnerStillSupported(persistedOwnerRecord);
+    const supportingContinuityEvidence =
+      persistedOwnerStillSupported && boundaryEvidence.continuityObservationComplete
+        ? []
+        : boundaryEvidence.supportingContinuityEvidence;
 
+    return evaluateOwnership({
+      ownerRecord: persistedOwnerRecord,
+      persistedOwnerStillSupported,
+      boundaryAnalysis,
+      currentProcessStillTrusted: boundaryEvidence.currentProcessStillTrusted,
+      supportingContinuityEvidence,
+      knownSupersedingEpoch: null,
+      lastTrustedBoundary: boundaryEvidence.lastTrustedBoundary,
+    });
+  };
+
+  let ownerRecord = await readOwnerRecord(runDir);
+  let ownership = evaluateOwnershipFor(ownerRecord);
   let nextOwnerRecord: OwnerRecord | null = null;
   let nextOwnerEpoch: number | null = null;
   let eligibleForContinuation = false;
 
   if (boundaryAnalysis.status === "stale_candidate" && ownership.verdict === "OWNER_LOST" && ownership.takeoverAllowed) {
-    const transfer = await persistOwnerTransfer(
-      runDir,
-      ownerRecord,
-      `pid:${process.pid}`,
-      new Date().toISOString(),
-      "owner lost after reconciliation",
-    );
-    nextOwnerRecord = transfer.ownerRecord;
-    nextOwnerEpoch = transfer.ownerRecord.currentOwnerEpoch;
-    eligibleForContinuation = transfer.eligibleForContinuation;
+    try {
+      const transfer = await persistOwnerTransfer(
+        runDir,
+        ownerRecord,
+        `pid:${process.pid}`,
+        new Date().toISOString(),
+        "owner lost after reconciliation",
+      );
+      nextOwnerRecord = transfer.ownerRecord;
+      nextOwnerEpoch = transfer.ownerRecord.currentOwnerEpoch;
+      eligibleForContinuation = transfer.eligibleForContinuation;
+    } catch (error) {
+      if (!(error instanceof OwnerTransferPreconditionError)) {
+        throw error;
+      }
+
+      ownerRecord = await readOwnerRecord(runDir);
+      ownership = evaluateOwnershipFor(ownerRecord);
+    }
   }
 
   await writeBoundaryArtifacts(runDir, {

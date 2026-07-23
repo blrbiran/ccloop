@@ -1,10 +1,11 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   appendEvent,
   initializeRunFiles,
+  OwnerTransferPreconditionError,
   writeAttemptArtifacts,
   writeBoundaryArtifacts,
   writeOwnerRecord,
@@ -113,7 +114,20 @@ describe("fileStore", () => {
       "owner lost after reconciliation",
     );
 
-    await writeOwnerTransferArtifacts(runDir, transfer.nextOwnerRecord, transfer.transferRecord);
+    await writeOwnerTransferArtifacts(
+      runDir,
+      {
+        runId: "task-1",
+        logicalSessionId: "task-1/session-1",
+        currentOwnerEpoch: 1,
+        currentProcessInstanceId: "pid:12345",
+        lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+        ownerStatus: "current",
+        supersededByEpoch: null,
+      },
+      transfer.nextOwnerRecord,
+      transfer.transferRecord,
+    );
 
     const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
       currentOwnerEpoch: number;
@@ -130,6 +144,105 @@ describe("fileStore", () => {
     expect(audit.priorOwnerEpoch).toBe(1);
     expect(audit.newOwnerEpoch).toBe(2);
     expect(audit.eligibleForContinuation).toBe(true);
+  });
+
+  it("rejects owner transfer when persisted owner truth no longer matches the expected pre-transfer state", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+    };
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    await writeOwnerRecord(runDir, {
+      ...initialOwnerRecord,
+      currentProcessInstanceId: "pid:22222",
+      lastAffirmedAt: "2026-07-22T10:04:00.000Z",
+      ownerStatus: "lost",
+    });
+
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await expect(
+      writeOwnerTransferArtifacts(runDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord),
+    ).rejects.toBeInstanceOf(OwnerTransferPreconditionError);
+
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+      currentOwnerEpoch: number;
+      currentProcessInstanceId: string;
+      ownerStatus: string;
+    };
+
+    expect(owner.currentOwnerEpoch).toBe(1);
+    expect(owner.currentProcessInstanceId).toBe("pid:22222");
+    expect(owner.ownerStatus).toBe("lost");
+    await expect(readFile(join(runDir, "owner-transfer.json"), "utf8")).rejects.toThrow();
+  });
+
+  it("restores the original owner truth when owner-record persistence fails after writing the transfer audit", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+    };
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+          if (String(args[0]).endsWith("owner-record.json.tmp")) {
+            throw new Error("simulated owner write failure");
+          }
+
+          return actual.writeFile(...args);
+        },
+      };
+    });
+
+    try {
+      const fileStore = await import("../../src/persistence/fileStore.js");
+      const transfer = applyOwnerEpochTransfer(
+        initialOwnerRecord,
+        "pid:67890",
+        "2026-07-22T10:05:00.000Z",
+        "owner lost after reconciliation",
+      );
+
+      await fileStore.writeOwnerRecord(runDir, initialOwnerRecord);
+      await expect(
+        fileStore.writeOwnerTransferArtifacts(runDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord),
+      ).rejects.toThrow("simulated owner write failure");
+
+      const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+        currentOwnerEpoch: number;
+        currentProcessInstanceId: string;
+      };
+
+      expect(owner.currentOwnerEpoch).toBe(1);
+      expect(owner.currentProcessInstanceId).toBe("pid:12345");
+      await expect(readFile(join(runDir, "owner-transfer.json"), "utf8")).rejects.toThrow();
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
   });
 
   it("writes execution-recovery.json when execution recovery is present", async () => {
