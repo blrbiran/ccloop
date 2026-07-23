@@ -1083,7 +1083,7 @@ describe("runLoop", () => {
     expect(owner.ownerStatus).toBe("current");
   });
 
-  it("writes an OWNER_UNDECIDABLE reconciliation record on a stale path without granting continuation", async () => {
+  it("keeps changed-path stale reconciliation on OWNER_UNDECIDABLE even when persisted owner truth is lost", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -1102,6 +1102,15 @@ describe("runLoop", () => {
         return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
       },
       async execute(context) {
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+          runId: "task-1",
+          logicalSessionId: "task-1:lost-with-changes",
+          currentOwnerEpoch: 1,
+          currentProcessInstanceId: "pid:12345",
+          lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+          ownerStatus: "lost",
+          supersededByEpoch: null,
+        }, null, 2));
         await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 2;\n");
         await waitForAbort(context.abortSignal);
         return null;
@@ -1130,7 +1139,7 @@ describe("runLoop", () => {
     expect(reconciliation.takeoverPermission.allowed).toBe(false);
   });
 
-  it("writes an OWNER_LOST reconciliation record only when persisted owner support is absent and continuity evidence does not rescue it", async () => {
+  it("writes an OWNER_LOST reconciliation record only when persisted owner truth no longer supports ownership and continuity evidence does not rescue it", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -1149,6 +1158,15 @@ describe("runLoop", () => {
         return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
       },
       async execute(context) {
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+          runId: "task-1",
+          logicalSessionId: "task-1:lost",
+          currentOwnerEpoch: 1,
+          currentProcessInstanceId: "pid:12345",
+          lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+          ownerStatus: "lost",
+          supersededByEpoch: null,
+        }, null, 2));
         await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 3;\n");
         await execFileAsync("git", ["checkout", "--", "src/index.ts"], { cwd: context.worktreePath });
         await waitForAbort(context.abortSignal);

@@ -1,4 +1,4 @@
-import { access, appendFile, mkdir, readdir, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { LoopContract } from "../contract/schema.js";
 import type {
@@ -104,6 +104,10 @@ export async function writeBoundaryArtifacts(
 
 export async function writeOwnerRecord(runDir: string, ownerRecord: OwnerRecord): Promise<void> {
   await writeFile(join(runDir, "owner-record.json"), JSON.stringify(ownerRecord, null, 2));
+}
+
+export async function readOwnerRecord(runDir: string): Promise<OwnerRecord> {
+  return JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as OwnerRecord;
 }
 
 export async function writeOwnerTransferRecord(runDir: string, transferRecord: OwnerTransferRecord): Promise<void> {

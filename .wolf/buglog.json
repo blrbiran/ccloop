@@ -598,5 +598,17 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-22T23:40:26Z"
+  }  ,
+  {
+    "id": "bug-031",
+    "timestamp": "2026-07-23T00:39:50Z",
+    "error_message": "Changed-path stale reconciliation could still resolve to OWNER_LOST when owner-record.json was mutated to lost before controller reconciliation.",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "The controller fed changed-path and worktree-diff observations only into continuitySuspicion/conflictingEvidence while derivePersistedOwnerStillSupported came solely from persisted owner truth, so evaluateOwnership could still see a lost owner record with no supporting continuity evidence and emit OWNER_LOST.",
+    "fix": "Added readOwnerRecord() for reconciliation-time owner truth, preserved changed-path/worktree-diff observations as supporting continuity evidence when persisted truth is lost, and added a focused controller regression covering changed-path stale plus mutated lost owner truth.",
+    "tags": ["task-3", "controller", "ownership", "reconciliation", "reviewer-fix"],
+    "related_bugs": ["bug-028"],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T00:39:50Z"
   }
 ]

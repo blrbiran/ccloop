@@ -65,3 +65,20 @@ Result:
 ## Concerns
 - No product-scope concerns.
 - Verification required one environment repair (`npm ci`) because the worktree initially lacked a local `tsx` binary for validation CLI tests; this was resolved before the final full-suite run.
+
+## Reviewer fix 2 — changed-path stale evidence must block OWNER_LOST
+- Updated `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a4eb27f619e34e491/src/controller/runLoop.ts` so stale reconciliation reads persisted owner truth from `owner-record.json` at reconciliation time and still forwards changed-path/worktree-diff stale evidence as supporting continuity evidence when persisted truth has already been flipped to `lost`.
+- Kept the clarified Task 3 boundary intact:
+  - changed-path or worktree-diff stale evidence stays `OWNER_UNDECIDABLE`
+  - the no-changed-path stale path remains the only deterministic `OWNER_LOST` case
+- Added focused controller regression coverage in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a4eb27f619e34e491/tests/controller/runLoop.integration.test.ts` for the changed-path stale plus mutated-lost-owner-record case.
+
+### Reviewer-fix-2 test coverage
+Command:
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/controller/runLoop.integration.test.ts`
+
+Result:
+- Passed: `Test Files  1 passed (1)` and `Tests  41 passed (41)`.
+
+### Reviewer-fix-2 note
+- While implementing the fix, the focused suite first failed because the deterministic `OWNER_LOST` fixture no longer mutated `owner-record.json` to `lost`; restoring that persisted-truth setup re-established the intended no-changed-path `OWNER_LOST` path and kept changed-path stale runs deny-by-default.

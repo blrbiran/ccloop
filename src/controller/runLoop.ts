@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import {
   appendEvent,
   initializeRunFiles,
+  readOwnerRecord,
   writeAttemptArtifacts,
   writeBoundaryArtifacts,
   writeOwnerRecord,
@@ -486,14 +487,16 @@ function buildExecutionRecovery(
   };
 }
 
-function buildBoundaryEvidence(executionRecovery: ExecutionRecovery | null): {
+type BoundaryEvidence = {
   continuitySuspicion: string[];
   conflictingEvidence: string[];
   currentProcessStillTrusted: boolean;
   supportingContinuityEvidence: string[];
   lastTrustedBoundary: LastTrustedBoundary;
   continuityObservationComplete: boolean;
-} {
+};
+
+function buildBoundaryEvidence(executionRecovery: ExecutionRecovery | null): BoundaryEvidence {
   if (executionRecovery === null) {
     return {
       continuitySuspicion: [],
@@ -542,7 +545,7 @@ function buildBoundaryEvidence(executionRecovery: ExecutionRecovery | null): {
       conflictingEvidence: ["changed-path observation failed after interrupted execute"],
       currentProcessStillTrusted: false,
       supportingContinuityEvidence: [],
-      lastTrustedBoundary: "execute",
+      lastTrustedBoundary: "unknown",
       continuityObservationComplete: false,
     };
   }
@@ -557,11 +560,8 @@ function buildBoundaryEvidence(executionRecovery: ExecutionRecovery | null): {
   };
 }
 
-function inferPersistedOwnerStillSupported(
-  boundaryEvidence: ReturnType<typeof buildBoundaryEvidence>,
-  _boundaryAnalysis: ReturnType<typeof evaluateRunBoundary>,
-): boolean {
-  return !boundaryEvidence.continuityObservationComplete;
+function derivePersistedOwnerStillSupported(ownerRecord: OwnerRecord): boolean {
+  return ownerRecord.ownerStatus === "current" && ownerRecord.supersededByEpoch === null;
 }
 
 function buildInitialOwnerRecord(contract: LoopContract, state: RunState): OwnerRecord {
@@ -605,7 +605,6 @@ async function writeCompletedAttemptArtifacts(
 async function persistBoundaryAnalysis(
   runDir: string,
   state: RunState,
-  ownerRecord: OwnerRecord,
   executionRecovery?: ExecutionRecovery,
 ): Promise<void> {
   const boundaryEvidence = buildBoundaryEvidence(executionRecovery ?? null);
@@ -622,13 +621,18 @@ async function persistBoundaryAnalysis(
     return;
   }
 
-  const persistedOwnerStillSupported = inferPersistedOwnerStillSupported(boundaryEvidence, boundaryAnalysis);
+  const ownerRecord = await readOwnerRecord(runDir);
+  const persistedOwnerStillSupported = derivePersistedOwnerStillSupported(ownerRecord);
+  const supportingContinuityEvidence =
+    persistedOwnerStillSupported && boundaryEvidence.continuityObservationComplete
+      ? []
+      : boundaryEvidence.supportingContinuityEvidence;
   const ownership = evaluateOwnership({
     ownerRecord,
     persistedOwnerStillSupported,
     boundaryAnalysis,
     currentProcessStillTrusted: boundaryEvidence.currentProcessStillTrusted,
-    supportingContinuityEvidence: boundaryEvidence.supportingContinuityEvidence,
+    supportingContinuityEvidence,
     knownSupersedingEpoch: null,
     lastTrustedBoundary: boundaryEvidence.lastTrustedBoundary,
   });
@@ -784,7 +788,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
             plan,
             executionRecovery,
           });
-          await persistBoundaryAnalysis(runDir, state, ownerRecord, executionRecovery);
+          await persistBoundaryAnalysis(runDir, state, executionRecovery);
           state = await persistTerminalState(
             runDir,
             state,
@@ -815,7 +819,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
       }
 
       if (execution === null) {
-        await persistBoundaryAnalysis(runDir, state, ownerRecord);
+        await persistBoundaryAnalysis(runDir, state);
         throw new Error("execute phase completed without a result");
       }
 
