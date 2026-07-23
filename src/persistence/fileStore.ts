@@ -98,7 +98,10 @@ function buildSuccessfulReconciliationFromTransfer(
     conflictingEvidence: currentRecord?.conflictingEvidence ?? [],
     takeoverPermission: {
       allowed: true,
-      reason: currentRecord?.takeoverPermission.reason ?? "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
+      reason:
+        currentRecord?.takeoverPermission.allowed === true
+          ? currentRecord.takeoverPermission.reason
+          : "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
     },
     priorOwnerEpoch: ownerTransferRecord.priorOwnerEpoch,
     newOwnerEpoch: ownerTransferRecord.newOwnerEpoch,

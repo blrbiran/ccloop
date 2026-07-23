@@ -1180,6 +1180,9 @@ describe("fileStore", () => {
     expect(reconciliation.newOwnerEpoch).toBe(2);
     expect(reconciliation.eligibleForContinuation).toBe(true);
     expect(reconciliation.takeoverPermission.allowed).toBe(true);
+    expect(reconciliation.takeoverPermission.reason).toBe(
+      "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
+    );
     expect(reconciliation.staleSuspicionBasis).toEqual(["continuity evidence missing"]);
     expect(reconciliation.conflictingEvidence).toEqual(["changed paths observed after interrupted execute: src/index.ts"]);
     expect(reconciliation.lastTrustedBoundary).toBe("execute");

@@ -1551,6 +1551,9 @@ describe("runLoop", () => {
       expect(reconciliation.newOwnerEpoch).toBe(2);
       expect(reconciliation.eligibleForContinuation).toBe(true);
       expect(reconciliation.takeoverPermission.allowed).toBe(true);
+      expect(reconciliation.takeoverPermission.reason).toBe(
+        "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
+      );
       expect(reconciliation.staleSuspicionBasis[0]).toContain("src/index.ts");
       expect(reconciliation.conflictingEvidence.join(" ")).toContain("src/index.ts");
       expect(reconciliation.lastTrustedBoundary).toBe("execute");
