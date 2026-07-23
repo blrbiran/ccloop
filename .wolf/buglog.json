@@ -610,5 +610,29 @@
     "related_bugs": ["bug-028"],
     "occurrences": 1,
     "last_seen": "2026-07-23T00:39:50Z"
+  },
+  {
+    "id": "bug-032",
+    "timestamp": "2026-07-23T09:00:25Z",
+    "error_message": "TypeError: writeOwnerTransferArtifacts is not a function",
+    "file": "src/persistence/fileStore.ts",
+    "root_cause": "Task 4 RED persistence coverage expected a controller-facing helper that updates owner-record.json and owner-transfer.json together, but fileStore only exposed the individual writers.",
+    "fix": "Added writeOwnerTransferArtifacts() and wired runLoop stale OWNER_LOST reconciliation through a minimal owner-transfer path that persists the transfer record, updates owner-record.json, appends owner_epoch_transferred, and marks reconciliation eligibility only after transfer succeeds.",
+    "tags": ["task-4", "persistence", "controller", "ownership", "tdd"],
+    "related_bugs": ["bug-023", "bug-028"],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T09:00:25Z"
+  },
+  {
+    "id": "bug-033",
+    "timestamp": "2026-07-23T09:05:30Z",
+    "error_message": "npm test failed with spawn /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a812cdc7f102a3c6b/node_modules/.bin/tsx ENOENT during Task 4 full verification",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "The current Task 4 worktree had no local node_modules/.bin/tsx path, so validation CLI tests that spawn the worktree-local tsx executable failed before reaching product logic.",
+    "fix": "Created a local node_modules/.bin/tsx symlink to the repository root tsx binary and reran the full Vitest suite successfully.",
+    "tags": ["task-4", "verification", "validation", "environment", "node_modules", "tsx"],
+    "related_bugs": ["bug-003", "bug-022", "bug-024", "bug-026", "bug-030"],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T09:05:30Z"
   }
 ]

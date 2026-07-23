@@ -1,53 +1,74 @@
-# Task 4 Report — Teach validation to read controller-owned boundary artifacts
+# Task 4 Report — Add atomic owner transfer persistence and controller-owned eligibility contract
 
 ## Status
 - DONE
 
 ## What I implemented
-- Updated `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ad0e524ad90f61b34/validation/v1/lib/evidence.ts` so the evidence layer now reads run-root `boundary-analysis.json` and `reconciliation-record.json`.
-- Added explicit evidence observations for both artifacts under `EvidenceRecord["observations"]`.
-- Added Zod validation for:
-  - `boundary-analysis.json`
-  - `reconciliation-record.json`
-- Ensured malformed `reconciliation-record.json` is surfaced as `INVALID` with a shape-validation error instead of being trusted as truth.
-- Preserved the existing historical evidence-boundary classification logic; this task only widened evidence collection/validation to include the new controller-owned artifacts.
+- Added `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a812cdc7f102a3c6b/src/persistence/fileStore.ts` helper `writeOwnerTransferArtifacts(...)` so the controller can persist `owner-record.json` and `owner-transfer.json` together in one minimal transfer step.
+- Added `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a812cdc7f102a3c6b/src/controller/runLoop.ts` helper `persistOwnerTransfer(...)` that:
+  - derives the next owner epoch with `applyOwnerEpochTransfer(...)`
+  - persists owner and transfer artifacts
+  - appends `owner_epoch_transferred`
+  - returns `eligibleForContinuation: true`
+- Updated stale reconciliation in `runLoop.ts` so that on exactly `OWNER_LOST + takeoverAllowed` it now:
+  - performs the transfer step
+  - records `newOwnerEpoch`
+  - records `eligibleForContinuation: true`
+  - keeps the run terminal in the same controller step instead of resuming execution
+- Kept all non-transfer stale paths deny-by-default:
+  - `OWNER_UNDECIDABLE` still records `eligibleForContinuation: false`
+  - no scheduler, resume, cleanup policy, or daemon behavior was added
 
 ## TDD evidence
 ### RED
-- Added a focused failing regression in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ad0e524ad90f61b34/tests/validation/evidence.test.ts`:
-  - `marks malformed reconciliation-record.json as INVALID instead of trusting it`
-- Focused command:
-  - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/validation/evidence.test.ts`
-- Product failure observed before the fix:
-  - `Cannot read properties of undefined (reading 'status')`
+- Added focused failing regressions in:
+  - `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a812cdc7f102a3c6b/tests/persistence/fileStore.test.ts`
+    - `writes owner-transfer.json and updates owner-record.json atomically after an OWNER_LOST takeover-allowed verdict`
+  - `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a812cdc7f102a3c6b/tests/controller/runLoop.integration.test.ts`
+    - `persists owner transfer artifacts and continuation eligibility after a controller-owned OWNER_LOST takeover-allowed verdict without resuming execution`
+- RED command:
+  - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/persistence/fileStore.test.ts`
+- Failure observed before the fix:
+  - `TypeError: writeOwnerTransferArtifacts is not a function`
 - Interpretation:
-  - the evidence layer was not yet reading `reconciliation-record.json`, so the new observation was absent.
+  - the Task 4 atomic transfer persistence path was not wired yet.
 
 ### GREEN
-- Implemented the minimal evidence-layer support in `validation/v1/lib/evidence.ts`.
-- Re-ran the same focused command:
-  - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/validation/evidence.test.ts`
+- Implemented the minimal transfer helper in `fileStore.ts` and the controller transfer wiring in `runLoop.ts`.
+- Updated the existing OWNER_LOST integration expectation to the Task 4 contract, since successful transfer now produces `newOwnerEpoch=2` and `eligibleForContinuation=true`.
+- GREEN command:
+  - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/controller/runLoop.integration.test.ts tests/persistence/fileStore.test.ts`
 - Result:
-  - `1` file passed
-  - `37` tests passed
+  - `2` files passed
+  - `48` tests passed
 
 ## What I tested
-- Focused validation suite only, per the task brief:
-  - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/validation/evidence.test.ts`
-- Result: PASS (`37/37` tests)
+- Focused Task 4 suites:
+  - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/persistence/fileStore.test.ts`
+    - RED confirmed
+  - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/controller/runLoop.integration.test.ts tests/persistence/fileStore.test.ts`
+    - PASS (`48/48`)
+- Full suite:
+  - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test`
+    - First run failed because this worktree lacked `node_modules/.bin/tsx`
+    - After restoring that local path via symlink, reran and got PASS (`217/217`)
 
 ## Files changed
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ad0e524ad90f61b34/validation/v1/lib/evidence.ts`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ad0e524ad90f61b34/tests/validation/evidence.test.ts`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ad0e524ad90f61b34/.wolf/buglog.json`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ad0e524ad90f61b34/.superpowers/sdd/task-4-report.md`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a812cdc7f102a3c6b/src/controller/runLoop.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a812cdc7f102a3c6b/src/persistence/fileStore.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a812cdc7f102a3c6b/tests/controller/runLoop.integration.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a812cdc7f102a3c6b/tests/persistence/fileStore.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a812cdc7f102a3c6b/.wolf/buglog.json`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a812cdc7f102a3c6b/.superpowers/sdd/task-4-report.md`
 
 ## Self-review findings
-- Scope stayed surgical: no controller wiring, scheduler behavior, daemon behavior, ownership/lease/fencing, cleanup/orphan GC, resume/adopt, or paid-run behavior was added.
-- The new artifact reads are run-root scoped, matching the controller-owned artifact contract.
-- The reconciliation record is only trusted on successful schema validation; malformed JSON shape now becomes `INVALID`.
-- Existing D-boundary classification behavior was left intact aside from the new evidence observations being available for downstream consumers.
+- Scope stayed surgical and matched the brief: only persistence/controller wiring plus focused tests changed.
+- Successful transfer now grants eligibility only; there is still no same-step resume path.
+- The transfer audit event is emitted exactly on the successful transfer path.
+- Reconciliation still reads persisted owner truth first and stays deny-by-default on non-transfer paths.
+- I left the atomic write implementation minimal and aligned to the brief's controller-step contract; it does not introduce broader file-store transaction machinery.
 
 ## Issues or concerns
-- No product concerns remain.
-- During execution, the isolated worktree lacked a local `node_modules/.bin/tsx` path expected by some existing focused tests; I fixed local test availability in the worktree environment and then confirmed the focused suite passed. This did not require product-code changes beyond Task 4 scope.
+- No product-scope concerns remain.
+- Full-suite verification required a local environment repair because this agent worktree initially lacked `node_modules/.bin/tsx`; I restored the worktree-local path with a symlink to the repository-root binary and reran successfully.
+- I created worktree-local OpenWolf bookkeeping files (`.wolf/anatomy.md`, `.wolf/cerebrum.md`, `.wolf/memory.md`) because this checkout did not include them; they are auxiliary and not part of the product change set.

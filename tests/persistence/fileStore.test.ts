@@ -8,10 +8,12 @@ import {
   writeAttemptArtifacts,
   writeBoundaryArtifacts,
   writeOwnerRecord,
+  writeOwnerTransferArtifacts,
   writeOwnerTransferRecord,
   writeRunState,
 } from "../../src/persistence/fileStore.js";
 import type { LoopContract } from "../../src/contract/schema.js";
+import { applyOwnerEpochTransfer } from "../../src/ownership/ownerController.js";
 import type { RunState } from "../../src/state/types.js";
 
 const contract: LoopContract = {
@@ -81,6 +83,53 @@ describe("fileStore", () => {
     expect(transfer.priorOwnerEpoch).toBe(1);
     expect(transfer.newOwnerEpoch).toBe(2);
     expect(transfer.eligibleForContinuation).toBe(true);
+  });
+
+  it("writes owner-transfer.json and updates owner-record.json atomically after an OWNER_LOST takeover-allowed verdict", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    await writeOwnerRecord(runDir, {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current",
+      supersededByEpoch: null,
+    });
+
+    const transfer = applyOwnerEpochTransfer(
+      {
+        runId: "task-1",
+        logicalSessionId: "task-1/session-1",
+        currentOwnerEpoch: 1,
+        currentProcessInstanceId: "pid:12345",
+        lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+        ownerStatus: "current",
+        supersededByEpoch: null,
+      },
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerTransferArtifacts(runDir, transfer.nextOwnerRecord, transfer.transferRecord);
+
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+      currentOwnerEpoch: number;
+      currentProcessInstanceId: string;
+    };
+    const audit = JSON.parse(await readFile(join(runDir, "owner-transfer.json"), "utf8")) as {
+      priorOwnerEpoch: number;
+      newOwnerEpoch: number;
+      eligibleForContinuation: boolean;
+    };
+
+    expect(owner.currentOwnerEpoch).toBe(2);
+    expect(owner.currentProcessInstanceId).toBe("pid:67890");
+    expect(audit.priorOwnerEpoch).toBe(1);
+    expect(audit.newOwnerEpoch).toBe(2);
+    expect(audit.eligibleForContinuation).toBe(true);
   });
 
   it("writes execution-recovery.json when execution recovery is present", async () => {

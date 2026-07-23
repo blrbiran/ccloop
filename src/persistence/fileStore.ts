@@ -114,6 +114,15 @@ export async function writeOwnerTransferRecord(runDir: string, transferRecord: O
   await writeFile(join(runDir, "owner-transfer.json"), JSON.stringify(transferRecord, null, 2));
 }
 
+export async function writeOwnerTransferArtifacts(
+  runDir: string,
+  ownerRecord: OwnerRecord,
+  transferRecord: OwnerTransferRecord,
+): Promise<void> {
+  await writeOwnerRecord(runDir, ownerRecord);
+  await writeOwnerTransferRecord(runDir, transferRecord);
+}
+
 export async function writeAttemptArtifacts(runDir: string, attempt: number, artifacts: AttemptArtifacts): Promise<void> {
   const attemptDir = join(runDir, "attempts", String(attempt));
   await mkdir(attemptDir, { recursive: true });

@@ -7,13 +7,14 @@ import {
   writeAttemptArtifacts,
   writeBoundaryArtifacts,
   writeOwnerRecord,
+  writeOwnerTransferArtifacts,
   writeRunState,
 } from "../persistence/fileStore.js";
 import { evaluatePathPolicy } from "../policy/pathPolicy.js";
 import { evaluateRunBoundary, evaluateStopDecision } from "../stop/stopController.js";
 import { transitionRunState } from "../state/stateMachine.js";
 import type { LoopContract } from "../contract/schema.js";
-import { evaluateOwnership } from "../ownership/ownerController.js";
+import { applyOwnerEpochTransfer, evaluateOwnership } from "../ownership/ownerController.js";
 import type {
   AttemptContext,
   AttemptPlan,
@@ -582,6 +583,26 @@ function buildTakeoverReason(allowed: boolean): string {
     : "deny-by-default until strict owner-loss and transfer conditions are fully met";
 }
 
+async function persistOwnerTransfer(
+  runDir: string,
+  ownerRecord: OwnerRecord,
+  nextProcessInstanceId: string,
+  at: string,
+  reason: string,
+): Promise<{ ownerRecord: OwnerRecord; eligibleForContinuation: true }> {
+  const transfer = applyOwnerEpochTransfer(ownerRecord, nextProcessInstanceId, at, reason);
+  await writeOwnerTransferArtifacts(runDir, transfer.nextOwnerRecord, transfer.transferRecord);
+  await appendEvent(runDir, {
+    type: "owner_epoch_transferred",
+    at,
+    detail: `owner epoch ${transfer.transferRecord.priorOwnerEpoch} superseded by ${transfer.transferRecord.newOwnerEpoch}`,
+  });
+  return {
+    ownerRecord: transfer.nextOwnerRecord,
+    eligibleForContinuation: true,
+  };
+}
+
 async function writeCompletedAttemptArtifacts(
   runDir: string,
   attempt: number,
@@ -637,6 +658,23 @@ async function persistBoundaryAnalysis(
     lastTrustedBoundary: boundaryEvidence.lastTrustedBoundary,
   });
 
+  let nextOwnerRecord: OwnerRecord | null = null;
+  let nextOwnerEpoch: number | null = null;
+  let eligibleForContinuation = false;
+
+  if (boundaryAnalysis.status === "stale_candidate" && ownership.verdict === "OWNER_LOST" && ownership.takeoverAllowed) {
+    const transfer = await persistOwnerTransfer(
+      runDir,
+      ownerRecord,
+      `pid:${process.pid}`,
+      new Date().toISOString(),
+      "owner lost after reconciliation",
+    );
+    nextOwnerRecord = transfer.ownerRecord;
+    nextOwnerEpoch = transfer.ownerRecord.currentOwnerEpoch;
+    eligibleForContinuation = transfer.eligibleForContinuation;
+  }
+
   await writeBoundaryArtifacts(runDir, {
     boundaryAnalysis,
     reconciliationRecord:
@@ -655,11 +693,12 @@ async function persistBoundaryAnalysis(
               reason: buildTakeoverReason(ownership.takeoverAllowed),
             },
             priorOwnerEpoch: ownerRecord.currentOwnerEpoch,
-            newOwnerEpoch: null,
-            eligibleForContinuation: false,
+            newOwnerEpoch: nextOwnerEpoch,
+            eligibleForContinuation,
           }
         : undefined,
   });
+
 }
 
 async function persistTerminalState(
