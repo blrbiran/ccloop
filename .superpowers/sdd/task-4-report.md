@@ -112,3 +112,22 @@
   - `eligibleForContinuation: true` still appears only on successful transfer
   - no same-step resume execution was added
   - controller transfer path still appends `owner_epoch_transferred` only after successful publish
+
+## Review-fix follow-up 3 (2026-07-23)
+- Closed the last known Task 4 blocker surgically in `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a9185b5c5e94b75a4/src/persistence/fileStore.ts`:
+  - added a narrow `shouldPreserveSuccessfulReconciliation(...)` guard before rewriting `reconciliation-record.json`
+  - when a successful `OWNER_LOST` transfer reconciliation is already persisted and `owner-transfer.json` proves the published winning transfer, a later loser-path downgrade write is ignored instead of overwriting that success view
+  - the guard only applies to the corresponding downgrade shape (`priorOwnerEpoch` already advanced to the winner epoch, `newOwnerEpoch: null`, `eligibleForContinuation: false`), so successful-path behavior stays unchanged
+- Added focused regressions:
+  - `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a9185b5c5e94b75a4/tests/persistence/fileStore.test.ts`
+    - `preserves a successful reconciliation record when a loser later tries to downgrade it`
+  - `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a9185b5c5e94b75a4/tests/controller/runLoop.integration.test.ts`
+    - `preserves the winner reconciliation view when another controller already completed the transfer`
+- Focused verification:
+  - `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/controller/runLoop.integration.test.ts tests/persistence/fileStore.test.ts`
+  - PASS (`70/70`)
+- Successful-path contract remains unchanged:
+  - transfer still occurs only on controller-owned `OWNER_LOST + takeoverAllowed`
+  - `eligibleForContinuation: true` still appears only on successful transfer
+  - no same-step resume execution was added
+  - loser reconciliation writes no longer downgrade an already-published successful transfer view

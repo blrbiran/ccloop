@@ -1291,7 +1291,7 @@ describe("runLoop", () => {
     ]);
   });
 
-  it("re-reads persisted owner truth before transfer and refuses takeover when another controller already changed it", async () => {
+  it("preserves the winner reconciliation view when another controller already completed the transfer", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -1325,6 +1325,38 @@ describe("runLoop", () => {
               currentProcessInstanceId: "pid:other-controller",
               lastAffirmedAt: "2026-07-23T00:00:01.000Z",
               ownerStatus: "current",
+            });
+            await actual.writeOwnerTransferRecord(observedRunDir, {
+              priorOwnerEpoch: owner.currentOwnerEpoch,
+              newOwnerEpoch: owner.currentOwnerEpoch + 1,
+              priorProcessInstanceId: owner.currentProcessInstanceId,
+              newProcessInstanceId: "pid:other-controller",
+              transferredAt: "2026-07-23T00:00:01.000Z",
+              reason: "owner lost after reconciliation",
+              eligibleForContinuation: true,
+            });
+            await actual.writeBoundaryArtifacts(observedRunDir, {
+              boundaryAnalysis: {
+                status: "stale_candidate",
+                strongProgressAt: null,
+                weakProgressAt: null,
+                suspectReason: null,
+                staleCandidateReason: "continuity evidence missing",
+              },
+              reconciliationRecord: {
+                staleSuspicionBasis: ["continuity evidence missing"],
+                staleConfirmed: true,
+                ownershipVerdict: "OWNER_LOST",
+                lastTrustedBoundary: "execute",
+                conflictingEvidence: [],
+                takeoverPermission: {
+                  allowed: true,
+                  reason: "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
+                },
+                priorOwnerEpoch: owner.currentOwnerEpoch,
+                newOwnerEpoch: owner.currentOwnerEpoch + 1,
+                eligibleForContinuation: true,
+              },
             });
           }
 
@@ -1363,6 +1395,12 @@ describe("runLoop", () => {
         currentProcessInstanceId: string;
         ownerStatus: string;
       };
+      const transfer = JSON.parse(await readFile(join(runDir, "owner-transfer.json"), "utf8")) as {
+        priorOwnerEpoch: number;
+        newOwnerEpoch: number;
+        newProcessInstanceId: string;
+        eligibleForContinuation: boolean;
+      };
       const reconciliation = JSON.parse(
         await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
       ) as {
@@ -1370,16 +1408,21 @@ describe("runLoop", () => {
         priorOwnerEpoch: number | null;
         newOwnerEpoch: number | null;
         eligibleForContinuation: boolean;
+        takeoverPermission: { allowed: boolean };
       };
 
       expect(owner.currentOwnerEpoch).toBe(2);
       expect(owner.currentProcessInstanceId).toBe("pid:other-controller");
       expect(owner.ownerStatus).toBe("current");
-      await expect(readFile(join(runDir, "owner-transfer.json"), "utf8")).rejects.toThrow();
-      expect(reconciliation.ownershipVerdict).toBe("OWNER_UNDECIDABLE");
-      expect(reconciliation.priorOwnerEpoch).toBe(2);
-      expect(reconciliation.newOwnerEpoch).toBe(null);
-      expect(reconciliation.eligibleForContinuation).toBe(false);
+      expect(transfer.priorOwnerEpoch).toBe(1);
+      expect(transfer.newOwnerEpoch).toBe(2);
+      expect(transfer.newProcessInstanceId).toBe("pid:other-controller");
+      expect(transfer.eligibleForContinuation).toBe(true);
+      expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
+      expect(reconciliation.priorOwnerEpoch).toBe(1);
+      expect(reconciliation.newOwnerEpoch).toBe(2);
+      expect(reconciliation.eligibleForContinuation).toBe(true);
+      expect(reconciliation.takeoverPermission.allowed).toBe(true);
       expect(finalState.status).toBe("exhausted");
       expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON);
       expect(await readEventTypes(runDir)).toEqual([

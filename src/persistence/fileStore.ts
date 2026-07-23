@@ -85,6 +85,37 @@ export async function appendEvent(runDir: string, event: RunEvent): Promise<void
   await appendFile(join(runDir, "events.jsonl"), `${JSON.stringify(event)}\n`);
 }
 
+async function shouldPreserveSuccessfulReconciliation(
+  runDir: string,
+  nextReconciliationRecord: ReconciliationRecord,
+): Promise<boolean> {
+  if (nextReconciliationRecord.eligibleForContinuation) {
+    return false;
+  }
+
+  let persistedReconciliationRecord: ReconciliationRecord;
+  let persistedOwnerTransferRecord: OwnerTransferRecord;
+
+  try {
+    [persistedReconciliationRecord, persistedOwnerTransferRecord] = await Promise.all([
+      JSON.parse(await readFile(join(runDir, "reconciliation-record.json"), "utf8")) as ReconciliationRecord,
+      readOwnerTransferRecordRaw(runDir),
+    ]);
+  } catch {
+    return false;
+  }
+
+  return (
+    persistedReconciliationRecord.eligibleForContinuation
+    && persistedReconciliationRecord.ownershipVerdict === "OWNER_LOST"
+    && persistedReconciliationRecord.priorOwnerEpoch === persistedOwnerTransferRecord.priorOwnerEpoch
+    && persistedReconciliationRecord.newOwnerEpoch === persistedOwnerTransferRecord.newOwnerEpoch
+    && nextReconciliationRecord.priorOwnerEpoch === persistedOwnerTransferRecord.newOwnerEpoch
+    && nextReconciliationRecord.newOwnerEpoch === null
+    && persistedOwnerTransferRecord.eligibleForContinuation === true
+  );
+}
+
 export async function writeBoundaryArtifacts(
   runDir: string,
   artifacts: {
@@ -95,6 +126,10 @@ export async function writeBoundaryArtifacts(
   await writeFile(join(runDir, "boundary-analysis.json"), JSON.stringify(artifacts.boundaryAnalysis, null, 2));
 
   if (artifacts.reconciliationRecord !== undefined) {
+    if (await shouldPreserveSuccessfulReconciliation(runDir, artifacts.reconciliationRecord)) {
+      return;
+    }
+
     await writeFile(
       join(runDir, "reconciliation-record.json"),
       JSON.stringify(artifacts.reconciliationRecord, null, 2),
@@ -152,6 +187,10 @@ async function writeJsonFile(path: string, value: unknown): Promise<void> {
 
 async function readOwnerRecordRaw(runDir: string): Promise<OwnerRecord> {
   return JSON.parse(await readFile(join(runDir, OWNER_RECORD_FILE), "utf8")) as OwnerRecord;
+}
+
+async function readOwnerTransferRecordRaw(runDir: string): Promise<OwnerTransferRecord> {
+  return JSON.parse(await readFile(join(runDir, OWNER_TRANSFER_FILE), "utf8")) as OwnerTransferRecord;
 }
 
 export async function writeOwnerRecord(runDir: string, ownerRecord: OwnerRecord): Promise<void> {

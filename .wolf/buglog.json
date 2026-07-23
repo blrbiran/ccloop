@@ -670,5 +670,17 @@
     "related_bugs": ["bug-035"],
     "occurrences": 1,
     "last_seen": "2026-07-23T13:51:19Z"
+  },
+  {
+    "id": "bug-037",
+    "timestamp": "2026-07-23T14:23:06Z",
+    "error_message": "A loser controller could overwrite reconciliation-record.json with an OWNER_UNDECIDABLE failure view after another controller had already completed the owner transfer and published a successful reconciliation view.",
+    "file": "src/persistence/fileStore.ts",
+    "root_cause": "writeBoundaryArtifacts() always rewrote reconciliation-record.json without checking whether a successful owner transfer and matching successful reconciliation had already been published, so a later loser-path write could downgrade the final persisted reconciliation view.",
+    "fix": "Added a narrow preservation guard in writeBoundaryArtifacts() that keeps an already-published successful OWNER_LOST reconciliation view when owner-transfer.json proves the winning transfer and the incoming record is the corresponding post-transfer downgrade, and added focused persistence/controller regressions.",
+    "tags": ["task-4", "persistence", "reconciliation", "concurrency", "ownership", "reviewer-fix"],
+    "related_bugs": ["bug-035"],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T14:23:06Z"
   }
 ]

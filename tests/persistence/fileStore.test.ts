@@ -1028,6 +1028,84 @@ describe("fileStore", () => {
     expect(reconciliation.takeoverPermission.allowed).toBe(false);
   });
 
+  it("preserves a successful reconciliation record when a loser later tries to downgrade it", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    await writeOwnerTransferRecord(runDir, {
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      priorProcessInstanceId: "pid:12345",
+      newProcessInstanceId: "pid:winner",
+      transferredAt: "2026-07-23T00:00:01.000Z",
+      reason: "owner lost after reconciliation",
+      eligibleForContinuation: true,
+    });
+
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis: {
+        status: "stale_candidate",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: "continuity evidence missing",
+      },
+      reconciliationRecord: {
+        staleSuspicionBasis: ["continuity evidence missing"],
+        staleConfirmed: true,
+        ownershipVerdict: "OWNER_LOST",
+        lastTrustedBoundary: "execute",
+        conflictingEvidence: [],
+        takeoverPermission: {
+          allowed: true,
+          reason: "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
+        },
+        priorOwnerEpoch: 1,
+        newOwnerEpoch: 2,
+        eligibleForContinuation: true,
+      },
+    });
+
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis: {
+        status: "stale_candidate",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: "continuity evidence missing",
+      },
+      reconciliationRecord: {
+        staleSuspicionBasis: ["continuity evidence missing"],
+        staleConfirmed: true,
+        ownershipVerdict: "OWNER_UNDECIDABLE",
+        lastTrustedBoundary: "execute",
+        conflictingEvidence: [],
+        takeoverPermission: {
+          allowed: false,
+          reason: "deny-by-default until strict owner-loss and transfer conditions are fully met",
+        },
+        priorOwnerEpoch: 2,
+        newOwnerEpoch: null,
+        eligibleForContinuation: false,
+      },
+    });
+
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as {
+      ownershipVerdict: string;
+      priorOwnerEpoch: number | null;
+      newOwnerEpoch: number | null;
+      eligibleForContinuation: boolean;
+      takeoverPermission: { allowed: boolean };
+    };
+
+    expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
+    expect(reconciliation.priorOwnerEpoch).toBe(1);
+    expect(reconciliation.newOwnerEpoch).toBe(2);
+    expect(reconciliation.eligibleForContinuation).toBe(true);
+    expect(reconciliation.takeoverPermission.allowed).toBe(true);
+  });
+
   it("writes contract, state, events, and attempt artifacts", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     await initializeRunFiles(runDir, contract, state);
