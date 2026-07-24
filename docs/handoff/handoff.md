@@ -1,25 +1,25 @@
-# ccloop Handoff — ownership + reconciliation 已落地本地 main
+# ccloop Handoff — ownership + reconciliation 已落地并 push 到 origin/main
 
-> 写于 2026-07-24。接手前先用 Git / 文件系统核对每一条状态声明再动手。
+> 写于 2026-07-24，2026-07-25 更新（push + worktree/分支清理）。接手前先用 Git / 文件系统核对每一条状态声明再动手。
 > 本文不硬钉 git HEAD：提交本文即会改变 HEAD。用下面的“如何定位当前状态”自查。
 
 ## 一句话现状
 
-Task 5（ownership + reconciliation 边界）实现已 **本地合并进 main（`--no-ff`，未 push）**；最后一个 validation 兼容性 blocker 已修复，全套件 / typecheck / build 均绿。
+Task 5（ownership + reconciliation 边界）实现已合并进 main（`--no-ff`）**并已推到 `origin/main`**；最后一个 validation 兼容性 blocker 已修复，全套件 / typecheck / build 均绿。遗留的 agent worktree 与 scratch 分支已**全部清理**（详见「已完成的收尾」）。
 
 ## 如何定位当前状态（不要照抄 commit hash）
 
 ```bash
 git -C /Users/biran/code/skills/loop/ccloop log --oneline --decorate -6
 git -C /Users/biran/code/skills/loop/ccloop status --branch --short
-git rev-parse origin/main   # 应仍指向合并前的 main（本地合并未 push）
+git rev-parse HEAD origin/main   # 二者应一致；若 HEAD 领先，多出的仅是「本 handoff 更新」文档提交，尚未 push
 ```
 
 - main 顶部应能看到一条 `Merge branch 'ownership-reconciliation-boundaries-20260723'` 合并提交。
 - 该合并带入 13 个 commit / 完整 Task 5 实现；其中最后两个是本次收尾：
   - `fix: accept owner-transfer fields in reconciliation validation`（validation 兼容修复）
   - `chore: log reconciliation validation compat fix (bug-038)`
-- **origin/main 未变**：这是本地合并，尚未 push。是否 push 由人决定。
+- **origin/main 已含**合并提交 + 之前的收尾/文档提交；唯一可能领先的是「本 handoff 更新」这一笔文档提交，push 与否由人决定。
 
 ## 本次做了什么（细节看 commit / buglog，勿在此重复）
 
@@ -38,11 +38,14 @@ git rev-parse origin/main   # 应仍指向合并前的 main（本地合并未 pu
 
 运行约定：`ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run ...`。
 
+## 已完成的收尾（不再是待办）
+
+- **main 已 push**：`origin/main == 合并后 main`。
+- **遗留 worktree / 分支已全部清理**：`.claude/worktrees/agent-*` 共 25 个 worktree 移除（17 个干净移除、8 个有 agent scratch 未提交改动的 `--force` 移除），37 个 `worktree-agent-*` / `task*` scratch 分支 `-D` 删除。丢弃的仅是 agent scratch（task 报告、`buglog.json`/`memory.md` 工作副本、一对已并入 main 的 `src` 顶层残留）。**`backup/evidence-first-v1-...`、两个 stash、`.validation-runs/` 均未动**。
+
 ## 待办 / 未擅自执行（等人拍板）
 
-1. **worktree 与分支未清理**：`.worktrees/ownership-reconciliation-boundaries-20260723`（分支同名）保留。合并已验证通过，如需清理可用 `superpowers:finishing-a-development-branch` 流程，但删除前须人确认。
-2. **本地 main 未 push**：`origin/main` 仍是合并前状态；是否 push 由人决定。
-3. worktree 内有个无关未跟踪文件 `src/.DS_Store`，本次未动。
+1. **本 handoff 更新提交是否 push**：合并与之前的收尾/文档提交都已在 `origin/main`；仅本次 handoff 更新可能领先一个本地提交，push 与否由人决定。
 
 ## 关键事实（2026-07-24 已逐条核实）
 
@@ -75,5 +78,5 @@ git rev-parse origin/main   # 应仍指向合并前的 main（本地合并未 pu
 
 - `superpowers:verification-before-completion` — 声称任何东西“通过/完成”前，先复跑 typecheck / build / 全套件并贴出真实输出。
 - `superpowers:systematic-debugging` — 若继续排障，先定位根因再改，勿照抄结论。
-- `superpowers:finishing-a-development-branch` — 若要清理已合并的 worktree / 分支或决定 push。
+- `superpowers:finishing-a-development-branch` — 若产生新分支需收尾，或要决定 push（遗留 worktree/分支清理已完成）。
 - OpenWolf 协议（`.wolf/OPENWOLF.md`）：改文件后更新 `.wolf/anatomy.md` / `memory.md`；修 bug 后写 `.wolf/buglog.json`。
