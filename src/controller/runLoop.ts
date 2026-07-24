@@ -517,7 +517,7 @@ function buildBoundaryEvidence(executionRecovery: ExecutionRecovery | null): Bou
       continuitySuspicion: [`interrupted execute left changed paths in the attempt worktree: ${changedPathsSummary}`],
       conflictingEvidence: [
         changedPathsEvidence,
-        `execution recovery captured ${executionRecovery.failureBoundary} with cleanup ${executionRecovery.cleanupStatus}`,
+        `execution recovery captured ${executionRecovery.failureBoundary}`,
       ],
       currentProcessStillTrusted: false,
       supportingContinuityEvidence: [changedPathsEvidence],
@@ -532,7 +532,7 @@ function buildBoundaryEvidence(executionRecovery: ExecutionRecovery | null): Bou
       continuitySuspicion: ["interrupted execute left worktree differences in the attempt worktree"],
       conflictingEvidence: [
         worktreeDiffEvidence,
-        `execution recovery captured ${executionRecovery.failureBoundary} with cleanup ${executionRecovery.cleanupStatus}`,
+        `execution recovery captured ${executionRecovery.failureBoundary}`,
       ],
       currentProcessStillTrusted: false,
       supportingContinuityEvidence: [worktreeDiffEvidence],

@@ -1042,6 +1042,12 @@ describe("runLoop", () => {
     expect(reconciliation.staleSuspicionBasis[0]).toContain("src/index.ts");
     expect(reconciliation.conflictingEvidence.length).toBeGreaterThan(0);
     expect(reconciliation.conflictingEvidence.join(" ")).toContain("src/index.ts");
+    // Terminal consistency: execution-recovery.json is the authoritative record of the
+    // final cleanupStatus ("removed" here, after cleanup succeeds post-boundary-analysis).
+    // reconciliation-record must not embed a cleanup status, since that snapshot is taken
+    // before cleanup and would otherwise stay stale ("retained"), contradicting recovery.
+    expect(reconciliation.conflictingEvidence.join(" ")).not.toContain("with cleanup");
+    expect(reconciliation.conflictingEvidence.join(" ")).not.toContain("retained");
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "loop_exhausted"]);
   });
 
