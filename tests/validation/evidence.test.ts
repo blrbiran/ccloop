@@ -828,6 +828,44 @@ describe("evidence collection", () => {
     });
   });
 
+  it("accepts a reconciliation-record.json that carries owner-transfer fields", async () => {
+    const { runDir, evidenceDir } = await createSyntheticRun({ scenarioId: "D" });
+    const boundaryAnalysis = {
+      status: "stale_confirmed",
+      strongProgressAt: "2026-07-21T00:00:00.000Z",
+      weakProgressAt: "2026-07-21T00:05:00.000Z",
+      suspectReason: "missing strong progress signal",
+      staleCandidateReason: "run exceeded stale threshold",
+    };
+    const reconciliationRecord = {
+      staleSuspicionBasis: ["owner transfer already published"],
+      staleConfirmed: true,
+      ownershipVerdict: "OWNER_LOST",
+      lastTrustedBoundary: "execute",
+      conflictingEvidence: [],
+      takeoverPermission: {
+        allowed: true,
+        reason: "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
+      },
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      eligibleForContinuation: true,
+    };
+
+    await writeFile(join(runDir, "boundary-analysis.json"), JSON.stringify(boundaryAnalysis, null, 2) + "\n");
+    await writeFile(join(runDir, "reconciliation-record.json"), JSON.stringify(reconciliationRecord, null, 2) + "\n");
+
+    const record = await collectEvidence({
+      scenario: getScenario("D"),
+      ...baseInput(runDir, evidenceDir),
+    });
+
+    expect(record.observations.reconciliationRecord).toMatchObject({
+      status: "PRESENT",
+      value: reconciliationRecord,
+    });
+  });
+
   it("marks malformed reconciliation-record.json as INVALID instead of trusting it", async () => {
     const { runDir, evidenceDir } = await createSyntheticRun({ scenarioId: "D" });
     const boundaryAnalysis = {

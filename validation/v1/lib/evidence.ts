@@ -230,6 +230,12 @@ const reconciliationRecordSchema = z
   .object({
     staleSuspicionBasis: z.array(z.string()).min(1),
     staleConfirmed: z.boolean(),
+    // Ownership-reconciliation fields are written by the controller once an
+    // owner-transfer boundary runs. Accept and read them when present, but do
+    // not require them: run-level (Task 1-4) reconciliation records that predate
+    // an owner transfer legitimately omit them. Validation only tolerates these
+    // fields; it does not enforce ownership continuation semantics.
+    ownershipVerdict: z.enum(["OWNER_VALID", "OWNER_LOST", "OWNER_SUPERSEDED", "OWNER_UNDECIDABLE"]).optional(),
     lastTrustedBoundary: z.enum(["planning", "execute", "verify", "terminal", "unknown"]),
     conflictingEvidence: z.array(z.string()),
     takeoverPermission: z
@@ -238,6 +244,9 @@ const reconciliationRecordSchema = z
         reason: z.string().trim().min(1),
       })
       .strict(),
+    priorOwnerEpoch: z.number().int().nullable().optional(),
+    newOwnerEpoch: z.number().int().nullable().optional(),
+    eligibleForContinuation: z.boolean().optional(),
   })
   .strict();
 
