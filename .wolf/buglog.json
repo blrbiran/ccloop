@@ -598,7 +598,7 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-22T23:40:26Z"
-  }  ,
+  },
   {
     "id": "bug-031",
     "timestamp": "2026-07-23T00:39:50Z",
@@ -606,8 +606,16 @@
     "file": "src/controller/runLoop.ts",
     "root_cause": "The controller fed changed-path and worktree-diff observations only into continuitySuspicion/conflictingEvidence while derivePersistedOwnerStillSupported came solely from persisted owner truth, so evaluateOwnership could still see a lost owner record with no supporting continuity evidence and emit OWNER_LOST.",
     "fix": "Added readOwnerRecord() for reconciliation-time owner truth, preserved changed-path/worktree-diff observations as supporting continuity evidence when persisted truth is lost, and added a focused controller regression covering changed-path stale plus mutated lost owner truth.",
-    "tags": ["task-3", "controller", "ownership", "reconciliation", "reviewer-fix"],
-    "related_bugs": ["bug-028"],
+    "tags": [
+      "task-3",
+      "controller",
+      "ownership",
+      "reconciliation",
+      "reviewer-fix"
+    ],
+    "related_bugs": [
+      "bug-028"
+    ],
     "occurrences": 1,
     "last_seen": "2026-07-23T00:39:50Z"
   },
@@ -618,8 +626,17 @@
     "file": "src/persistence/fileStore.ts",
     "root_cause": "Task 4 RED persistence coverage expected a controller-facing helper that updates owner-record.json and owner-transfer.json together, but fileStore only exposed the individual writers.",
     "fix": "Added writeOwnerTransferArtifacts() and wired runLoop stale OWNER_LOST reconciliation through a minimal owner-transfer path that persists the transfer record, updates owner-record.json, appends owner_epoch_transferred, and marks reconciliation eligibility only after transfer succeeds.",
-    "tags": ["task-4", "persistence", "controller", "ownership", "tdd"],
-    "related_bugs": ["bug-023", "bug-028"],
+    "tags": [
+      "task-4",
+      "persistence",
+      "controller",
+      "ownership",
+      "tdd"
+    ],
+    "related_bugs": [
+      "bug-023",
+      "bug-028"
+    ],
     "occurrences": 1,
     "last_seen": "2026-07-23T09:00:25Z"
   },
@@ -630,8 +647,21 @@
     "file": "tests/validation/evidence.test.ts",
     "root_cause": "The current Task 4 worktree had no local node_modules/.bin/tsx path, so validation CLI tests that spawn the worktree-local tsx executable failed before reaching product logic.",
     "fix": "Created a local node_modules/.bin/tsx symlink to the repository root tsx binary and reran the full Vitest suite successfully.",
-    "tags": ["task-4", "verification", "validation", "environment", "node_modules", "tsx"],
-    "related_bugs": ["bug-003", "bug-022", "bug-024", "bug-026", "bug-030"],
+    "tags": [
+      "task-4",
+      "verification",
+      "validation",
+      "environment",
+      "node_modules",
+      "tsx"
+    ],
+    "related_bugs": [
+      "bug-003",
+      "bug-022",
+      "bug-024",
+      "bug-026",
+      "bug-030"
+    ],
     "occurrences": 1,
     "last_seen": "2026-07-23T09:05:30Z"
   },
@@ -642,8 +672,18 @@
     "file": "src/controller/runLoop.ts",
     "root_cause": "persistOwnerTransfer() derived the next epoch from a cached owner record with no compare-and-swap against freshly persisted truth, and writeOwnerTransferArtifacts() only performed a plain owner-record then owner-transfer write sequence.",
     "fix": "Re-read owner-record.json immediately before transfer, refused transfer when persisted truth changed, derived the next epoch from the fresh persisted record, rewrote owner transfer persistence to use temp-file/rename plus rollback/restore logic with owner truth written last, and added focused controller/persistence regressions.",
-    "tags": ["task-4", "controller", "persistence", "ownership", "atomicity", "concurrency", "reviewer-fix"],
-    "related_bugs": ["bug-032"],
+    "tags": [
+      "task-4",
+      "controller",
+      "persistence",
+      "ownership",
+      "atomicity",
+      "concurrency",
+      "reviewer-fix"
+    ],
+    "related_bugs": [
+      "bug-032"
+    ],
     "occurrences": 1,
     "last_seen": "2026-07-23T21:14:08Z"
   },
@@ -654,8 +694,17 @@
     "file": "src/persistence/fileStore.ts",
     "root_cause": "The first reviewer fix still validated transfer eligibility outside a serialized critical section and had no staged transaction marker or read-path recovery, so a second controller or crash could leave stale success or half-published artifacts.",
     "fix": "Added an exclusive per-run .owner-transfer.lock, moved the persisted-truth precondition check into the locked writeOwnerTransferArtifacts() critical section, staged pending owner/transfer files plus .owner-transfer.transaction.json, finalized in deterministic transfer-then-owner order, and taught readOwnerRecord()/new transfers to recover interrupted publishes.",
-    "tags": ["task-4", "persistence", "concurrency", "crash-recovery", "ownership", "reviewer-fix"],
-    "related_bugs": ["bug-034"],
+    "tags": [
+      "task-4",
+      "persistence",
+      "concurrency",
+      "crash-recovery",
+      "ownership",
+      "reviewer-fix"
+    ],
+    "related_bugs": [
+      "bug-034"
+    ],
     "occurrences": 1,
     "last_seen": "2026-07-23T13:51:19Z"
   },
@@ -666,8 +715,16 @@
     "file": "tests/persistence/fileStore.test.ts",
     "root_cause": "The expanded regression set introduced direct staging-file setup without importing writeFile, and iterative edits left duplicated/obsolete assertions from the earlier rollback-based persistence contract.",
     "fix": "Imported writeFile, rewrote the owner-transfer persistence regressions around the new lock and transaction-recovery contract, removed duplicate stale blocks, and reran the focused Task 4 suites successfully.",
-    "tags": ["task-4", "tests", "tdd", "reviewer-fix", "vitest"],
-    "related_bugs": ["bug-035"],
+    "tags": [
+      "task-4",
+      "tests",
+      "tdd",
+      "reviewer-fix",
+      "vitest"
+    ],
+    "related_bugs": [
+      "bug-035"
+    ],
     "occurrences": 1,
     "last_seen": "2026-07-23T13:51:19Z"
   },
@@ -678,9 +735,37 @@
     "file": "src/persistence/fileStore.ts",
     "root_cause": "writeBoundaryArtifacts() always rewrote reconciliation-record.json without checking whether a successful owner transfer and matching successful reconciliation had already been published, so a later loser-path write could downgrade the final persisted reconciliation view.",
     "fix": "Added a narrow preservation guard in writeBoundaryArtifacts() that keeps an already-published successful OWNER_LOST reconciliation view when owner-transfer.json proves the winning transfer and the incoming record is the corresponding post-transfer downgrade, and added focused persistence/controller regressions.",
-    "tags": ["task-4", "persistence", "reconciliation", "concurrency", "ownership", "reviewer-fix"],
-    "related_bugs": ["bug-035"],
+    "tags": [
+      "task-4",
+      "persistence",
+      "reconciliation",
+      "concurrency",
+      "ownership",
+      "reviewer-fix"
+    ],
+    "related_bugs": [
+      "bug-035"
+    ],
     "occurrences": 1,
     "last_seen": "2026-07-23T14:23:06Z"
+  },
+  {
+    "id": "bug-038",
+    "timestamp": "2026-07-24",
+    "error_message": "validation reader marks real reconciliation-record.json as INVALID: controller writes ownershipVerdict/priorOwnerEpoch/newOwnerEpoch/eligibleForContinuation but reconciliationRecordSchema was narrowed to run-level shape and kept .strict()",
+    "file": "validation/v1/lib/evidence.ts",
+    "root_cause": "An earlier 'remove Task 5 leakage' edit reverted reconciliationRecordSchema to the Task 1-4 shape while keeping .strict(), so any owner-transfer-shaped artifact failed strict parsing.",
+    "fix": "Added ownershipVerdict/priorOwnerEpoch/newOwnerEpoch/eligibleForContinuation as .optional() fields (kept .strict()) so pre- and post-transfer records both parse; validation tolerates/reads them without enforcing ownership semantics. Added regression test in tests/validation/evidence.test.ts.",
+    "tags": [
+      "validation",
+      "reconciliation",
+      "ownership",
+      "zod",
+      "strict",
+      "schema-compat"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-24"
   }
 ]
