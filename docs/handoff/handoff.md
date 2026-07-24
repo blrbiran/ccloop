@@ -1,25 +1,26 @@
-# ccloop Handoff — ownership + reconciliation 已落地并 push 到 origin/main
+# ccloop Handoff — ownership + reconciliation 已落地；cleanupStatus 一致性 follow-up 已本地修复（待 push）
 
-> 写于 2026-07-24，2026-07-25 更新（push + worktree/分支清理）。接手前先用 Git / 文件系统核对每一条状态声明再动手。
-> 本文不硬钉 git HEAD：提交本文即会改变 HEAD。用下面的“如何定位当前状态”自查。
+> 写于 2026-07-24，2026-07-25 更新（push + worktree/分支清理 + cleanupStatus 一致性 follow-up）。接手前先用 Git / 文件系统核对每一条状态声明再动手。
+> 本文不硬钉 git HEAD：提交本文即会改变 HEAD。用下面的”如何定位当前状态”自查。
 
 ## 一句话现状
 
-Task 5（ownership + reconciliation 边界）实现已合并进 main（`--no-ff`）**并已推到 `origin/main`**；最后一个 validation 兼容性 blocker 已修复，全套件 / typecheck / build 均绿。遗留的 agent worktree 与 scratch 分支已**全部清理**（详见「已完成的收尾」）。
+Task 5（ownership + reconciliation 边界）实现已合并进 main（`--no-ff`）**并已推到 `origin/main`**；全套件 / typecheck / build 均绿。此后新增一笔 **cleanupStatus 终态一致性 follow-up 修复（bug-039），已本地提交但尚未 push**（`origin/main` 尚不含它）。遗留的 agent worktree 与 scratch 分支已**全部清理**（详见「已完成的收尾」）。
 
 ## 如何定位当前状态（不要照抄 commit hash）
 
 ```bash
 git -C /Users/biran/code/skills/loop/ccloop log --oneline --decorate -6
 git -C /Users/biran/code/skills/loop/ccloop status --branch --short
-git rev-parse HEAD origin/main   # 二者应一致；若 HEAD 领先，多出的仅是「本 handoff 更新」文档提交，尚未 push
+git rev-parse HEAD origin/main   # 二者不再相等：本地 main 领先 origin 若干笔（cleanupStatus follow-up 修复 + 本 handoff 更新），均未 push
+git log origin/main..HEAD --oneline   # 看清「本地领先、待 push」的具体是哪几笔
 ```
 
-- main 顶部应能看到一条 `Merge branch 'ownership-reconciliation-boundaries-20260723'` 合并提交。
-- 该合并带入 13 个 commit / 完整 Task 5 实现；其中最后两个是本次收尾：
-  - `fix: accept owner-transfer fields in reconciliation validation`（validation 兼容修复）
+- main 顶部往下应能看到：`fix: keep cleanupStatus out of reconciliation conflictingEvidence`（bug-039，本地新增）、以及更早的一条 `Merge branch 'ownership-reconciliation-boundaries-20260723'` 合并提交。
+- 该合并带入完整 Task 5 实现；合并内最后两个是当时收尾：
+  - `fix: accept owner-transfer fields in reconciliation validation`（validation 兼容修复，bug-038）
   - `chore: log reconciliation validation compat fix (bug-038)`
-- **origin/main 已含**合并提交 + 之前的收尾/文档提交；唯一可能领先的是「本 handoff 更新」这一笔文档提交，push 与否由人决定。
+- **origin/main 已含**合并提交 + 之前的收尾/文档提交；**本地领先、尚未 push 的**是：cleanupStatus follow-up 修复（bug-039）+「本 handoff 更新」文档提交。push 由人决定。
 
 ## 本次做了什么（细节看 commit / buglog，勿在此重复）
 
@@ -27,7 +28,14 @@ git rev-parse HEAD origin/main   # 二者应一致；若 HEAD 领先，多出的
 - 一句话：controller 真实写出 `ownershipVerdict / priorOwnerEpoch / newOwnerEpoch / eligibleForContinuation`，而 `validation/v1/lib/evidence.ts` 的 `reconciliationRecordSchema` 曾被收窄回旧 shape 且保留 `.strict()`，把真实产物误判 INVALID。修法：这 4 个字段改为 `.optional()`、保留 `.strict()` —— validation 只「容忍/读取」，不强制、不删除；未知乱键仍 fail loud。新增回归测试见 `tests/validation/evidence.test.ts`。
 - 关键判断：不要把这些字段设为**必填**（历史提交 `84bd66a` 这么做过），那会反过来拒绝 transfer 之前的旧产物，即所谓「Task 5 专属强约束泄漏」。optional 是正解。
 
-## 验证证据（均在合并后的 main 上复跑）
+## cleanupStatus 一致性 follow-up（2026-07-25，bug-039，本地已修）
+
+- 这是原 handoff「小尾巴」的落地：cleanup 成功后 `execution-recovery.json.cleanupStatus` 变 `removed`，但 `reconciliation-record.json.conflictingEvidence` 仍嵌着 cleanup 快照前的 `retained`，两产物终态矛盾。
+- 根因/修复详见 `.wolf/buglog.json` 的 `bug-039`。一句话：`buildBoundaryEvidence`（`src/controller/runLoop.ts`）曾把可变的 `cleanupStatus` 拼进 `conflictingEvidence`，而它是在 cleanup 之前拍的快照、之后只回写 execution-recovery。修法（方案 A）：从 `conflictingEvidence` 两处删掉 `with cleanup <status>` 半句，让 `cleanupStatus` 只有 execution-recovery.json 一个权威源；保留稳定的 `failureBoundary`。
+- 回归测试：给既有 `tests/controller/runLoop.integration.test.ts` 的 abort-after-changing-files 用例加终态一致性断言（`conflictingEvidence` 不得含 `with cleanup`/`retained`）；已按 TDD 先 RED 后 GREEN。
+- 关键判断：未动终态控制流顺序（方案 C 有触碰 D-scenario 校验依赖的风险），也未在 cleanup 后二次重跑 boundary/ownership（方案 B 有 `persistOwnerTransfer` 重入副作用）。选 A = 消除第二真相源，是根因修复而非补丁。
+
+## 验证证据（bug-039 修复后在本地 main 上复跑；合并后 main 亦曾全绿）
 
 | 项 | 结果 |
 |---|---|
@@ -45,7 +53,7 @@ git rev-parse HEAD origin/main   # 二者应一致；若 HEAD 领先，多出的
 
 ## 待办 / 未擅自执行（等人拍板）
 
-1. **本 handoff 更新提交是否 push**：合并与之前的收尾/文档提交都已在 `origin/main`；仅本次 handoff 更新可能领先一个本地提交，push 与否由人决定。
+1. **push 本地领先的提交**：`origin/main` 已含合并 + 之前的收尾/文档提交；**本地尚未 push** 的是 cleanupStatus follow-up 修复（bug-039，源码提交）+ 本 handoff 更新。是否 push 由人决定（用户偏好自己 push）。
 
 ## 关键事实（2026-07-24 已逐条核实）
 
@@ -59,7 +67,7 @@ git rev-parse HEAD origin/main   # 二者应一致；若 HEAD 领先，多出的
 - **两个 gotcha**：
   - `validation/v1/scripts/run-scenario.ts` 已 canonicalize 调用脚本路径，闭合了 macOS `/var` vs `/private/var` 的 zero-exit / 无产物 bug —— 勿回退。
   - `claudeChildExited` 仍为 `NOT_OBSERVABLE`，除非有被跟踪的后代 PID 证明。
-- **一个小的一致性 follow-up**：cleanup 成功后，`execution-recovery.json.cleanupStatus` 与 `reconciliation-record.json.conflictingEvidence` 应保持终态一致；这是小尾巴，不是重开已接受证据的理由。
+- **~~一个小的一致性 follow-up~~（2026-07-25 已修，bug-039）**：cleanup 成功后 `execution-recovery.json.cleanupStatus` 与 `reconciliation-record.json.conflictingEvidence` 的终态一致性已修复（本地提交，待 push）；详见上方「cleanupStatus 一致性 follow-up」。
 
 ## 仍然生效的治理边界
 
