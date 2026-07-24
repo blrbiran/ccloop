@@ -40,14 +40,11 @@ git rev-parse origin/main   # 应仍指向合并前的 main（本地合并未 pu
 
 ## 待办 / 未擅自执行（等人拍板）
 
-1. **`docs/handover/ccloop-handover.md` 已过期**：以下几处结论需更新——① Executive Summary 第 5 条与 Important Fixes 里「ownership 实现未 landed / owner-record / owner-transfer / 严格 owner-loss / 原子 owner-epoch transfer 是 future work」现均已 landed；② Known Limitations 里「full ownership truth / owner epochs / owner transfer 未实现」同样已 landed（但 resume/adopt、scheduler、daemon、queue、lease、heartbeat、多任务协调仍未实现）；③ Recommended Next-Step Focus 第 1 条「先实现 ownership+reconciliation 计划」已完成，应改指下一前沿。其余治理边界与已接受证据部分仍有效。
-2. **worktree 与分支未清理**：`.worktrees/ownership-reconciliation-boundaries-20260723`（分支同名）保留。合并已验证通过，如需清理可用 `superpowers:finishing-a-development-branch` 流程，但删除前须人确认。
-3. **本地 main 未 push**：`origin/main` 仍是合并前状态；是否 push 由人决定。
-4. worktree 内有个无关未跟踪文件 `src/.DS_Store`，本次未动。
+1. **worktree 与分支未清理**：`.worktrees/ownership-reconciliation-boundaries-20260723`（分支同名）保留。合并已验证通过，如需清理可用 `superpowers:finishing-a-development-branch` 流程，但删除前须人确认。
+2. **本地 main 未 push**：`origin/main` 仍是合并前状态；是否 push 由人决定。
+3. worktree 内有个无关未跟踪文件 `src/.DS_Store`，本次未动。
 
-## 摘自总 handover 的关键事实（2026-07-24 已逐条核实）
-
-> 总 handover 部分结论已过期（见「待办 1」），以下是仍成立、且只读该 handoff 会漏掉的耐用事实。
+## 关键事实（2026-07-24 已逐条核实）
 
 - **已接受不可变证据集**（`.validation-runs/evidence/<id>/review.json`）：`A-04-08 PASS`、`B-02 PASS`、`C-05 PASS`、`D-01 INCONCLUSIVE/CONTRACT_GAP`、`E-01 PASS`。勿覆盖、勿原地重解释。
 - **superseded 运行不是最终真相**：`B-01`、`C-01`、`C-02`、`C-03`、`C-04` 目录仍在但已被取代，勿当接受结论。
@@ -61,7 +58,7 @@ git rev-parse origin/main   # 应仍指向合并前的 main（本地合并未 pu
   - `claudeChildExited` 仍为 `NOT_OBSERVABLE`，除非有被跟踪的后代 PID 证明。
 - **一个小的一致性 follow-up**：cleanup 成功后，`execution-recovery.json.cleanupStatus` 与 `reconciliation-record.json.conflictingEvidence` 应保持终态一致；这是小尾巴，不是重开已接受证据的理由。
 
-## 仍然生效的治理边界（详见 `docs/handover/ccloop-handover.md`）
+## 仍然生效的治理边界
 
 - 每次真实 Claude 调用前须显式获批（付费）。
 - 不覆盖已接受的 `review.json`；`D-01` 保持 `INCONCLUSIVE / CONTRACT_GAP`，重解释走单独的 `review-reclassified.json`。
@@ -71,7 +68,6 @@ git rev-parse origin/main   # 应仍指向合并前的 main（本地合并未 pu
 ## 参考（不要在此复制内容，按路径读）
 
 - 设计 / 计划：`docs/superpowers/specs/2026-07-22-ownership-and-reconciliation-boundaries-design.md`、`docs/superpowers/plans/2026-07-22-ownership-and-reconciliation-boundaries.md`
-- 前一阶段总 handover：`docs/handover/ccloop-handover.md`
 - 校验层：`validation/v1/README.md`、`validation/v1/lib/evidence.ts`
 - 项目规约：`CLAUDE.md`、`.wolf/OPENWOLF.md`、`.wolf/cerebrum.md`、`.wolf/buglog.json`
 
