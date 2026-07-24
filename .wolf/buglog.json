@@ -426,5 +426,346 @@
     ],
     "occurrences": 1,
     "last_seen": "2026-07-22T13:09:34Z"
+  },
+  {
+    "id": "bug-023",
+    "timestamp": "2026-07-22T16:59:09Z",
+    "error_message": "writeOwnerRecord is not a function and writeOwnerTransferRecord is not a function in tests/persistence/fileStore.test.ts",
+    "file": "src/persistence/fileStore.ts",
+    "root_cause": "Task 1 added RED persistence coverage before explicit owner artifact types and JSON writer helpers existed, and the expanded reconciliation record shape had not yet been backfilled at all producer/consumer sites.",
+    "fix": "Added OwnerStatus, OwnershipVerdict, OwnerRecord, and OwnerTransferRecord types, added writeOwnerRecord() and writeOwnerTransferRecord(), expanded ReconciliationRecord with ownership fields, and updated controller/evidence schema fixtures to match the new required shape.",
+    "tags": [
+      "task-1",
+      "ownership",
+      "reconciliation",
+      "persistence",
+      "tdd"
+    ],
+    "related_bugs": [
+      "bug-018",
+      "bug-020"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T16:59:09Z"
+  },
+  {
+    "id": "bug-024",
+    "timestamp": "2026-07-22T16:59:09Z",
+    "error_message": "npm test failed with spawn /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a0794d0cb78d51cf0/node_modules/.bin/tsx ENOENT during Task 1 full verification",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "The isolated Task 1 worktree did not yet have a local node_modules/.bin/tsx binary, so run-scenario CLI tests failed before exercising product behavior.",
+    "fix": "Ran npm ci in the worktree to restore local dependencies and the tsx binary, then reran the full Vitest suite successfully.",
+    "tags": [
+      "task-1",
+      "verification",
+      "validation",
+      "environment",
+      "node_modules",
+      "tsx"
+    ],
+    "related_bugs": [
+      "bug-003",
+      "bug-022"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T16:59:09Z"
+  },
+  {
+    "id": "bug-025",
+    "timestamp": "2026-07-22T17:22:49Z",
+    "error_message": "Failed to load url ../../src/ownership/ownerController.js in tests/ownership/ownerController.test.ts. Does the file exist?",
+    "file": "src/ownership/ownerController.ts",
+    "root_cause": "Task 2 added RED ownership tests before the pure ownership controller module existed, so Vitest could not resolve the new import.",
+    "fix": "Added src/ownership/ownerController.ts with evaluateOwnership() and applyOwnerEpochTransfer(), plus the OwnershipEvaluation input/output types in src/state/types.ts, then reran the focused test successfully.",
+    "tags": [
+      "task-2",
+      "ownership",
+      "tdd",
+      "missing-module"
+    ],
+    "related_bugs": [
+      "bug-018",
+      "bug-023"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T17:22:49Z"
+  },
+  {
+    "id": "bug-026",
+    "timestamp": "2026-07-22T17:24:59Z",
+    "error_message": "npm test failed with spawn /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8f2d273ff438a98f/node_modules/.bin/tsx ENOENT during Task 2 full verification",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "The isolated Task 2 worktree initially had no local node_modules/.bin/tsx binary, so validation CLI tests that spawn the worktree-local tsx executable failed before reaching product logic.",
+    "fix": "Ran npm ci in the current worktree to restore local dependencies and the tsx binary, then reran the full Vitest suite successfully.",
+    "tags": [
+      "task-2",
+      "verification",
+      "validation",
+      "environment",
+      "node_modules",
+      "tsx"
+    ],
+    "related_bugs": [
+      "bug-003",
+      "bug-022",
+      "bug-024"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T17:24:59Z"
+  },
+  {
+    "id": "bug-027",
+    "timestamp": "2026-07-22T18:00:14Z",
+    "error_message": "Task 2 ownership evaluation let supporting continuity evidence return OWNER_VALID even when persisted owner truth no longer supported the owner, and ignored explicit owner record supersede/loss fields as direct truth.",
+    "file": "src/ownership/ownerController.ts",
+    "root_cause": "evaluateOwnership() checked Layer B continuity before controller-owned persisted truth and only used knownSupersedingEpoch/persistedOwnerStillSupported as indirect proxies, so contradictory evidence could override Layer A and the persisted owner record was not acting as the source of truth.",
+    "fix": "Reordered evaluateOwnership() to respect ownerRecord.supersededByEpoch and ownerRecord.ownerStatus before supporting evidence, treated unconfirmed external supersede claims and persisted-truth-versus-supporting-evidence contradictions as OWNER_UNDECIDABLE, and added focused regressions for contradictory support, persisted-only supersede, and persisted lost-status conflicts.",
+    "tags": [
+      "task-2",
+      "ownership",
+      "reviewer-fix",
+      "persisted-truth",
+      "deny-by-default"
+    ],
+    "related_bugs": [
+      "bug-025"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T18:00:14Z"
+  },
+  {
+    "id": "bug-028",
+    "timestamp": "2026-07-22T23:40:26Z",
+    "error_message": "Task 3 controller integration tests failed because owner-record.json was never initialized and stale reconciliation records did not carry strict ownership verdict fields or a deterministic OWNER_LOST path.",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "runLoop initialized only loop state/events and the stale reconciliation path still hard-coded a deny-only placeholder record, so controller-owned ownership truth was never persisted at run start and stale reconciliation never delegated verdict calculation to evaluateOwnership().",
+    "fix": "Initialized owner-record.json at run start, passed the persisted owner record into stale reconciliation, evaluated strict ownership verdicts from controller-owned evidence, persisted ownershipVerdict/priorOwnerEpoch/newOwnerEpoch/eligibleForContinuation, and added controller integration coverage for owner-record initialization plus OWNER_UNDECIDABLE versus OWNER_LOST stale paths.",
+    "tags": [
+      "task-3",
+      "controller",
+      "ownership",
+      "reconciliation",
+      "tdd"
+    ],
+    "related_bugs": [
+      "bug-023",
+      "bug-025",
+      "bug-027"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T23:40:26Z"
+  },
+  {
+    "id": "bug-029",
+    "timestamp": "2026-07-22T23:40:26Z",
+    "error_message": "Transform failed with ERROR: The symbol \"inferPersistedOwnerStillSupported\" has already been declared in src/controller/runLoop.ts",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "An intermediate Task 3 edit added a second helper with the same name instead of replacing the earlier placeholder, so esbuild stopped before the focused controller suite could run.",
+    "fix": "Removed the stale duplicate helper declaration and reran the focused controller integration suite to confirm the controller wiring compiled and passed.",
+    "tags": [
+      "task-3",
+      "controller",
+      "syntax",
+      "esbuild",
+      "duplicate-declaration"
+    ],
+    "related_bugs": [
+      "bug-028"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T23:40:26Z"
+  },
+  {
+    "id": "bug-030",
+    "timestamp": "2026-07-22T23:40:26Z",
+    "error_message": "npm test failed with spawn /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-ab72c7a2627895357/node_modules/.bin/tsx ENOENT during Task 3 full verification",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "The current Task 3 worktree had no local node_modules/.bin/tsx binary, so validation CLI tests that spawn the worktree-local tsx executable failed before reaching product logic.",
+    "fix": "Ran npm ci in the current worktree to restore local dependencies and the tsx binary, then reran the full Vitest suite successfully.",
+    "tags": [
+      "task-3",
+      "verification",
+      "validation",
+      "environment",
+      "node_modules",
+      "tsx"
+    ],
+    "related_bugs": [
+      "bug-003",
+      "bug-022",
+      "bug-024",
+      "bug-026"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-22T23:40:26Z"
+  },
+  {
+    "id": "bug-031",
+    "timestamp": "2026-07-23T00:39:50Z",
+    "error_message": "Changed-path stale reconciliation could still resolve to OWNER_LOST when owner-record.json was mutated to lost before controller reconciliation.",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "The controller fed changed-path and worktree-diff observations only into continuitySuspicion/conflictingEvidence while derivePersistedOwnerStillSupported came solely from persisted owner truth, so evaluateOwnership could still see a lost owner record with no supporting continuity evidence and emit OWNER_LOST.",
+    "fix": "Added readOwnerRecord() for reconciliation-time owner truth, preserved changed-path/worktree-diff observations as supporting continuity evidence when persisted truth is lost, and added a focused controller regression covering changed-path stale plus mutated lost owner truth.",
+    "tags": [
+      "task-3",
+      "controller",
+      "ownership",
+      "reconciliation",
+      "reviewer-fix"
+    ],
+    "related_bugs": [
+      "bug-028"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T00:39:50Z"
+  },
+  {
+    "id": "bug-032",
+    "timestamp": "2026-07-23T09:00:25Z",
+    "error_message": "TypeError: writeOwnerTransferArtifacts is not a function",
+    "file": "src/persistence/fileStore.ts",
+    "root_cause": "Task 4 RED persistence coverage expected a controller-facing helper that updates owner-record.json and owner-transfer.json together, but fileStore only exposed the individual writers.",
+    "fix": "Added writeOwnerTransferArtifacts() and wired runLoop stale OWNER_LOST reconciliation through a minimal owner-transfer path that persists the transfer record, updates owner-record.json, appends owner_epoch_transferred, and marks reconciliation eligibility only after transfer succeeds.",
+    "tags": [
+      "task-4",
+      "persistence",
+      "controller",
+      "ownership",
+      "tdd"
+    ],
+    "related_bugs": [
+      "bug-023",
+      "bug-028"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T09:00:25Z"
+  },
+  {
+    "id": "bug-033",
+    "timestamp": "2026-07-23T09:05:30Z",
+    "error_message": "npm test failed with spawn /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a812cdc7f102a3c6b/node_modules/.bin/tsx ENOENT during Task 4 full verification",
+    "file": "tests/validation/evidence.test.ts",
+    "root_cause": "The current Task 4 worktree had no local node_modules/.bin/tsx path, so validation CLI tests that spawn the worktree-local tsx executable failed before reaching product logic.",
+    "fix": "Created a local node_modules/.bin/tsx symlink to the repository root tsx binary and reran the full Vitest suite successfully.",
+    "tags": [
+      "task-4",
+      "verification",
+      "validation",
+      "environment",
+      "node_modules",
+      "tsx"
+    ],
+    "related_bugs": [
+      "bug-003",
+      "bug-022",
+      "bug-024",
+      "bug-026",
+      "bug-030"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T09:05:30Z"
+  },
+  {
+    "id": "bug-034",
+    "timestamp": "2026-07-23T21:14:08Z",
+    "error_message": "Task 4 owner transfer could advance from stale in-memory owner truth and plain sequential writes could leave owner-record.json ahead of owner-transfer.json on ordinary failures.",
+    "file": "src/controller/runLoop.ts",
+    "root_cause": "persistOwnerTransfer() derived the next epoch from a cached owner record with no compare-and-swap against freshly persisted truth, and writeOwnerTransferArtifacts() only performed a plain owner-record then owner-transfer write sequence.",
+    "fix": "Re-read owner-record.json immediately before transfer, refused transfer when persisted truth changed, derived the next epoch from the fresh persisted record, rewrote owner transfer persistence to use temp-file/rename plus rollback/restore logic with owner truth written last, and added focused controller/persistence regressions.",
+    "tags": [
+      "task-4",
+      "controller",
+      "persistence",
+      "ownership",
+      "atomicity",
+      "concurrency",
+      "reviewer-fix"
+    ],
+    "related_bugs": [
+      "bug-032"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T21:14:08Z"
+  },
+  {
+    "id": "bug-035",
+    "timestamp": "2026-07-23T13:51:19Z",
+    "error_message": "Task 4 owner transfer still published owner-record.json and owner-transfer.json through separate final renames and still allowed a TOCTOU window between the stale-owner precondition check and final publish.",
+    "file": "src/persistence/fileStore.ts",
+    "root_cause": "The first reviewer fix still validated transfer eligibility outside a serialized critical section and had no staged transaction marker or read-path recovery, so a second controller or crash could leave stale success or half-published artifacts.",
+    "fix": "Added an exclusive per-run .owner-transfer.lock, moved the persisted-truth precondition check into the locked writeOwnerTransferArtifacts() critical section, staged pending owner/transfer files plus .owner-transfer.transaction.json, finalized in deterministic transfer-then-owner order, and taught readOwnerRecord()/new transfers to recover interrupted publishes.",
+    "tags": [
+      "task-4",
+      "persistence",
+      "concurrency",
+      "crash-recovery",
+      "ownership",
+      "reviewer-fix"
+    ],
+    "related_bugs": [
+      "bug-034"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T13:51:19Z"
+  },
+  {
+    "id": "bug-036",
+    "timestamp": "2026-07-23T13:51:19Z",
+    "error_message": "Focused Task 4 persistence regressions initially failed with ReferenceError: writeFile is not defined and overlapping stale owner-transfer assertions after the second review-fix edit wave.",
+    "file": "tests/persistence/fileStore.test.ts",
+    "root_cause": "The expanded regression set introduced direct staging-file setup without importing writeFile, and iterative edits left duplicated/obsolete assertions from the earlier rollback-based persistence contract.",
+    "fix": "Imported writeFile, rewrote the owner-transfer persistence regressions around the new lock and transaction-recovery contract, removed duplicate stale blocks, and reran the focused Task 4 suites successfully.",
+    "tags": [
+      "task-4",
+      "tests",
+      "tdd",
+      "reviewer-fix",
+      "vitest"
+    ],
+    "related_bugs": [
+      "bug-035"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T13:51:19Z"
+  },
+  {
+    "id": "bug-037",
+    "timestamp": "2026-07-23T14:23:06Z",
+    "error_message": "A loser controller could overwrite reconciliation-record.json with an OWNER_UNDECIDABLE failure view after another controller had already completed the owner transfer and published a successful reconciliation view.",
+    "file": "src/persistence/fileStore.ts",
+    "root_cause": "writeBoundaryArtifacts() always rewrote reconciliation-record.json without checking whether a successful owner transfer and matching successful reconciliation had already been published, so a later loser-path write could downgrade the final persisted reconciliation view.",
+    "fix": "Added a narrow preservation guard in writeBoundaryArtifacts() that keeps an already-published successful OWNER_LOST reconciliation view when owner-transfer.json proves the winning transfer and the incoming record is the corresponding post-transfer downgrade, and added focused persistence/controller regressions.",
+    "tags": [
+      "task-4",
+      "persistence",
+      "reconciliation",
+      "concurrency",
+      "ownership",
+      "reviewer-fix"
+    ],
+    "related_bugs": [
+      "bug-035"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-07-23T14:23:06Z"
+  },
+  {
+    "id": "bug-038",
+    "timestamp": "2026-07-24",
+    "error_message": "validation reader marks real reconciliation-record.json as INVALID: controller writes ownershipVerdict/priorOwnerEpoch/newOwnerEpoch/eligibleForContinuation but reconciliationRecordSchema was narrowed to run-level shape and kept .strict()",
+    "file": "validation/v1/lib/evidence.ts",
+    "root_cause": "An earlier 'remove Task 5 leakage' edit reverted reconciliationRecordSchema to the Task 1-4 shape while keeping .strict(), so any owner-transfer-shaped artifact failed strict parsing.",
+    "fix": "Added ownershipVerdict/priorOwnerEpoch/newOwnerEpoch/eligibleForContinuation as .optional() fields (kept .strict()) so pre- and post-transfer records both parse; validation tolerates/reads them without enforcing ownership semantics. Added regression test in tests/validation/evidence.test.ts.",
+    "tags": [
+      "validation",
+      "reconciliation",
+      "ownership",
+      "zod",
+      "strict",
+      "schema-compat"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-07-24"
   }
 ]

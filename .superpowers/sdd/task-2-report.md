@@ -1,72 +1,126 @@
-# Task 2 Report — Rewrite the backlog as a current-truth decision backlog
+# Task 2 Report — strict ownership evaluation and atomic transfer helpers
 
 ## What I implemented
-- Rewrote `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-adce08f8baf2066b5/docs/ccloop-v2-review-backlog.md` from the old candidate-table/reference-notes format into the required current-truth decision backlog structure.
-- Kept the approved header truths verbatim: `A-04-08 PASS`, `B-02 PASS`, `C-05 PASS`, `D-01 INCONCLUSIVE / CONTRACT_GAP`, and `E-01 PASS`.
-- Replaced the old archival sections (`## Candidate Review Table`, `## Reference Notes`, `## V2 Review Checklist`) with the required sections:
-  - `## Purpose`
-  - `## Review Principles`
-  - `## V1 truthful-docs follow-ups`
-  - `## V2 candidates`
-  - `## Explicitly not now`
-- Kept every retained item in the required field format:
-  - `- Priority:`
-  - `- Decision:`
-  - `- Why:`
-  - `- Evidence:`
-  - `- Next step:`
-- Preserved the D-01 evidence boundary by keeping accepted history as `INCONCLUSIVE / CONTRACT_GAP` and adding an explicit not-now item forbidding backlog cleanup from rewriting that accepted history.
-- Narrowed the V2 section to current-truth candidates that survived review:
-  - stop / no-progress / stale-run boundaries before scheduler work;
-  - ownership and reconciliation before resume / adopt;
-  - workflow / scheduled execution only after ownership and reconciliation are explicit;
-  - handoff support as inspectable evidence rather than implicit resume;
-  - memory only as a scoped support system.
+- Added `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8f2d273ff438a98f/src/ownership/ownerController.ts`.
+- Added `evaluateOwnership(input)` as pure ownership logic that:
+  - returns `OWNER_SUPERSEDED` when a newer owner epoch is already known;
+  - returns `OWNER_VALID` when the current process is still trusted or other supporting continuity evidence exists;
+  - returns `OWNER_UNDECIDABLE` unless stale-candidate evidence exists, persisted owner truth no longer supports the owner, and the last trusted boundary is known;
+  - returns `OWNER_LOST` only when the deny-by-default conditions from the brief are satisfied, with `takeoverAllowed: true`.
+- Added `applyOwnerEpochTransfer(ownerRecord, nextProcessInstanceId, at, reason)` as a pure atomic transfer helper that:
+  - increments the owner epoch;
+  - updates the current process instance and affirmation timestamp;
+  - leaves the new owner record authoritative with `ownerStatus: "current"` and `supersededByEpoch: null`;
+  - emits an `OwnerTransferRecord` marked `eligibleForContinuation: true` without implying resume behavior.
+- Modified `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8f2d273ff438a98f/src/state/types.ts` only to add the evaluation input/output types required by the brief:
+  - `LastTrustedBoundary`
+  - `OwnershipEvaluationInput`
+  - `OwnershipEvaluation`
+- Added `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8f2d273ff438a98f/tests/ownership/ownerController.test.ts` with the four brief-specified unit tests.
 
-## What I tested and test results
-### Step 1 reference review
-Ran the task-brief searches to confirm the old backlog shape and pull reference signals.
-
-Commands used:
-- `rg -n '^## |^### |^\| ' docs/ccloop-v2-review-backlog.md`
-- `rg -n 'stop|stale|resume|reconcil|ownership|workflow|schedule|memory|handoff|no-progress' ...`
-
-Results:
-- Confirmed the source backlog still used the older candidate-table / reference-notes structure.
-- Confirmed the reference set contains signals for stop boundaries, workflow/scheduling, handoff, ownership/reconciliation, and memory.
-
-### Step 3 backlog verification
-Ran the required structural verification.
-
-Command used:
-- Python assertion script from the task brief plus:
-- `rg -n "ADOPT|MODIFY|REJECT|STILL_DEFER|## V1 truthful-docs follow-ups|## V2 candidates|## Explicitly not now" docs/ccloop-v2-review-backlog.md`
-
-Results:
-- Python script printed: `backlog structure ok`
-- `rg` showed the required top-level sections and explicit decision labels.
-
-### Diff hygiene
-Command used:
-- `git diff --check -- docs/ccloop-v2-review-backlog.md`
+## What I tested and results
+### Focused RED phase
+Command:
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/ownership/ownerController.test.ts`
 
 Result:
-- No diff-formatting problems were reported.
+- Failed as expected before implementation.
+- Relevant output:
+  - `Error: Failed to load url ../../src/ownership/ownerController.js ... Does the file exist?`
+
+### Focused GREEN phase
+Command:
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/ownership/ownerController.test.ts`
+
+Result:
+- Passed.
+- Relevant output:
+  - `✓ tests/ownership/ownerController.test.ts (4 tests)`
+  - `Tests 4 passed (4)`
+
+### Full suite verification
+First command:
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm test`
+
+Initial result:
+- Failed due to environment, not product logic.
+- Relevant output:
+  - `spawn /Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8f2d273ff438a98f/node_modules/.bin/tsx ENOENT`
+
+Remediation:
+- Ran `ECC_GATEGUARD=off DISABLE_OMC=1 npm ci` in the current worktree to restore local dependencies.
+
+Second command:
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm test`
+
+Final result:
+- Passed.
+- Relevant output:
+  - `Test Files 15 passed (15)`
+  - `Tests 208 passed (208)`
+
+## TDD evidence
+### RED
+Command:
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/ownership/ownerController.test.ts`
+
+Output excerpt:
+```text
+FAIL  tests/ownership/ownerController.test.ts
+Error: Failed to load url ../../src/ownership/ownerController.js ... Does the file exist?
+```
+
+### GREEN
+Command:
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/ownership/ownerController.test.ts`
+
+Output excerpt:
+```text
+✓ tests/ownership/ownerController.test.ts (4 tests)
+Tests 4 passed (4)
+```
 
 ## Files changed
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-adce08f8baf2066b5/docs/ccloop-v2-review-backlog.md`
-- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-adce08f8baf2066b5/.superpowers/sdd/task-2-report.md`
-- `/Users/biran/code/skills/loop/ccloop/.superpowers/sdd/task-2-report.md`
-
-## Commits created
-- `6bbefa9 docs: rewrite truth-aligned review backlog`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8f2d273ff438a98f/src/ownership/ownerController.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8f2d273ff438a98f/src/state/types.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8f2d273ff438a98f/tests/ownership/ownerController.test.ts`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8f2d273ff438a98f/.wolf/buglog.json`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8f2d273ff438a98f/package-lock.json`
+- `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a8f2d273ff438a98f/.superpowers/sdd/task-2-report.md`
 
 ## Self-review findings
-- The rewrite stays within the approved Task 2 boundary: backlog doc only, no product-code changes.
-- The new backlog is materially shorter and now expresses decisions against current V1 truth instead of preserving a historical idea archive.
-- The retained items are grounded in current truth plus reviewed references, and the backlog does not present reference systems as approved ccloop roadmap.
-- The accepted D-01 boundary was preserved exactly as requested.
-- I did not run any real Claude scenario or touch `.validation-runs/**` evidence.
+- The implementation stays within the pure ownership logic boundary and does not add scheduler, daemon, resume, cleanup, or controller wiring.
+- `takeoverAllowed` is only true in the exact `OWNER_LOST` branch, and that branch requires stale-candidate evidence, unsupported persisted owner truth, and a known last trusted boundary.
+- Supporting evidence and current process trust override stale suspicion as required by the brief's deny-by-default model.
+- The transfer helper only rotates ownership epoch and emits continuation eligibility; it does not imply or perform continuation.
+- Changes were surgical: one new logic file, one new focused test file, and the minimum type additions in `src/state/types.ts`.
 
-## Issues or concerns
-- The isolated worktree does not contain a local `reference/ccmem/` subtree; I treated `/Users/biran/code/skills/loop/ccloop/reference/ccmem/` in the repository root as read-only reference input when evaluating the memory item.
+## Concerns
+- Full-suite success required a local `npm ci` because this isolated worktree initially lacked `node_modules/.bin/tsx`. After restoring dependencies, the suite passed cleanly.
+
+## Reviewer fix — persisted ownership truth precedence
+- Updated `/Users/biran/code/skills/loop/ccloop/.claude/worktrees/agent-a6ad7c880d542af0f/src/ownership/ownerController.ts` so `evaluateOwnership()` now treats controller-owned persisted owner truth as authoritative before any Layer B continuity support.
+- `ownerRecord.supersededByEpoch` now directly drives `OWNER_SUPERSEDED`, and conflicting supersede claims resolve deny-by-default to `OWNER_UNDECIDABLE` instead of trusting non-persisted evidence.
+- `ownerRecord.ownerStatus` is now read directly:
+  - `"unknown"` yields `OWNER_UNDECIDABLE`;
+  - `"lost"` can yield `OWNER_LOST` only when persisted support and supporting continuity evidence do not contradict that record and the last trusted boundary is known;
+  - contradictory persisted truth vs supporting evidence now resolves to `OWNER_UNDECIDABLE` rather than `OWNER_VALID`.
+- Unconfirmed `knownSupersedingEpoch` claims no longer override a persisted current owner record; without persisted supersede confirmation, the function denies by default with `OWNER_UNDECIDABLE`.
+- `applyOwnerEpochTransfer()` remains pure transfer-only logic and was not broadened beyond epoch rotation plus transfer-record emission.
+
+## Reviewer-fix test evidence
+Command:
+- `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- tests/ownership/ownerController.test.ts`
+
+Result:
+- Passed.
+- Relevant output:
+  - `✓ tests/ownership/ownerController.test.ts (8 tests)`
+  - `Tests 8 passed (8)`
+
+## Reviewer-fix regressions added
+- contradictory persisted-truth-vs-supporting-evidence case does not return `OWNER_VALID`
+- persisted owner record alone indicating supersede returns `OWNER_SUPERSEDED`
+- unconfirmed external superseding claim without persisted confirmation returns `OWNER_UNDECIDABLE`
+- persisted lost-status plus supporting continuity contradiction returns `OWNER_UNDECIDABLE`
+- existing owner-loss and atomic transfer coverage remains green

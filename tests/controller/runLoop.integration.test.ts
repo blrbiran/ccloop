@@ -1045,6 +1045,532 @@ describe("runLoop", () => {
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "loop_exhausted"]);
   });
 
+  it("writes owner-record.json when a run is initialized", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+
+    const adapter = new ScriptedAdapter([
+      {
+        plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+        execution: {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        },
+        verification: {
+          approved: true,
+          rejectCategory: "",
+          primaryTargetPaths: ["src/index.ts"],
+          failingCommand: null,
+          safeToRetry: false,
+          evidence: ["pass"],
+          pauseSignals: [],
+          stopSignals: [],
+        },
+      },
+    ]);
+
+    await runLoop(contract, runDir, adapter);
+
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+      currentOwnerEpoch: number;
+      ownerStatus: string;
+    };
+
+    expect(owner.currentOwnerEpoch).toBe(1);
+    expect(owner.ownerStatus).toBe("current");
+  });
+
+  it("keeps changed-path stale reconciliation on OWNER_UNDECIDABLE even when persisted owner truth is lost", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+          runId: "task-1",
+          logicalSessionId: "task-1:lost-with-changes",
+          currentOwnerEpoch: 1,
+          currentProcessInstanceId: "pid:12345",
+          lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+          ownerStatus: "lost",
+          supersededByEpoch: null,
+        }, null, 2));
+        await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 2;\n");
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    await runLoop(contract, runDir, adapter);
+
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as {
+      ownershipVerdict: string;
+      priorOwnerEpoch: number | null;
+      newOwnerEpoch: number | null;
+      eligibleForContinuation: boolean;
+      takeoverPermission: { allowed: boolean };
+    };
+
+    expect(reconciliation.ownershipVerdict).toBe("OWNER_UNDECIDABLE");
+    expect(reconciliation.priorOwnerEpoch).toBe(1);
+    expect(reconciliation.newOwnerEpoch).toBeNull();
+    expect(reconciliation.eligibleForContinuation).toBe(false);
+    expect(reconciliation.takeoverPermission.allowed).toBe(false);
+  });
+
+  it("writes an OWNER_LOST reconciliation record with transferred ownership when persisted owner truth no longer supports ownership and continuity evidence does not rescue it", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+          runId: "task-1",
+          logicalSessionId: "task-1:lost",
+          currentOwnerEpoch: 1,
+          currentProcessInstanceId: "pid:12345",
+          lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+          ownerStatus: "lost",
+          supersededByEpoch: null,
+        }, null, 2));
+        await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 3;\n");
+        await execFileAsync("git", ["checkout", "--", "src/index.ts"], { cwd: context.worktreePath });
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    await runLoop(contract, runDir, adapter);
+
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as {
+      ownershipVerdict: string;
+      priorOwnerEpoch: number | null;
+      newOwnerEpoch: number | null;
+      eligibleForContinuation: boolean;
+      takeoverPermission: { allowed: boolean };
+    };
+
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+      currentOwnerEpoch: number;
+      currentProcessInstanceId: string;
+    };
+    const transfer = JSON.parse(await readFile(join(runDir, "owner-transfer.json"), "utf8")) as {
+      priorOwnerEpoch: number;
+      newOwnerEpoch: number;
+      eligibleForContinuation: boolean;
+    };
+
+    expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
+    expect(reconciliation.priorOwnerEpoch).toBe(1);
+    expect(reconciliation.newOwnerEpoch).toBe(2);
+    expect(reconciliation.eligibleForContinuation).toBe(true);
+    expect(reconciliation.takeoverPermission.allowed).toBe(true);
+    expect(owner.currentOwnerEpoch).toBe(2);
+    expect(owner.currentProcessInstanceId).toBe(`pid:${process.pid}`);
+    expect(transfer.priorOwnerEpoch).toBe(1);
+    expect(transfer.newOwnerEpoch).toBe(2);
+    expect(transfer.eligibleForContinuation).toBe(true);
+  });
+
+  it("persists owner transfer artifacts and continuation eligibility after a controller-owned OWNER_LOST takeover-allowed verdict without resuming execution", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+    let verifyCalled = false;
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+          runId: "task-1",
+          logicalSessionId: "task-1:lost",
+          currentOwnerEpoch: 1,
+          currentProcessInstanceId: "pid:12345",
+          lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+          ownerStatus: "lost",
+          supersededByEpoch: null,
+        }, null, 2));
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        verifyCalled = true;
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+      currentOwnerEpoch: number;
+      currentProcessInstanceId: string;
+    };
+    const transfer = JSON.parse(await readFile(join(runDir, "owner-transfer.json"), "utf8")) as {
+      priorOwnerEpoch: number;
+      newOwnerEpoch: number;
+      eligibleForContinuation: boolean;
+      newProcessInstanceId: string;
+    };
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as {
+      ownershipVerdict: string;
+      priorOwnerEpoch: number | null;
+      newOwnerEpoch: number | null;
+      eligibleForContinuation: boolean;
+    };
+
+    expect(owner.currentOwnerEpoch).toBe(2);
+    expect(owner.currentProcessInstanceId).toBe(`pid:${process.pid}`);
+    expect(transfer.priorOwnerEpoch).toBe(1);
+    expect(transfer.newOwnerEpoch).toBe(2);
+    expect(transfer.eligibleForContinuation).toBe(true);
+    expect(transfer.newProcessInstanceId).toBe(`pid:${process.pid}`);
+    expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
+    expect(reconciliation.priorOwnerEpoch).toBe(1);
+    expect(reconciliation.newOwnerEpoch).toBe(2);
+    expect(reconciliation.eligibleForContinuation).toBe(true);
+    expect(finalState.status).toBe("exhausted");
+    expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON);
+    expect(verifyCalled).toBe(false);
+    expect(await readEventTypes(runDir)).toEqual([
+      "loop_planning",
+      "attempt_started",
+      "execute_started",
+      "owner_epoch_transferred",
+      "loop_exhausted",
+    ]);
+  });
+
+  it("preserves the winner reconciliation view when another controller already completed the transfer", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    vi.resetModules();
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+      let readCount = 0;
+
+      return {
+        ...actual,
+        readOwnerRecord: async (observedRunDir: string) => {
+          const owner = await actual.readOwnerRecord(observedRunDir);
+          readCount += 1;
+
+          if (readCount === 1) {
+            await actual.writeOwnerRecord(observedRunDir, {
+              ...owner,
+              currentOwnerEpoch: owner.currentOwnerEpoch + 1,
+              currentProcessInstanceId: "pid:other-controller",
+              lastAffirmedAt: "2026-07-23T00:00:01.000Z",
+              ownerStatus: "current",
+            });
+            await actual.writeOwnerTransferRecord(observedRunDir, {
+              priorOwnerEpoch: owner.currentOwnerEpoch,
+              newOwnerEpoch: owner.currentOwnerEpoch + 1,
+              priorProcessInstanceId: owner.currentProcessInstanceId,
+              newProcessInstanceId: "pid:other-controller",
+              transferredAt: "2026-07-23T00:00:01.000Z",
+              reason: "owner lost after reconciliation",
+              eligibleForContinuation: true,
+            });
+            await actual.writeBoundaryArtifacts(observedRunDir, {
+              boundaryAnalysis: {
+                status: "stale_candidate",
+                strongProgressAt: null,
+                weakProgressAt: null,
+                suspectReason: null,
+                staleCandidateReason: "continuity evidence missing",
+              },
+              reconciliationRecord: {
+                staleSuspicionBasis: ["continuity evidence missing"],
+                staleConfirmed: true,
+                ownershipVerdict: "OWNER_LOST",
+                lastTrustedBoundary: "execute",
+                conflictingEvidence: [],
+                takeoverPermission: {
+                  allowed: true,
+                  reason: "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
+                },
+                priorOwnerEpoch: owner.currentOwnerEpoch,
+                newOwnerEpoch: owner.currentOwnerEpoch + 1,
+                eligibleForContinuation: true,
+              },
+            });
+          }
+
+          return owner;
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+            runId: "task-1",
+            logicalSessionId: "task-1:lost",
+            currentOwnerEpoch: 1,
+            currentProcessInstanceId: "pid:12345",
+            lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+            ownerStatus: "lost",
+            supersededByEpoch: null,
+          }, null, 2));
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const finalState = await observedRunLoop(contract, runDir, adapter);
+      const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+        currentOwnerEpoch: number;
+        currentProcessInstanceId: string;
+        ownerStatus: string;
+      };
+      const transfer = JSON.parse(await readFile(join(runDir, "owner-transfer.json"), "utf8")) as {
+        priorOwnerEpoch: number;
+        newOwnerEpoch: number;
+        newProcessInstanceId: string;
+        eligibleForContinuation: boolean;
+      };
+      const reconciliation = JSON.parse(
+        await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+      ) as {
+        ownershipVerdict: string;
+        priorOwnerEpoch: number | null;
+        newOwnerEpoch: number | null;
+        eligibleForContinuation: boolean;
+        takeoverPermission: { allowed: boolean };
+      };
+
+      expect(owner.currentOwnerEpoch).toBe(2);
+      expect(owner.currentProcessInstanceId).toBe("pid:other-controller");
+      expect(owner.ownerStatus).toBe("current");
+      expect(transfer.priorOwnerEpoch).toBe(1);
+      expect(transfer.newOwnerEpoch).toBe(2);
+      expect(transfer.newProcessInstanceId).toBe("pid:other-controller");
+      expect(transfer.eligibleForContinuation).toBe(true);
+      expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
+      expect(reconciliation.priorOwnerEpoch).toBe(1);
+      expect(reconciliation.newOwnerEpoch).toBe(2);
+      expect(reconciliation.eligibleForContinuation).toBe(true);
+      expect(reconciliation.takeoverPermission.allowed).toBe(true);
+      expect(finalState.status).toBe("exhausted");
+      expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON);
+      expect(await readEventTypes(runDir)).toEqual([
+        "loop_planning",
+        "attempt_started",
+        "execute_started",
+        "loop_exhausted",
+      ]);
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
+
+  it("preserves a synthesized winner reconciliation view when another controller already completed the transfer before success reconciliation was written", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    vi.resetModules();
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+      let readCount = 0;
+
+      return {
+        ...actual,
+        readOwnerRecord: async (observedRunDir: string) => {
+          const owner = await actual.readOwnerRecord(observedRunDir);
+          readCount += 1;
+
+          if (readCount === 1) {
+            await actual.writeOwnerRecord(observedRunDir, {
+              ...owner,
+              currentOwnerEpoch: owner.currentOwnerEpoch + 1,
+              currentProcessInstanceId: "pid:other-controller",
+              lastAffirmedAt: "2026-07-23T00:00:01.000Z",
+              ownerStatus: "current",
+            });
+            await actual.writeOwnerTransferRecord(observedRunDir, {
+              priorOwnerEpoch: owner.currentOwnerEpoch,
+              newOwnerEpoch: owner.currentOwnerEpoch + 1,
+              priorProcessInstanceId: owner.currentProcessInstanceId,
+              newProcessInstanceId: "pid:other-controller",
+              transferredAt: "2026-07-23T00:00:01.000Z",
+              reason: "owner lost after reconciliation",
+              eligibleForContinuation: true,
+            });
+          }
+
+          return owner;
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+            runId: "task-1",
+            logicalSessionId: "task-1:lost",
+            currentOwnerEpoch: 1,
+            currentProcessInstanceId: "pid:12345",
+            lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+            ownerStatus: "lost",
+            supersededByEpoch: null,
+          }, null, 2));
+          await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 2;\n");
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const finalState = await observedRunLoop(contract, runDir, adapter);
+      const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+        currentOwnerEpoch: number;
+        currentProcessInstanceId: string;
+        ownerStatus: string;
+      };
+      const transfer = JSON.parse(await readFile(join(runDir, "owner-transfer.json"), "utf8")) as {
+        priorOwnerEpoch: number;
+        newOwnerEpoch: number;
+        newProcessInstanceId: string;
+        eligibleForContinuation: boolean;
+      };
+      const reconciliation = JSON.parse(
+        await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+      ) as {
+        staleSuspicionBasis: string[];
+        staleConfirmed: boolean;
+        ownershipVerdict: string;
+        lastTrustedBoundary: string;
+        conflictingEvidence: string[];
+        takeoverPermission: { allowed: boolean; reason: string };
+        priorOwnerEpoch: number | null;
+        newOwnerEpoch: number | null;
+        eligibleForContinuation: boolean;
+      };
+
+      expect(owner.currentOwnerEpoch).toBe(2);
+      expect(owner.currentProcessInstanceId).toBe("pid:other-controller");
+      expect(owner.ownerStatus).toBe("current");
+      expect(transfer.priorOwnerEpoch).toBe(1);
+      expect(transfer.newOwnerEpoch).toBe(2);
+      expect(transfer.newProcessInstanceId).toBe("pid:other-controller");
+      expect(transfer.eligibleForContinuation).toBe(true);
+      expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
+      expect(reconciliation.priorOwnerEpoch).toBe(1);
+      expect(reconciliation.newOwnerEpoch).toBe(2);
+      expect(reconciliation.eligibleForContinuation).toBe(true);
+      expect(reconciliation.takeoverPermission.allowed).toBe(true);
+      expect(reconciliation.takeoverPermission.reason).toBe(
+        "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
+      );
+      expect(reconciliation.staleSuspicionBasis).toEqual(["owner transfer already published"]);
+      expect(reconciliation.conflictingEvidence).toEqual([]);
+      expect(reconciliation.lastTrustedBoundary).toBe("execute");
+      expect(finalState.status).toBe("exhausted");
+      expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON);
+      expect(await readEventTypes(runDir)).toEqual([
+        "loop_planning",
+        "attempt_started",
+        "execute_started",
+        "loop_exhausted",
+      ]);
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
+
   it("records retained cleanupStatus in execution recovery when cleanup fails", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
