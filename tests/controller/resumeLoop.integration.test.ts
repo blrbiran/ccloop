@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { resumeLoop, ResumeNotEligibleError } from "../../src/controller/resumeLoop.js";
+import { createAttemptWorkspace } from "../../src/workspace/worktreeManager.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 
@@ -132,5 +133,24 @@ describe("resumeLoop", () => {
     owner.currentOwnerEpoch = 3;
     await writeFile(join(runDir, "owner-record.json"), JSON.stringify(owner));
     await expect(resumeLoop(runDir, new ScriptedAdapter([successFrame()]))).rejects.toBeInstanceOf(ResumeNotEligibleError);
+  });
+
+  it("discards a residual worktree from the interrupted attempt during resume (next-attempt-fresh)", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    // Create a REAL residual worktree the same way the controller does mid-attempt
+    // (createAttemptWorkspace -> `git worktree add`), so cleanup has a genuine
+    // git-registered worktree to remove rather than a plain directory it would no-op on.
+    const { worktreePath } = await createAttemptWorkspace(repoPath, runDir, 1);
+    await expect(access(worktreePath)).resolves.toBeUndefined(); // exists before resume
+
+    const adapter = new ScriptedAdapter([successFrame()]);
+    const finalState = await resumeLoop(runDir, adapter);
+
+    expect(finalState.status).toBe("succeeded");
+    await expect(access(worktreePath)).rejects.toThrow(); // cleanup removed the residual worktree
   });
 });

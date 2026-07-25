@@ -94,7 +94,8 @@ export async function main(argv: string[]): Promise<number> {
     const contract = await loadContract(parsed.contractPath);
     const finalState = await runLoop(contract, parsed.runDir, adapter);
     return finalState.status === "succeeded" ? 0 : 2;
-  } catch {
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
 }
