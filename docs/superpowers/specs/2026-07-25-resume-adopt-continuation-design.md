@@ -31,6 +31,7 @@ Resume is a strict **consumer** of the ownership layer, never a producer of owne
 - The only path to continuation eligibility is a reconciliation-granted owner-epoch transfer that already wrote `owner-transfer.json` with `eligibleForContinuation: true` and rotated `owner-record.json` to the new epoch.
 - There is **no same-epoch fast path**: an ordinary same-process crash-restart must still obtain eligibility through reconciliation (which rotates the epoch) before resume will act. This keeps a single, uniform, deny-by-default gate.
 - `eligible-for-continuation` means "a new valid owner epoch exists and a resume layer may decide whether to continue." This design is that decision layer; it grants nothing new.
+- **Eligibility is a standing property of the current owner epoch, not a one-shot token.** It is *re-claimable*: while the epoch published by the transfer is still current and un-superseded, resume may act on it repeatedly — a run that crashes again after being resumed can be resumed again against the *same* transfer, without a fresh reconciliation. A newer reconciliation rotates the epoch and, by the §5.3 fence, retires the old eligibility. This is safe because each resumed attempt consumes attempt/budget, so repeated resumes converge on a terminal state rather than looping forever.
 
 ## 4. Entry Model
 
@@ -55,7 +56,7 @@ All of the following must hold; if **any** fails, resume refuses (§9):
 4. `owner-record.ownerStatus === "current"`.
 5. `loop-state.status` is in the resumable whitelist (§8).
 
-The gate is read-only: it computes a decision without modifying any ownership truth. This mirrors the reconciliation read/verdict/transfer split — resume gates, then claims, but never repairs.
+The gate makes **no new ownership decision or write**. The one exception is not a resume action: reading `owner-record.json` via `readOwnerRecord` may finalize an already-staged, interrupted owner-transfer transaction (`recoverInterruptedOwnerTransfer`) — the idempotent completion of a transfer reconciliation already decided, never a fresh judgment. Aside from that recovery, the gate only reads; it mirrors the reconciliation read/verdict/transfer split — resume gates, then claims, but never repairs.
 
 ## 6. Claim (Adopt) — Compare-and-Swap Re-Affirmation
 
@@ -77,20 +78,22 @@ Resume trusts the persisted `loop-state.json` **verbatim**: `attemptsUsed`, `bud
 
 - The interrupted in-flight attempt is treated as **abandoned**. Resume does not read, salvage, or continue its partial artifacts.
 - Continuation re-enters `runLoopFromState` so the loop opens a **fresh next attempt** (`attemptsUsed + 1`) with its own new worktree. Attempt numbering never collides with the abandoned attempt.
-- The abandoned attempt's residual worktree, if any, is cleaned **best-effort** (reusing `cleanupAttemptWorkspaceBestEffort`); failure to clean is non-fatal and never blocks continuation, and the abandoned worktree's contents are never resumed.
+- The abandoned attempt's residual worktree, if any, is cleaned **best-effort**: resume locates residual worktrees by scanning `runDir/worktrees/` (resume does not otherwise track the interrupted attempt's path) and cleans them via `cleanupAttemptWorkspaceBestEffort`. Failing to locate or remove a residual worktree is non-fatal and never blocks continuation, and the abandoned worktree's contents are never resumed.
 - If persisted budget is already near-zero, resume adds no special case: the loop's existing `consumeAttemptBudget` / `hasBudgetExceeded` terminate the run naturally on the next attempt.
 
 ## 8. Resumable Status Whitelist
 
 Resume proceeds only when `loop-state.status` is one of:
 
-- `planning`, `executing`, `verifying`, `queued`.
+- `planning`, `executing`, `verifying`.
 
 All other statuses are refused:
 
 - terminal — `succeeded`, `failed`, `cancelled` — the run is finished;
 - `exhausted` — budget is spent; resuming without refreshing budget (out of scope) would re-exhaust immediately;
 - `blocked_waiting_human` — the run is explicitly awaiting a human; it is not an automated-continuation candidate.
+
+`queued` is deliberately **excluded**: `initialState` starts a run at `queued`, but `runLoop` transitions to `planning` before the first persisted `loop-state.json` write, so `queued` is never observable on disk for a run that could need resuming. Admitting it would be speculative; if a future change makes `queued` reachable on disk, it can be added then with its own test.
 
 This whitelist also provides natural idempotency: once a resumed run reaches a terminal status, a second `resumeLoop` invocation is refused by this gate.
 
