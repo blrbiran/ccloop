@@ -49,3 +49,15 @@ describe("parseArgs", () => {
     ).resolves.toBe(0);
   });
 });
+
+describe("parseArgs resume", () => {
+  it("parses a resume command", () => {
+    const parsed = parseArgs(["resume", "--run-dir", "/tmp/run", "--adapter", "scripted", "--adapter-config", "/tmp/cfg.json"]);
+    expect(parsed).toEqual({ command: "resume", runDir: "/tmp/run", adapter: "scripted", adapterConfigPath: "/tmp/cfg.json" });
+  });
+
+  it("still parses a run command", () => {
+    const parsed = parseArgs(["run", "--contract", "/c.json", "--run-dir", "/r", "--adapter", "scripted", "--adapter-config", "/a.json"]);
+    expect(parsed.command).toBe("run");
+  });
+});
