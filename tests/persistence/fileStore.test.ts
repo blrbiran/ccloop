@@ -21,6 +21,7 @@ import {
 import type { LoopContract } from "../../src/contract/schema.js";
 import { applyOwnerEpochTransfer } from "../../src/ownership/ownerController.js";
 import type { RunState } from "../../src/state/types.js";
+import type { OwnerRecord } from "../../src/runtime/types.js";
 
 const contract: LoopContract = {
   objective: { taskId: "task-1", goal: "Fix test", successCondition: "tests pass", nonGoals: [] },
@@ -1312,7 +1313,7 @@ describe("fileStore", () => {
   });
 });
 
-function ownerRecord(overrides = {}) {
+function ownerRecord(overrides: Partial<OwnerRecord> = {}): OwnerRecord {
   return {
     runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 2,
     currentProcessInstanceId: "pid:111", lastAffirmedAt: "2026-07-25T00:00:00.000Z",
