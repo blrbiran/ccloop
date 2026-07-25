@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateResumeEligibility, type ResumeGateInput } from "../../src/controller/resumeLoop.js";
+import { evaluateResumeEligibility, ResumeNotEligibleError, type ResumeGateInput } from "../../src/controller/resumeLoop.js";
 
 function baseInput(): ResumeGateInput {
   return {
@@ -31,6 +31,15 @@ function baseInput(): ResumeGateInput {
 describe("evaluateResumeEligibility", () => {
   it("passes for a coherent, current, non-superseded, resumable input", () => {
     expect(evaluateResumeEligibility(baseInput())).toEqual({ ok: true });
+  });
+
+  // The whitelist is the whole contract: an interrupted run is resumable only while it was
+  // mid-loop. Asserting each accepted status separately keeps a silent narrowing of the
+  // whitelist (e.g. dropping "verifying") from passing as "still green".
+  it.each(["planning", "executing", "verifying"] as const)("accepts resumable status %s", (status) => {
+    const input = baseInput();
+    input.runState.status = status;
+    expect(evaluateResumeEligibility(input)).toEqual({ ok: true });
   });
 
   it("refuses when owner-transfer is not eligible", () => {
@@ -78,4 +87,17 @@ describe("evaluateResumeEligibility", () => {
       expect(evaluateResumeEligibility(input).ok).toBe(false);
     },
   );
+});
+
+describe("ResumeNotEligibleError", () => {
+  // A refusal is a policy outcome, not a crash. The CLI prints `error.message` only for
+  // `instanceof Error` (src/cli.ts), so losing the Error subclassing or the verbatim reason
+  // would leave an operator with no way to see WHY resume was denied.
+  it("is an Error carrying the refusal reason verbatim under a distinguishable name", () => {
+    const error = new ResumeNotEligibleError("run status succeeded is not resumable");
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("ResumeNotEligibleError");
+    expect(error.message).toBe("run status succeeded is not resumable");
+  });
 });
