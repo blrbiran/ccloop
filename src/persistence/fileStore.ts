@@ -588,6 +588,18 @@ export async function writeOwnerTransferArtifacts(
   }
 }
 
+export async function readRunState(runDir: string): Promise<RunState> {
+  return JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8")) as RunState;
+}
+
+export async function readOwnerTransferRecord(runDir: string): Promise<OwnerTransferRecord> {
+  return JSON.parse(await readFile(join(runDir, OWNER_TRANSFER_FILE), "utf8")) as OwnerTransferRecord;
+}
+
+export async function readReconciliationRecord(runDir: string): Promise<ReconciliationRecord> {
+  return JSON.parse(await readFile(join(runDir, "reconciliation-record.json"), "utf8")) as ReconciliationRecord;
+}
+
 export async function writeAttemptArtifacts(runDir: string, attempt: number, artifacts: AttemptArtifacts): Promise<void> {
   const attemptDir = join(runDir, "attempts", String(attempt));
   await mkdir(attemptDir, { recursive: true });

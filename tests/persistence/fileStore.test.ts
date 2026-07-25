@@ -7,6 +7,9 @@ import {
   initializeRunFiles,
   OwnerTransferPreconditionError,
   readOwnerRecord,
+  readRunState,
+  readOwnerTransferRecord,
+  readReconciliationRecord,
   writeAttemptArtifacts,
   writeBoundaryArtifacts,
   writeOwnerRecord,
@@ -1284,5 +1287,43 @@ describe("fileStore", () => {
     expect(savedState.status).toBe("verifying");
     expect(savedEvents).toContain("attempt_started");
     expect(savedPlan.summary).toBe("change src/index.ts");
+  });
+});
+
+describe("strict persisted-artifact readers", () => {
+  it("reads a persisted run state", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
+    const state = {
+      status: "executing", currentAttempt: 2, attemptsUsed: 2,
+      lastTransitionAt: "2026-07-25T00:00:00.000Z", waitingOnHuman: false,
+      stopReason: null,
+      budgetSnapshot: { attemptsRemaining: 1, timeRemainingMs: 1000, tokenBudgetRemaining: 500 },
+      recentFailures: [],
+    };
+    await writeFile(join(runDir, "loop-state.json"), JSON.stringify(state));
+    expect(await readRunState(runDir)).toEqual(state);
+  });
+
+  it("throws when loop-state.json is missing", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
+    await expect(readRunState(runDir)).rejects.toThrow();
+  });
+
+  it("throws when owner-transfer.json is unparseable", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
+    await writeFile(join(runDir, "owner-transfer.json"), "{ not json");
+    await expect(readOwnerTransferRecord(runDir)).rejects.toThrow();
+  });
+
+  it("reads a persisted reconciliation record", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
+    const rec = {
+      staleSuspicionBasis: [], staleConfirmed: true, ownershipVerdict: "OWNER_LOST",
+      lastTrustedBoundary: "execute", conflictingEvidence: [],
+      takeoverPermission: { allowed: true, reason: "ok" },
+      priorOwnerEpoch: 1, newOwnerEpoch: 2, eligibleForContinuation: true,
+    };
+    await writeFile(join(runDir, "reconciliation-record.json"), JSON.stringify(rec));
+    expect(await readReconciliationRecord(runDir)).toEqual(rec);
   });
 });
