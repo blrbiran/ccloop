@@ -60,7 +60,7 @@ A live lease is a reason to **refuse** a second executor. An expired lease is **
 
 ### 4.3 One Layer A record, not two
 
-The lease lives in the existing owner record. No second lease file is introduced, because a separate file would create a second source of truth in which "who is running" and "who is the owner" can disagree — a direct violation of §3.1 and §4.1.
+The lease lives in the existing owner record. No second lease file is introduced, because a separate file would create a second source of truth in which "who is running" and "who is the owner" can disagree — a direct violation of §3.1 and §4.1 of the ownership design.
 
 ### 4.4 Losing the lease means stopping
 
@@ -106,6 +106,12 @@ One consequence of reusing that path is worth stating, because it looks like a b
 
 A heartbeat failure that is **not** a precondition failure (lock contention, transient I/O) is swallowed and retried on the next tick. It must never throw into the control loop.
 
+### 6.0 Lifecycle
+
+The heartbeat starts immediately after the gate has admitted this process and the owner record naming it is on disk — in `runLoop` after `writeOwnerRecord`, in `resumeLoop` after the CAS claim — and never before, so it can never affirm a lease this process does not hold.
+
+`stop()` must run on **every** exit path: normal completion, stop-boundary exit, and any thrown error. The implementation wraps the loop body in `try/finally` for exactly this reason. A timer that outlives its loop keeps refreshing the lease of a run that is no longer executing, which for up to one TTL refuses legitimate later work — the exact inverse of what the lease is for. `unref()` prevents the timer from holding the process open; it does **not** substitute for `stop()`, because a run can end long before its process does.
+
 ### 6.1 The expected record rotates on every successful affirm
 
 Each successful affirm changes `lastAffirmedAt`, so the record the heartbeat compared against is stale the moment it succeeds. The handle therefore replaces its expected record with the one `affirmOwnerLease` returns, every time. A heartbeat that keeps comparing against its start-of-run record would fail its own second CAS roughly one interval in, and — under the naive reading of §8 — would stop a perfectly healthy run.
@@ -115,6 +121,12 @@ This also fixes the criterion for §8. A failed CAS is **not** by itself proof o
 ## 7. Acquisition gate
 
 The gate runs as early as possible, with one ordering constraint: it must not precede `initializeRunFiles`, because it may need to append an event and the events file does not exist before that call. In `runLoop` the current order is `buildInitialOwnerRecord` → `initializeRunFiles` → `writeOwnerRecord` (`src/controller/runLoop.ts:732-734`), so the gate belongs between the second and third of those. In `resumeLoop` the run directory already exists, so the gate goes immediately after the opening `resume_requested` event (`src/controller/resumeLoop.ts:83`) and before every read the eligibility gate performs.
+
+### 7.0 Only `resumeLoop` reaches the interesting branches
+
+`initializeRunFiles` begins with `ensureFreshRunDir`, which throws if `loop-contract.json`, `loop-state.json`, or `events.jsonl` already exists — V1 refuses to reinitialize an existing automated run (`src/persistence/fileStore.ts:48-61`, `:72-78`). A `runLoop` start therefore always operates on a directory that has just been created empty, so the gate placed after it can only ever observe "no owner record".
+
+The consequence is worth stating so nobody implements unreachable code: in `runLoop` the gate is a single ENOENT check and nothing more. Every other branch below — a live lease held by someone else, an expired lease, a malformed record — is reachable **only** through `resumeLoop`. The gate is described once, for both call sites, but only one of them exercises it.
 
 The gate reads the owner record **raw** — no `recoverInterruptedOwnerTransfer`, see the refusal-purity note below — and branches:
 
@@ -176,6 +188,8 @@ A re-check has three outcomes, and only the first two abandon the attempt:
 
 Row one is the same criterion the heartbeat applies in §6.1 — a clean read showing a different epoch, a set `supersededByEpoch`, or a different process instance — evaluated by whichever mechanism observes it first. The re-check is not a second, weaker way to conclude supersession; it applies the identical test, and either mechanism reaching that conclusion is sufficient.
 
+`assertHeld` reads the persisted record **every time it is called**. It is not subject to `LEASE_AFFIRM_THROTTLE_MS`, and it caches nothing — a throttled or cached re-check would silently degrade "fail closed before every side effect" into "fail closed at most once per throttle window", which is not the same guarantee. The throttle exists to keep the two *writers* of §6 from thrashing the lock; `assertHeld` is a raw read (§7.1) and takes no lock, so nothing is saved by skipping it.
+
 Row two is what "fail closed" buys: an unverifiable lease stops the run rather than letting it act unverified, and it deliberately does **not** claim supersession — hence the separate reason. No owner record is written on either abandoning path.
 
 ### 8.2 What this does not protect
@@ -186,7 +200,9 @@ The lease is keyed to a run, so it serializes executors of the *same* run only. 
 
 ## 9. Freshness inside `evaluateOwnership`
 
-`OwnershipEvaluationInput` gains one field: `leaseFresh: boolean | "unknown"`.
+`OwnershipEvaluationInput` gains one **required** field: `leaseFresh: boolean | "unknown"`.
+
+Required, not optional-with-a-default. An optional field would make "I forgot to pass it" indistinguishable from "I looked and could not tell", and that distinction is the whole content of §4.2. The cost is real and belongs in the implementation plan: every existing construction site and test fixture must be updated to pass `"unknown"` explicitly before this compiles.
 
 - `true` → the owner has a live counter-claim: the verdict must not be `OWNER_LOST` and `takeoverAllowed` must be `false`;
 - `false` / `"unknown"` → every existing verdict path is unchanged, byte for byte.
@@ -219,9 +235,11 @@ That is survivable because the lease is not what ultimately prevents two executo
 
 - **whichever process no longer holds the record discovers this at its next affirm and stops** (§6.1, §8). This holds on every path.
 
-A weaker statement is often assumed here and is **false**, so it is written out: it is *not* true that the owner record is always claimed by CAS. `resumeLoop` claims by CAS, but a fresh `runLoop` start writes the record unconditionally — `writeOwnerRecord` is a plain overwrite with no precondition (`src/persistence/fileStore.ts:379-381`), called at `src/controller/runLoop.ts:734`. Two `runLoop` starts racing on the same brand-new run directory therefore both write, last-writer-wins, and both continue past the gate.
+A weaker statement is often assumed here and is **false**, so it is written out: it is *not* true that the owner record is always claimed by CAS. `resumeLoop` claims by CAS, but a fresh `runLoop` start writes the record unconditionally — `writeOwnerRecord` is a plain overwrite with no precondition (`src/persistence/fileStore.ts:379-381`), called at `src/controller/runLoop.ts:734`.
 
-What contains that race is not exclusion at the start but the heartbeat: within one interval the loser's affirm fails, it re-reads, finds an identity that is not its own, and stops. So on the fresh-start path the lease and the record write are both best-effort, and the single hard guarantee is the heartbeat. Closing the fresh-start race properly (a conditional create) is a real improvement and is deliberately **not** in L1's scope; it is noted here so a later layer can pick it up knowingly rather than discover it.
+What normally stops a second `runLoop` on the same directory is not that write but `ensureFreshRunDir`, which throws once the first run's files exist (§7.0). That check is a test-then-write sequence, not an atomic create, so a narrow TOCTOU window remains: if two starts both pass the existence check before either writes, both proceed, and the second `writeOwnerRecord` silently overwrites the first.
+
+The window is milliseconds wide and the common case fails loudly, but "narrow" is not "closed". What contains it is the heartbeat: within one interval the loser's affirm fails, it re-reads, finds an identity that is not its own, and stops. So on the fresh-start path exclusion is best-effort and the single hard guarantee is the heartbeat. Closing the window properly (an atomic exclusive create) is a real improvement, deliberately **not** in L1's scope, and noted here so a later layer picks it up knowingly rather than discovering it.
 
 An implementer must not "strengthen" the lease into something the rest of the system relies on for correctness.
 
@@ -277,7 +295,7 @@ export function startLeaseHeartbeat(options: {
 
 1. **Pure predicate** — boundary values at exactly TTL, backwards clock, and the defensive "not fresh" answer for an unparseable or absent `lastAffirmedAt`. The last case pins §5's belt-and-braces default only; the *governing* rule for malformed records is refusal, covered by the "corrupt record is refused" requirement below.
 2. **Recycled PID is not mistaken for self** — a fresh lease held by `pid:4242:<earlier start>` does not match a checking process that is also PID 4242 but started later; the gate refuses (§5.1). A record in the legacy `pid:4242` format likewise never matches.
-3. **Fresh-start race is contained by the heartbeat, not by the gate** — two `runLoop` starts against the same new run directory both proceed (documenting the unconditional `writeOwnerRecord`), and the loser stops within one heartbeat interval with a lease reason rather than running to completion (§10.1).
+3. **Second `runLoop` on an occupied directory fails loudly** — it throws from `ensureFreshRunDir` rather than reaching the lease gate at all (§7.0). The TOCTOU window of §10.1 is documented but not simulated: no test may assert that two concurrent starts both proceed, because the ordinary outcome is the throw.
 4. **Heartbeat under fake timers** — refreshes repeatedly across a TTL window; `stop()` ends all writes.
 5. **The heartbeat survives its own writes** — at least three consecutive affirms succeed with no external interference, proving the expected record rotates per §6.1. Written to fail against the naive implementation, which stops the run one interval in.
 6. **Mutual exclusion** — a second `resume` against a live-lease run is refused, and the run directory is unchanged **except for appended events** (§7.1): owner record, run state, and worktrees compare byte-identical, and no interrupted-transfer recovery ran.
@@ -289,6 +307,8 @@ export function startLeaseHeartbeat(options: {
 12. **Expiry refuses nothing** — a resume that is legitimately eligible (published transfer, matching epoch) still succeeds when the owner record's lease has aged out, and a resume that is ineligible is refused with the *eligibility* reason, never a lease reason. A `lease_expired_observed` event is present in both cases.
 13. **Fail-closed re-check** — when the owner record is unreadable or names a different process, the next side effect (Claude call, artifact write, worktree mutation) does not happen. Asserted per side-effect kind, not once generically.
 14. **Gate ordering** — a `runLoop` start against a brand-new run directory does not attempt to append an event before `initializeRunFiles` (§7).
+15. **The heartbeat does not outlive its run** — after the loop returns, and separately after it throws, no further affirm is written, and a subsequent legitimate `resume` is not refused by a lease the previous run left ticking (§6.0).
+16. **`assertHeld` is never throttled** — two side effects less than `LEASE_AFFIRM_THROTTLE_MS` apart each read the record, and a record rotated between them blocks the second (§8.1). Written to fail against an implementation that reuses the affirm throttle.
 
 Every test uses `ScriptedAdapter`. No paid Claude call is permitted by this work.
 
