@@ -2,26 +2,35 @@
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { loadContract } from "./contract/loadContract.js";
+import { resumeLoop } from "./controller/resumeLoop.js";
 import { runLoop } from "./controller/runLoop.js";
 import { SubprocessClaudeAdapter } from "./runtime/claude/subprocessClaudeAdapter.js";
 import { ScriptedAdapter } from "./runtime/scriptedAdapter.js";
 import type { RuntimeAdapter } from "./runtime/types.js";
 
-export type ParsedArgs = {
-  command: "run";
-  contractPath: string;
-  runDir: string;
-  adapter: "scripted" | "claude";
-  adapterConfigPath: string;
-};
+export type ParsedArgs =
+  | {
+      command: "run";
+      contractPath: string;
+      runDir: string;
+      adapter: "scripted" | "claude";
+      adapterConfigPath: string;
+    }
+  | {
+      command: "resume";
+      runDir: string;
+      adapter: "scripted" | "claude";
+      adapterConfigPath: string;
+    };
 
 type ScriptedAdapterConfig = {
   frames: ConstructorParameters<typeof ScriptedAdapter>[0];
 };
 
 export function parseArgs(argv: string[]): ParsedArgs {
-  if (argv[0] !== "run") {
-    throw new Error("expected `run` command");
+  const command = argv[0];
+  if (command !== "run" && command !== "resume") {
+    throw new Error("expected `run` or `resume` command");
   }
 
   const values = new Map<string, string>();
@@ -29,12 +38,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
     values.set(argv[index]!, argv[index + 1]!);
   }
 
-  const contractPath = values.get("--contract");
   const runDir = values.get("--run-dir");
   const adapter = values.get("--adapter");
   const adapterConfigPath = values.get("--adapter-config");
 
-  if (!contractPath || !runDir || !adapter || !adapterConfigPath) {
+  if (!runDir || !adapter || !adapterConfigPath) {
     throw new Error("missing required flags");
   }
 
@@ -42,8 +50,22 @@ export function parseArgs(argv: string[]): ParsedArgs {
     throw new Error("invalid adapter");
   }
 
+  if (command === "resume") {
+    return {
+      command,
+      runDir,
+      adapter,
+      adapterConfigPath,
+    };
+  }
+
+  const contractPath = values.get("--contract");
+  if (!contractPath) {
+    throw new Error("missing required flags");
+  }
+
   return {
-    command: "run",
+    command,
     contractPath,
     runDir,
     adapter,
@@ -64,11 +86,16 @@ async function loadAdapter(parsed: ParsedArgs): Promise<RuntimeAdapter> {
 export async function main(argv: string[]): Promise<number> {
   try {
     const parsed = parseArgs(argv);
-    const contract = await loadContract(parsed.contractPath);
     const adapter = await loadAdapter(parsed);
+    if (parsed.command === "resume") {
+      const finalState = await resumeLoop(parsed.runDir, adapter);
+      return finalState.status === "succeeded" ? 0 : 2;
+    }
+    const contract = await loadContract(parsed.contractPath);
     const finalState = await runLoop(contract, parsed.runDir, adapter);
     return finalState.status === "succeeded" ? 0 : 2;
-  } catch {
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
 }

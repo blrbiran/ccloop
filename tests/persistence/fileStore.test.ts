@@ -4,9 +4,13 @@ import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import {
   appendEvent,
+  claimOwnerRecordWithPrecondition,
   initializeRunFiles,
   OwnerTransferPreconditionError,
   readOwnerRecord,
+  readRunState,
+  readOwnerTransferRecord,
+  readReconciliationRecord,
   writeAttemptArtifacts,
   writeBoundaryArtifacts,
   writeOwnerRecord,
@@ -17,6 +21,7 @@ import {
 import type { LoopContract } from "../../src/contract/schema.js";
 import { applyOwnerEpochTransfer } from "../../src/ownership/ownerController.js";
 import type { RunState } from "../../src/state/types.js";
+import type { OwnerRecord } from "../../src/runtime/types.js";
 
 const contract: LoopContract = {
   objective: { taskId: "task-1", goal: "Fix test", successCondition: "tests pass", nonGoals: [] },
@@ -963,6 +968,27 @@ describe("fileStore", () => {
     await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();
   });
 
+  it("writes contract, state, events, and attempt artifacts", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await initializeRunFiles(runDir, contract, state);
+    await appendEvent(runDir, { type: "attempt_started", at: "2026-07-14T00:00:01.000Z", detail: "attempt 1" });
+    await writeAttemptArtifacts(runDir, 1, {
+      plan: { summary: "change src/index.ts" },
+      execution: { changedFiles: ["src/index.ts"], commandOutputs: ["ok"] },
+      verify: { approved: false, rejectCategory: "tests-failed" },
+      diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+      stdoutStderrLog: "npm test\nFAIL",
+    });
+    await writeRunState(runDir, { ...state, status: "verifying", currentAttempt: 1, attemptsUsed: 1 });
+
+    const savedState = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8"));
+    const savedEvents = await readFile(join(runDir, "events.jsonl"), "utf8");
+    const savedPlan = JSON.parse(await readFile(join(runDir, "attempts", "1", "plan.json"), "utf8"));
+
+    expect(savedState.status).toBe("verifying");
+    expect(savedEvents).toContain("attempt_started");
+    expect(savedPlan.summary).toBe("change src/index.ts");
+  });
 
   it("writes execution-recovery.json when execution recovery is present", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
@@ -1284,5 +1310,72 @@ describe("fileStore", () => {
     expect(savedState.status).toBe("verifying");
     expect(savedEvents).toContain("attempt_started");
     expect(savedPlan.summary).toBe("change src/index.ts");
+  });
+});
+
+function ownerRecord(overrides: Partial<OwnerRecord> = {}): OwnerRecord {
+  return {
+    runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 2,
+    currentProcessInstanceId: "pid:111", lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+    ownerStatus: "current", supersededByEpoch: null, ...overrides,
+  };
+}
+
+describe("claimOwnerRecordWithPrecondition", () => {
+  it("writes the next record when the precondition matches", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
+    const current = ownerRecord();
+    await writeOwnerRecord(runDir, current);
+    const next = ownerRecord({ currentProcessInstanceId: "pid:222", lastAffirmedAt: "2026-07-25T01:00:00.000Z" });
+    await claimOwnerRecordWithPrecondition(runDir, current, next);
+    expect(await readOwnerRecord(runDir)).toEqual(next);
+  });
+
+  it("throws and leaves the record untouched when the precondition fails", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
+    const persisted = ownerRecord({ currentOwnerEpoch: 3 });
+    await writeOwnerRecord(runDir, persisted);
+    const stale = ownerRecord({ currentOwnerEpoch: 2 });
+    const next = ownerRecord({ currentOwnerEpoch: 2, currentProcessInstanceId: "pid:222" });
+    await expect(claimOwnerRecordWithPrecondition(runDir, stale, next)).rejects.toBeInstanceOf(OwnerTransferPreconditionError);
+    expect(await readOwnerRecord(runDir)).toEqual(persisted);
+  });
+});
+
+describe("strict persisted-artifact readers", () => {
+  it("reads a persisted run state", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
+    const state = {
+      status: "executing", currentAttempt: 2, attemptsUsed: 2,
+      lastTransitionAt: "2026-07-25T00:00:00.000Z", waitingOnHuman: false,
+      stopReason: null,
+      budgetSnapshot: { attemptsRemaining: 1, timeRemainingMs: 1000, tokenBudgetRemaining: 500 },
+      recentFailures: [],
+    };
+    await writeFile(join(runDir, "loop-state.json"), JSON.stringify(state));
+    expect(await readRunState(runDir)).toEqual(state);
+  });
+
+  it("throws when loop-state.json is missing", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
+    await expect(readRunState(runDir)).rejects.toThrow();
+  });
+
+  it("throws when owner-transfer.json is unparseable", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
+    await writeFile(join(runDir, "owner-transfer.json"), "{ not json");
+    await expect(readOwnerTransferRecord(runDir)).rejects.toThrow();
+  });
+
+  it("reads a persisted reconciliation record", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
+    const rec = {
+      staleSuspicionBasis: [], staleConfirmed: true, ownershipVerdict: "OWNER_LOST",
+      lastTrustedBoundary: "execute", conflictingEvidence: [],
+      takeoverPermission: { allowed: true, reason: "ok" },
+      priorOwnerEpoch: 1, newOwnerEpoch: 2, eligibleForContinuation: true,
+    };
+    await writeFile(join(runDir, "reconciliation-record.json"), JSON.stringify(rec));
+    expect(await readReconciliationRecord(runDir)).toEqual(rec);
   });
 });
