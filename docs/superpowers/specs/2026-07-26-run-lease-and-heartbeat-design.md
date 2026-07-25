@@ -105,7 +105,7 @@ The lease holder is identified by `currentProcessInstanceId`, today `pid:${proce
 
 L1 therefore extends the identity with a component that is not reusable within a TTL: `pid:<pid>:<processStartMs>`, where `processStartMs` is this process's start time in epoch milliseconds.
 
-The field stays opaque and is only ever compared for string equality, so this is behavior-compatible with records written in the old format: an old-format record can never equal a new-format identity, so it can never be mistaken for "held by me". It falls through to the fresh-or-expired branches of §7, which is the safe direction. Historical artifacts are not rewritten.
+The field stays opaque and is only ever compared for string equality, so this is behavior-compatible with records written in the old format: an old-format record can never equal a new-format identity, so it can never be mistaken for "held by me". Such a record also predates `leaseAffirmedAt`, so it reads as carrying no lease at all and takes §7's no-lease branch rather than the fresh-or-expired ones. Either way the identity mismatch can only add refusals, never permissions. Historical artifacts are not rewritten.
 
 ## 6. Heartbeat writers
 
@@ -126,7 +126,11 @@ A heartbeat failure that is **not** a precondition failure (lock contention, tra
 
 The heartbeat starts immediately after the gate has admitted this process and the owner record naming it is on disk — in `runLoop` after `writeOwnerRecord`, in `resumeLoop` after the CAS claim — and never before, so it can never affirm a lease this process does not hold.
 
-`stop()` must run on **every** exit path: normal completion, stop-boundary exit, and any thrown error. The implementation wraps the loop body in `try/finally` for exactly this reason. A timer that outlives its loop keeps refreshing the lease of a run that is no longer executing, which for up to one TTL refuses legitimate later work — the exact inverse of what the lease is for. `unref()` prevents the timer from holding the process open; it does **not** substitute for `stop()`, because a run can end long before its process does.
+`stop()` must run on **every** exit path: normal completion, stop-boundary exit, and any thrown error. The implementation wraps the loop body in `try/finally` for exactly this reason. `unref()` prevents the timer from holding the process open; it does **not** substitute for `stop()`, because a run can end long before its process does.
+
+**`stop()` also releases the lease**, and this half is not optional. Cancelling the timer leaves `leaseAffirmedAt` frozen at its last value, so for up to one TTL a run that has already finished still reads as "somebody is running this" and refuses the next legitimate process. `stop()` therefore performs one final CAS setting `leaseAffirmedAt` back to `null` — the run is still owned, just no longer running, which is precisely the state §5.0 introduced the field to express.
+
+The release is best-effort. If the CAS fails or the write errors, `stop()` swallows it and the lease simply ages out; a process that was killed never gets to release at all, which is the case the TTL exists for. Graceful exit releases immediately; everything else waits out the TTL.
 
 ### 6.1 The expected record rotates on every successful affirm
 
@@ -146,7 +150,7 @@ The consequence is worth stating so nobody implements unreachable code: in `runL
 
 The gate reads the owner record **raw** — no `recoverInterruptedOwnerTransfer`, see the refusal-purity note below — and branches:
 
-- the owner-record file does not exist (`ENOENT`, and only `ENOENT`) → a brand-new run directory, so there is no lease; proceed, and the record `runLoop` already creates establishes the first one. Any other read failure — malformed JSON, unreadable file, a record missing required fields — is **refused**, never treated as "no lease". `readOwnerRecordRaw` is a bare `JSON.parse` plus a type assertion (`src/persistence/fileStore.ts:371-373`), so it accepts a structurally invalid record silently; the gate must therefore validate the fields it depends on (`currentProcessInstanceId`, `leaseAffirmedAt`, `currentOwnerEpoch`) itself and refuse when they are absent or malformed;
+- the owner-record file does not exist (`ENOENT`, and only `ENOENT`) → a brand-new run directory, so there is no lease; proceed, and the record `runLoop` already creates establishes the first one. Any other read failure — malformed JSON, unreadable file, a record missing required fields — is **refused**, never treated as "no lease". `readOwnerRecordRaw` is a bare `JSON.parse` plus a type assertion (`src/persistence/fileStore.ts:371-373`), so it accepts a structurally invalid record silently; the gate must therefore validate the fields it depends on itself. `currentProcessInstanceId` and `currentOwnerEpoch` must be present and well-formed or the record is refused. `leaseAffirmedAt` is the exception: **absent means `null`** — an older record predating this design, carrying no lease (§5.0) — while a value that is present but neither a string nor `null` is malformed and refused;
 - an owner record exists but `leaseAffirmedAt` is `null` → nobody is running this run. There is no lease, so the gate takes no position and records nothing. **This is the post-transfer state**: a run that reconciliation has just handed to a new owner is owned but not running, and its resume must not be refused (§5.0);
 - an owner record exists, its lease is fresh, **and** `currentProcessInstanceId` is not this process → refuse with a distinct `RunLeaseHeldError` naming the holder and the remaining TTL;
 - the lease is expired → **L1 takes no position**. Expiry neither permits nor refuses: control passes unchanged to the gates that already exist (for `resumeLoop`, the published-transfer eligibility gate; for `runLoop`, whatever it does today). L1 only appends a `lease_expired_observed` event so the expiry is visible to later layers instead of being silently swallowed;
@@ -242,7 +246,8 @@ The honest summary: L1 ships plumbing, and the test suite must pin it as plumbin
 |---|---|---|
 | Machine sleeps / suspends | lease looks expired | expiry authorizes nothing; worst case is more suspicion and more refusal |
 | Clock skew across machines | lease looks expired or fresh early | fresh-too-long only adds refusals; expired-too-early **degrades mutual exclusion** — see §10.1 |
-| `SIGKILL` of the run process | last heartbeat remains, then ages out | after TTL the lease stops refusing; takeover still requires full reconciliation |
+| Graceful exit (normal, stop-boundary, or throw) | `stop()` clears `leaseAffirmedAt` to `null` | the next process sees no lease immediately, not after a TTL (§6.0) |
+| `SIGKILL` of the run process | no release happens; last heartbeat ages out | this is the case the TTL exists for; after it the lease stops refusing, and takeover still requires full reconciliation |
 | Timer starved or killed | event refresh carries the lease | and vice versa — the two paths cover each other |
 | Lock contention with a concurrent transfer | affirm retries next tick | affirm is never on the critical path of correctness |
 
@@ -328,8 +333,9 @@ export function startLeaseHeartbeat(options: {
 14. **Gate ordering** — a `runLoop` start against a brand-new run directory does not attempt to append an event before `initializeRunFiles` (§7).
 15. **A resume immediately after a transfer is not refused** — with the owner record freshly written by an owner transfer (seconds old, naming the transfer's `newProcessInstanceId`, `leaseAffirmedAt: null`), a resuming process with a different identity proceeds. This is the regression the single-timestamp design would have caused (§5.0); it must be asserted at a lease age well *inside* the TTL, since the existing expiry test only covers the aged-out case.
 16. **Only the heartbeat writes `leaseAffirmedAt`** — after an initial `runLoop` record write, an owner transfer, and a resume claim, the field is `null` in all three; it becomes non-null only once the heartbeat has run. A record persisted without the field at all reads as `null`.
-17. **The heartbeat does not outlive its run** — after the loop returns, and separately after it throws, no further affirm is written, and a subsequent legitimate `resume` is not refused by a lease the previous run left ticking (§6.0).
-18. **`assertHeld` is never throttled** — two side effects less than `LEASE_AFFIRM_THROTTLE_MS` apart each read the record, and a record rotated between them blocks the second (§8.1). Written to fail against an implementation that reuses the affirm throttle.
+17. **A finished run releases its lease** — after the loop returns, and separately after it throws, `leaseAffirmedAt` is back to `null` and a subsequent legitimate `resume` proceeds *immediately*, not after a TTL. Asserted while the last heartbeat is still well inside the TTL, so an implementation that only cancels the timer fails it (§6.0).
+18. **A killed run does not release, and that is fine** — with `stop()` never called, the lease stays fresh until the TTL elapses and refuses in the meantime; after it, the gate takes no position and the existing eligibility rules decide.
+19. **`assertHeld` is never throttled** — two side effects less than `LEASE_AFFIRM_THROTTLE_MS` apart each read the record, and a record rotated between them blocks the second (§8.1). Written to fail against an implementation that reuses the affirm throttle.
 
 Every test uses `ScriptedAdapter`. No paid Claude call is permitted by this work.
 
@@ -337,8 +343,9 @@ Every test uses `ScriptedAdapter`. No paid Claude call is permitted by this work
 
 An implementer can answer all of the following from this document without inventing policy:
 
-- what makes a lease fresh, and what an unparseable anchor means;
-- which two writers refresh it, why both exist, and how they avoid thrashing;
+- what makes a lease fresh, what `null` means, and how that differs from expired;
+- which writers refresh it, why both exist, and how they avoid thrashing;
+- who releases a lease, when release is immediate, and when it can only age out;
 - exactly what a live lease refuses, and what an expired lease permits (nothing);
 - what a running owner must do when it can no longer affirm its lease;
 - how freshness enters `evaluateOwnership` without changing any existing verdict;
