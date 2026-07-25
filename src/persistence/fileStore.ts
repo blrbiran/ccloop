@@ -588,6 +588,30 @@ export async function writeOwnerTransferArtifacts(
   }
 }
 
+export async function claimOwnerRecordWithPrecondition(
+  runDir: string,
+  expectedOwnerRecord: OwnerRecord,
+  nextOwnerRecord: OwnerRecord,
+): Promise<void> {
+  const lock = await acquireOwnerTransferLock(runDir);
+
+  try {
+    await recoverInterruptedOwnerTransfer(runDir, { lockHeld: true });
+    const persistedOwnerRecord = await readOwnerRecordRaw(runDir);
+
+    if (!sameOwnerRecord(persistedOwnerRecord, expectedOwnerRecord)) {
+      throw new OwnerTransferPreconditionError("persisted owner record changed before resume could claim it");
+    }
+
+    const { ownerPath, ownerTempPath } = getOwnerTransferPaths(runDir);
+    await safeUnlink(ownerTempPath);
+    await writeJsonFile(ownerTempPath, nextOwnerRecord);
+    await rename(ownerTempPath, ownerPath);
+  } finally {
+    await lock.release();
+  }
+}
+
 export async function readRunState(runDir: string): Promise<RunState> {
   return JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8")) as RunState;
 }
