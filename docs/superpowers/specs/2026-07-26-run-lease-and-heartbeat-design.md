@@ -94,11 +94,19 @@ The affirm write is a compare-and-swap against the persisted owner record, perfo
 
 A heartbeat failure that is **not** a precondition failure (lock contention, transient I/O) is swallowed and retried on the next tick. It must never throw into the control loop.
 
+### 6.1 The expected record rotates on every successful affirm
+
+Each successful affirm changes `lastAffirmedAt`, so the record the heartbeat compared against is stale the moment it succeeds. The handle therefore replaces its expected record with the one `affirmOwnerLease` returns, every time. A heartbeat that keeps comparing against its start-of-run record would fail its own second CAS roughly one interval in, and — under the naive reading of §8 — would stop a perfectly healthy run.
+
+This also fixes the criterion for §8. A failed CAS is **not** by itself proof of supersession; it only means the persisted record is not the one this process last wrote. Supersession is concluded only after re-reading the record and finding that it no longer names this process at this epoch (`currentOwnerEpoch` changed, `supersededByEpoch` set, or `currentProcessInstanceId` is someone else). Anything else — including a record that differs for reasons this process cannot explain — is a transient failure per the paragraph above, retried on the next tick.
+
 ## 7. Acquisition gate
 
-Both `runLoop` and `resumeLoop` check the lease before doing anything else:
+The gate runs as early as possible, with one ordering constraint: it must not precede `initializeRunFiles`, because it may need to append an event and the events file does not exist before that call. In `runLoop` the current order is `buildInitialOwnerRecord` → `initializeRunFiles` → `writeOwnerRecord` (`src/controller/runLoop.ts:732-734`), so the gate belongs between the second and third of those. In `resumeLoop` the run directory already exists, so the gate goes immediately after the opening `resume_requested` event (`src/controller/resumeLoop.ts:83`) and before every read the eligibility gate performs.
 
-- no owner record exists yet (a brand-new run directory) → there is no lease; proceed, and the record `runLoop` already creates establishes the first one;
+The gate reads the owner record **raw** — no `recoverInterruptedOwnerTransfer`, see the refusal-purity note below — and branches:
+
+- the owner-record file does not exist (`ENOENT`, and only `ENOENT`) → a brand-new run directory, so there is no lease; proceed, and the record `runLoop` already creates establishes the first one. Any other read failure — malformed JSON, unreadable file, a record missing required fields — is **refused**, never treated as "no lease". `readOwnerRecordRaw` is a bare `JSON.parse` plus a type assertion (`src/persistence/fileStore.ts:371-373`), so it accepts a structurally invalid record silently; the gate must therefore validate the fields it depends on (`currentProcessInstanceId`, `lastAffirmedAt`, `currentOwnerEpoch`) itself and refuse when they are absent or malformed;
 - an owner record exists, its lease is fresh, **and** `currentProcessInstanceId` is not this process → refuse with a distinct `RunLeaseHeldError` naming the holder and the remaining TTL;
 - the lease is expired → **L1 takes no position**. Expiry neither permits nor refuses: control passes unchanged to the gates that already exist (for `resumeLoop`, the published-transfer eligibility gate; for `runLoop`, whatever it does today). L1 only appends a `lease_expired_observed` event so the expiry is visible to later layers instead of being silently swallowed;
 - the lease is fresh and held by this process → proceed. `resumeLoop` takes the lease inside the owner-record claim it already performs, which already writes `currentProcessInstanceId` and `lastAffirmedAt`; no second write is added.
@@ -107,7 +115,12 @@ Making expiry *permit* anything would mean an unproven owner loss had authorized
 
 `loop-worktree` (`reference/loop-engineering/tools/loop-worktree/README.md:96-99`) reaches the same conclusion from the other direction: an orphaned lock is *reported* by `locks --sweep` and deleted only under `--force`, never reclaimed automatically. The `lease_expired_observed` event is ccloop's equivalent of that report.
 
-A refusal performs **zero** state mutation: no run-state write, no owner-record write, no worktree change. This matches the refusal invariant already established for `resumeLoop`.
+### 7.1 What "refusal changes nothing" actually means
+
+A refusal introduces **no new** state mutation: no run-state write, no owner-record write, no worktree change. Two pre-existing behaviors are explicitly outside that claim, and stating them is the point of this subsection:
+
+- **Events are appended.** `resumeLoop` already appends `resume_requested` before it reads anything (`src/controller/resumeLoop.ts:83`) and `resume_denied` on every refusal, and this design adds `lease_expired_observed`. A refused run directory is therefore never byte-identical to its prior state; only its non-event contents are.
+- **Reading the owner record through `readOwnerRecord` is not side-effect-free.** It first runs `recoverInterruptedOwnerTransfer`, which may finalize a pending transfer or clean up staging files — both writes (`src/persistence/fileStore.ts:537-556`). The lease gate therefore uses the raw read, so that a refusal never triggers crash recovery as a side effect. Recovery remains where it already is: on the paths that go on to claim or transfer.
 
 In `resumeLoop` the lease check runs **before** the eligibility gate and before the owner-record claim, so a live lease refuses earlier and more cheaply than any eligibility reasoning.
 
@@ -115,13 +128,13 @@ The lease gate is an additional refusal, layered on top of — never in place of
 
 ## 8. Losing the lease mid-run
 
-If an affirm fails its CAS precondition, the owner record was legitimately replaced, i.e. this process has been superseded. The run then:
+When an affirm fails its CAS precondition, the heartbeat re-reads the record and applies the §6.1 criterion. Only if the record no longer names this process at this epoch is the process superseded. The run then:
 
 1. appends a `lease_lost` event recording the observed and expected owner records;
 2. stops at the next phase boundary with `stopReason = "lease_lost"`, launching no further attempt;
 3. leaves the newer owner's record untouched.
 
-Both `RunEvent.type` and `RunState.stopReason` are free-form strings today, so neither addition requires a type change. Only a CAS precondition failure triggers this path; transient failures are handled per §6.
+Both `RunEvent.type` and `RunState.stopReason` are free-form strings today, so neither addition requires a type change. Only a confirmed supersession triggers this path; a bare CAS failure does not (§6.1), and transient failures are handled per §6.
 
 Stopping happens at a phase boundary rather than mid-attempt so the run never tears down state a new owner might be reading. This is the only runtime behavior change L1 makes to `runLoop`.
 
@@ -132,6 +145,23 @@ A phase boundary can be minutes wide, so the lease is additionally re-checked im
 DoWhiz applies the same shape to its `thread_epoch`, re-checking it before each outbound action rather than only at claim time (`reference/DoWhiz/DoWhiz_service/scheduler_module/src/scheduler/actions.rs:797`, `:857`).
 
 Its default must be inverted. `thread_epoch_matches` fails **open** in two places — a task without an epoch proceeds, and an unreadable state file proceeds (`actions.rs:402-412`). ccloop's re-check fails **closed**: if the owner record cannot be read, or cannot be confirmed to still name this process at the current epoch, the side effect does not happen. Borrow the shape, invert the default.
+
+What happens after a blocked side effect is fixed, not left to the implementer:
+
+- the side effect is skipped, and the current attempt is **abandoned in place** — no further side effect of that attempt is attempted, including its worktree cleanup;
+- the run then follows §8 exactly: `lease_lost` event, stop at the next phase boundary with `stopReason = "lease_lost"`, no new attempt.
+
+Abandoning rather than unwinding is deliberate. Cleanup is itself a side effect on a worktree the new owner may already be reading, and this process has just lost the authority to touch it. The residual worktree is left for the new owner, whose resume path already performs best-effort cleanup of residual worktrees before continuing (`src/controller/resumeLoop.ts`, `cleanupResidualWorktrees`).
+
+A re-check has three outcomes, and only the first two abandon the attempt:
+
+| Outcome | Side effect | Attempt | Stop reason |
+|---|---|---|---|
+| Record confirms someone else owns this run | skipped | abandoned | `lease_lost` |
+| Record cannot be read or validated, after a bounded retry | skipped | abandoned | `lease_unverifiable` |
+| Transient failure that clears within the retry budget | proceeds | continues | — |
+
+The second row is what "fail closed" buys: an unverifiable lease stops the run rather than letting it act unverified, but it does **not** assert supersession. Concluding supersession remains the heartbeat's job under §6.1, and no owner record is written on either abandoning path.
 
 ### 8.2 What this does not protect
 
@@ -148,17 +178,36 @@ The lease is keyed to a run, so it serializes executors of the *same* run only. 
 
 Existing callers pass `"unknown"` until L3 supplies a measured value. This containment is what makes wiring freshness in now a zero-regression change.
 
+### 9.1 This field has no production supplier in L1 — deliberately
+
+Stated plainly, because it is the same shape of defect §1 diagnoses in `lastAffirmedAt`, merely inverted: that field was written and never read; this one is read and, within L1, never supplied with a real value. Every L1 caller passes `"unknown"`, so §7.1 condition 1 of the ownership design becomes *evaluable* here but is not yet *evaluated*.
+
+The alternative was considered and rejected. Reconciliation already holds the owner record when it calls `evaluateOwnership`, so computing real freshness there costs nothing — but it would change live verdicts (strictly toward refusal) in the same change that introduces the mechanism, forfeiting the regression fence of §12.8. Freshness is measurable evidence; deciding *with* it is L3's job, and L3 is where the first real supplier appears.
+
+The honest summary: L1 ships plumbing, and the test suite must pin it as plumbing (§12.5) rather than pretend it changes behavior.
+
 ## 10. Clock and failure modes
 
 | Situation | Effect | Why it is safe |
 |---|---|---|
 | Machine sleeps / suspends | lease looks expired | expiry authorizes nothing; worst case is more suspicion and more refusal |
-| Clock skew across machines | lease looks expired or fresh early | fresh-too-long only adds refusals; expired-too-early adds none |
+| Clock skew across machines | lease looks expired or fresh early | fresh-too-long only adds refusals; expired-too-early **degrades mutual exclusion** — see §10.1 |
 | `SIGKILL` of the run process | last heartbeat remains, then ages out | after TTL the lease stops refusing; takeover still requires full reconciliation |
 | Timer starved or killed | event refresh carries the lease | and vice versa — the two paths cover each other |
 | Lock contention with a concurrent transfer | affirm retries next tick | affirm is never on the critical path of correctness |
 
-### 10.1 Why this is not a visibility timeout
+### 10.1 The lease is not the hard guarantee
+
+The row above understates one case, so it is stated in full here. If the holder's clock runs more than a TTL behind the checker's, the checker always sees an expired lease, never refuses, and mutual exclusion — L1's only promise — silently stops working.
+
+That is survivable because the lease is not what ultimately prevents two executors. It is a cheap, early, best-effort refusal. The hard guarantee is the pair that does not depend on any clock:
+
+1. the owner record is claimed by CAS, so two processes cannot both hold it;
+2. whichever process no longer holds it discovers this at its next heartbeat and stops (§6.1, §8).
+
+Clock skew degrades the first line of defense and leaves the second intact. An implementer must not "strengthen" the lease into something the rest of the system relies on for correctness.
+
+### 10.2 Why this is not a visibility timeout
 
 The common queue-lease pattern makes expiry self-healing: DoWhiz's ingestion queue reclaims any row whose `status = 'processing' AND locked_at < now() - lease_secs` and hands it to another worker (`reference/DoWhiz/DoWhiz_service/scheduler_module/src/ingestion_queue.rs:314-316`). Expiry there *is* authorization to take over.
 
@@ -171,14 +220,24 @@ That is sound for idempotent message delivery and wrong for ccloop, where one at
 export const LEASE_HEARTBEAT_INTERVAL_MS: number;
 export const LEASE_TTL_MS: number;
 export function isLeaseFresh(record: OwnerRecord, nowMs: number, ttlMs: number): boolean;
+// §7: validates the fields the gate depends on; a structurally invalid record is a
+// refusal, never a "no lease here".
+export function parseOwnerRecordForLease(raw: unknown): OwnerRecord;
 export class RunLeaseHeldError extends Error {}
+export class RunLeaseUnverifiableError extends Error {}
 
 // src/persistence/fileStore.ts
+// Raw read for the gate: no recoverInterruptedOwnerTransfer, so a refusal cannot
+// trigger crash recovery as a side effect (§7.1).
+export async function readOwnerRecordWithoutRecovery(runDir: string): Promise<OwnerRecord>;
+// Returns the record it just wrote — the caller MUST adopt it as its next expected
+// record (§6.1). Throws OwnerTransferPreconditionError on CAS mismatch, which by
+// itself does not mean superseded.
 export async function affirmOwnerLease(
   runDir: string,
   expected: OwnerRecord,
   nowIso: string,
-): Promise<OwnerRecord>; // throws OwnerTransferPreconditionError when superseded
+): Promise<OwnerRecord>;
 
 // src/controller/leaseHeartbeat.ts
 export function startLeaseHeartbeat(options: {
@@ -200,12 +259,16 @@ export function startLeaseHeartbeat(options: {
 
 1. **Pure predicate** — boundary values at exactly TTL, unparseable and absent `lastAffirmedAt`, backwards clock.
 2. **Heartbeat under fake timers** — refreshes repeatedly across a TTL window; `stop()` ends all writes.
-3. **Mutual exclusion** — a second `resume` against a live-lease run is refused, and a full run-directory snapshot is byte-identical before and after the refusal.
-4. **Lease loss** — an externally rotated owner record causes the running loop to stop at the next phase boundary with the distinct reason, start no further attempt, and leave the new owner record intact.
-5. **Regression fence** — every existing `evaluateOwnership` case is asserted to produce an identical verdict under `leaseFresh: "unknown"`; only `leaseFresh: true` adds new cases, all of which block `OWNER_LOST` or takeover.
-6. **Expiry authorizes nothing** — an expired lease alone does not make any previously-denied resume or takeover succeed.
-7. **Expiry refuses nothing** — a resume that is legitimately eligible (published transfer, matching epoch) still succeeds when the owner record's lease has aged out, and a resume that is ineligible is refused with the *eligibility* reason, never a lease reason. A `lease_expired_observed` event is present in both cases.
-8. **Fail-closed re-check** — when the owner record is unreadable or names a different process, the next side effect (Claude call, artifact write, worktree mutation) does not happen. Asserted per side-effect kind, not once generically.
+3. **The heartbeat survives its own writes** — at least three consecutive affirms succeed with no external interference, proving the expected record rotates per §6.1. Written to fail against the naive implementation, which stops the run one interval in.
+4. **Mutual exclusion** — a second `resume` against a live-lease run is refused, and the run directory is unchanged **except for appended events** (§7.1): owner record, run state, and worktrees compare byte-identical, and no interrupted-transfer recovery ran.
+5. **Corrupt record is refused, not mistaken for absent** — separate cases for a missing file (proceeds), malformed JSON, and a structurally valid JSON object missing `lastAffirmedAt` / `currentProcessInstanceId` (both refused). The third case is the one `readOwnerRecordRaw` accepts silently.
+6. **Lease loss** — an externally rotated owner record causes the running loop to stop at the next phase boundary with `stopReason = "lease_lost"`, start no further attempt, and leave the new owner record intact. The rotation is performed by the test writing the file directly; no production path rotates a record this way, and the test must not be read as evidence that one exists.
+7. **Blocked side effect abandons rather than unwinds** — after a re-check fails, the attempt performs no further side effect *including worktree cleanup*, and the residual worktree survives for the next owner (§8.1). An unverifiable-but-not-superseded record stops with `stopReason = "lease_unverifiable"` and writes no owner record.
+8. **Regression fence** — every existing `evaluateOwnership` case is asserted to produce an identical verdict under `leaseFresh: "unknown"`; only `leaseFresh: true` adds new cases, all of which block `OWNER_LOST` or takeover. Per §9.1 no production caller supplies `true` in L1, so this fence is what keeps the field honest until L3.
+9. **Expiry authorizes nothing** — an expired lease alone does not make any previously-denied resume or takeover succeed.
+10. **Expiry refuses nothing** — a resume that is legitimately eligible (published transfer, matching epoch) still succeeds when the owner record's lease has aged out, and a resume that is ineligible is refused with the *eligibility* reason, never a lease reason. A `lease_expired_observed` event is present in both cases.
+11. **Fail-closed re-check** — when the owner record is unreadable or names a different process, the next side effect (Claude call, artifact write, worktree mutation) does not happen. Asserted per side-effect kind, not once generically.
+12. **Gate ordering** — a `runLoop` start against a brand-new run directory does not attempt to append an event before `initializeRunFiles` (§7).
 
 Every test uses `ScriptedAdapter`. No paid Claude call is permitted by this work.
 
@@ -219,4 +282,7 @@ An implementer can answer all of the following from this document without invent
 - what a running owner must do when it can no longer affirm its lease;
 - how freshness enters `evaluateOwnership` without changing any existing verdict;
 - why expiry is neither permission nor refusal, and what is recorded when it is observed;
+- why a failed CAS is not by itself proof of supersession, and what is;
+- what a refusal may still change on disk, and why the gate reads raw;
+- what happens to the attempt, the worktree, and the stop reason when a pre-side-effect re-check fails;
 - which layer (L2–L5) each deferred concern belongs to.
