@@ -314,7 +314,7 @@ async function cleanupAttemptWorkspaceWithStatus(
   }
 }
 
-async function cleanupAttemptWorkspaceBestEffort(
+export async function cleanupAttemptWorkspaceBestEffort(
   repoPath: string,
   worktreePath: string,
   runDir: string,
@@ -728,12 +728,21 @@ async function persistTerminalState(
 }
 
 export async function runLoop(contract: LoopContract, runDir: string, adapter: RuntimeAdapter): Promise<RunState> {
-  let state = transitionRunState(initialState(contract), "planning");
+  const state = transitionRunState(initialState(contract), "planning");
   const ownerRecord = buildInitialOwnerRecord(contract, state);
   await initializeRunFiles(runDir, contract, state);
   await writeOwnerRecord(runDir, ownerRecord);
   await appendTransitionEvent(runDir, state, "loop_planning", "run initialized and ready to plan");
+  return runLoopFromState(contract, runDir, adapter, state);
+}
 
+export async function runLoopFromState(
+  contract: LoopContract,
+  runDir: string,
+  adapter: RuntimeAdapter,
+  initialLoopState: RunState,
+): Promise<RunState> {
+  let state = initialLoopState;
   while (true) {
     await writeRunState(runDir, state);
     const attempt = state.attemptsUsed + 1;
