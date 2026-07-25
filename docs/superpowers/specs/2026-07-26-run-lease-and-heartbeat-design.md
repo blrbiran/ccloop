@@ -24,7 +24,8 @@ This design does not:
 - change the resume eligibility gate or the reconciliation verdict rules;
 - implement cleanup or orphan GC;
 - authorize any paid Claude run;
-- rewrite accepted historical evidence.
+- rewrite accepted historical evidence;
+- **mutually exclude two different runs that target the same repository.** The lease is keyed to a run. Cross-run collision on shared paths is a real hazard and is deliberately left to L2/L4 — see §8.2.
 
 ## 3. Position in the frontier decomposition
 
@@ -42,11 +43,16 @@ L1 comes first because every layer above it decides on owner freshness. A schedu
 
 L5 corresponds to the third follow-on spec named in the ownership design §17 and remains unwritten.
 
+Two mechanisms noted here so they are not lost, both belonging to L2/L3 rather than L1:
+
+- an **attempt cap on re-leasing**, so a repeatedly failing run cannot be leased and retried forever. DoWhiz guards its queue with `attempts < max_attempts` and increments `attempts` on every claim (`reference/DoWhiz/DoWhiz_service/scheduler_module/src/ingestion_queue.rs:319`, `:355`);
+- **cross-run path exclusion**, per §8.2.
+
 ## 4. Core principles
 
 ### 4.1 The lease adds refusals, never authority
 
-A live lease is a reason to **refuse** a second executor. An expired lease is **not** a reason to permit anything. This keeps the lease compatible with §3.5 and §7.2: timeout-shaped signals may raise suspicion, never prove owner loss.
+A live lease is a reason to **refuse** a second executor. An expired lease is **not** a reason to permit anything — and equally not a reason to refuse anything (§7). Expiry is an observation, not a decision. This keeps the lease compatible with §3.5 and §7.2 of the ownership design: timeout-shaped signals may raise suspicion, never prove owner loss.
 
 ### 4.2 Freshness is Layer A evidence, used only in the deny direction
 
@@ -94,7 +100,12 @@ Both `runLoop` and `resumeLoop` check the lease before doing anything else:
 
 - no owner record exists yet (a brand-new run directory) → there is no lease; proceed, and the record `runLoop` already creates establishes the first one;
 - an owner record exists, its lease is fresh, **and** `currentProcessInstanceId` is not this process → refuse with a distinct `RunLeaseHeldError` naming the holder and the remaining TTL;
-- otherwise → proceed and take the lease. `resumeLoop` takes it inside the owner-record claim it already performs, which already writes `currentProcessInstanceId` and `lastAffirmedAt`; no second write is added.
+- the lease is expired → **L1 takes no position**. Expiry neither permits nor refuses: control passes unchanged to the gates that already exist (for `resumeLoop`, the published-transfer eligibility gate; for `runLoop`, whatever it does today). L1 only appends a `lease_expired_observed` event so the expiry is visible to later layers instead of being silently swallowed;
+- the lease is fresh and held by this process → proceed. `resumeLoop` takes the lease inside the owner-record claim it already performs, which already writes `currentProcessInstanceId` and `lastAffirmedAt`; no second write is added.
+
+Making expiry *permit* anything would mean an unproven owner loss had authorized a de-facto takeover, contradicting §4.1 and the ownership design §7.2. Making expiry *refuse* would be equally wrong: after a reconciliation transfer, the new owner's record ages normally, so a legitimate resume hours later always meets an expired lease and must not be blocked by it.
+
+`loop-worktree` (`reference/loop-engineering/tools/loop-worktree/README.md:96-99`) reaches the same conclusion from the other direction: an orphaned lock is *reported* by `locks --sweep` and deleted only under `--force`, never reclaimed automatically. The `lease_expired_observed` event is ccloop's equivalent of that report.
 
 A refusal performs **zero** state mutation: no run-state write, no owner-record write, no worktree change. This matches the refusal invariant already established for `resumeLoop`.
 
@@ -114,6 +125,20 @@ Both `RunEvent.type` and `RunState.stopReason` are free-form strings today, so n
 
 Stopping happens at a phase boundary rather than mid-attempt so the run never tears down state a new owner might be reading. This is the only runtime behavior change L1 makes to `runLoop`.
 
+### 8.1 Re-check before every side effect
+
+A phase boundary can be minutes wide, so the lease is additionally re-checked immediately before each side-effecting step — launching a Claude call, writing attempt artifacts, and mutating or removing a worktree. This narrows the window in which a superseded owner can still act from one phase to one side effect.
+
+DoWhiz applies the same shape to its `thread_epoch`, re-checking it before each outbound action rather than only at claim time (`reference/DoWhiz/DoWhiz_service/scheduler_module/src/scheduler/actions.rs:797`, `:857`).
+
+Its default must be inverted. `thread_epoch_matches` fails **open** in two places — a task without an epoch proceeds, and an unreadable state file proceeds (`actions.rs:402-412`). ccloop's re-check fails **closed**: if the owner record cannot be read, or cannot be confirmed to still name this process at the current epoch, the side effect does not happen. Borrow the shape, invert the default.
+
+### 8.2 What this does not protect
+
+The lease is keyed to a run, so it serializes executors of the *same* run only. Two different runs targeting the same repository are not mutually excluded by L1 — see §2.
+
+`loop-worktree` keys its advisory lock on path globs precisely so that it also catches cross-task collisions (`reference/loop-engineering/tools/loop-worktree/README.md:85`). Adopting anything of that shape belongs to L2 or L4, once more than one run can be in flight at a time.
+
 ## 9. Freshness inside `evaluateOwnership`
 
 `OwnershipEvaluationInput` gains one field: `leaseFresh: boolean | "unknown"`.
@@ -132,6 +157,12 @@ Existing callers pass `"unknown"` until L3 supplies a measured value. This conta
 | `SIGKILL` of the run process | last heartbeat remains, then ages out | after TTL the lease stops refusing; takeover still requires full reconciliation |
 | Timer starved or killed | event refresh carries the lease | and vice versa — the two paths cover each other |
 | Lock contention with a concurrent transfer | affirm retries next tick | affirm is never on the critical path of correctness |
+
+### 10.1 Why this is not a visibility timeout
+
+The common queue-lease pattern makes expiry self-healing: DoWhiz's ingestion queue reclaims any row whose `status = 'processing' AND locked_at < now() - lease_secs` and hands it to another worker (`reference/DoWhiz/DoWhiz_service/scheduler_module/src/ingestion_queue.rs:314-316`). Expiry there *is* authorization to take over.
+
+That is sound for idempotent message delivery and wrong for ccloop, where one attempt mutates a repository, spends money, and cannot be replayed harmlessly. It is exactly what the ownership design §7.2 rules out. This subsection exists so a future implementer who recognizes the familiar pattern does not "fix" ccloop back into it.
 
 ## 11. Interfaces
 
@@ -155,7 +186,14 @@ export function startLeaseHeartbeat(options: {
   ownerRecord: OwnerRecord;
   onLeaseLost: (error: unknown) => void;
   now?: () => number;
-}): { affirmNow: () => Promise<void>; stop: () => Promise<void> };
+}): {
+  affirmNow: () => Promise<void>;
+  // §8.1 pre-side-effect re-check; rejects when the record cannot be read or no
+  // longer names this process at this epoch — fail-closed, unlike DoWhiz's fail-open
+  // thread_epoch_matches.
+  assertHeld: () => Promise<void>;
+  stop: () => Promise<void>;
+};
 ```
 
 ## 12. Testing requirements
@@ -166,6 +204,8 @@ export function startLeaseHeartbeat(options: {
 4. **Lease loss** — an externally rotated owner record causes the running loop to stop at the next phase boundary with the distinct reason, start no further attempt, and leave the new owner record intact.
 5. **Regression fence** — every existing `evaluateOwnership` case is asserted to produce an identical verdict under `leaseFresh: "unknown"`; only `leaseFresh: true` adds new cases, all of which block `OWNER_LOST` or takeover.
 6. **Expiry authorizes nothing** — an expired lease alone does not make any previously-denied resume or takeover succeed.
+7. **Expiry refuses nothing** — a resume that is legitimately eligible (published transfer, matching epoch) still succeeds when the owner record's lease has aged out, and a resume that is ineligible is refused with the *eligibility* reason, never a lease reason. A `lease_expired_observed` event is present in both cases.
+8. **Fail-closed re-check** — when the owner record is unreadable or names a different process, the next side effect (Claude call, artifact write, worktree mutation) does not happen. Asserted per side-effect kind, not once generically.
 
 Every test uses `ScriptedAdapter`. No paid Claude call is permitted by this work.
 
@@ -178,4 +218,5 @@ An implementer can answer all of the following from this document without invent
 - exactly what a live lease refuses, and what an expired lease permits (nothing);
 - what a running owner must do when it can no longer affirm its lease;
 - how freshness enters `evaluateOwnership` without changing any existing verdict;
+- why expiry is neither permission nor refusal, and what is recorded when it is observed;
 - which layer (L2–L5) each deferred concern belongs to.
