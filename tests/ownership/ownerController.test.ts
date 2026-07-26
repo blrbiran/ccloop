@@ -25,6 +25,7 @@ describe("ownerController", () => {
     supportingContinuityEvidence: [] as string[],
     knownSupersedingEpoch: null,
     lastTrustedBoundary: "execute" as const,
+    leaseFresh: "unknown" as const,
   };
 
   it("returns OWNER_LOST only when persisted truth is no longer supported and no trusted continuity evidence remains", () => {
@@ -134,5 +135,61 @@ describe("ownerController", () => {
     expect(result.transferRecord.priorOwnerEpoch).toBe(1);
     expect(result.transferRecord.newOwnerEpoch).toBe(2);
     expect(result.transferRecord.eligibleForContinuation).toBe(true);
+  });
+
+  // §9.1 regression fence. In L1 no production caller ever passes `true`, so without this
+  // the field could silently rot. Every existing case must be identical under "unknown"
+  // AND under false — anything else means freshness leaked into a verdict path.
+  it.each([false, "unknown"] as const)("changes no verdict when leaseFresh is %s", (leaseFresh) => {
+    const cases = [
+      baseInput,
+      { ...baseInput, persistedOwnerStillSupported: true },
+      { ...baseInput, ownerRecord: { ...baseInput.ownerRecord, ownerStatus: "lost" as const } },
+      { ...baseInput, ownerRecord: { ...baseInput.ownerRecord, ownerStatus: "unknown" as const } },
+      { ...baseInput, ownerRecord: { ...baseInput.ownerRecord, supersededByEpoch: 2 } },
+      { ...baseInput, knownSupersedingEpoch: 3 },
+      { ...baseInput, currentProcessStillTrusted: true, persistedOwnerStillSupported: true },
+      { ...baseInput, lastTrustedBoundary: "unknown" as const },
+      { ...baseInput, boundaryAnalysis: { ...baseInput.boundaryAnalysis, status: "healthy" as const } },
+    ];
+
+    for (const input of cases) {
+      expect(evaluateOwnership({ ...input, leaseFresh })).toEqual(
+        evaluateOwnership({ ...input, leaseFresh: "unknown" }),
+      );
+    }
+  });
+
+  // §4.2: a live lease is a counter-claim. It may only push toward refusal.
+  it("blocks OWNER_LOST and takeover when the lease is fresh", () => {
+    const withoutLease = evaluateOwnership(baseInput);
+    expect(withoutLease.verdict).toBe("OWNER_LOST");
+    expect(withoutLease.takeoverAllowed).toBe(true);
+
+    const withLease = evaluateOwnership({ ...baseInput, leaseFresh: true });
+
+    expect(withLease.verdict).toBe("OWNER_UNDECIDABLE");
+    expect(withLease.takeoverAllowed).toBe(false);
+    expect(withLease.reasons.join(" ")).toContain("live run lease");
+  });
+
+  it("blocks OWNER_LOST via the persisted-owner-lost path too when the lease is fresh", () => {
+    const input = {
+      ...baseInput,
+      ownerRecord: { ...baseInput.ownerRecord, ownerStatus: "lost" as const },
+    };
+    expect(evaluateOwnership(input).verdict).toBe("OWNER_LOST");
+
+    expect(evaluateOwnership({ ...input, leaseFresh: true }).verdict).toBe("OWNER_UNDECIDABLE");
+  });
+
+  // A fresh lease must not turn a refusal into a permission — it only ever adds refusals.
+  it("never upgrades a verdict: OWNER_SUPERSEDED stays superseded under a fresh lease", () => {
+    const input = {
+      ...baseInput,
+      ownerRecord: { ...baseInput.ownerRecord, supersededByEpoch: 2 },
+    };
+
+    expect(evaluateOwnership({ ...input, leaseFresh: true })).toEqual(evaluateOwnership(input));
   });
 });

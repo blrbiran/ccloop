@@ -15,7 +15,7 @@ function createEvaluation(
   };
 }
 
-export function evaluateOwnership(input: OwnershipEvaluationInput): OwnershipEvaluation {
+function evaluateOwnershipWithoutLease(input: OwnershipEvaluationInput): OwnershipEvaluation {
   const hasSupportingContinuityEvidence =
     input.currentProcessStillTrusted || input.supportingContinuityEvidence.length > 0;
 
@@ -132,6 +132,29 @@ export function evaluateOwnership(input: OwnershipEvaluationInput): OwnershipEva
     [input.boundaryAnalysis.staleCandidateReason ?? "stale continuity evidence"],
     true,
   );
+}
+
+// §4.2: freshness is Layer A evidence used ONLY in the deny direction. `true` is a live
+// counter-claim that blocks OWNER_LOST and blocks takeover; `false` and "unknown"
+// contribute nothing. Applying it after the existing logic — rather than inside it — is
+// what makes "no existing verdict changes" a property of the code shape.
+export function evaluateOwnership(input: OwnershipEvaluationInput): OwnershipEvaluation {
+  const evaluation = evaluateOwnershipWithoutLease(input);
+
+  if (input.leaseFresh !== true) {
+    return evaluation;
+  }
+
+  if (evaluation.verdict !== "OWNER_LOST" && !evaluation.takeoverAllowed) {
+    return evaluation;
+  }
+
+  return {
+    ...evaluation,
+    verdict: "OWNER_UNDECIDABLE",
+    reasons: [...evaluation.reasons, "a live run lease contradicts owner loss"],
+    takeoverAllowed: false,
+  };
 }
 
 export function applyOwnerEpochTransfer(

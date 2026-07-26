@@ -660,6 +660,9 @@ async function persistBoundaryAnalysis(
       supportingContinuityEvidence,
       knownSupersedingEpoch: null,
       lastTrustedBoundary: boundaryEvidence.lastTrustedBoundary,
+      // §9.1: no production supplier in L1 — deliberately. L3 is where the first real
+      // measured value appears.
+      leaseFresh: "unknown",
     });
   };
 

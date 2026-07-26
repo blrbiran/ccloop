@@ -62,6 +62,10 @@ export type OwnershipEvaluationInput = {
   supportingContinuityEvidence: string[];
   knownSupersedingEpoch: number | null;
   lastTrustedBoundary: LastTrustedBoundary;
+  // §9: REQUIRED on purpose. Optional-with-a-default would make "I forgot to pass it"
+  // indistinguishable from "I looked and could not tell", and that distinction is the
+  // whole content of §4.2. Derived from leaseAffirmedAt, never from lastAffirmedAt.
+  leaseFresh: boolean | "unknown";
 };
 
 export type OwnershipEvaluation = {
