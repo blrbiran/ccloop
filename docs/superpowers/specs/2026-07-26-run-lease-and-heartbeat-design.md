@@ -132,6 +132,8 @@ The heartbeat starts immediately after the gate has admitted this process and th
 
 The release is best-effort. If the CAS fails or the write errors, `stop()` swallows it and the lease simply ages out; a process that was killed never gets to release at all, which is the case the TTL exists for. Graceful exit releases immediately; everything else waits out the TTL.
 
+On the `lease_lost` path the release is necessarily a no-op, and must stay that way. `stop()` still runs from the same `finally`, but the record now belongs to the new owner, so the CAS cannot match and the write is swallowed like any other failure. That is the correct outcome: a superseded process must not touch the new owner's record (§8), and the release must never be implemented as an unconditional write that could clear a lease the new owner has already begun affirming.
+
 ### 6.1 The expected record rotates on every successful affirm
 
 Each successful affirm changes `lastAffirmedAt`, so the record the heartbeat compared against is stale the moment it succeeds. The handle therefore replaces its expected record with the one `affirmOwnerLease` returns, every time. A heartbeat that keeps comparing against its start-of-run record would fail its own second CAS roughly one interval in, and — under the naive reading of §8 — would stop a perfectly healthy run.
@@ -298,6 +300,13 @@ export async function affirmOwnerLease(
   expected: OwnerRecord,
   nowIso: string,
 ): Promise<OwnerRecord>;
+// §6.0 release: CAS leaseAffirmedAt back to null, leaving every other field alone.
+// Separate from affirmOwnerLease because that name would lie about writing null.
+// Best-effort by contract: the caller swallows failure and lets the lease age out.
+export async function releaseOwnerLease(
+  runDir: string,
+  expected: OwnerRecord,
+): Promise<void>;
 
 // src/controller/leaseHeartbeat.ts
 export function startLeaseHeartbeat(options: {
@@ -320,7 +329,7 @@ export function startLeaseHeartbeat(options: {
 1. **Pure predicate** — boundary values at exactly TTL, backwards clock, a `null` `leaseAffirmedAt` (no lease, not an expired one), and the defensive "not fresh" answer for an unparseable `leaseAffirmedAt`. The last case pins §5's belt-and-braces default only; the *governing* rule for malformed records is refusal, covered by the "corrupt record is refused" requirement below.
 2. **Recycled PID is not mistaken for self** — a fresh lease held by `pid:4242:<earlier start>` does not match a checking process that is also PID 4242 but started later; the gate refuses (§5.1). A record in the legacy `pid:4242` format likewise never matches.
 3. **Second `runLoop` on an occupied directory fails loudly** — it throws from `ensureFreshRunDir` rather than reaching the lease gate at all (§7.0). The TOCTOU window of §10.1 is documented but not simulated: no test may assert that two concurrent starts both proceed, because the ordinary outcome is the throw.
-4. **Heartbeat under fake timers** — refreshes repeatedly across a TTL window; `stop()` ends all writes.
+4. **Heartbeat under fake timers** — refreshes repeatedly across a TTL window; after `stop()` no further *heartbeat* write occurs. The one write `stop()` is permitted — and required — to make is the release of requirement 17; assert the absence of affirms, not the absence of writes.
 5. **The heartbeat survives its own writes** — at least three consecutive affirms succeed with no external interference, proving the expected record rotates per §6.1. Written to fail against the naive implementation, which stops the run one interval in.
 6. **Mutual exclusion** — a second `resume` against a live-lease run is refused, and the run directory is unchanged **except for appended events** (§7.1): owner record, run state, and worktrees compare byte-identical, and no interrupted-transfer recovery ran.
 7. **Corrupt record is refused, not mistaken for absent** — separate cases for a missing file (proceeds), malformed JSON, and a structurally valid JSON object missing `currentProcessInstanceId` or carrying a non-string `leaseAffirmedAt` (both refused). The third case is the one `readOwnerRecordRaw` accepts silently.
