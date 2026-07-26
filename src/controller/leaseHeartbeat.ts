@@ -1,7 +1,11 @@
 import {
   LEASE_AFFIRM_THROTTLE_MS,
   LEASE_HEARTBEAT_INTERVAL_MS,
+  LEASE_VERIFY_READ_ATTEMPTS,
+  LEASE_VERIFY_RETRY_DELAY_MS,
+  parseOwnerRecordForLease,
   RunLeaseLostError,
+  RunLeaseUnverifiableError,
 } from "../ownership/lease.js";
 import {
   affirmOwnerLease,
@@ -145,8 +149,52 @@ export function startLeaseHeartbeat(options: {
     }
   };
 
+  const delay = (ms: number): Promise<void> => new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+  // §8.1: re-checked immediately before EVERY side effect, narrowing the window in which a
+  // superseded owner can still act from one phase to one side effect.
+  //
+  // Reads the persisted record every time it is called: NOT subject to the affirm throttle
+  // and caching nothing, because a throttled re-check degrades "fail closed before every
+  // side effect" into "fail closed at most once per throttle window". The throttle exists
+  // to keep the two WRITERS of §6 from thrashing the lock; this is a raw read and takes no
+  // lock, so nothing is saved by skipping it.
+  //
+  // Fails CLOSED, unlike DoWhiz's thread_epoch_matches which proceeds on an unreadable
+  // state file. Borrow the shape, invert the default.
   const assertHeld = async (): Promise<void> => {
-    // Filled in by Task 10.
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < LEASE_VERIFY_READ_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await delay(LEASE_VERIFY_RETRY_DELAY_MS);
+      }
+
+      let persisted: OwnerRecord;
+      try {
+        persisted = parseOwnerRecordForLease(await readOwnerRecordWithoutRecovery(options.runDir));
+      } catch (error) {
+        lastError = error;
+        continue;
+      }
+
+      if (namesSomeoneElse(persisted)) {
+        // The same criterion the heartbeat applies in §6.1, evaluated by whichever
+        // mechanism observes it first — not a second, weaker test.
+        superseded = true;
+        throw new RunLeaseLostError(
+          `run lease lost: owner record now names ${persisted.currentProcessInstanceId} at epoch ${persisted.currentOwnerEpoch}`,
+        );
+      }
+
+      return;
+    }
+
+    throw new RunLeaseUnverifiableError(
+      `run lease could not be verified after ${LEASE_VERIFY_READ_ATTEMPTS} attempts: ${String(lastError)}`,
+    );
   };
 
   return { affirmNow, assertHeld, stop };

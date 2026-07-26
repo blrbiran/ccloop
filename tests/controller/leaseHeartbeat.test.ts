@@ -220,3 +220,62 @@ describe("startLeaseHeartbeat", () => {
     await heartbeat.stop();
   });
 });
+
+describe("assertHeld", () => {
+  // §8.1, written to fail against an implementation that reuses the affirm throttle: two
+  // side effects less than LEASE_AFFIRM_THROTTLE_MS apart must EACH read the record.
+  it("is never throttled: a record rotated between two close side effects blocks the second", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-07-26T10:00:00.000Z"));
+    const runDir = await seed(record());
+    const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
+
+    await expect(heartbeat.assertHeld()).resolves.toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(100); // far inside LEASE_AFFIRM_THROTTLE_MS
+    await writeFile(
+      join(runDir, "owner-record.json"),
+      JSON.stringify(record({ currentOwnerEpoch: 3, currentProcessInstanceId: "pid:999:9000" }), null, 2),
+    );
+
+    await expect(heartbeat.assertHeld()).rejects.toMatchObject({ stopReason: "lease_lost" });
+    await heartbeat.stop();
+    vi.useRealTimers();
+  });
+
+  // §8.1 row two: fail CLOSED. An unverifiable lease stops the run rather than letting it
+  // act unverified — and deliberately does NOT claim supersession, hence the other reason.
+  it("rejects as unverifiable — not as lost — when the record cannot be read", async () => {
+    const runDir = await seed(record());
+    const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
+
+    await writeFile(join(runDir, "owner-record.json"), "{ not json");
+
+    await expect(heartbeat.assertHeld()).rejects.toMatchObject({ stopReason: "lease_unverifiable" });
+    await heartbeat.stop();
+  });
+
+  it("rejects as unverifiable when the record is structurally invalid", async () => {
+    const runDir = await seed(record());
+    const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
+
+    await writeFile(join(runDir, "owner-record.json"), JSON.stringify({ currentOwnerEpoch: 2 }, null, 2));
+
+    await expect(heartbeat.assertHeld()).rejects.toMatchObject({ stopReason: "lease_unverifiable" });
+    await heartbeat.stop();
+  });
+
+  // §8.1 row three: a transient failure that clears within the retry budget proceeds.
+  it("proceeds when a transient read failure clears within the retry budget", async () => {
+    const runDir = await seed(record());
+    const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
+
+    await writeFile(join(runDir, "owner-record.json"), "{ not json");
+    setTimeout(() => {
+      void writeFile(join(runDir, "owner-record.json"), JSON.stringify(record(), null, 2));
+    }, 10);
+
+    await expect(heartbeat.assertHeld()).resolves.toBeUndefined();
+    await heartbeat.stop();
+  });
+});
