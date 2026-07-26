@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readdir, writeFile, readFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -84,6 +84,15 @@ function rejectFrame() {
     ...successFrame(),
     verification: { approved: false, rejectCategory: "tests fail", primaryTargetPaths: ["src/index.ts"], failingCommand: "npm test", safeToRetry: true, evidence: ["FAIL"], pauseSignals: [], stopSignals: [] },
   };
+}
+
+async function pathExists(candidate: string): Promise<boolean> {
+  try {
+    await access(candidate);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function readEvents(runDir: string): Promise<{ type: string; detail: string }[]> {
@@ -476,5 +485,111 @@ describe("lease heartbeat lifecycle", () => {
 
     expect(finalState.status).toBe("succeeded");
     await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
+  });
+
+  // Final-review finding: two of the twelve assertHeld guard sites — the plan-phase and
+  // verify-phase Claude calls — could be DELETED with the whole suite still green. What those
+  // two prevent is a superseded process spending money on a Claude call, so "nothing fails if
+  // they go" is the wrong state for them to be in.
+  //
+  // Rather than one test per site, this drives the whole success path with a heartbeat that
+  // refuses at its n-th call and states, per n, exactly which phases have run by then. Deleting
+  // any guard on this path is caught twice over: the numbering shifts, so some case observes a
+  // phase its expectation forbids, and the guard COUNT asserted by the case below this one
+  // changes. The two Claude-call guards are cases 2 and 4.
+  //
+  // Only the six guards on the SUCCESS path are fenced here. The other six live on timeout,
+  // partial-execution and retry paths, which this scenario never reaches.
+  const successPathGuardSites = [
+    { refusalIndex: 1, site: "attempt worktree creation", phasesBefore: [] as string[] },
+    { refusalIndex: 2, site: "plan Claude call", phasesBefore: [] as string[] },
+    { refusalIndex: 3, site: "execute Claude call", phasesBefore: ["plan"] },
+    { refusalIndex: 4, site: "verify Claude call", phasesBefore: ["plan", "execute"] },
+    { refusalIndex: 5, site: "attempt artifact write", phasesBefore: ["plan", "execute", "verify"] },
+    { refusalIndex: 6, site: "post-terminal worktree cleanup", phasesBefore: ["plan", "execute", "verify"] },
+  ];
+
+  async function runSuccessPathWithRefusalAt(refusalIndex: number | null): Promise<{
+    runDir: string;
+    phases: string[];
+    guardCalls: number;
+    finalState: RunState;
+  }> {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const phases: string[] = [];
+    const scripted = new ScriptedAdapter([successFrame()]);
+    // Records the phase before delegating, so a phase that runs is recorded even if it throws.
+    const adapter = {
+      plan: (context: unknown) => {
+        phases.push("plan");
+        return scripted.plan(context as never);
+      },
+      execute: (context: unknown) => {
+        phases.push("execute");
+        return scripted.execute(context as never);
+      },
+      verify: (context: unknown) => {
+        phases.push("verify");
+        return scripted.verify(context as never);
+      },
+    };
+
+    let guardCalls = 0;
+    const heartbeat: LeaseHeartbeat = {
+      adopt: () => {},
+      affirmNow: async () => {},
+      assertHeld: async () => {
+        guardCalls += 1;
+
+        if (guardCalls === refusalIndex) {
+          throw new RunLeaseLostError("run lease lost: test-injected supersession");
+        }
+      },
+      stop: async () => {},
+    };
+
+    const finalState = await runLoopFromState(
+      contract,
+      runDir,
+      adapter as never,
+      planningRunState(contract),
+      heartbeat,
+    );
+
+    return { runDir, phases, guardCalls, finalState };
+  }
+
+  it.each(successPathGuardSites)(
+    "runs no further phase once the guard before the $site refuses",
+    async ({ refusalIndex, phasesBefore }) => {
+      const { runDir, phases, finalState } = await runSuccessPathWithRefusalAt(refusalIndex);
+
+      // The decisive assertion: the refused side effect, and every side effect after it, did
+      // not happen. For cases 2 and 4 that is a Claude call a superseded process would
+      // otherwise have paid for.
+      expect(phases).toEqual(phasesBefore);
+      // Guards 1-5 refuse before the attempt reaches a terminal decision, so the run stops with
+      // the lease reason; guard 6 fires after one is already persisted, and that decision stands
+      // (see the test above).
+      expect(finalState.status).toBe(refusalIndex === 6 ? "succeeded" : "cancelled");
+      expect(finalState.stopReason === "lease_lost").toBe(refusalIndex !== 6);
+      // Abandoned IN PLACE: whatever the attempt had already created stays, and nothing new is
+      // created. The artifact write is itself guard 5, so it happens only in the last case.
+      expect(await pathExists(join(runDir, "worktrees", "attempt-1"))).toBe(refusalIndex > 1);
+      expect(await pathExists(join(runDir, "attempts", "1", "plan.json"))).toBe(refusalIndex === 6);
+    },
+  );
+
+  // The other half of the fence: the number of guards on this path. Deleting one leaves every
+  // case above satisfiable by a shifted numbering, but there is no numbering in which five
+  // guards are six.
+  it("passes exactly six guards, and completes, when none of them refuses", async () => {
+    const { phases, guardCalls, finalState } = await runSuccessPathWithRefusalAt(null);
+
+    expect(guardCalls).toBe(successPathGuardSites.length);
+    expect(phases).toEqual(["plan", "execute", "verify"]);
+    expect(finalState.status).toBe("succeeded");
   });
 });
