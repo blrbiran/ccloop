@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -85,9 +85,32 @@ function rejectFrame() {
   };
 }
 
-async function readEventTypes(runDir: string): Promise<string[]> {
+async function readEvents(runDir: string): Promise<{ type: string; detail: string }[]> {
   const raw = await readFile(join(runDir, "events.jsonl"), "utf8");
-  return raw.split("\n").filter(Boolean).map((l) => JSON.parse(l).type as string);
+  return raw.split("\n").filter(Boolean).map((l) => JSON.parse(l) as { type: string; detail: string });
+}
+
+async function readEventTypes(runDir: string): Promise<string[]> {
+  return (await readEvents(runDir)).map((event) => event.type);
+}
+
+// What runLoop hands runLoopFromState after its own "planning" transition, for the tests that
+// drive runLoopFromState directly.
+function planningRunState(contract: LoopContract): RunState {
+  return {
+    status: "planning",
+    currentAttempt: 0,
+    attemptsUsed: 0,
+    lastTransitionAt: new Date().toISOString(),
+    waitingOnHuman: false,
+    stopReason: null,
+    budgetSnapshot: {
+      attemptsRemaining: contract.executionPolicy.maxAttempts,
+      timeRemainingMs: contract.executionPolicy.totalRuntimeBudgetMs,
+      tokenBudgetRemaining: contract.executionPolicy.tokenBudget,
+    },
+    recentFailures: [],
+  };
 }
 
 describe("lease heartbeat lifecycle", () => {
@@ -179,6 +202,10 @@ describe("lease heartbeat lifecycle", () => {
     // never attempting the CAS that would discover the rotation. Faking only `Date` (not the
     // timers) and jumping it forward here, right after the rotation, is the same pattern
     // leaseHeartbeat.test.ts itself uses to get past this throttle deterministically.
+    //
+    // Since task 13 the throttle is no longer what gates discovery here (see the event
+    // assertion below), but the clock jump is retained: it is what the widened runtime budget
+    // above is sized for, and removing it would silently change what this test measures.
     vi.useFakeTimers({ toFake: ["Date"] });
     const rotateAfterFirstAttempt = {
       plan: (context: unknown) => adapter.plan(context as never),
@@ -200,7 +227,17 @@ describe("lease heartbeat lifecycle", () => {
 
     expect(finalState.stopReason).toBe("lease_lost");
     expect(finalState.attemptsUsed).toBe(1); // no further attempt started
-    expect(await readEventTypes(runDir)).toContain("lease_lost");
+    // Updated by task 13, and NOT by weakening the check. The `lease_lost` EVENT is appended
+    // by the heartbeat, when its affirm CAS fails and the re-read names someone else
+    // (leaseHeartbeat.ts, concludeLeaseLost). Task 13's assertHeld guard before the next side
+    // effect — the attempt-artifact write immediately after verify — observes the rotated
+    // record strictly earlier than the next top-of-loop affirm can, so the run now stops
+    // before that CAS ever runs and no heartbeat event is produced. assertHeld appends no
+    // event of its own by design (task 10), so the terminal transition is what records the
+    // stop, carrying the same reason.
+    expect(await readEvents(runDir)).toContainEqual(
+      expect.objectContaining({ type: "loop_cancelled", detail: "lease_lost" }),
+    );
 
     const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
     expect(owner.currentOwnerEpoch).toBe(99); // the new owner's record is untouched
@@ -252,22 +289,7 @@ describe("lease heartbeat lifecycle", () => {
       stop: async () => {},
     };
 
-    const initialLoopState: RunState = {
-      status: "planning",
-      currentAttempt: 0,
-      attemptsUsed: 0,
-      lastTransitionAt: new Date().toISOString(),
-      waitingOnHuman: false,
-      stopReason: null,
-      budgetSnapshot: {
-        attemptsRemaining: contract.executionPolicy.maxAttempts,
-        timeRemainingMs: contract.executionPolicy.totalRuntimeBudgetMs,
-        tokenBudgetRemaining: contract.executionPolicy.tokenBudget,
-      },
-      recentFailures: [],
-    };
-
-    const finalState = await runLoopFromState(contract, runDir, adapter as never, initialLoopState, spyHeartbeat, leaseLoss);
+    const finalState = await runLoopFromState(contract, runDir, adapter as never, planningRunState(contract), spyHeartbeat, leaseLoss);
 
     expect(finalState.stopReason).toBe("lease_lost");
     expect(finalState.attemptsUsed).toBe(1); // no second attempt started
@@ -278,5 +300,124 @@ describe("lease heartbeat lifecycle", () => {
 
     const owner = await readFile(join(runDir, "owner-record.json"), "utf8");
     expect(JSON.parse(owner)).toEqual(ownerRecordSentinel); // the stop never touches it
+  });
+
+  // §8.1 requirement 13: asserted per side-effect KIND, not once generically. Rotating from
+  // INSIDE the plan phase makes the ordering deterministic — no timer race — and the next
+  // Claude call (execute) is the side effect that must not happen.
+  function rotateOwnerRecord(runDir: string): Promise<void> {
+    const at = new Date().toISOString();
+    return writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+      runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 99,
+      currentProcessInstanceId: "pid:999:9000", lastAffirmedAt: at,
+      ownerStatus: "current", supersededByEpoch: null, leaseAffirmedAt: at,
+    }, null, 2));
+  }
+
+  it("does not launch the next Claude call when the record names a different process", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    let executeCalls = 0;
+    const adapter = {
+      plan: async () => {
+        await rotateOwnerRecord(runDir);
+        return { summary: "s", primaryTargetPaths: ["src/index.ts"] };
+      },
+      execute: async () => {
+        executeCalls += 1;
+        throw new Error("execute must not run");
+      },
+      verify: async () => { throw new Error("verify must not run"); },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter as never);
+
+    expect(executeCalls).toBe(0);
+    expect(finalState.stopReason).toBe("lease_lost");
+  });
+
+  // §8.1: abandoned in place — no further side effect of the attempt, INCLUDING its
+  // worktree cleanup. The residual worktree survives for the next owner, whose resume path
+  // already cleans up residual worktrees before continuing.
+  it("leaves the attempt worktree in place rather than unwinding it", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    const adapter = {
+      plan: async () => {
+        await rotateOwnerRecord(runDir);
+        return { summary: "s", primaryTargetPaths: ["src/index.ts"] };
+      },
+      execute: async () => { throw new Error("execute must not run"); },
+      verify: async () => { throw new Error("verify must not run"); },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter as never);
+
+    expect(finalState.stopReason).toBe("lease_lost");
+    await expect(readdir(join(runDir, "worktrees"))).resolves.not.toHaveLength(0);
+  });
+
+  // §8.1 row two: unverifiable stops the run, does NOT claim supersession, and writes no
+  // owner record.
+  it("stops with lease_unverifiable and writes no owner record when the record is corrupt", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    const adapter = {
+      plan: async () => {
+        await writeFile(join(runDir, "owner-record.json"), "{ not json");
+        return { summary: "s", primaryTargetPaths: ["src/index.ts"] };
+      },
+      execute: async () => { throw new Error("execute must not run"); },
+      verify: async () => { throw new Error("verify must not run"); },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter as never);
+
+    expect(finalState.stopReason).toBe("lease_unverifiable");
+    expect(await readFile(join(runDir, "owner-record.json"), "utf8")).toBe("{ not json");
+    expect(await readEventTypes(runDir)).not.toContain("lease_lost");
+  });
+
+  // Not in the brief; found while enumerating the call sites. Several guarded cleanup sites
+  // run AFTER the attempt has already persisted a terminal decision. A lease error raised
+  // there cannot be re-decided as "cancelled": succeeded -> cancelled is not a legal
+  // transition (legalTransitions, src/state/stateMachine.ts) and rewriting a terminal
+  // decision would itself be a write to a run this process no longer owns. So the terminal
+  // decision stands — and the blocked cleanup is still skipped, which is what this asserts.
+  it("keeps an already-persisted terminal decision when the post-terminal cleanup is blocked", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    // Throws at the first guard that runs once a terminal state is on disk — on the success
+    // path that is the post-terminal worktree cleanup — and at no guard before it.
+    const heartbeat: LeaseHeartbeat = {
+      affirmNow: async () => {},
+      assertHeld: async () => {
+        const persisted = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8")) as RunState;
+
+        if (persisted.status === "succeeded") {
+          throw new RunLeaseLostError("run lease lost: test-injected supersession");
+        }
+      },
+      stop: async () => {},
+    };
+
+    const finalState = await runLoopFromState(
+      contract,
+      runDir,
+      new ScriptedAdapter([successFrame()]),
+      planningRunState(contract),
+      heartbeat,
+    );
+
+    expect(finalState.status).toBe("succeeded");
+    await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
   });
 });

@@ -1098,6 +1098,16 @@ describe("runLoop", () => {
     expect(owner.ownerStatus).toBe("current");
   });
 
+  // The five reconciliation tests below overwrite owner-record.json from inside `execute` to
+  // drive evaluateOwnership's inputs. They named a foreign `pid:12345` until task 13 added a
+  // lease re-check immediately before every side effect: a record naming another process
+  // instance is now (correctly) refused as supersession before the boundary machinery runs at
+  // all, which would have left these tests asserting on artifacts that must never be written
+  // by a superseded owner. The ownership signal they actually exercise is `ownerStatus`
+  // ("lost"), never the process identity — nothing in src/ writes ownerStatus, so a record
+  // that still names THIS process while reporting a lost owner is exactly the case that
+  // remains reachable — so the fixtures name this process and let ownerStatus carry the loss.
+  // Every assertion in all five is unchanged.
   it("keeps changed-path stale reconciliation on OWNER_UNDECIDABLE even when persisted owner truth is lost", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
@@ -1121,7 +1131,7 @@ describe("runLoop", () => {
           runId: "task-1",
           logicalSessionId: "task-1:lost-with-changes",
           currentOwnerEpoch: 1,
-          currentProcessInstanceId: "pid:12345",
+          currentProcessInstanceId: buildProcessInstanceId(),
           lastAffirmedAt: "2026-07-23T00:00:00.000Z",
           ownerStatus: "lost",
           supersededByEpoch: null,
@@ -1177,7 +1187,7 @@ describe("runLoop", () => {
           runId: "task-1",
           logicalSessionId: "task-1:lost",
           currentOwnerEpoch: 1,
-          currentProcessInstanceId: "pid:12345",
+          currentProcessInstanceId: buildProcessInstanceId(),
           lastAffirmedAt: "2026-07-23T00:00:00.000Z",
           ownerStatus: "lost",
           supersededByEpoch: null,
@@ -1250,7 +1260,7 @@ describe("runLoop", () => {
           runId: "task-1",
           logicalSessionId: "task-1:lost",
           currentOwnerEpoch: 1,
-          currentProcessInstanceId: "pid:12345",
+          currentProcessInstanceId: buildProcessInstanceId(),
           lastAffirmedAt: "2026-07-23T00:00:00.000Z",
           ownerStatus: "lost",
           supersededByEpoch: null,
@@ -1391,7 +1401,7 @@ describe("runLoop", () => {
             runId: "task-1",
             logicalSessionId: "task-1:lost",
             currentOwnerEpoch: 1,
-            currentProcessInstanceId: "pid:12345",
+            currentProcessInstanceId: buildProcessInstanceId(),
             lastAffirmedAt: "2026-07-23T00:00:00.000Z",
             ownerStatus: "lost",
             supersededByEpoch: null,
@@ -1514,7 +1524,7 @@ describe("runLoop", () => {
             runId: "task-1",
             logicalSessionId: "task-1:lost",
             currentOwnerEpoch: 1,
-            currentProcessInstanceId: "pid:12345",
+            currentProcessInstanceId: buildProcessInstanceId(),
             lastAffirmedAt: "2026-07-23T00:00:00.000Z",
             ownerStatus: "lost",
             supersededByEpoch: null,

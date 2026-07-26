@@ -13,13 +13,13 @@ import {
 } from "../persistence/fileStore.js";
 import { evaluatePathPolicy } from "../policy/pathPolicy.js";
 import { evaluateRunBoundary, evaluateStopDecision } from "../stop/stopController.js";
-import { transitionRunState } from "../state/stateMachine.js";
+import { isTerminalRunStatus, transitionRunState } from "../state/stateMachine.js";
 import type { LoopContract } from "../contract/schema.js";
 import { applyOwnerEpochTransfer, evaluateOwnership } from "../ownership/ownerController.js";
 import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
 import type { LeaseHeartbeat } from "./leaseHeartbeat.js";
-import type { RunLeaseLostError } from "../ownership/lease.js";
+import { RunLeaseLostError, RunLeaseUnverifiableError } from "../ownership/lease.js";
 import type {
   AttemptContext,
   AttemptPlan,
@@ -86,6 +86,13 @@ class PhaseExecutionError extends Error {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+// §8.1: the two ways heartbeat.assertHeld() can refuse a side effect. Both abandon the
+// attempt in place; they differ only in the stop reason they carry, because "someone else
+// owns this run" and "this run's ownership could not be read" are not the same claim.
+function isLeaseStopError(error: unknown): error is RunLeaseLostError | RunLeaseUnverifiableError {
+  return error instanceof RunLeaseLostError || error instanceof RunLeaseUnverifiableError;
 }
 
 function buildRequiredCheckEvidence(
@@ -791,6 +798,17 @@ export async function runLoopFromState(
   leaseLoss: LeaseLossSignal = { lost: null },
 ): Promise<RunState> {
   let state = initialLoopState;
+
+  // §8.1: writing attempt artifacts is a side effect, so every such write inside the attempt
+  // body goes through here. Deliberately NOT pushed down into writeCompletedAttemptArtifacts:
+  // that function is also called from the failure path, which has already abandoned.
+  const guardedWriteArtifacts = async (
+    write: () => Promise<void>,
+  ): Promise<void> => {
+    await heartbeat.assertHeld();
+    await write();
+  };
+
   while (true) {
     await writeRunState(runDir, state);
     // §6: the event-driven refresh. It survives environments where the timer is unreliable
@@ -810,8 +828,19 @@ export async function runLoopFromState(
 
     while (!worktreePath) {
       try {
+        // §8.1: adding a worktree mutates the repository, so the lease is re-checked here —
+        // inside the retry loop, because the retry can be a long way from the first attempt.
+        await heartbeat.assertHeld();
         worktreePath = (await createAttemptWorkspace(contract.context.repoPath, runDir, attempt)).worktreePath;
       } catch (error) {
+        // §8.1: a refused lease is not a workspace-infrastructure failure and must consume
+        // neither the infra retry nor the blocked_waiting_human escalation below. No worktree
+        // was created, so there is nothing to abandon in place; the attempt simply never
+        // starts and the run stops here.
+        if (isLeaseStopError(error)) {
+          return await persistTerminalState(runDir, state, "cancelled", error.stopReason);
+        }
+
         if (infraRetryUsed) {
           await appendEvent(runDir, {
             type: "workspace_create_failed",
@@ -841,6 +870,8 @@ export async function runLoopFromState(
       await writeRunState(runDir, state);
 
       const planTimeoutMs = getPhaseTimeoutMs(contract, state);
+      // §8.1: launching a Claude call is a side effect.
+      await heartbeat.assertHeld();
       const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal) =>
         adapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal)),
       );
@@ -853,6 +884,9 @@ export async function runLoopFromState(
           "exhausted",
           hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("plan", planTimeoutMs),
         );
+        // §8.1: removing the worktree is a side effect on a directory a new owner may already
+        // be reading.
+        await heartbeat.assertHeld();
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
           worktreePath,
@@ -866,8 +900,9 @@ export async function runLoopFromState(
       state = applyPhaseUsage(state, planOutcome.elapsedMs, plan.tokenUsage);
 
       if (hasBudgetExceeded(state)) {
-        await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
         state = await persistTerminalState(runDir, state, "exhausted", BUDGET_EXHAUSTED_REASON);
+        await heartbeat.assertHeld();
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
           worktreePath,
@@ -883,6 +918,8 @@ export async function runLoopFromState(
       await appendTransitionEvent(runDir, state, "execute_started", `attempt ${attempt}`);
 
       const executeTimeoutMs = getPhaseTimeoutMs(contract, state);
+      // §8.1: launching a Claude call is a side effect.
+      await heartbeat.assertHeld();
       const executeOutcome = await runPhaseWithTimeout(
         executeTimeoutMs,
         (abortSignal) => adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan)),
@@ -904,10 +941,10 @@ export async function runLoopFromState(
             getExecutionFailureBoundary(state),
             "retained",
           );
-          await writeAttemptArtifacts(runDir, attempt, {
+          await guardedWriteArtifacts(() => writeAttemptArtifacts(runDir, attempt, {
             plan,
             executionRecovery,
-          });
+          }));
           await persistBoundaryAnalysis(runDir, state, executionRecovery);
           state = await persistTerminalState(
             runDir,
@@ -915,6 +952,7 @@ export async function runLoopFromState(
             "exhausted",
             hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("execute", executeTimeoutMs),
           );
+          await heartbeat.assertHeld();
           const cleanupStatus = await cleanupAttemptWorkspaceWithStatus(
             contract.context.repoPath,
             worktreePath,
@@ -923,13 +961,13 @@ export async function runLoopFromState(
           );
 
           if (cleanupStatus !== executionRecovery.cleanupStatus) {
-            await writeAttemptArtifacts(runDir, attempt, {
+            await guardedWriteArtifacts(() => writeAttemptArtifacts(runDir, attempt, {
               plan,
               executionRecovery: {
                 ...executionRecovery,
                 cleanupStatus,
               },
-            });
+            }));
           }
 
           return state;
@@ -950,7 +988,7 @@ export async function runLoopFromState(
       }
 
       if (isPartialExecutionResult(completedExecution)) {
-        await writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution);
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
 
         const partialPathPolicy = evaluatePathPolicy({
           changedFiles: completedExecution.changedFiles,
@@ -976,6 +1014,7 @@ export async function runLoopFromState(
           completedExecution.failureMessage,
         );
 
+        await heartbeat.assertHeld();
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
           worktreePath,
@@ -993,7 +1032,7 @@ export async function runLoopFromState(
       });
 
       if (pathPolicy.humanGateHit) {
-        await writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution);
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
         state = await persistTerminalState(
           runDir,
           state,
@@ -1004,8 +1043,9 @@ export async function runLoopFromState(
       }
 
       if (hasBudgetExceeded(state)) {
-        await writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution);
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
         state = await persistTerminalState(runDir, state, "exhausted", BUDGET_EXHAUSTED_REASON);
+        await heartbeat.assertHeld();
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
           worktreePath,
@@ -1020,6 +1060,9 @@ export async function runLoopFromState(
       await writeRunState(runDir, state);
 
       const verifyTimeoutMs = getPhaseTimeoutMs(contract, state);
+      // §8.1: launching a Claude call is a side effect. runVerification also shells out to the
+      // contract's required checks inside the attempt worktree, which is one too.
+      await heartbeat.assertHeld();
       const verifyOutcome = await runPhaseWithTimeout(verifyTimeoutMs, (abortSignal) =>
         runVerification(
           contract,
@@ -1032,13 +1075,14 @@ export async function runLoopFromState(
 
       if (verifyOutcome.timedOut) {
         state = applyPhaseUsage(state, verifyOutcome.elapsedMs, undefined);
-        await writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution);
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
         state = await persistTerminalState(
           runDir,
           state,
           "exhausted",
           hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("verify", verifyTimeoutMs),
         );
+        await heartbeat.assertHeld();
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
           worktreePath,
@@ -1050,7 +1094,11 @@ export async function runLoopFromState(
 
       verification = verifyOutcome.result;
       state = applyPhaseUsage(state, verifyOutcome.elapsedMs, verification.tokenUsage);
-      await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution, verification);
+      // Captured because the guard's closure widens the `verification` let back to `| null`.
+      const completedVerification = verification;
+      await guardedWriteArtifacts(() =>
+        writeCompletedAttemptArtifacts(runDir, attempt, plan, execution, completedVerification),
+      );
 
       const humanGateHit =
         pathPolicy.humanGateHit ||
@@ -1091,12 +1139,15 @@ export async function runLoopFromState(
         await appendTransitionEvent(runDir, state, "verification_rejected", decision.reason);
         await writeRunState(runDir, state);
 
+        await heartbeat.assertHeld();
+
         try {
           await cleanupAttemptWorkspace(contract.context.repoPath, worktreePath);
         } catch (error) {
           state = transitionRunState(state, "failed", String(error));
           await appendTransitionEvent(runDir, state, "attempt_failed", String(error));
           await writeRunState(runDir, state);
+          await heartbeat.assertHeld();
           await cleanupAttemptWorkspaceBestEffort(
             contract.context.repoPath,
             worktreePath,
@@ -1119,6 +1170,7 @@ export async function runLoopFromState(
       state = await persistTerminalState(runDir, state, decision.kind, decision.reason);
 
       if (decision.kind !== "blocked_waiting_human") {
+        await heartbeat.assertHeld();
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
           worktreePath,
@@ -1129,6 +1181,24 @@ export async function runLoopFromState(
 
       return state;
     } catch (error) {
+      // §8.1: the side effect was skipped and the attempt is abandoned IN PLACE. No further
+      // side effect of this attempt is attempted, including its worktree cleanup — cleanup
+      // is itself a side effect on a worktree the new owner may already be reading, and
+      // this process has just lost the authority to touch it. The residual worktree is left
+      // for the new owner, whose resume path already cleans up residual worktrees. This
+      // returns before the generic failure handling below on purpose: a refused lease is not
+      // an attempt failure, so it must not be fingerprinted, boundary-analysed or
+      // transitioned to "failed".
+      if (isLeaseStopError(error)) {
+        // A guard that fired after this attempt had already persisted a terminal decision
+        // blocked only the cleanup that follows it: the run has already stopped, and
+        // re-deciding it as "cancelled" would be an illegal transition out of a terminal
+        // status as well as another write to a run this process no longer owns.
+        return isTerminalRunStatus(state.status)
+          ? state
+          : await persistTerminalState(runDir, state, "cancelled", error.stopReason);
+      }
+
       const failureReason = error instanceof PhaseExecutionError ? error.message : String(error);
 
       if (error instanceof PhaseExecutionError) {

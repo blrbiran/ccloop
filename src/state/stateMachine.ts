@@ -12,6 +12,12 @@ const legalTransitions: Record<RunStatus, RunStatus[]> = {
   failed: [],
 };
 
+// Derived from legalTransitions rather than restated: a status is terminal exactly when
+// nothing legally follows it.
+export function isTerminalRunStatus(status: RunStatus): boolean {
+  return legalTransitions[status].length === 0;
+}
+
 export function transitionRunState(state: RunState, next: RunStatus, reason?: string): RunState {
   if (!legalTransitions[state.status].includes(next)) {
     throw new Error(`illegal transition: ${state.status} -> ${next}`);
