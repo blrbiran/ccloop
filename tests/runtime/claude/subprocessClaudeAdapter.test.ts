@@ -122,13 +122,29 @@ async function createCommittedRepo(files: Record<string, string>): Promise<strin
   return repoDir;
 }
 
+// The marker file is written by a real subprocess we spawn, so how long it takes to appear
+// is a property of machine load, not of the behavior under test. A fixed 2s budget made
+// these tests fail under full-suite parallelism while passing when the file ran alone —
+// a flake that reads exactly like a regression. Budget is a deadline, not an attempt count,
+// so a slow poll cannot silently shorten it, and the message reports what was actually
+// observed so a real hang is still distinguishable from a slow start.
+const MARKER_WAIT_BUDGET_MS = 10_000;
+// Vitest's 5s default is below the wait budget above, so without this the marker wait would
+// never get to report its diagnostic — the test would die on a bare per-test timeout first.
+// Applied only to the four tests that wait on a marker.
+const MARKER_WAIT_TEST_TIMEOUT_MS = 30_000;
+
 async function waitForFileToContain(path: string, expected: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const deadline = Date.now() + MARKER_WAIT_BUDGET_MS;
+  let lastObserved = "<file did not exist>";
+
+  while (Date.now() < deadline) {
     try {
       const contents = await readFile(path, "utf8");
       if (contents.includes(expected)) {
         return;
       }
+      lastObserved = JSON.stringify(contents);
     } catch {
       // wait for the fixture to write the marker file
     }
@@ -136,7 +152,9 @@ async function waitForFileToContain(path: string, expected: string): Promise<voi
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 
-  throw new Error(`timed out waiting for ${path} to contain ${expected}`);
+  throw new Error(
+    `timed out after ${MARKER_WAIT_BUDGET_MS}ms waiting for ${path} to contain ${expected}; last observed ${lastObserved}`,
+  );
 }
 
 
@@ -708,7 +726,7 @@ setInterval(() => {}, 1000);
         process.env.CLAUDE_MARKER_PATH = originalMarkerPath;
       }
     }
-  });
+  }, MARKER_WAIT_TEST_TIMEOUT_MS);
 
   for (const phase of ["plan", "execute", "verify"] as const) {
     it(`terminates the inner Claude process when ${phase} is interrupted`, async () => {
@@ -758,7 +776,7 @@ setInterval(() => {}, 1000);
       expect(markerContents).toContain("SIGTERM");
       expect(outcome.code).not.toBe(0);
       expect(outcome.signal).toBeNull();
-    });
+    }, MARKER_WAIT_TEST_TIMEOUT_MS);
   }
 
   it("parses a large partial execute payload after wrapper interruption", async () => {
@@ -824,7 +842,7 @@ setInterval(() => {}, 1000);
         process.env.CLAUDE_MARKER_PATH = originalMarkerPath;
       }
     }
-  });
+  }, MARKER_WAIT_TEST_TIMEOUT_MS);
 
   it("includes brand-new untracked files in partial execute diff recovery", async () => {
     const worktreePath = await createCommittedRepo({
@@ -973,7 +991,7 @@ process.exit(0);
     expect(payload).not.toHaveProperty("completionStatus");
     expect(payload.changedFiles).not.toContain("dirty.txt");
     expect(await readFile(markerPath, "utf8")).toContain("tail");
-  });
+  }, MARKER_WAIT_TEST_TIMEOUT_MS);
 
   it("returns repo-relative target paths for renamed and quoted files", async () => {
     const worktreePath = await createCommittedRepo({
