@@ -46,23 +46,30 @@ export function startLeaseHeartbeat(options: {
     || persisted.supersededByEpoch !== null
     || persisted.currentProcessInstanceId !== expected.currentProcessInstanceId;
 
+  // appendEvent is a raw appendFile with no internal guard, so it can reject on real I/O
+  // failure. Losing the event log must not cost us the stop signal or the refusal that follows
+  // it, so it is swallowed here rather than left to propagate: out of runAffirm's catch block
+  // it would be unguarded (the timer path fires via a bare `void affirmNow()`, turning any
+  // throw into an unhandled rejection instead of the swallow-and-retry the spec requires), and
+  // out of assertHeld it would REPLACE a lease refusal with an I/O error — failing open on the
+  // one path whose entire job is to fail closed.
+  const appendLeaseEvent = async (type: string, detail: string): Promise<void> => {
+    try {
+      await appendEvent(options.runDir, { type, at: new Date(now()).toISOString(), detail });
+    } catch {
+      // Swallowed by contract: the stop signal and the refusal must still fire without it.
+    }
+  };
+
+  // §6.1: both sides of the comparison, which is the whole point of the event — "who took this
+  // run over". Only this module can produce it: `expected` is closure state, and the error
+  // thrown to the control loop carries the observed side alone.
+  const describeSupersession = (persisted: OwnerRecord): string =>
+    `expected ${expected.currentProcessInstanceId} at epoch ${expected.currentOwnerEpoch}, observed ${persisted.currentProcessInstanceId} at epoch ${persisted.currentOwnerEpoch}`;
+
   const concludeLeaseLost = async (persisted: OwnerRecord): Promise<void> => {
     superseded = true;
-
-    // appendEvent is a raw appendFile with no internal guard, so it can reject on real I/O
-    // failure. Losing the event log must not cost us the stop signal below, so it is swallowed
-    // here rather than left to propagate out of runAffirm's catch block unguarded (which the
-    // timer path fires via a bare `void affirmNow()`, turning any throw here into an unhandled
-    // rejection instead of the swallow-and-retry the spec requires).
-    try {
-      await appendEvent(options.runDir, {
-        type: "lease_lost",
-        at: new Date(now()).toISOString(),
-        detail: `expected ${expected.currentProcessInstanceId} at epoch ${expected.currentOwnerEpoch}, observed ${persisted.currentProcessInstanceId} at epoch ${persisted.currentOwnerEpoch}`,
-      });
-    } catch {
-      // Swallowed: the stop signal below must still fire even without an event record of it.
-    }
+    await appendLeaseEvent("lease_lost", describeSupersession(persisted));
 
     // onLeaseLost is caller-supplied. The same "never throws into the caller" contract that
     // covers this module's own I/O has to cover a misbehaving callback too, so it is guarded
@@ -183,7 +190,22 @@ export function startLeaseHeartbeat(options: {
       if (namesSomeoneElse(persisted)) {
         // The same criterion the heartbeat applies in §6.1, evaluated by whichever
         // mechanism observes it first — not a second, weaker test.
-        superseded = true;
+        //
+        // §6.1 requires the run to record the observed and expected owner records when it
+        // concludes supersession, and that consequence belongs to the CONCLUSION, not to the
+        // mechanism that reaches it. Appending here is what makes it reachable at all: setting
+        // `superseded` makes runAffirm return early forever, so once a guard concludes, the
+        // heartbeat can never append the event afterwards. Since §8.1's guards run before every
+        // side effect, the guard normally wins that race — leaving, without this, a run that
+        // stopped for a lease reason with nothing on disk naming who took it over.
+        //
+        // The `superseded` check keeps it exactly-once per run whichever mechanism gets there
+        // first, rather than appending a second, duplicate record of the same conclusion.
+        if (!superseded) {
+          superseded = true;
+          await appendLeaseEvent("lease_lost", describeSupersession(persisted));
+        }
+
         throw new RunLeaseLostError(
           `run lease lost: owner record now names ${persisted.currentProcessInstanceId} at epoch ${persisted.currentOwnerEpoch}`,
         );
@@ -191,6 +213,16 @@ export function startLeaseHeartbeat(options: {
 
       return;
     }
+
+    // A DISTINCT type, deliberately: this path refuses without concluding supersession, so it
+    // must not append `lease_lost` — there is no observed owner to name, and claiming one would
+    // assert exactly what could not be read. It is recorded all the same because a refusal that
+    // leaves no trace is indistinguishable from a run that simply stopped, and on the
+    // already-terminal path in runLoopFromState this event is the only trace there is.
+    await appendLeaseEvent(
+      "lease_unverifiable",
+      `expected ${expected.currentProcessInstanceId} at epoch ${expected.currentOwnerEpoch}, owner record unreadable after ${LEASE_VERIFY_READ_ATTEMPTS} attempts: ${String(lastError)}`,
+    );
 
     throw new RunLeaseUnverifiableError(
       `run lease could not be verified after ${LEASE_VERIFY_READ_ATTEMPTS} attempts: ${String(lastError)}`,

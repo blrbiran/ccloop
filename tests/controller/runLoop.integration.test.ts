@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, chmod, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,6 +71,16 @@ async function readEventTypes(runDir: string): Promise<string[]> {
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line).type as string);
+}
+
+async function readEventDetails(runDir: string, type: string): Promise<string[]> {
+  const contents = await readFile(join(runDir, "events.jsonl"), "utf8");
+  return contents
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { type: string; detail: string })
+    .filter((event) => event.type === type)
+    .map((event) => event.detail);
 }
 
 async function readRunState(runDir: string): Promise<RunState> {
@@ -1234,6 +1244,10 @@ describe("runLoop", () => {
     expect(transfer.priorOwnerEpoch).toBe(1);
     expect(transfer.newOwnerEpoch).toBe(2);
     expect(transfer.eligibleForContinuation).toBe(true);
+    // Task 13, review finding 3: the fourth test that now takes the post-terminal lease escape
+    // after its own transfer to epoch 2 — pinned so the changed path is asserted, not incidental.
+    expect(await readEventTypes(runDir)).toContain("lease_lost");
+    await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
   });
 
   it("persists owner transfer artifacts and continuation eligibility after a controller-owned OWNER_LOST takeover-allowed verdict without resuming execution", async () => {
@@ -1313,6 +1327,19 @@ describe("runLoop", () => {
       "execute_started",
       "owner_epoch_transferred",
       "loop_exhausted",
+      // Task 13, review finding 3: this test's execution path changed and nothing pinned the
+      // new one. The transfer above moves the record to epoch 2 while this process's heartbeat
+      // still expects epoch 1, so the lease guard before the post-terminal worktree cleanup
+      // concludes supersession. Asserted here (and below) so that a later change to the guard,
+      // the terminal escape, or the supersession criterion fails this test instead of leaving
+      // it green for a different reason than it was designed for.
+      "lease_lost",
+    ]);
+    // The already-persisted terminal decision stands (asserted above), and the refused cleanup
+    // is abandoned in place — which is why the attempt worktree is still here.
+    await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
+    expect(await readEventDetails(runDir, "lease_lost")).toEqual([
+      `expected ${buildProcessInstanceId()} at epoch 1, observed ${buildProcessInstanceId()} at epoch 2`,
     ]);
   });
 
@@ -1455,6 +1482,14 @@ describe("runLoop", () => {
         "attempt_started",
         "execute_started",
         "loop_exhausted",
+        // Task 13, review finding 3: the other controller's record is what the lease guard
+        // before the post-terminal cleanup now reads, so it concludes supersession — a genuine
+        // foreign takeover here, unlike the self-transfer case above.
+        "lease_lost",
+      ]);
+      await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
+      expect(await readEventDetails(runDir, "lease_lost")).toEqual([
+        `expected ${buildProcessInstanceId()} at epoch 1, observed pid:other-controller at epoch 2`,
       ]);
     } finally {
       vi.doUnmock("../../src/persistence/fileStore.js");
@@ -1589,6 +1624,12 @@ describe("runLoop", () => {
         "attempt_started",
         "execute_started",
         "loop_exhausted",
+        // Task 13, review finding 3: same post-terminal lease refusal as the test above.
+        "lease_lost",
+      ]);
+      await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
+      expect(await readEventDetails(runDir, "lease_lost")).toEqual([
+        `expected ${buildProcessInstanceId()} at epoch 1, observed pid:other-controller at epoch 2`,
       ]);
     } finally {
       vi.doUnmock("../../src/persistence/fileStore.js");

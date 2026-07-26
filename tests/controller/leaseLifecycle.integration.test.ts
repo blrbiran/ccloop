@@ -8,6 +8,7 @@ import { runLoop, runLoopFromState, createLeaseLossSignal } from "../../src/cont
 import { resumeLoop } from "../../src/controller/resumeLoop.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import { LEASE_AFFIRM_THROTTLE_MS, LEASE_TTL_MS, RunLeaseLostError } from "../../src/ownership/lease.js";
+import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
 import type { LeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import type { RunState } from "../../src/state/types.js";
@@ -336,6 +337,17 @@ describe("lease heartbeat lifecycle", () => {
 
     expect(executeCalls).toBe(0);
     expect(finalState.stopReason).toBe("lease_lost");
+
+    // Review finding 1. The guard is what concluded supersession here, and it sets `superseded`,
+    // which makes runAffirm return early forever — so if the guard does not append this event,
+    // nothing ever will, and a run that stopped for a lease reason names nobody. End-to-end
+    // through the real runLoop and the real heartbeat, on a real events.jsonl: the detail has to
+    // answer "who took this run over", which needs BOTH sides of the comparison.
+    const leaseLostEvents = (await readEvents(runDir)).filter((event) => event.type === "lease_lost");
+    expect(leaseLostEvents).toHaveLength(1); // exactly once, not once per mechanism
+    expect(leaseLostEvents[0].detail).toBe(
+      `expected ${buildProcessInstanceId()} at epoch 1, observed pid:999:9000 at epoch 99`,
+    );
   });
 
   // §8.1: abandoned in place — no further side effect of the attempt, INCLUDING its
@@ -382,6 +394,15 @@ describe("lease heartbeat lifecycle", () => {
     expect(finalState.stopReason).toBe("lease_unverifiable");
     expect(await readFile(join(runDir, "owner-record.json"), "utf8")).toBe("{ not json");
     expect(await readEventTypes(runDir)).not.toContain("lease_lost");
+
+    // Review finding 2, and the reason the event above is a DISTINCT type: the refusal is
+    // recorded — a refusal that leaves no trace reads as a run that merely stopped — but it
+    // claims no supersession and names no observed owner, because the record could not be read.
+    // It still names the process that refused, and why.
+    const unverifiableEvents = (await readEvents(runDir)).filter((event) => event.type === "lease_unverifiable");
+    expect(unverifiableEvents).toHaveLength(1);
+    expect(unverifiableEvents[0].detail).toContain(`expected ${buildProcessInstanceId()} at epoch 1`);
+    expect(unverifiableEvents[0].detail).toContain("owner record unreadable after 3 attempts");
   });
 
   // Not in the brief; found while enumerating the call sites. Several guarded cleanup sites
