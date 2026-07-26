@@ -222,13 +222,20 @@ describe("startLeaseHeartbeat", () => {
 });
 
 describe("assertHeld", () => {
-  // §8.1, written to fail against an implementation that reuses the affirm throttle: two
-  // side effects less than LEASE_AFFIRM_THROTTLE_MS apart must EACH read the record.
+  // §8.1, written to fail against an implementation that reuses the affirm throttle. A real
+  // process reaches assertHeld with lastAffirmAtMs already recently set by the periodic
+  // heartbeat — so this primes it with a genuine affirmNow() first, rather than leaving it at
+  // its never-affirmed -Infinity default. An implementation that skips the read whenever
+  // `now() - lastAffirmAtMs < LEASE_AFFIRM_THROTTLE_MS` would see a fresh lastAffirmAtMs here
+  // and short-circuit on the second call, missing the rotation; only a real per-call read
+  // catches it.
   it("is never throttled: a record rotated between two close side effects blocks the second", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse("2026-07-26T10:00:00.000Z"));
     const runDir = await seed(record());
     const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
+
+    await heartbeat.affirmNow(); // primes lastAffirmAtMs with a recent, real affirm
 
     await expect(heartbeat.assertHeld()).resolves.toBeUndefined();
 
