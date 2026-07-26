@@ -12,6 +12,7 @@ import {
 import type { OwnerRecord, OwnerTransferRecord, ReconciliationRecord, RuntimeAdapter } from "../runtime/types.js";
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { RunState, RunStatus } from "../state/types.js";
+import { checkRunLease } from "./leaseGate.js";
 import { cleanupAttemptWorkspaceBestEffort, runLoopFromState } from "./runLoop.js";
 
 export class ResumeNotEligibleError extends Error {
@@ -82,6 +83,21 @@ async function cleanupResidualWorktrees(repoPath: string, runDir: string): Promi
 
 export async function resumeLoop(runDir: string, adapter: RuntimeAdapter): Promise<RunState> {
   await appendEvent(runDir, { type: "resume_requested", at: new Date().toISOString(), detail: runDir });
+
+  // §7: the lease check runs BEFORE the eligibility gate and before the owner-record
+  // claim, so a live lease refuses earlier and more cheaply than any eligibility
+  // reasoning. It is an ADDITIONAL refusal layered on top of — never in place of — the
+  // eligibility gate and the CAS precondition below.
+  try {
+    await checkRunLease(runDir, buildProcessInstanceId());
+  } catch (error) {
+    await appendEvent(runDir, {
+      type: "resume_denied",
+      at: new Date().toISOString(),
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 
   let ownerRecord;
   let ownerTransfer;

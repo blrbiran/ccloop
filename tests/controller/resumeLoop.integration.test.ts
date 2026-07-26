@@ -8,6 +8,7 @@ import { resumeLoop, ResumeNotEligibleError } from "../../src/controller/resumeL
 import { createAttemptWorkspace } from "../../src/workspace/worktreeManager.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
+import { LEASE_TTL_MS, RunLeaseHeldError } from "../../src/ownership/lease.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 
 const execFileAsync = promisify(execFile);
@@ -156,5 +157,110 @@ describe("resumeLoop", () => {
 
     expect(finalState.status).toBe("succeeded");
     await expect(access(worktreePath)).rejects.toThrow(); // cleanup removed the residual worktree
+  });
+
+  async function setLease(runDir: string, leaseAffirmedAt: string | null, holder?: string) {
+    const path = join(runDir, "owner-record.json");
+    const owner = JSON.parse(await readFile(path, "utf8"));
+    owner.leaseAffirmedAt = leaseAffirmedAt;
+    if (holder !== undefined) {
+      owner.currentProcessInstanceId = holder;
+    }
+    await writeFile(path, JSON.stringify(owner, null, 2));
+  }
+
+  // §7.1: a refusal introduces no new state mutation. Events are the stated exception —
+  // and the ONLY one. This is what "the lease adds refusals, never authority" buys.
+  it("refuses a resume against a live lease and mutates nothing but events", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+    await setLease(runDir, new Date().toISOString(), "pid:999:9000");
+
+    const ownerBefore = await readFile(join(runDir, "owner-record.json"), "utf8");
+    const stateBefore = await readFile(join(runDir, "loop-state.json"), "utf8");
+
+    await expect(resumeLoop(runDir, new ScriptedAdapter([successFrame()]))).rejects.toBeInstanceOf(
+      RunLeaseHeldError,
+    );
+
+    expect(await readFile(join(runDir, "owner-record.json"), "utf8")).toBe(ownerBefore);
+    expect(await readFile(join(runDir, "loop-state.json"), "utf8")).toBe(stateBefore);
+    expect(await readEventTypes(runDir)).toEqual(["resume_requested", "resume_denied"]);
+    // No interrupted-transfer recovery may run on a refusal path (§7.1).
+    await expect(access(join(runDir, "owner-transfer.json"))).resolves.toBeUndefined();
+  });
+
+  // §5.0's headline regression: with a single timestamp, the record an owner transfer just
+  // wrote is seconds old and names the new owner, so a lease gate keyed on lastAffirmedAt
+  // would refuse the very resume the transfer authorized, for a full TTL. Asserted WELL
+  // INSIDE the TTL — the expiry test below only covers the aged-out case.
+  it("does not refuse a resume immediately after an owner transfer", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+    await setLease(runDir, null, "pid:100:1000"); // freshly transferred: owned, not running
+
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
+    owner.lastAffirmedAt = new Date().toISOString(); // seconds old, as a transfer leaves it
+    await writeFile(join(runDir, "owner-record.json"), JSON.stringify(owner, null, 2));
+
+    const finalState = await resumeLoop(runDir, new ScriptedAdapter([successFrame()]));
+
+    expect(finalState.status).toBe("succeeded");
+    expect(await readEventTypes(runDir)).not.toContain("lease_expired_observed");
+  });
+
+  // §7: expiry refuses nothing. An eligible resume still succeeds; the observation is
+  // recorded either way.
+  it("lets an eligible resume through an expired lease and records the observation", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+    await setLease(runDir, new Date(Date.now() - LEASE_TTL_MS - 1_000).toISOString(), "pid:999:9000");
+
+    const finalState = await resumeLoop(runDir, new ScriptedAdapter([successFrame()]));
+
+    expect(finalState.status).toBe("succeeded");
+    expect(await readEventTypes(runDir)).toContain("lease_expired_observed");
+  });
+
+  // §7: and expiry authorizes nothing. An INELIGIBLE resume is still refused, and refused
+  // with the eligibility reason — never a lease reason.
+  it("refuses an ineligible resume with the eligibility reason even when the lease has expired", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+    await setLease(runDir, new Date(Date.now() - LEASE_TTL_MS - 1_000).toISOString(), "pid:999:9000");
+
+    const state = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8"));
+    state.status = "succeeded";
+    await writeFile(join(runDir, "loop-state.json"), JSON.stringify(state, null, 2));
+
+    await expect(resumeLoop(runDir, new ScriptedAdapter([successFrame()]))).rejects.toBeInstanceOf(
+      ResumeNotEligibleError,
+    );
+    expect(await readEventTypes(runDir)).toContain("lease_expired_observed");
+  });
+
+  // §10 / requirement 18: a killed run never releases. Its lease refuses until the TTL
+  // elapses, and after that the gate takes no position and the ordinary rules decide.
+  it("refuses while a killed run's lease is still fresh and stops refusing after the TTL", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    await setLease(runDir, new Date(Date.now() - LEASE_TTL_MS + 5_000).toISOString(), "pid:999:9000");
+    await expect(resumeLoop(runDir, new ScriptedAdapter([successFrame()]))).rejects.toBeInstanceOf(
+      RunLeaseHeldError,
+    );
+
+    await setLease(runDir, new Date(Date.now() - LEASE_TTL_MS - 1).toISOString(), "pid:999:9000");
+    expect((await resumeLoop(runDir, new ScriptedAdapter([successFrame()]))).status).toBe("succeeded");
   });
 });
