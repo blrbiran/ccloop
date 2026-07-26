@@ -196,7 +196,17 @@ describe("resumeLoop", () => {
   // wrote is seconds old and names the new owner, so a lease gate keyed on lastAffirmedAt
   // would refuse the very resume the transfer authorized, for a full TTL. Asserted WELL
   // INSIDE the TTL — the expiry test below only covers the aged-out case.
-  it("does not refuse a resume immediately after an owner transfer", async () => {
+  //
+  // Split into a matched pair with the test below it, same lease age, opposite field. On
+  // its own this half is vacuous: `leaseAffirmedAt` is null here, so `checkRunLease` takes
+  // its `no_lease` branch, which has zero observable side effects (no event, no state
+  // change) — the assertions below would pass identically whether the gate ran or was
+  // never called. The pairing is what makes it meaningful: the test below sets the SAME
+  // seconds-old age on `leaseAffirmedAt` instead of `lastAffirmedAt`, with a different
+  // holder, and must be refused. Same age, one field vs. the other, opposite outcomes —
+  // that fails if the gate isn't wired (this half's twin would wrongly succeed) and fails
+  // if the gate reads the wrong field (this half would be wrongly refused).
+  it("does not refuse a resume immediately after an owner transfer (lastAffirmedAt is not the lease field)", async () => {
     const repoPath = await createRepo();
     const contract = createContract(repoPath);
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
@@ -211,6 +221,24 @@ describe("resumeLoop", () => {
 
     expect(finalState.status).toBe("succeeded");
     expect(await readEventTypes(runDir)).not.toContain("lease_expired_observed");
+  });
+
+  // Second half of the pair above: same seconds-old age, but on `leaseAffirmedAt` — the
+  // field the gate actually reads — held by a different process. A fresh mkdtemp run dir
+  // is used rather than re-seeding the run dir the first half just consumed, because that
+  // dir is no longer in the eligible/interrupted state resumeLoop requires (the first half
+  // already advanced it to "succeeded" and claimed ownership); a clean seedEligibleRun into
+  // a new dir is simpler than unwinding that than re-deriving an eligible state from it.
+  it("refuses a resume when leaseAffirmedAt is seconds old and held by another process", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+    await setLease(runDir, new Date().toISOString(), "pid:999:9000"); // same age, wrong field
+
+    await expect(resumeLoop(runDir, new ScriptedAdapter([successFrame()]))).rejects.toBeInstanceOf(
+      RunLeaseHeldError,
+    );
   });
 
   // §7: expiry refuses nothing. An eligible resume still succeeds; the observation is
