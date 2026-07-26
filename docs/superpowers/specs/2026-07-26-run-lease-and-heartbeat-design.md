@@ -1,6 +1,7 @@
 # Run Lease and Heartbeat Design
 
-> Status: proposed on 2026-07-26
+> Status: proposed on 2026-07-26; implemented and amended on 2026-07-26
+> Amendments: four, all found by implementing this document and marked inline as **Amended 2026-07-26 (a)–(d)** in §4.4, §6, §8.1 and §8.1. Each corrects a defect in *this document*, not in the implementation — the implementer followed the text and the text was wrong. (a) a running owner can transfer ownership to itself, which is not supersession; (b) §8.1's outcome table assumes every re-check fires before a terminal decision is persisted; (c) §8.1's side-effect list omits `persistBoundaryAnalysis`; (d) §6's redundancy argument misdescribes where loss detection comes from.
 > Scope: make owner freshness mechanically measurable, and give a live owner exclusive execution rights over its run — without granting any new takeover authority.
 > Parent design: [`2026-07-22-ownership-and-reconciliation-boundaries-design.md`](2026-07-22-ownership-and-reconciliation-boundaries-design.md) (§5.5 freshness anchor, §7.1 owner-loss condition 1)
 > Sibling design: [`2026-07-25-resume-adopt-continuation-design.md`](2026-07-25-resume-adopt-continuation-design.md)
@@ -66,6 +67,12 @@ The lease lives in the existing owner record. No second lease file is introduced
 
 The only legal way for the owner record to change under a running owner is a formal reconciliation transfer, which supersedes that owner. Since a superseded epoch loses execution authority (§6.3), a run that discovers it can no longer affirm its own lease must stop rather than continue as a second executor.
 
+**Amended 2026-07-26 (a): the transfer may be performed by the running owner itself, and that is not supersession.** The sentence above reads as though every transfer hands the run to someone else. It does not. `persistBoundaryAnalysis` transfers the epoch to `buildProcessInstanceId()` — *this* process — when reconciliation concludes the previous epoch's owner was lost. The record then changes under a running owner who is still the owner: the epoch rotates, but `currentProcessInstanceId` still names this process.
+
+A heartbeat whose expected record predates that rotation will nonetheless conclude supersession, because §6.1's criterion compares epochs. That conclusion is wrong, and it is not harmless: it writes a `lease_lost` event whose observed and expected process instances are **identical**, into the evidence stream L2–L5 are meant to consume, and it abandons the attempt's worktree under §8.1.
+
+The rule is therefore: **a process that successfully performs its own owner-epoch transfer adopts the record it just wrote as its new expected record.** Adoption is not a weakening of §6.1 — the transfer's own CAS has already proven this process held the prior record, so adoption removes a *spurious* refusal rather than excusing a real one. Adoption must not clear a supersession that was already concluded; if this process has already been superseded, the transfer could not have succeeded, and a late adoption must not resurrect a stopped run.
+
 ## 5. Data model
 
 No new persisted artifact, but the owner record gains one field. Three fields matter:
@@ -115,6 +122,10 @@ Two independent paths refresh the same field through the same code path, because
 2. **Event-driven refresh** — the same affirm call at attempt boundaries and adapter frame boundaries. It survives environments where the timer is unreliable or the timer-carrying work is killed, and it additionally evidences that the loop is making progress rather than merely being alive.
 
 Both call one `affirmNow()`, throttled by `LEASE_AFFIRM_THROTTLE_MS` so the two paths cannot thrash the owner-transfer lock.
+
+**Amended 2026-07-26 (d): what the two paths actually give you, and where loss detection really comes from.** Path 2's stated value above — "survives environments where the timer is unreliable" — is true for *keeping the lease fresh*, and the throttle does not defeat it: `LEASE_AFFIRM_THROTTLE_MS` is a floor on a single shared last-affirm timestamp, not a suppression of one path. Events arriving every 9 s against a dead timer still affirm roughly every 18 s, and either path working alone keeps freshness bounded by about `LEASE_HEARTBEAT_INTERVAL_MS + LEASE_AFFIRM_THROTTLE_MS` — well inside `LEASE_TTL_MS`. Neither path can be starved for longer than one throttle window. An implementer who reads the throttle as starving the event path will go looking for a bug that is not there.
+
+Detecting *loss* is a different question, and the honest answer is that neither writer is the primary mechanism. `assertHeld` (§8.1) is: it is un-throttled by construction, takes no lock, reads the persisted record on every call, and runs before every side effect. On any run that is doing work it therefore observes a rotation sooner than either affirm path, and its detection latency is bounded by "one side effect" rather than by any timer. The redundancy that matters is **two writers for freshness, plus one un-throttled reader for detection** — and the reader is the part that makes detection independent of timer reliability.
 
 The affirm write is a compare-and-swap against the persisted owner record, performed under the existing `acquireOwnerTransferLock` critical section and reusing the existing interrupted-transfer recovery path. Refreshing advances `leaseAffirmedAt` and, so that the ownership design's named anchor stops being dead (§1), `lastAffirmedAt` alongside it. It never rotates an epoch, never changes `ownerStatus`, and never touches `supersededByEpoch`. The heartbeat is the **only** writer of `leaseAffirmedAt` to a non-null value; every other writer of the record sets it to `null` (§5.0).
 
@@ -189,6 +200,8 @@ Stopping happens at a phase boundary rather than mid-attempt so the run never te
 
 A phase boundary can be minutes wide, so the lease is additionally re-checked immediately before each side-effecting step — launching a Claude call, writing attempt artifacts, and mutating or removing a worktree. This narrows the window in which a superseded owner can still act from one phase to one side effect.
 
+**Amended 2026-07-26 (c): that list is incomplete — `persistBoundaryAnalysis` belongs on it.** It is the largest side effect in the loop and the original list simply missed it: it reads through `readOwnerRecord` (which runs `recoverInterruptedOwnerTransfer`, itself a write), writes `boundary-analysis.json` and `reconciliation-record.json`, and can perform a full owner-epoch transfer. Layer A is protected without a guard, because `writeOwnerTransferArtifacts` is a CAS that a genuinely superseded process cannot pass — but `writeBoundaryArtifacts` has no such precondition, so an unguarded superseded process still writes reconciliation artifacts into a run it no longer owns. Guarding it is the correct reading of this section; L1 shipped it unguarded because this list did not name it.
+
 DoWhiz applies the same shape to its `thread_epoch`, re-checking it before each outbound action rather than only at claim time (`reference/DoWhiz/DoWhiz_service/scheduler_module/src/scheduler/actions.rs:797`, `:857`).
 
 Its default must be inverted. `thread_epoch_matches` fails **open** in two places — a task without an epoch proceeds, and an unreadable state file proceeds (`actions.rs:402-412`). ccloop's re-check fails **closed**: if the owner record cannot be read, or cannot be confirmed to still name this process at the current epoch, the side effect does not happen. Borrow the shape, invert the default.
@@ -214,6 +227,18 @@ Row one is the same criterion the heartbeat applies in §6.1 — a clean read sh
 `assertHeld` reads the persisted record **every time it is called**. It is not subject to `LEASE_AFFIRM_THROTTLE_MS`, and it caches nothing — a throttled or cached re-check would silently degrade "fail closed before every side effect" into "fail closed at most once per throttle window", which is not the same guarantee. The throttle exists to keep the two *writers* of §6 from thrashing the lock; `assertHeld` is a raw read (§7.1) and takes no lock, so nothing is saved by skipping it.
 
 Row two is what "fail closed" buys: an unverifiable lease stops the run rather than letting it act unverified, and it deliberately does **not** claim supersession — hence the separate reason. No owner record is written on either abandoning path.
+
+**Amended 2026-07-26 (b): the table above assumes every re-check fires before a terminal decision is persisted. Some fire after it.** Cleanup runs on the terminal paths too, so a guard can refuse *after* `loop-state.json` already records `succeeded`, `exhausted` or `failed`. The table has no row for that, and its "stop reason" column cannot be honored there: rewriting a persisted terminal state is itself a write to a run this process may no longer own, and `succeeded → cancelled` is not a legal transition in the first place.
+
+The rule for the post-terminal window is therefore:
+
+- **the terminal status and its stop reason stand.** They were durably recorded while this process still held the run, and they are not retracted. A run that genuinely succeeded did succeed;
+- **the remaining side effect is still skipped**, exactly as the table requires — in practice this means the attempt's worktree is left in place;
+- **the observation is still recorded.** This is the part the table's stop-reason column was standing in for: a `lease_lost` event (or `lease_unverifiable`, per row two) is appended so the refusal is visible even though no state changed.
+
+The consequence to state plainly, because it is surprising: a run whose lease was lost can still report `succeeded`, and a caller reading only the exit status will not see the loss. The event is the record. A future layer that needs to distinguish "succeeded cleanly" from "succeeded, then discovered it had been superseded during cleanup" must read the event log, not the terminal state.
+
+Note that no *heartbeat*-concluded supersession reaches this window — the heartbeat stops the run at a phase boundary, which is always before a terminal decision. This case exists only because `assertHeld` runs at points the phase-boundary checks cannot cover.
 
 ### 8.2 What this does not protect
 
