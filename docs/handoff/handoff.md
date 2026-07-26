@@ -5,7 +5,7 @@
 
 ## 一句话现状
 
-前沿五层里的 **L1（run lease + heartbeat）已经全部做完**：13 个任务、每个任务独立评审、4 个任务共 5 轮修复、最终整支评审判定 `Ready to merge: Yes`，已 **fast-forward merge 进本地 `main`**。测试 274 → **356** 全绿，typecheck / build 干净。**尚未 push**（按惯例留给人）。下一步是 L2（registry / queue），或先清掉下面两个 tracked follow-up。
+前沿五层里的 **L1（run lease + heartbeat）已经全部做完**：13 个任务、每个任务独立评审、4 个任务共 5 轮修复、最终整支评审判定 `Ready to merge: Yes`，已 **fast-forward merge 进 `main`**。测试 274 → **356** 全绿，typecheck / build 干净。下一步是 L2（registry / queue），或先清掉下面两个 tracked follow-up。
 
 ## 如何定位当前状态（不要照抄 commit hash）
 
@@ -49,7 +49,7 @@ git -C /Users/biran/code/skills/loop/ccloop worktree list                     # 
 
 ## 收尾事项 / 未擅自执行
 
-1. **push** —— `main` 领先 `origin/main` 约 25 笔。是否 push 由人决定。
+1. **push** —— L1 的实现提交已进 `origin/main`；本文这笔（及之后的）可能仍在本地。用上面第三条命令看实际待 push 的是哪几笔，不要假设数量。push 由人决定。
 2. **worktree 尚未清理** —— `.claude/worktrees/l1-run-lease-heartbeat`（分支 `worktree-l1-run-lease-heartbeat`，处于 locked）。已 FF merge，内容与 main 相同，可以安全移除，但**没有人下过指令，所以没动**。
 3. **`.superpowers/sdd/` 是跨会话共用的扁平目录**。本轮只提交了自己那个子目录里的 ledger 与报告（`git add -f`），并**刻意跳过** 21 个 `review-*.diff`（就是 `git diff` 输出，可重建）和 briefs（可从 plan 抽取）。同级目录属于更早的会话，仍被 ignore，**不要整删**。
 
