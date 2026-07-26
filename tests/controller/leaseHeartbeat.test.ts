@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -169,6 +169,38 @@ describe("startLeaseHeartbeat", () => {
     expect(lost).toHaveLength(1);
     const raw = await readFile(join(runDir, "events.jsonl"), "utf8");
     expect(raw).toContain("lease_lost");
+    await heartbeat.stop();
+  });
+
+  // Review finding (Task 9): concludeLeaseLost's appendEvent call was unguarded, so a real
+  // I/O failure on the lease_lost event write would reject out of runAffirm's catch block —
+  // an unhandled rejection on the timer path, and a thrown promise on a direct affirmNow()
+  // call, either way violating "never throws into the caller". onLeaseLost must still fire
+  // even though the event log write failed.
+  it("never throws into the caller when the lease-lost event append fails", async () => {
+    const runDir = await seed(record());
+    const lost: unknown[] = [];
+    const heartbeat = startLeaseHeartbeat({
+      runDir,
+      ownerRecord: record(),
+      onLeaseLost: (error) => lost.push(error),
+    });
+
+    // Break the event log so concludeLeaseLost's appendEvent call fails: appendFile against a
+    // directory rejects with EISDIR.
+    await rm(join(runDir, "events.jsonl"));
+    await mkdir(join(runDir, "events.jsonl"));
+
+    // A genuine rotation: the CAS fails, the re-read confirms supersession, and
+    // concludeLeaseLost attempts to append "lease_lost" against the now-broken event log.
+    await writeFile(
+      join(runDir, "owner-record.json"),
+      JSON.stringify(record({ currentOwnerEpoch: 3, currentProcessInstanceId: "pid:999:9000" }), null, 2),
+    );
+
+    await expect(heartbeat.affirmNow()).resolves.toBeUndefined();
+    expect(lost).toHaveLength(1); // the stop signal must still fire despite the failed event write
+
     await heartbeat.stop();
   });
 

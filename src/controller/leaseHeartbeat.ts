@@ -44,16 +44,34 @@ export function startLeaseHeartbeat(options: {
 
   const concludeLeaseLost = async (persisted: OwnerRecord): Promise<void> => {
     superseded = true;
-    await appendEvent(options.runDir, {
-      type: "lease_lost",
-      at: new Date(now()).toISOString(),
-      detail: `expected ${expected.currentProcessInstanceId} at epoch ${expected.currentOwnerEpoch}, observed ${persisted.currentProcessInstanceId} at epoch ${persisted.currentOwnerEpoch}`,
-    });
-    options.onLeaseLost(
-      new RunLeaseLostError(
-        `run lease lost: owner record now names ${persisted.currentProcessInstanceId} at epoch ${persisted.currentOwnerEpoch}`,
-      ),
-    );
+
+    // appendEvent is a raw appendFile with no internal guard, so it can reject on real I/O
+    // failure. Losing the event log must not cost us the stop signal below, so it is swallowed
+    // here rather than left to propagate out of runAffirm's catch block unguarded (which the
+    // timer path fires via a bare `void affirmNow()`, turning any throw here into an unhandled
+    // rejection instead of the swallow-and-retry the spec requires).
+    try {
+      await appendEvent(options.runDir, {
+        type: "lease_lost",
+        at: new Date(now()).toISOString(),
+        detail: `expected ${expected.currentProcessInstanceId} at epoch ${expected.currentOwnerEpoch}, observed ${persisted.currentProcessInstanceId} at epoch ${persisted.currentOwnerEpoch}`,
+      });
+    } catch {
+      // Swallowed: the stop signal below must still fire even without an event record of it.
+    }
+
+    // onLeaseLost is caller-supplied. The same "never throws into the caller" contract that
+    // covers this module's own I/O has to cover a misbehaving callback too, so it is guarded
+    // deliberately rather than left to accidentally propagate.
+    try {
+      options.onLeaseLost(
+        new RunLeaseLostError(
+          `run lease lost: owner record now names ${persisted.currentProcessInstanceId} at epoch ${persisted.currentOwnerEpoch}`,
+        ),
+      );
+    } catch {
+      // Swallowed: a broken caller callback must not turn into an unhandled rejection either.
+    }
   };
 
   const runAffirm = async (): Promise<void> => {
@@ -65,15 +83,9 @@ export function startLeaseHeartbeat(options: {
       return;
     }
 
-    // Captured before the CAS await, not after: the write lands at this instant, and
-    // throttling has to measure from it. Reading now() again post-await would instead read
-    // whatever the clock has become by the time the (arbitrarily delayed) I/O settles, which
-    // can wrongly push the throttle window forward and stall a legitimate next affirm.
-    const attemptAtMs = now();
-
     try {
-      expected = await affirmOwnerLease(options.runDir, expected, new Date(attemptAtMs).toISOString());
-      lastAffirmAtMs = attemptAtMs;
+      expected = await affirmOwnerLease(options.runDir, expected, new Date(now()).toISOString());
+      lastAffirmAtMs = now();
     } catch (error) {
       // §6: a failure that is not a precondition failure — lock contention, transient I/O —
       // is swallowed and retried on the next tick. It must never throw into the control loop.
