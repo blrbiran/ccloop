@@ -150,6 +150,7 @@ export function applyOwnerEpochTransfer(
       lastAffirmedAt: at,
       ownerStatus: "current",
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     },
     transferRecord: {
       priorOwnerEpoch: ownerRecord.currentOwnerEpoch,

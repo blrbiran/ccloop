@@ -110,6 +110,7 @@ export async function resumeLoop(runDir: string, adapter: RuntimeAdapter): Promi
     ...ownerRecord,
     currentProcessInstanceId: `pid:${process.pid}`,
     lastAffirmedAt: new Date().toISOString(),
+    leaseAffirmedAt: null,
   };
   try {
     await claimOwnerRecordWithPrecondition(runDir, ownerRecord, nextOwnerRecord);

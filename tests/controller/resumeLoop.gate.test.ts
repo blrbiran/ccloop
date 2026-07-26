@@ -6,7 +6,7 @@ function baseInput(): ResumeGateInput {
     ownerRecord: {
       runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 2,
       currentProcessInstanceId: "pid:111", lastAffirmedAt: "2026-07-25T00:00:00.000Z",
-      ownerStatus: "current", supersededByEpoch: null,
+      ownerStatus: "current", supersededByEpoch: null, leaseAffirmedAt: null,
     },
     ownerTransfer: {
       priorOwnerEpoch: 1, newOwnerEpoch: 2, priorProcessInstanceId: "pid:100",

@@ -55,6 +55,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current",
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     });
 
     const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
@@ -103,6 +104,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current",
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     });
 
     const transfer = applyOwnerEpochTransfer(
@@ -114,6 +116,7 @@ describe("fileStore", () => {
         lastAffirmedAt: "2026-07-22T10:00:00.000Z",
         ownerStatus: "current",
         supersededByEpoch: null,
+        leaseAffirmedAt: null,
       },
       "pid:67890",
       "2026-07-22T10:05:00.000Z",
@@ -130,6 +133,7 @@ describe("fileStore", () => {
         lastAffirmedAt: "2026-07-22T10:00:00.000Z",
         ownerStatus: "current",
         supersededByEpoch: null,
+        leaseAffirmedAt: null,
       },
       transfer.nextOwnerRecord,
       transfer.transferRecord,
@@ -162,6 +166,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
 
     await writeOwnerRecord(runDir, initialOwnerRecord);
@@ -205,6 +210,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const transfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -256,6 +262,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const transfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -294,6 +301,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const changedOwnerRecord = {
       ...initialOwnerRecord,
@@ -326,6 +334,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const transfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -360,6 +369,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const transfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -386,6 +396,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const transfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -420,6 +431,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
 
     vi.resetModules();
@@ -478,6 +490,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
 
     vi.resetModules();
@@ -534,6 +547,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const transfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -573,6 +587,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const transfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -611,6 +626,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const firstTransfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -659,6 +675,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const transfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -686,6 +703,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
 
     vi.resetModules();
@@ -746,6 +764,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const transfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -780,6 +799,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const transfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -806,6 +826,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const changedOwnerRecord = {
       ...initialOwnerRecord,
@@ -837,6 +858,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
 
     vi.resetModules();
@@ -898,6 +920,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const firstTransfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -946,6 +969,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-22T10:00:00.000Z",
       ownerStatus: "current" as const,
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     };
     const transfer = applyOwnerEpochTransfer(
       initialOwnerRecord,
@@ -1065,6 +1089,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-23T00:00:01.000Z",
       ownerStatus: "current",
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     });
     await writeOwnerTransferRecord(runDir, {
       priorOwnerEpoch: 1,
@@ -1152,6 +1177,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-23T00:00:01.000Z",
       ownerStatus: "current",
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     });
     await writeOwnerTransferRecord(runDir, {
       priorOwnerEpoch: 1,
@@ -1225,6 +1251,7 @@ describe("fileStore", () => {
       lastAffirmedAt: "2026-07-23T00:00:01.000Z",
       ownerStatus: "current",
       supersededByEpoch: null,
+      leaseAffirmedAt: null,
     });
     await writeOwnerTransferRecord(runDir, {
       priorOwnerEpoch: 1,
@@ -1317,7 +1344,7 @@ function ownerRecord(overrides: Partial<OwnerRecord> = {}): OwnerRecord {
   return {
     runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 2,
     currentProcessInstanceId: "pid:111", lastAffirmedAt: "2026-07-25T00:00:00.000Z",
-    ownerStatus: "current", supersededByEpoch: null, ...overrides,
+    ownerStatus: "current", supersededByEpoch: null, leaseAffirmedAt: null, ...overrides,
   };
 }
 

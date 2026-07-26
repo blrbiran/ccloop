@@ -575,6 +575,7 @@ function buildInitialOwnerRecord(contract: LoopContract, state: RunState): Owner
     lastAffirmedAt: state.lastTransitionAt,
     ownerStatus: "current",
     supersededByEpoch: null,
+    leaseAffirmedAt: null,
   };
 }
 

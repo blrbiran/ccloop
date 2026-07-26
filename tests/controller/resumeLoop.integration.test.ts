@@ -96,6 +96,9 @@ describe("resumeLoop", () => {
     const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
     expect(owner.currentProcessInstanceId).toBe(`pid:${process.pid}`); // claimed
     expect(owner.currentOwnerEpoch).toBe(2); // epoch unchanged
+    // §5.0/§16: a resume CLAIM is not a heartbeat. It says "I own this", not "I am running
+    // it right now" — only the heartbeat may write a non-null lease.
+    expect(owner.leaseAffirmedAt).toBeNull();
     expect(await readEventTypes(runDir)).toContain("resume_adopted");
   });
 

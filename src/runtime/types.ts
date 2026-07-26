@@ -87,6 +87,10 @@ export type OwnerRecord = {
   lastAffirmedAt: string;
   ownerStatus: OwnerStatus;
   supersededByEpoch: number | null;
+  // §5.0: written non-null ONLY by the lease heartbeat. `null` means "owned, but no
+  // process is running it". Records written before this design omit the field; readers
+  // treat absent as null.
+  leaseAffirmedAt: string | null;
 };
 
 export type OwnerTransferRecord = {
