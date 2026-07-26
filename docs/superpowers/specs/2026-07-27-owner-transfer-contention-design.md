@@ -40,13 +40,14 @@ After this change the two classes have exactly one meaning each:
 | `OwnerTransferLockBusyError` | another writer holds the owner-transfer lock, and it is not recoverable as stale | `fileStore.ts:499`, `:504` |
 | `OwnerTransferPreconditionError` | the persisted owner record is not the record the caller expected (CAS mismatch) | `fileStore.ts:572`, `:603`, `:640` |
 
-Sibling rather than subclass is deliberate. A subclass would keep every existing `instanceof OwnerTransferPreconditionError` branch matching, so each of the three consumers would silently retain behaviour that was only ever correct for a CAS mismatch. As siblings, each consumer's behaviour changes visibly and must be re-decided:
+Sibling rather than subclass is deliberate. A subclass would keep every existing `instanceof OwnerTransferPreconditionError` branch matching, so each consumer would silently retain behaviour that was only ever correct for a CAS mismatch. As siblings, each consumer's behaviour changes visibly and must be re-decided. There are four call paths, not the two the follow-up note named:
 
 | Consumer | Today | After |
 |---|---|---|
 | `leaseHeartbeat.ts:151` (`runAffirm`) | non-precondition errors `return`, swallowed and retried next tick | lock-busy falls into exactly that path. This is what makes L1 §6's "swallow lock contention" implementable: contention can no longer reach the supersession decision. |
 | `runLoop.ts:711` (`persistBoundaryAnalysis`) | non-precondition errors rethrow | lock-busy would now propagate, so §5.2 must handle it explicitly. The compiler cannot force this; test T2 does. |
-| `resumeLoop.ts:136` | catches everything, raises `ResumeNotEligibleError` | unchanged and deliberately so — resume stays fail-closed. Only the `resume_denied` event detail becomes more precise. |
+| `resumeLoop.ts:136` | catches everything, raises `ResumeNotEligibleError` | control flow unchanged and deliberately so — resume stays fail-closed. But its `resume_denied` detail is the hardcoded string `claim CAS failed: ...` (`resumeLoop.ts:137`), which becomes a **false statement** for a busy lock: no CAS was evaluated. The detail must be derived from which failure occurred. |
+| `leaseHeartbeat.ts:208` (`stop` → `releaseOwnerLease`) | bare `catch {}`, swallows everything | unchanged, and correct as-is: a best-effort release that cannot get the lock simply lets the lease age out. Listed so it is not "fixed" into something that distinguishes cases it has no use for. |
 
 `fileStore` gains no retry, backoff, or policy of any kind. It reports which precondition failed; the controller decides what that is worth.
 
@@ -58,7 +59,9 @@ Sibling rather than subclass is deliberate. A subclass would keep every existing
 runExclusive: <T>(fn: () => Promise<T>) => Promise<T>
 ```
 
-It chains `fn` onto the existing `queue` (`leaseHeartbeat.ts:41`) — the same serialization that already exists so that the module's two writers cannot race each other for the owner-transfer lock — and resolves or rejects with `fn`'s result. The queue must survive a rejected `fn`: a thrown error propagates to the caller *and* leaves the chain usable, following the existing `queue.then(runAffirm, runAffirm)` pattern (`:178`).
+It chains `fn` onto the existing `queue` (`leaseHeartbeat.ts:41`) — the same serialization that already exists so that the module's two writers cannot race each other for the owner-transfer lock — and resolves or rejects with `fn`'s result.
+
+**Do not copy the shape of `affirmNow` here.** `queue = queue.then(runAffirm, runAffirm); return queue` (`:177`–`:180`) is safe only because `runAffirm` never rejects. `fn` can. Storing a rejecting promise back into `queue` poisons the chain: every later affirm inherits the rejection, and `stop`'s `await queue.catch(() => {})` (`:200`) would be the only thing still working. The stored chain and the returned promise must therefore be **different** promises — the stored one absorbs the rejection, the returned one carries it to the caller. Test requirement 10 exists to kill the poisoned-chain version.
 
 `persistBoundaryAnalysis` wraps exactly one span in it: **read the owner record → evaluate ownership → CAS transfer → `adopt`** (`runLoop.ts:683`–`:717`). Not the boundary evaluation before it, and not `writeBoundaryArtifacts` after it — there is no reason to make the heartbeat wait behind artifact writes.
 
@@ -80,6 +83,9 @@ Constraints on the implementation:
 
 1. entry guard: `await heartbeat.assertHeld()` — before anything, including `readOwnerRecord`;
 2. evaluate the run boundary (pure, unchanged); return early if healthy;
+
+   The guard goes **before** this early return, not after it, even though the healthy path writes nothing. Moving it behind the early return looks like a free optimization and is not: a superseded process would then evaluate a boundary and return normally, letting the caller proceed to its next side effect as though the lease still held. The guard's job is to stop the process, not to protect one write. Both call sites are rare failure paths (`runLoop.ts:961`, `:993`), so the extra read costs nothing worth having.
+
 3. `heartbeat.runExclusive(...)` over the read → ownership evaluation → transfer → `adopt` span;
 4. write boundary artifacts through the existing `guardedWriteArtifacts` wrapper.
 
@@ -118,7 +124,7 @@ Every requirement below must be mutation-verified: delete or invert the implemen
 5. A self-performed transfer produces no `lease_lost` event, with `adopt` inside the exclusive span. *Kills: moving `adopt` outside the span, restoring the parked window.*
 6. A process that has already been superseded calls `persistBoundaryAnalysis` and is refused **before** `readOwnerRecord` — assert that no recovery-on-read write occurred. *Kills: deleting the entry guard.*
 7. A process superseded *after* the entry guard passes does not write boundary or reconciliation artifacts. *Kills: deleting the `guardedWriteArtifacts` wrapper.*
-8. `resumeLoop` remains fail-closed when the claim hits a busy lock: `ResumeNotEligibleError`, `resume_denied` appended, and the detail distinguishes lock contention. *Kills: letting the new class escape resume's catch.*
+8. `resumeLoop` remains fail-closed when the claim hits a busy lock: `ResumeNotEligibleError`, `resume_denied` appended, and the detail does **not** claim a CAS failure. Assert on the detail text, not merely on the error type. *Kills: letting the new class escape resume's catch, and leaving the hardcoded `claim CAS failed:` prefix on a path where no CAS was evaluated.*
 9. The heartbeat's `runAffirm` treats a busy lock as transient: no `lease_lost` event, no supersession concluded, retried on the next tick. *Kills: routing lock contention into the supersession decision.*
 10. A rejected `fn` propagates out of `runExclusive` **and** leaves the queue usable for a subsequent affirm. *Kills: a queue that deadlocks or swallows on error.*
 
