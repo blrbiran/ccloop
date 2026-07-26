@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
-import { runLoop } from "../../src/controller/runLoop.js";
+import { runLoop, runLoopFromState, createLeaseLossSignal } from "../../src/controller/runLoop.js";
 import { resumeLoop } from "../../src/controller/resumeLoop.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
-import { LEASE_AFFIRM_THROTTLE_MS, LEASE_TTL_MS } from "../../src/ownership/lease.js";
+import { LEASE_AFFIRM_THROTTLE_MS, LEASE_TTL_MS, RunLeaseLostError } from "../../src/ownership/lease.js";
+import type { LeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
 import type { LoopContract } from "../../src/contract/schema.js";
+import type { RunState } from "../../src/state/types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -204,5 +206,77 @@ describe("lease heartbeat lifecycle", () => {
     expect(owner.currentOwnerEpoch).toBe(99); // the new owner's record is untouched
     expect(owner.currentProcessInstanceId).toBe("pid:999:9000");
     expect(owner.leaseAffirmedAt).toBe(rotated.leaseAffirmedAt);
+  });
+
+  // Coverage gap found in review of the test above: that test's rotation is only ever
+  // observed by the top-of-loop check (Check 1), one iteration after the rotation, because
+  // the heartbeat's only affirmNow() call site is the top of the loop. The retry-boundary
+  // check (Check 2, right before the retry `continue`) was therefore never exercised by any
+  // test. This test drives `leaseLoss` directly through runLoopFromState's sixth parameter —
+  // no heartbeat, no clock games — flipping it from inside `verify`, after Check 1 for this
+  // same attempt has already run and before any second iteration's Check 1 could run.
+  it("check 2: stops at the retry boundary itself, without ever reaching a second top-of-loop pass", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    // Written directly, not by any production path (same caveat as the rotation above): a
+    // sentinel to prove the stop never touches the owner record, without needing the real
+    // owner-record machinery this direct runLoopFromState call bypasses entirely.
+    const ownerRecordSentinel = { sentinel: true };
+    await writeFile(join(runDir, "owner-record.json"), JSON.stringify(ownerRecordSentinel));
+
+    const leaseLoss = createLeaseLossSignal();
+    const frame = rejectFrame();
+    const adapter = {
+      plan: async () => frame.plan,
+      execute: async () => frame.execution,
+      verify: async () => {
+        // Simulates the heartbeat concluding loss mid-attempt: by the time this fires, this
+        // attempt's own top-of-loop check has already passed (it ran before plan/execute/
+        // verify), so only the retry-boundary check can be what observes it for THIS attempt.
+        leaseLoss.lost = new RunLeaseLostError("run lease lost: test-injected supersession");
+        return frame.verification;
+      },
+    };
+
+    // A spy heartbeat, not the inert default: counts affirmNow() calls, each of which
+    // corresponds to exactly one top-of-loop pass. If the retry-boundary check did NOT catch
+    // this and the loop fell through to a second iteration, affirmNow would be called twice.
+    let affirmNowCalls = 0;
+    const spyHeartbeat: LeaseHeartbeat = {
+      affirmNow: async () => {
+        affirmNowCalls += 1;
+      },
+      assertHeld: async () => {},
+      stop: async () => {},
+    };
+
+    const initialLoopState: RunState = {
+      status: "planning",
+      currentAttempt: 0,
+      attemptsUsed: 0,
+      lastTransitionAt: new Date().toISOString(),
+      waitingOnHuman: false,
+      stopReason: null,
+      budgetSnapshot: {
+        attemptsRemaining: contract.executionPolicy.maxAttempts,
+        timeRemainingMs: contract.executionPolicy.totalRuntimeBudgetMs,
+        tokenBudgetRemaining: contract.executionPolicy.tokenBudget,
+      },
+      recentFailures: [],
+    };
+
+    const finalState = await runLoopFromState(contract, runDir, adapter as never, initialLoopState, spyHeartbeat, leaseLoss);
+
+    expect(finalState.stopReason).toBe("lease_lost");
+    expect(finalState.attemptsUsed).toBe(1); // no second attempt started
+    // The decisive assertion: only one top-of-loop pass happened. If Check 2 were missing,
+    // deleted, or misplaced, the loop would `continue` into a second pass, affirmNow() would
+    // fire again, and this would read 2 (see task-12-report.md for the mutation evidence).
+    expect(affirmNowCalls).toBe(1);
+
+    const owner = await readFile(join(runDir, "owner-record.json"), "utf8");
+    expect(JSON.parse(owner)).toEqual(ownerRecordSentinel); // the stop never touches it
   });
 });
