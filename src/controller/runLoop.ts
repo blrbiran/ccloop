@@ -19,6 +19,7 @@ import { applyOwnerEpochTransfer, evaluateOwnership } from "../ownership/ownerCo
 import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
 import type { LeaseHeartbeat } from "./leaseHeartbeat.js";
+import type { RunLeaseLostError } from "../ownership/lease.js";
 import type {
   AttemptContext,
   AttemptPlan,
@@ -749,10 +750,17 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
 
   // §6.0: started only now — after the gate admitted this process AND the record naming it
   // is on disk — so it can never affirm a lease this process does not hold.
-  const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord, onLeaseLost: () => {} });
+  const leaseLoss = createLeaseLossSignal();
+  const heartbeat = startLeaseHeartbeat({
+    runDir,
+    ownerRecord,
+    onLeaseLost: (error) => {
+      leaseLoss.lost = error as RunLeaseLostError;
+    },
+  });
 
   try {
-    return await runLoopFromState(contract, runDir, adapter, state, heartbeat);
+    return await runLoopFromState(contract, runDir, adapter, state, heartbeat, leaseLoss);
   } finally {
     // §6.0: every exit path — normal completion, stop-boundary exit, and any throw.
     await heartbeat.stop();
@@ -765,12 +773,22 @@ const INERT_LEASE_HEARTBEAT: LeaseHeartbeat = {
   stop: async () => {},
 };
 
+// §8: the caller-owned slot a lost-lease notification lands in. runLoopFromState checks it
+// at phase boundaries rather than being called back into directly, so the check point is
+// always a place the loop chose to look, never wherever the heartbeat happens to fire.
+export type LeaseLossSignal = { lost: RunLeaseLostError | null };
+
+export function createLeaseLossSignal(): LeaseLossSignal {
+  return { lost: null };
+}
+
 export async function runLoopFromState(
   contract: LoopContract,
   runDir: string,
   adapter: RuntimeAdapter,
   initialLoopState: RunState,
   heartbeat: LeaseHeartbeat = INERT_LEASE_HEARTBEAT,
+  leaseLoss: LeaseLossSignal = { lost: null },
 ): Promise<RunState> {
   let state = initialLoopState;
   while (true) {
@@ -778,6 +796,13 @@ export async function runLoopFromState(
     // §6: the event-driven refresh. It survives environments where the timer is unreliable
     // and additionally evidences that the loop is making progress rather than merely alive.
     await heartbeat.affirmNow();
+
+    // §8: stop at a phase boundary rather than mid-attempt, so the run never tears down
+    // state a new owner might be reading. Launch no further attempt.
+    if (leaseLoss.lost !== null) {
+      return await persistTerminalState(runDir, state, "cancelled", "lease_lost");
+    }
+
     const attempt = state.attemptsUsed + 1;
 
     let worktreePath: string | null = null;
@@ -1079,6 +1104,13 @@ export async function runLoopFromState(
             "cleanup after retry cleanup failure",
           );
           return state;
+        }
+
+        // §8: the same stop, checked again here because this phase boundary can be minutes
+        // away from the top of the loop — the periodic heartbeat timer, not just the
+        // top-of-loop affirmNow() call, can be what discovers the loss during that gap.
+        if (leaseLoss.lost !== null) {
+          return await persistTerminalState(runDir, state, "cancelled", "lease_lost");
         }
 
         continue;

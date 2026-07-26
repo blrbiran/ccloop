@@ -3,11 +3,11 @@ import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runLoop } from "../../src/controller/runLoop.js";
 import { resumeLoop } from "../../src/controller/resumeLoop.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
-import { LEASE_TTL_MS } from "../../src/ownership/lease.js";
+import { LEASE_AFFIRM_THROTTLE_MS, LEASE_TTL_MS } from "../../src/ownership/lease.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 
 const execFileAsync = promisify(execFile);
@@ -76,6 +76,13 @@ function successFrame() {
   };
 }
 
+function rejectFrame() {
+  return {
+    ...successFrame(),
+    verification: { approved: false, rejectCategory: "tests fail", primaryTargetPaths: ["src/index.ts"], failingCommand: "npm test", safeToRetry: true, evidence: ["FAIL"], pauseSignals: [], stopSignals: [] },
+  };
+}
+
 async function readEventTypes(runDir: string): Promise<string[]> {
   const raw = await readFile(join(runDir, "events.jsonl"), "utf8");
   return raw.split("\n").filter(Boolean).map((l) => JSON.parse(l).type as string);
@@ -127,5 +134,75 @@ describe("lease heartbeat lifecycle", () => {
 
     const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
     expect(owner.leaseAffirmedAt).toBeNull();
+  });
+
+  // §8. The rotation is performed by the test writing the file directly. No production path
+  // rotates a record this way, and this test must not be read as evidence that one exists.
+  it("stops at the next phase boundary with stopReason lease_lost and leaves the new record intact", async () => {
+    const repoPath = await createRepo();
+    const baseContract = createContract(repoPath);
+    // The runtime budget is widened for this test only: jumping the fake clock forward inside
+    // the verify phase (below) is measured by runLoop as time spent IN that phase, and the
+    // default 5000ms budget would otherwise be exhausted by the jump itself before the loop
+    // ever gets a chance to notice the lost lease.
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: { ...baseContract.executionPolicy, totalRuntimeBudgetMs: 120_000 },
+    };
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    // A rejecting-then-retrying script gives the loop a second attempt to reach.
+    const adapter = new ScriptedAdapter([rejectFrame(), successFrame()]);
+
+    const rotated = {
+      runId: "task-1",
+      logicalSessionId: "task-1:t0",
+      currentOwnerEpoch: 99,
+      currentProcessInstanceId: "pid:999:9000",
+      lastAffirmedAt: new Date().toISOString(),
+      ownerStatus: "current",
+      supersededByEpoch: null,
+      leaseAffirmedAt: new Date().toISOString(),
+    };
+
+    // A hand-written wrapper, not the Proxy the brief offers as its default mechanism: a
+    // Proxy trap detaches `this` when it forwards the call, and ScriptedAdapter#verify reads
+    // `this.currentFrame` — so the trapped call throws. This wrapper delegates by calling the
+    // scripted adapter as a bound method instead, then rotates the owner record afterward.
+    //
+    // The heartbeat throttles affirms to once per LEASE_AFFIRM_THROTTLE_MS (see
+    // leaseHeartbeat.ts §6), and attempt 1's top-of-loop affirm (which succeeds, since the
+    // record hasn't rotated yet) resets that window — so without moving the clock, attempt
+    // 2's top-of-loop affirm lands inside the same throttle window and silently no-ops,
+    // never attempting the CAS that would discover the rotation. Faking only `Date` (not the
+    // timers) and jumping it forward here, right after the rotation, is the same pattern
+    // leaseHeartbeat.test.ts itself uses to get past this throttle deterministically.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const rotateAfterFirstAttempt = {
+      plan: (context: unknown) => adapter.plan(context as never),
+      execute: (context: unknown) => adapter.execute(context as never),
+      verify: async (context: unknown) => {
+        const result = await adapter.verify(context as never);
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify(rotated, null, 2));
+        vi.setSystemTime(Date.now() + LEASE_AFFIRM_THROTTLE_MS);
+        return result;
+      },
+    };
+
+    let finalState;
+    try {
+      finalState = await runLoop(contract, runDir, rotateAfterFirstAttempt as never);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(finalState.stopReason).toBe("lease_lost");
+    expect(finalState.attemptsUsed).toBe(1); // no further attempt started
+    expect(await readEventTypes(runDir)).toContain("lease_lost");
+
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
+    expect(owner.currentOwnerEpoch).toBe(99); // the new owner's record is untouched
+    expect(owner.currentProcessInstanceId).toBe("pid:999:9000");
+    expect(owner.leaseAffirmedAt).toBe(rotated.leaseAffirmedAt);
   });
 });

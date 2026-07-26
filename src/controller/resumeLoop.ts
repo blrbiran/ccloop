@@ -12,9 +12,10 @@ import {
 import type { OwnerRecord, OwnerTransferRecord, ReconciliationRecord, RuntimeAdapter } from "../runtime/types.js";
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { RunState, RunStatus } from "../state/types.js";
+import type { RunLeaseLostError } from "../ownership/lease.js";
 import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
-import { cleanupAttemptWorkspaceBestEffort, runLoopFromState } from "./runLoop.js";
+import { cleanupAttemptWorkspaceBestEffort, createLeaseLossSignal, runLoopFromState } from "./runLoop.js";
 
 export class ResumeNotEligibleError extends Error {
   constructor(message: string) {
@@ -147,7 +148,14 @@ export async function resumeLoop(runDir: string, adapter: RuntimeAdapter): Promi
   // this process — and never before, so it can never affirm a lease this process does not
   // hold. nextOwnerRecord is exactly what claimOwnerRecordWithPrecondition wrote, so it is
   // the correct starting `expected` record for the heartbeat's CAS chain.
-  const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: nextOwnerRecord, onLeaseLost: () => {} });
+  const leaseLoss = createLeaseLossSignal();
+  const heartbeat = startLeaseHeartbeat({
+    runDir,
+    ownerRecord: nextOwnerRecord,
+    onLeaseLost: (error) => {
+      leaseLoss.lost = error as RunLeaseLostError;
+    },
+  });
 
   try {
     await cleanupResidualWorktrees(contract.context.repoPath, runDir);
@@ -165,7 +173,7 @@ export async function resumeLoop(runDir: string, adapter: RuntimeAdapter): Promi
         ? runState
         : { ...runState, status: "planning", waitingOnHuman: false, lastTransitionAt: new Date().toISOString() };
 
-    return await runLoopFromState(contract, runDir, adapter, resumedState, heartbeat);
+    return await runLoopFromState(contract, runDir, adapter, resumedState, heartbeat, leaseLoss);
   } finally {
     // §6.0: every exit path — normal completion, stop-boundary exit, and any throw.
     await heartbeat.stop();
