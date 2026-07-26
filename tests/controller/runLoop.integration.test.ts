@@ -121,6 +121,14 @@ function makeRunState(status: RunState["status"]): RunState {
   };
 }
 
+function successFrame() {
+  return {
+    plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+    execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "ok" },
+    verification: { approved: true, rejectCategory: "", primaryTargetPaths: ["src/index.ts"], failingCommand: null, safeToRetry: false, evidence: ["npm test passed"], pauseSignals: [], stopSignals: [] },
+  };
+}
+
 describe("evaluateRunBoundary", () => {
   it("routes to no_progress when strong progress stops and weak progress is exhausted without stale evidence", () => {
     const result = evaluateRunBoundary({
@@ -2209,7 +2217,8 @@ describe("runLoop", () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const contract = createContract(repoPath);
     const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
-    const timestamps = [1_000, 1_600];
+    // §7: gate calls Date.now() before phases, so we need one extra timestamp value at the start
+    const timestamps = [1_000, 1_000, 1_600];
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => timestamps.shift() ?? 1_600);
 
     const adapter = new ScriptedAdapter([
@@ -2574,5 +2583,34 @@ describe("runLoop", () => {
       "execution_finished",
       "loop_blocked_waiting_human",
     ]);
+  });
+
+  // §7.0 + requirement 3: a second start on an occupied directory fails LOUDLY from
+  // ensureFreshRunDir and never reaches the lease gate. The §10.1 TOCTOU window is
+  // documented, not simulated — no test may assert that two concurrent starts both proceed.
+  it("throws from ensureFreshRunDir on a second start rather than reaching the lease gate", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    await runLoop(contract, runDir, new ScriptedAdapter([successFrame()]));
+
+    await expect(runLoop(contract, runDir, new ScriptedAdapter([successFrame()]))).rejects.toThrow(
+      /already contains prior run data/,
+    );
+  });
+
+  // §7 ordering: the gate may append an event, and events.jsonl does not exist before
+  // initializeRunFiles. A gate placed one line earlier would crash every fresh start.
+  it("appends no event before initializeRunFiles on a brand-new run directory", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    await runLoop(contract, runDir, new ScriptedAdapter([successFrame()]));
+
+    const types = await readEventTypes(runDir);
+    expect(types[0]).toBe("loop_planning");
+    expect(types).not.toContain("lease_expired_observed");
   });
 });

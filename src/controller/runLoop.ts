@@ -16,6 +16,7 @@ import { evaluateRunBoundary, evaluateStopDecision } from "../stop/stopControlle
 import { transitionRunState } from "../state/stateMachine.js";
 import type { LoopContract } from "../contract/schema.js";
 import { applyOwnerEpochTransfer, evaluateOwnership } from "../ownership/ownerController.js";
+import { checkRunLease } from "./leaseGate.js";
 import type {
   AttemptContext,
   AttemptPlan,
@@ -736,6 +737,11 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
   const state = transitionRunState(initialState(contract), "planning");
   const ownerRecord = buildInitialOwnerRecord(contract, state);
   await initializeRunFiles(runDir, contract, state);
+  // §7: as early as possible, but never before initializeRunFiles — the gate may append an
+  // event and events.jsonl does not exist yet. §7.0: ensureFreshRunDir has already thrown
+  // on any pre-existing run file, so this call can only ever observe "no owner record";
+  // every other branch is reachable through resumeLoop alone.
+  await checkRunLease(runDir, ownerRecord.currentProcessInstanceId, Date.now());
   await writeOwnerRecord(runDir, ownerRecord);
   await appendTransitionEvent(runDir, state, "loop_planning", "run initialized and ready to plan");
   return runLoopFromState(contract, runDir, adapter, state);
