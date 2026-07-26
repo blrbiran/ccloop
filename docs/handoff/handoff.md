@@ -5,7 +5,7 @@
 
 ## 一句话现状
 
-**resume/adopt 续跑**（前沿第 1 项）已实现并 merge 进 `main`、已 push。本轮做了两件事：①收尾 resume/adopt 遗留的 deferred minor（补测试，270 → 274 tests）；②为下一前沿的**第一层 L1「run lease + heartbeat」**完成 brainstorming → spec → **六轮对抗式评审**，spec 现已冻结，**尚未写实施计划、尚未写任何实现代码**。本轮所有提交**均在本地、未 push**。
+**resume/adopt 续跑**（前沿第 1 项）已实现并 merge 进 `main`、已 push。本轮做了两件事：①收尾 resume/adopt 遗留的 deferred minor（补测试，270 → 274 tests）；②为下一前沿的**第一层 L1「run lease + heartbeat」**完成 brainstorming → spec → **六轮对抗式评审**，spec 现已冻结，**尚未写实施计划、尚未写任何实现代码**。本轮提交已有一部分 push 到 `origin/main`，其余仍在本地——具体以下面的自查命令为准。
 
 ## 如何定位当前状态（不要照抄 commit hash）
 
@@ -15,7 +15,7 @@ git -C /Users/biran/code/skills/loop/ccloop status --branch --short
 git log origin/main..HEAD --oneline        # 本地领先、待 push 的全部提交
 ```
 
-- 本轮应能看到 9 笔本地提交（1 笔测试 + 8 笔 spec 相关），外加本 handoff 更新提交。
+- 本轮共 10 笔提交（1 笔测试 + 8 笔 spec + 1 笔本 handoff）；其中较早的若干笔已在 `origin/main`，末尾几笔可能仍在本地。用上面第三条命令看实际待 push 的是哪几笔，不要假设数量。
 - 唯一的代码改动是 `tests/controller/resumeLoop.gate.test.ts`；其余全是 `docs/superpowers/specs/2026-07-26-run-lease-and-heartbeat-design.md`。
 - `src/` **零改动**（可用 `git diff origin/main..HEAD -- src/` 验证为空）。
 
@@ -54,7 +54,7 @@ spec 自查只查「文档内部一致性」不够，必须把每条断言拿去
 
 ## 待办 / 未擅自执行
 
-1. **push 本轮全部提交**——本轮 9 笔 + 本 handoff 均在本地。是否 push 由人决定。
+1. **push 剩余提交**——本轮已有部分进入 `origin/main`，末尾几笔可能仍在本地。是否 push 由人决定。
 2. **进 `writing-plans` 出 L1 实施计划**——这是明确的下一步。spec 已自足，新 session 只读 spec 即可开工。
 3. **L1 实施**：`src/ownership/lease.ts`（纯）、`src/controller/leaseHeartbeat.ts`、`fileStore` 增 `affirmOwnerLease` / `releaseOwnerLease` / `readOwnerRecordWithoutRecovery`，并改 `evaluateOwnership` 输入。spec §11 有完整签名，§12 有 19 条测试要求。
 4. **`.superpowers/sdd/` 是跨会话共用的扁平目录**（不是本次专属），整删会毁掉前几次会话的 ledger 与 review diff。**建议不删**。
