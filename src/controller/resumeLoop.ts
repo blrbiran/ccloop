@@ -13,6 +13,7 @@ import type { OwnerRecord, OwnerTransferRecord, ReconciliationRecord, RuntimeAda
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { RunState, RunStatus } from "../state/types.js";
 import { checkRunLease } from "./leaseGate.js";
+import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
 import { cleanupAttemptWorkspaceBestEffort, runLoopFromState } from "./runLoop.js";
 
 export class ResumeNotEligibleError extends Error {
@@ -142,20 +143,31 @@ export async function resumeLoop(runDir: string, adapter: RuntimeAdapter): Promi
     detail: `epoch ${ownerRecord.currentOwnerEpoch}: ${ownerTransfer.priorProcessInstanceId} -> ${buildProcessInstanceId()}`,
   });
 
-  await cleanupResidualWorktrees(contract.context.repoPath, runDir);
+  // §6.0: started only now — after the CAS claim has succeeded, so the record on disk names
+  // this process — and never before, so it can never affirm a lease this process does not
+  // hold. nextOwnerRecord is exactly what claimOwnerRecordWithPrecondition wrote, so it is
+  // the correct starting `expected` record for the heartbeat's CAS chain.
+  const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: nextOwnerRecord, onLeaseLost: () => {} });
 
-  // The interrupted attempt (and its worktree) is discarded by cleanup above, so resume
-  // always restarts from a fresh "planning" phase for the next attempt — regardless of
-  // which resumable status ("planning" | "executing" | "verifying") the run was
-  // interrupted at. runLoopFromState requires status "planning" on entry to legally
-  // transition to "executing" once the plan phase completes (see legalTransitions in
-  // ../state/stateMachine.js); "executing" -> "planning" is not itself a legal transition,
-  // so this normalizes the persisted state directly rather than routing through
-  // transitionRunState.
-  const resumedState: RunState =
-    runState.status === "planning"
-      ? runState
-      : { ...runState, status: "planning", waitingOnHuman: false, lastTransitionAt: new Date().toISOString() };
+  try {
+    await cleanupResidualWorktrees(contract.context.repoPath, runDir);
 
-  return runLoopFromState(contract, runDir, adapter, resumedState);
+    // The interrupted attempt (and its worktree) is discarded by cleanup above, so resume
+    // always restarts from a fresh "planning" phase for the next attempt — regardless of
+    // which resumable status ("planning" | "executing" | "verifying") the run was
+    // interrupted at. runLoopFromState requires status "planning" on entry to legally
+    // transition to "executing" once the plan phase completes (see legalTransitions in
+    // ../state/stateMachine.js); "executing" -> "planning" is not itself a legal transition,
+    // so this normalizes the persisted state directly rather than routing through
+    // transitionRunState.
+    const resumedState: RunState =
+      runState.status === "planning"
+        ? runState
+        : { ...runState, status: "planning", waitingOnHuman: false, lastTransitionAt: new Date().toISOString() };
+
+    return await runLoopFromState(contract, runDir, adapter, resumedState, heartbeat);
+  } finally {
+    // §6.0: every exit path — normal completion, stop-boundary exit, and any throw.
+    await heartbeat.stop();
+  }
 }

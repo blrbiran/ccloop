@@ -2217,8 +2217,12 @@ describe("runLoop", () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const contract = createContract(repoPath);
     const attemptWorktreePath = join(runDir, "worktrees", "attempt-1");
-    // §7: gate calls Date.now() before phases, so we need one extra timestamp value at the start
-    const timestamps = [1_000, 1_000, 1_600];
+    // §7/§6.0: the lease gate and, after this task, the heartbeat's affirmNow() at the top
+    // of the loop each call Date.now() before the plan phase's own timing calls — one for
+    // the gate, three for the heartbeat's throttle check and affirm write — so four extra
+    // timestamp values are needed at the start before the plan phase's startedAtMs/elapsedMs
+    // pair (1_000 / 1_600, giving the 600ms elapsed this test asserts on).
+    const timestamps = [1_000, 1_000, 1_000, 1_000, 1_000, 1_600];
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => timestamps.shift() ?? 1_600);
 
     const adapter = new ScriptedAdapter([

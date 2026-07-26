@@ -17,6 +17,8 @@ import { transitionRunState } from "../state/stateMachine.js";
 import type { LoopContract } from "../contract/schema.js";
 import { applyOwnerEpochTransfer, evaluateOwnership } from "../ownership/ownerController.js";
 import { checkRunLease } from "./leaseGate.js";
+import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
+import type { LeaseHeartbeat } from "./leaseHeartbeat.js";
 import type {
   AttemptContext,
   AttemptPlan,
@@ -744,18 +746,38 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
   await checkRunLease(runDir, ownerRecord.currentProcessInstanceId, Date.now());
   await writeOwnerRecord(runDir, ownerRecord);
   await appendTransitionEvent(runDir, state, "loop_planning", "run initialized and ready to plan");
-  return runLoopFromState(contract, runDir, adapter, state);
+
+  // §6.0: started only now — after the gate admitted this process AND the record naming it
+  // is on disk — so it can never affirm a lease this process does not hold.
+  const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord, onLeaseLost: () => {} });
+
+  try {
+    return await runLoopFromState(contract, runDir, adapter, state, heartbeat);
+  } finally {
+    // §6.0: every exit path — normal completion, stop-boundary exit, and any throw.
+    await heartbeat.stop();
+  }
 }
+
+const INERT_LEASE_HEARTBEAT: LeaseHeartbeat = {
+  affirmNow: async () => {},
+  assertHeld: async () => {},
+  stop: async () => {},
+};
 
 export async function runLoopFromState(
   contract: LoopContract,
   runDir: string,
   adapter: RuntimeAdapter,
   initialLoopState: RunState,
+  heartbeat: LeaseHeartbeat = INERT_LEASE_HEARTBEAT,
 ): Promise<RunState> {
   let state = initialLoopState;
   while (true) {
     await writeRunState(runDir, state);
+    // §6: the event-driven refresh. It survives environments where the timer is unreliable
+    // and additionally evidences that the loop is making progress rather than merely alive.
+    await heartbeat.affirmNow();
     const attempt = state.attemptsUsed + 1;
 
     let worktreePath: string | null = null;
