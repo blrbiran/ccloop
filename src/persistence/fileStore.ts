@@ -603,13 +603,83 @@ export async function claimOwnerRecordWithPrecondition(
       throw new OwnerTransferPreconditionError("persisted owner record changed before resume could claim it");
     }
 
-    const { ownerPath, ownerTempPath } = getOwnerTransferPaths(runDir);
-    await safeUnlink(ownerTempPath);
-    await writeJsonFile(ownerTempPath, nextOwnerRecord);
-    await rename(ownerTempPath, ownerPath);
+    await writeOwnerRecordAtomically(runDir, nextOwnerRecord);
   } finally {
     await lock.release();
   }
+}
+
+// §7.1: the gate's read. readOwnerRecord runs recoverInterruptedOwnerTransfer first, which
+// may finalize a pending transfer or delete staging files — both writes. A refusal must
+// not trigger crash recovery as a side effect, so the gate reads raw. Recovery stays where
+// it already is: on the paths that go on to claim or transfer.
+export async function readOwnerRecordWithoutRecovery(runDir: string): Promise<OwnerRecord> {
+  return readOwnerRecordRaw(runDir);
+}
+
+async function writeOwnerRecordAtomically(runDir: string, ownerRecord: OwnerRecord): Promise<void> {
+  const { ownerPath, ownerTempPath } = getOwnerTransferPaths(runDir);
+  await safeUnlink(ownerTempPath);
+  await writeJsonFile(ownerTempPath, ownerRecord);
+  await rename(ownerTempPath, ownerPath);
+}
+
+async function updateOwnerRecordWithPrecondition(
+  runDir: string,
+  expectedOwnerRecord: OwnerRecord,
+  buildNext: (persisted: OwnerRecord) => OwnerRecord,
+  mismatchMessage: string,
+): Promise<OwnerRecord> {
+  const lock = await acquireOwnerTransferLock(runDir);
+
+  try {
+    await recoverInterruptedOwnerTransfer(runDir, { lockHeld: true });
+    const persistedOwnerRecord = await readOwnerRecordRaw(runDir);
+
+    if (!sameOwnerRecord(persistedOwnerRecord, expectedOwnerRecord)) {
+      throw new OwnerTransferPreconditionError(mismatchMessage);
+    }
+
+    const nextOwnerRecord = buildNext(persistedOwnerRecord);
+    await writeOwnerRecordAtomically(runDir, nextOwnerRecord);
+    return nextOwnerRecord;
+  } finally {
+    await lock.release();
+  }
+}
+
+// §6: the heartbeat's write. Advances leaseAffirmedAt and, so the ownership design's named
+// freshness anchor stops being dead, lastAffirmedAt alongside it. Never rotates an epoch,
+// never changes ownerStatus, never touches supersededByEpoch.
+//
+// Returns the record it just wrote: the caller MUST adopt it as its next expected record
+// (§6.1), because this write makes the caller's previous expectation stale immediately.
+export async function affirmOwnerLease(
+  runDir: string,
+  expected: OwnerRecord,
+  nowIso: string,
+): Promise<OwnerRecord> {
+  return updateOwnerRecordWithPrecondition(
+    runDir,
+    expected,
+    (persisted) => ({ ...persisted, lastAffirmedAt: nowIso, leaseAffirmedAt: nowIso }),
+    "persisted owner record changed before the lease could be affirmed",
+  );
+}
+
+// §6.0: release. CAS leaseAffirmedAt back to null, leaving every other field alone — the
+// run is still owned, just no longer running. Kept separate from affirmOwnerLease because
+// that name would lie about writing null.
+//
+// Best-effort by contract: it throws on a CAS mismatch and the caller swallows that, so a
+// superseded process cannot clear the lease of the owner that replaced it.
+export async function releaseOwnerLease(runDir: string, expected: OwnerRecord): Promise<void> {
+  await updateOwnerRecordWithPrecondition(
+    runDir,
+    expected,
+    (persisted) => ({ ...persisted, leaseAffirmedAt: null }),
+    "persisted owner record changed before the lease could be released",
+  );
 }
 
 export async function readRunState(runDir: string): Promise<RunState> {
