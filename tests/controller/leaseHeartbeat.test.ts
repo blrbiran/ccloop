@@ -167,8 +167,16 @@ describe("startLeaseHeartbeat", () => {
     await heartbeat.affirmNow();
 
     expect(lost).toHaveLength(1);
-    const raw = await readFile(join(runDir, "events.jsonl"), "utf8");
-    expect(raw).toContain("lease_lost");
+    // The heartbeat-first path: this call is what sets `superseded`, so it must still emit.
+    // Pinned explicitly because a gate placed AFTER that assignment rather than before it would
+    // silently suppress the event on exactly this path (fix-round-2 review).
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; detail: string });
+    const leaseLost = events.filter((event) => event.type === "lease_lost");
+    expect(leaseLost).toHaveLength(1);
+    expect(leaseLost[0].detail).toBe(`expected ${SELF} at epoch 2, observed pid:999:9000 at epoch 3`);
     await heartbeat.stop();
   });
 
@@ -269,6 +277,60 @@ describe("assertHeld", () => {
     await writeFile(join(runDir, "owner-record.json"), JSON.stringify({ currentOwnerEpoch: 2 }, null, 2));
 
     await expect(heartbeat.assertHeld()).rejects.toMatchObject({ stopReason: "lease_unverifiable" });
+    await heartbeat.stop();
+  });
+
+  // Fix-round-2 review finding: the exactly-once gate was asymmetric. assertHeld gated its
+  // append on `superseded`, but concludeLeaseLost set the flag and appended unconditionally —
+  // and assertHeld is deliberately NOT part of the `queue` chain that serializes the two
+  // writers, so the two can run concurrently and both append.
+  //
+  // The window is reached by construction, not by luck:
+  //
+  //   1. affirmNow() chains runAffirm onto an already-resolved queue, so runAffirm is scheduled
+  //      as a MICROTASK and has not run when affirmNow() returns.
+  //   2. assertHeld() is then called synchronously and runs up to its first await — issuing its
+  //      single owner-record read before returning control.
+  //   3. The microtask drains: runAffirm passes its `stopped || superseded` entry check (the
+  //      flag is still false — this is the precondition of the race) and suspends inside
+  //      affirmOwnerLease.
+  //   4. assertHeld's ONE read resolves ahead of affirmOwnerLease's lock-acquire → recover →
+  //      read → CAS chain (roughly eight filesystem round trips against one), concludes
+  //      supersession, sets the flag and appends.
+  //   5. runAffirm's CAS then fails its precondition, it re-reads, finds the rotation, and
+  //      arrives at concludeLeaseLost SECOND — where the ungated append produced the duplicate.
+  //
+  // Real timers, because step 4's ordering rests on real filesystem work.
+  it("appends one lease_lost event when a guard concludes while an affirm is already in flight", async () => {
+    vi.useRealTimers();
+    const runDir = await seed(record());
+    const lost: unknown[] = [];
+    const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: (error) => lost.push(error) });
+
+    await writeFile(
+      join(runDir, "owner-record.json"),
+      JSON.stringify(record({ currentOwnerEpoch: 3, currentProcessInstanceId: "pid:999:9000" }), null, 2),
+    );
+
+    const affirmInFlight = heartbeat.affirmNow(); // deliberately not awaited: see step 1
+    await expect(heartbeat.assertHeld()).rejects.toMatchObject({ stopReason: "lease_lost" });
+    await expect(affirmInFlight).resolves.toBeUndefined(); // still must never throw into the caller
+
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; detail: string });
+    const leaseLost = events.filter((event) => event.type === "lease_lost");
+
+    // The decisive assertion. Both mechanisms concluded the same supersession — the callback
+    // below proves the affirm reached concludeLeaseLost after the guard had already set the
+    // flag — and exactly one event records it.
+    expect(leaseLost).toHaveLength(1);
+    expect(leaseLost[0].detail).toBe(`expected ${SELF} at epoch 2, observed pid:999:9000 at epoch 3`);
+    // The stop signal is NOT gated with the append: assertHeld only throws, so this callback is
+    // the sole signal the control loop can observe, and suppressing it would lose it.
+    expect(lost).toHaveLength(1);
+
     await heartbeat.stop();
   });
 

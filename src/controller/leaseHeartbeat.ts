@@ -67,10 +67,37 @@ export function startLeaseHeartbeat(options: {
   const describeSupersession = (persisted: OwnerRecord): string =>
     `expected ${expected.currentProcessInstanceId} at epoch ${expected.currentOwnerEpoch}, observed ${persisted.currentProcessInstanceId} at epoch ${persisted.currentOwnerEpoch}`;
 
-  const concludeLeaseLost = async (persisted: OwnerRecord): Promise<void> => {
+  // §6.1: the ONE place supersession is concluded, so the event recording it is appended
+  // exactly once whichever mechanism reaches the conclusion first.
+  //
+  // Both entry points can reach this CONCURRENTLY: assertHeld is deliberately not part of the
+  // `queue` chain that serializes the two writers (it takes no lock and must never wait behind
+  // an affirm), so a guard can conclude while a runAffirm that has already passed its
+  // `stopped || superseded` entry check is still awaiting its CAS write. That runAffirm then
+  // gets its precondition failure, re-reads, and arrives here second.
+  //
+  // The check therefore has to precede the assignment: on the heartbeat-first path this call is
+  // itself what sets the flag, so testing it afterwards would suppress the event on the very
+  // path that is supposed to emit it.
+  const concludeSupersededOnce = async (persisted: OwnerRecord): Promise<void> => {
+    if (superseded) {
+      return;
+    }
+
     superseded = true;
     await appendLeaseEvent("lease_lost", describeSupersession(persisted));
+  };
 
+  const concludeLeaseLost = async (persisted: OwnerRecord): Promise<void> => {
+    await concludeSupersededOnce(persisted);
+
+    // NOT behind the same gate, deliberately. `superseded` records that supersession has been
+    // CONCLUDED, not that the caller has been SIGNALLED: assertHeld sets the flag and never
+    // signals (it throws into its caller instead), so gating this on the flag would suppress
+    // the only signal there is in exactly the interleaving above, leaving the caller's
+    // leaseLoss slot null. A redundant signal costs nothing — it is an idempotent assignment
+    // to a caller-owned slot, and by §8's no-new-authority rule it can only ever cause a stop.
+    //
     // onLeaseLost is caller-supplied. The same "never throws into the caller" contract that
     // covers this module's own I/O has to cover a misbehaving callback too, so it is guarded
     // deliberately rather than left to accidentally propagate.
@@ -199,12 +226,10 @@ export function startLeaseHeartbeat(options: {
         // side effect, the guard normally wins that race — leaving, without this, a run that
         // stopped for a lease reason with nothing on disk naming who took it over.
         //
-        // The `superseded` check keeps it exactly-once per run whichever mechanism gets there
-        // first, rather than appending a second, duplicate record of the same conclusion.
-        if (!superseded) {
-          superseded = true;
-          await appendLeaseEvent("lease_lost", describeSupersession(persisted));
-        }
+        // Routed through the shared conclusion so the exactly-once gate is ONE gate rather than
+        // two similar ones: the heartbeat's own path can be in flight concurrently with this
+        // call and would otherwise append a second, duplicate record of the same conclusion.
+        await concludeSupersededOnce(persisted);
 
         throw new RunLeaseLostError(
           `run lease lost: owner record now names ${persisted.currentProcessInstanceId} at epoch ${persisted.currentOwnerEpoch}`,
