@@ -44,10 +44,21 @@ export async function checkRunLease(
   if (!isLeaseFresh(ownerRecord, nowMs, LEASE_TTL_MS)) {
     // §7: expiry neither permits nor refuses. Record the observation so later layers can
     // see it instead of it being silently swallowed, then pass control on unchanged.
+    // The detail names the EXPIRY instant (affirmation + TTL), not the affirmation instant:
+    // later layers consume this event as "when did the lease lapse", and the last affirmation
+    // is a different, earlier moment. Both are recorded so neither has to be reconstructed.
+    //
+    // isLeaseFresh also answers "not fresh" for an unparseable timestamp, which has no expiry
+    // instant to name — and computing one anyway would throw RangeError out of the gate,
+    // turning an observation the gate is required to pass through into a crash.
+    const leaseAffirmedAtMs = Date.parse(leaseAffirmedAt);
+    const expiredAt = Number.isNaN(leaseAffirmedAtMs)
+      ? "an unparseable instant"
+      : new Date(leaseAffirmedAtMs + LEASE_TTL_MS).toISOString();
     await appendEvent(runDir, {
       type: "lease_expired_observed",
       at: new Date(nowMs).toISOString(),
-      detail: `lease held by ${ownerRecord.currentProcessInstanceId} expired at ${leaseAffirmedAt}`,
+      detail: `lease held by ${ownerRecord.currentProcessInstanceId} expired at ${expiredAt} (last affirmed ${leaseAffirmedAt})`,
     });
     return { kind: "expired", ownerRecord };
   }

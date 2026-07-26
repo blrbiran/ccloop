@@ -37,6 +37,11 @@ async function eventTypes(runDir: string): Promise<string[]> {
   return raw.split("\n").filter(Boolean).map((line) => JSON.parse(line).type as string);
 }
 
+async function eventDetails(runDir: string): Promise<string[]> {
+  const raw = await readFile(join(runDir, "events.jsonl"), "utf8");
+  return raw.split("\n").filter(Boolean).map((line) => JSON.parse(line).detail as string);
+}
+
 describe("checkRunLease", () => {
   it("reports no_record and appends nothing when the file does not exist", async () => {
     const runDir = await seed(undefined);
@@ -105,12 +110,30 @@ describe("checkRunLease", () => {
   // §7: expiry authorizes nothing AND refuses nothing. It is an observation, recorded so
   // later layers can see it, and control passes unchanged to the gates that already exist.
   it("takes no position on an expired lease and records the observation", async () => {
-    const runDir = await seed(
-      record({ leaseAffirmedAt: new Date(NOW - LEASE_TTL_MS - 1).toISOString() }),
-    );
+    const affirmedAt = new Date(NOW - LEASE_TTL_MS - 1).toISOString();
+    const runDir = await seed(record({ leaseAffirmedAt: affirmedAt }));
 
     expect(await checkRunLease(runDir, SELF, NOW)).toMatchObject({ kind: "expired" });
     expect(await eventTypes(runDir)).toEqual(["lease_expired_observed"]);
+    // The instant this event names is consumed by later layers as "when the lease lapsed", so
+    // it must be the EXPIRY instant (last affirmation + TTL), not the affirmation instant.
+    // Written to fail against `expired at ${leaseAffirmedAt}`, which named the wrong one.
+    expect(await eventDetails(runDir)).toEqual([
+      `lease held by pid:100:1000 expired at ${new Date(Date.parse(affirmedAt) + LEASE_TTL_MS).toISOString()} (last affirmed ${affirmedAt})`,
+    ]);
+  });
+
+  // A string leaseAffirmedAt is structurally valid, so an unparseable one reaches the expiry
+  // branch (isLeaseFresh answers "not fresh"). There is no expiry instant to compute from it,
+  // and computing one anyway throws RangeError — which would turn an observation the gate is
+  // required to pass through into a crash that refuses the run.
+  it("still passes control on, naming no expiry instant, when leaseAffirmedAt is unparseable", async () => {
+    const runDir = await seed(record({ leaseAffirmedAt: "not-a-timestamp" }));
+
+    expect(await checkRunLease(runDir, SELF, NOW)).toMatchObject({ kind: "expired" });
+    expect(await eventDetails(runDir)).toEqual([
+      "lease held by pid:100:1000 expired at an unparseable instant (last affirmed not-a-timestamp)",
+    ]);
   });
 
   // §7: only ENOENT means "no lease". Everything else is a refusal — including the shapes
