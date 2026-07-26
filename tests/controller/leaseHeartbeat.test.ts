@@ -33,6 +33,11 @@ async function readOwner(runDir: string): Promise<OwnerRecord> {
   return JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as OwnerRecord;
 }
 
+async function readEventTypes(runDir: string): Promise<string[]> {
+  const raw = await readFile(join(runDir, "events.jsonl"), "utf8");
+  return raw.split("\n").filter(Boolean).map((line) => (JSON.parse(line) as { type: string }).type);
+}
+
 describe("startLeaseHeartbeat", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -212,6 +217,43 @@ describe("startLeaseHeartbeat", () => {
     await heartbeat.stop();
   });
 
+  // §6.1 + §8's fail-closed table. The re-read that follows a failed CAS fed
+  // readOwnerRecordWithoutRecovery's bare JSON.parse straight to namesSomeoneElse: a
+  // well-formed-JSON record of the wrong SHAPE has no currentProcessInstanceId and no
+  // supersededByEpoch, so it "differed" from `expected` and was concluded as supersession —
+  // appending lease_lost and stopping the run on the strength of a record that could not be
+  // read at all. assertHeld parses before comparing and classifies exactly this as
+  // unverifiable; the heartbeat has to classify it the same way, since it is the same ONE
+  // criterion: transient, retried on the next tick, never proof of a takeover.
+  it("treats a structurally invalid record as transient rather than concluding supersession", async () => {
+    const runDir = await seed(record());
+    const lost: unknown[] = [];
+    const heartbeat = startLeaseHeartbeat({
+      runDir,
+      ownerRecord: record(),
+      onLeaseLost: (error) => lost.push(error),
+    });
+
+    // Well-formed JSON, wrong shape: the CAS fails its precondition, and the re-read that
+    // follows cannot be validated.
+    await writeFile(join(runDir, "owner-record.json"), JSON.stringify({ currentOwnerEpoch: 2 }, null, 2));
+
+    await expect(heartbeat.affirmNow()).resolves.toBeUndefined();
+
+    expect(lost).toHaveLength(0);
+    expect(await readEventTypes(runDir)).not.toContain("lease_lost");
+
+    // And it must be a RETRY, not a permanent stop: once the record is readable again the next
+    // affirm succeeds, which an implementation that had already concluded supersession — and so
+    // returns early from runAffirm forever — could never do.
+    await writeFile(join(runDir, "owner-record.json"), JSON.stringify(record(), null, 2));
+    await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS);
+    await heartbeat.affirmNow();
+
+    expect((await readOwner(runDir)).leaseAffirmedAt).not.toBeNull();
+    await heartbeat.stop();
+  });
+
   it("never throws into the caller when a heartbeat write fails", async () => {
     const runDir = await seed(record());
     const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
@@ -230,6 +272,16 @@ describe("startLeaseHeartbeat", () => {
 });
 
 describe("assertHeld", () => {
+  // Every test below except the first depends on REAL timers: assertHeld's retry delay is a
+  // setTimeout, so under a leaked fake clock those tests hang instead of failing. The first
+  // test installs fake timers and un-installs them only on its success path, so a throw
+  // anywhere inside it would otherwise poison the rest of the block. beforeEach rather than
+  // afterEach: it also covers fake timers leaked from anywhere earlier in the file, not only
+  // from a test inside this block.
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   // §8.1, written to fail against an implementation that reuses the affirm throttle. A real
   // process reaches assertHeld with lastAffirmAtMs already recently set by the periodic
   // heartbeat — so this primes it with a genuine affirmNow() first, rather than leaving it at

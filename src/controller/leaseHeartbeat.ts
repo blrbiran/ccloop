@@ -17,6 +17,7 @@ import {
 import type { OwnerRecord } from "../runtime/types.js";
 
 export type LeaseHeartbeat = {
+  adopt: (record: OwnerRecord) => void;
   affirmNow: () => Promise<void>;
   assertHeld: () => Promise<void>;
   stop: () => Promise<void>;
@@ -112,6 +113,26 @@ export function startLeaseHeartbeat(options: {
     }
   };
 
+  // §6.1's companion to the "adopt what affirmOwnerLease returns" rule, for the one writer of
+  // the owner record that is NOT affirmOwnerLease: a reconciliation transfer performed by THIS
+  // process (runLoop's persistBoundaryAnalysis), which rotates the epoch to this same process.
+  // Without it, `expected` still holds the pre-transfer epoch and the very next comparison
+  // reads its own transfer as somebody else's takeover — a lease_lost event naming this process
+  // on both sides, and a refusal of this process's own remaining side effects.
+  //
+  // Never clears `superseded`. Once supersession has been CONCLUDED the refusal is permanent:
+  // adopting a record afterwards would make namesSomeoneElse pass again and let a run that has
+  // already been told it lost the lease resume acting, which is precisely the real refusal this
+  // method must not weaken. So a post-supersession adopt is dropped, leaving `expected` naming
+  // the record this process was superseded from and every later assertHeld still refusing.
+  const adopt = (record: OwnerRecord): void => {
+    if (superseded) {
+      return;
+    }
+
+    expected = record;
+  };
+
   const runAffirm = async (): Promise<void> => {
     if (stopped || superseded) {
       return;
@@ -133,9 +154,16 @@ export function startLeaseHeartbeat(options: {
 
       let persisted: OwnerRecord;
       try {
-        persisted = await readOwnerRecordWithoutRecovery(options.runDir);
+        // Parsed, not merely read — the same validation assertHeld applies, because this is the
+        // same ONE criterion. readOwnerRecordWithoutRecovery is a bare JSON.parse plus a cast,
+        // so a well-formed-JSON record of the wrong SHAPE would otherwise reach
+        // namesSomeoneElse with currentOwnerEpoch === undefined, differ from `expected`, and be
+        // concluded as supersession — asserting exactly what could not be read. A record this
+        // process cannot validate is a transient failure, classified here as assertHeld
+        // classifies it: unverifiable, retried on the next tick, never proof of a takeover.
+        persisted = parseOwnerRecordForLease(await readOwnerRecordWithoutRecovery(options.runDir));
       } catch {
-        return; // cannot re-read: transient, retry next tick. Not proof of anything.
+        return; // cannot re-read or cannot parse: transient, retry next tick. Not proof of anything.
       }
 
       if (!namesSomeoneElse(persisted)) {
@@ -254,5 +282,5 @@ export function startLeaseHeartbeat(options: {
     );
   };
 
-  return { affirmNow, assertHeld, stop };
+  return { adopt, affirmNow, assertHeld, stop };
 }

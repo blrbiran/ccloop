@@ -640,6 +640,9 @@ async function writeCompletedAttemptArtifacts(
 async function persistBoundaryAnalysis(
   runDir: string,
   state: RunState,
+  // §6.1: only so a transfer this function performs ITSELF can be adopted — see the adopt call
+  // below. Nothing here is guarded by it.
+  heartbeat: LeaseHeartbeat,
   executionRecovery?: ExecutionRecovery,
 ): Promise<void> {
   const boundaryEvidence = buildBoundaryEvidence(executionRecovery ?? null);
@@ -692,6 +695,15 @@ async function persistBoundaryAnalysis(
         new Date().toISOString(),
         "owner lost after reconciliation",
       );
+      // §6.1: this process just rotated the epoch TO ITSELF, so the record the heartbeat is
+      // comparing against is stale exactly as it is after an affirm — and a stale expectation
+      // here reads as a takeover by this same process (identical expected and observed
+      // instance IDs) and refuses every side effect that follows, including the post-terminal
+      // worktree cleanup. Adopting removes only that spurious refusal: this process
+      // demonstrably still holds the record, because the CAS above only succeeded against the
+      // record it expected. A genuine foreign transfer fails that CAS instead, and never
+      // reaches this line.
+      heartbeat.adopt(transfer.ownerRecord);
       nextOwnerRecord = transfer.ownerRecord;
       nextOwnerEpoch = transfer.ownerRecord.currentOwnerEpoch;
       eligibleForContinuation = transfer.eligibleForContinuation;
@@ -775,6 +787,7 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
 }
 
 const INERT_LEASE_HEARTBEAT: LeaseHeartbeat = {
+  adopt: () => {},
   affirmNow: async () => {},
   assertHeld: async () => {},
   stop: async () => {},
@@ -945,7 +958,7 @@ export async function runLoopFromState(
             plan,
             executionRecovery,
           }));
-          await persistBoundaryAnalysis(runDir, state, executionRecovery);
+          await persistBoundaryAnalysis(runDir, state, heartbeat, executionRecovery);
           state = await persistTerminalState(
             runDir,
             state,
@@ -977,7 +990,7 @@ export async function runLoopFromState(
       }
 
       if (execution === null) {
-        await persistBoundaryAnalysis(runDir, state);
+        await persistBoundaryAnalysis(runDir, state, heartbeat);
         throw new Error("execute phase completed without a result");
       }
 

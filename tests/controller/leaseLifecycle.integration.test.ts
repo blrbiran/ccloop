@@ -132,21 +132,55 @@ describe("lease heartbeat lifecycle", () => {
     expect(Date.now() - Date.parse(owner.lastAffirmedAt)).toBeLessThan(LEASE_TTL_MS);
   });
 
+  // §6.0 + requirement 17's second half: "and separately after it throws". A REJECTING ADAPTER
+  // does not reach it — runLoopFromState converts every adapter failure into a terminal state
+  // and RETURNS, which is the case the test above already covers. The throw has to come from
+  // outside that catch, so this fails the loop's own state write: the first one succeeds (the
+  // lease is affirmed straight after it, which is what makes the release below observable),
+  // every later one rejects, and the second rejection lands while the catch block is already
+  // handling the first — leaving no handler between it and the caller.
   it("releases the lease when the loop throws", async () => {
     const repoPath = await createRepo();
     const contract = createContract(repoPath);
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
 
-    const throwingAdapter = {
-      plan: () => Promise.reject(new Error("boom")),
-      execute: () => Promise.reject(new Error("boom")),
-      verify: () => Promise.reject(new Error("boom")),
-    };
+    vi.resetModules();
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+      let writes = 0;
 
-    await runLoop(contract, runDir, throwingAdapter as never).catch(() => {});
+      return {
+        ...actual,
+        writeRunState: async (observedRunDir: string, state: RunState) => {
+          writes += 1;
 
-    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
-    expect(owner.leaseAffirmedAt).toBeNull();
+          if (writes > 1) {
+            throw new Error("loop-state.json write failed");
+          }
+
+          await actual.writeRunState(observedRunDir, state);
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+
+      // The decisive assertion of this test's premise: the loop THREW, rather than returning a
+      // terminal state as it does for every adapter failure.
+      await expect(observedRunLoop(contract, runDir, new ScriptedAdapter([successFrame()])))
+        .rejects.toThrow("loop-state.json write failed");
+
+      const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
+      expect(owner.leaseAffirmedAt).toBeNull();
+      // Released, not aged out: the affirm that preceded the throw is still well inside the TTL.
+      expect(Date.now() - Date.parse(owner.lastAffirmedAt)).toBeLessThan(LEASE_TTL_MS);
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
   });
 
   // §6.0 for the other call site.
@@ -283,6 +317,7 @@ describe("lease heartbeat lifecycle", () => {
     // this and the loop fell through to a second iteration, affirmNow would be called twice.
     let affirmNowCalls = 0;
     const spyHeartbeat: LeaseHeartbeat = {
+      adopt: () => {},
       affirmNow: async () => {
         affirmNowCalls += 1;
       },
@@ -419,6 +454,7 @@ describe("lease heartbeat lifecycle", () => {
     // Throws at the first guard that runs once a terminal state is on disk — on the success
     // path that is the post-terminal worktree cleanup — and at no guard before it.
     const heartbeat: LeaseHeartbeat = {
+      adopt: () => {},
       affirmNow: async () => {},
       assertHeld: async () => {
         const persisted = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8")) as RunState;

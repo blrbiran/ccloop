@@ -1244,10 +1244,15 @@ describe("runLoop", () => {
     expect(transfer.priorOwnerEpoch).toBe(1);
     expect(transfer.newOwnerEpoch).toBe(2);
     expect(transfer.eligibleForContinuation).toBe(true);
-    // Task 13, review finding 3: the fourth test that now takes the post-terminal lease escape
-    // after its own transfer to epoch 2 — pinned so the changed path is asserted, not incidental.
-    expect(await readEventTypes(runDir)).toContain("lease_lost");
-    await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
+    // Final-review fix 1. The transfer asserted above was performed by THIS process, to itself:
+    // the heartbeat adopts the record it just wrote, so the epoch rotation is not a takeover and
+    // must not be reported as one. Written to fail against the pre-fix behavior, where the
+    // stale expectation made the next guard conclude supersession — emitting a lease_lost event
+    // naming this same process on both sides, and refusing the post-terminal cleanup below.
+    expect(await readEventTypes(runDir)).not.toContain("lease_lost");
+    // And the side effect that spurious refusal blocked happens: the attempt worktree is
+    // removed rather than leaked as a registered git worktree in the user's repo.
+    await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual([]);
   });
 
   it("persists owner transfer artifacts and continuation eligibility after a controller-owned OWNER_LOST takeover-allowed verdict without resuming execution", async () => {
@@ -1321,26 +1326,25 @@ describe("runLoop", () => {
     expect(finalState.status).toBe("exhausted");
     expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON);
     expect(verifyCalled).toBe(false);
+    // Final-review fix 1. The transfer moves the record to epoch 2 and names THIS process; the
+    // heartbeat adopts it, so the guards that follow compare against what is actually on disk
+    // and none of them concludes supersession. Before the fix this list ended in a "lease_lost"
+    // event whose expected and observed process instance IDs were IDENTICAL — a false takeover
+    // signal in the evidence stream that exists for later layers to consume.
     expect(await readEventTypes(runDir)).toEqual([
       "loop_planning",
       "attempt_started",
       "execute_started",
       "owner_epoch_transferred",
       "loop_exhausted",
-      // Task 13, review finding 3: this test's execution path changed and nothing pinned the
-      // new one. The transfer above moves the record to epoch 2 while this process's heartbeat
-      // still expects epoch 1, so the lease guard before the post-terminal worktree cleanup
-      // concludes supersession. Asserted here (and below) so that a later change to the guard,
-      // the terminal escape, or the supersession criterion fails this test instead of leaving
-      // it green for a different reason than it was designed for.
-      "lease_lost",
     ]);
-    // The already-persisted terminal decision stands (asserted above), and the refused cleanup
-    // is abandoned in place — which is why the attempt worktree is still here.
-    await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
-    expect(await readEventDetails(runDir, "lease_lost")).toEqual([
-      `expected ${buildProcessInstanceId()} at epoch 1, observed ${buildProcessInstanceId()} at epoch 2`,
-    ]);
+    // The post-terminal cleanup is no longer refused, so the attempt worktree is removed
+    // instead of being leaked as a registered git worktree in the user's repo. The
+    // already-persisted terminal decision is untouched either way (asserted above).
+    await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual([]);
+    // Stated separately from the event-list assertion because it is the specific defect:
+    // no event may claim this process was superseded by itself.
+    expect(await readEventDetails(runDir, "lease_lost")).toEqual([]);
   });
 
   it("preserves the winner reconciliation view when another controller already completed the transfer", async () => {
@@ -1485,6 +1489,12 @@ describe("runLoop", () => {
         // Task 13, review finding 3: the other controller's record is what the lease guard
         // before the post-terminal cleanup now reads, so it concludes supersession — a genuine
         // foreign takeover here, unlike the self-transfer case above.
+        //
+        // The other half of final-review fix 1, and the reason that fix cannot remove a REAL
+        // refusal: this transfer is not performed by this process. Its CAS fails against the
+        // other controller's record, so persistOwnerTransfer throws and heartbeat.adopt is
+        // never reached — leaving the stale expectation, the refusal, and the retained
+        // worktree exactly as they were. Note the two sides of the detail below differ.
         "lease_lost",
       ]);
       await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
@@ -1624,7 +1634,9 @@ describe("runLoop", () => {
         "attempt_started",
         "execute_started",
         "loop_exhausted",
-        // Task 13, review finding 3: same post-terminal lease refusal as the test above.
+        // Task 13, review finding 3: same post-terminal lease refusal as the test above, and
+        // like it a genuine foreign takeover whose CAS failure means heartbeat.adopt is never
+        // reached — final-review fix 1 leaves this refusal, and this retained worktree, intact.
         "lease_lost",
       ]);
       await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
