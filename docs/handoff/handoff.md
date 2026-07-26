@@ -1,92 +1,97 @@
-# ccloop Handoff — L1（run lease + heartbeat）spec 已冻结，待进 writing-plans
+# ccloop Handoff — L1（run lease + heartbeat）已实现、评审通过、merge 进 main
 
 > 更新于 2026-07-26。接手前先用 Git / 文件系统核对每一条状态声明再动手。
 > 本文不硬钉 git HEAD：提交本文即会改变 HEAD。用下面「如何定位当前状态」自查。
 
 ## 一句话现状
 
-**resume/adopt 续跑**（前沿第 1 项）已实现并 merge 进 `main`、已 push。本轮做了两件事：①收尾 resume/adopt 遗留的 deferred minor（补测试，270 → 274 tests）；②为下一前沿的**第一层 L1「run lease + heartbeat」**完成 brainstorming → spec → **六轮对抗式评审**，spec 现已冻结，**尚未写实施计划、尚未写任何实现代码**。本轮提交已有一部分 push 到 `origin/main`，其余仍在本地——具体以下面的自查命令为准。
+前沿五层里的 **L1（run lease + heartbeat）已经全部做完**：13 个任务、每个任务独立评审、4 个任务共 5 轮修复、最终整支评审判定 `Ready to merge: Yes`，已 **fast-forward merge 进本地 `main`**。测试 274 → **356** 全绿，typecheck / build 干净。**尚未 push**（按惯例留给人）。下一步是 L2（registry / queue），或先清掉下面两个 tracked follow-up。
 
 ## 如何定位当前状态（不要照抄 commit hash）
 
 ```bash
-git -C /Users/biran/code/skills/loop/ccloop log --oneline --decorate -12
+git -C /Users/biran/code/skills/loop/ccloop log --oneline --decorate -30
 git -C /Users/biran/code/skills/loop/ccloop status --branch --short
-git log origin/main..HEAD --oneline        # 本地领先、待 push 的全部提交
+git -C /Users/biran/code/skills/loop/ccloop log origin/main..HEAD --oneline   # 待 push 的全部提交
+git -C /Users/biran/code/skills/loop/ccloop worktree list                     # 见「收尾事项」
 ```
 
-- 本轮共 10 笔提交（1 笔测试 + 8 笔 spec + 1 笔本 handoff）；其中较早的若干笔已在 `origin/main`，末尾几笔可能仍在本地。用上面第三条命令看实际待 push 的是哪几笔，不要假设数量。
-- 唯一的代码改动是 `tests/controller/resumeLoop.gate.test.ts`；其余全是 `docs/superpowers/specs/2026-07-26-run-lease-and-heartbeat-design.md`。
-- `src/` **零改动**（可用 `git diff origin/main..HEAD -- src/` 验证为空）。
+- 本轮在 `main` 上留下约 25 笔提交（13 个任务 + 修复轮 + spec 修订 + ledger）。数量以上面第三条命令为准，不要假设。
+- 所有 L1 代码与测试都在 `main` 上，工作区干净。
 
-## 本轮做了什么
+## 本轮做了什么（细节都在仓库里，勿在此重复）
 
-### 1. 收尾 resume/adopt 的 deferred minor（已完成、已验证）
+**唯一真相源仍是 spec**：`docs/superpowers/specs/2026-07-26-run-lease-and-heartbeat-design.md`。
+**实施计划**：`docs/superpowers/plans/2026-07-26-run-lease-and-heartbeat.md`（13 个任务，末尾附 §12 十九条测试要求 → 任务的覆盖表）。
+**执行全过程的 ledger 与 13 份实施报告**：`.superpowers/sdd/2026-07-26-run-lease-and-heartbeat/`（已提交）。里面有每条评审发现、每条人工裁决、每条 parked 项的理由，以及各测试的变异验证证据。**遇到「为什么代码长这样」的问题先读 `progress.md`，不要重新推理。**
 
-补两条测试：eligibility gate 的三个 accept 分支（`planning|executing|verifying`）各自断言；`ResumeNotEligibleError` 的 `.name`/`.message`/`instanceof` 直测。
+新增模块：`src/ownership/lease.ts`（纯）、`src/controller/leaseGate.ts`、`src/controller/leaseHeartbeat.ts`、`src/runtime/processIdentity.ts`；`fileStore` 增三个租约函数；`runLoop` / `resumeLoop` 接线。
 
-**变异验证**（证明测试真能失败）：临时删掉白名单里的 `"verifying"`、把 `this.name` 改成 `"Error"` → 恰好各挂 1 条新测试；随后 `src/` 逐字改回，`git diff -- src/` 为空。顺带证实这个缺口是真的——变异前**没有任何既有测试**能发现白名单被删。
+### spec 已被修订过四处 —— 它不再等同于当初冻结的那一版
 
-### 2. L1 spec：`docs/superpowers/specs/2026-07-26-run-lease-and-heartbeat-design.md`
+顶部 Status 行有索引，正文内联标注 `**Amended 2026-07-26 (a)–(d)**`。**四处全部是文档缺陷，不是实现缺陷**：实施者忠实照做，是文本错了。
 
-**前沿被切成五层**（spec §3）：L1 lease+heartbeat（本份）→ L2 registry/queue → L3 scheduler → L4 daemon → L5 cleanup/orphan GC。L1 优先，因为其上每一层都要判断 owner 新鲜度，而该判断今天**无法机械测量**。注意 L5 对应 ownership spec §17 的第三份后续 spec，**至今未写**。
-
-**四个已确认的设计决定**（人拍板，勿擅自推翻）：lease = 证据 + 互斥（只增加拒绝、不增加授权）；心跳 = 墙钟定时器 **+** 特定 event 双写；新鲜度**接进** `evaluateOwnership`（但只往拒绝方向用）；`leaseFresh` 为**必填**字段。
-
-**六轮评审的产出**（细节看 spec 与 commit message，勿在此重复）：共修 30 条缺陷，其中前四轮是真设计缺陷，后两轮多为「上一轮修法自己留下的尾巴」。最重要的两条：
-- **P1 → B 方案**：owner record 新增 `leaseAffirmedAt: string | null`，**只有心跳**能写非 null 值。原因是 `lastAffirmedAt` 被 transfer / 初始建记录 / 认领三方写入，把它当「有人在跑」会**拒掉刚被 transfer 授权的那次 resume**。
-- **Q1**：`stop()` 除停定时器外还须 CAS 释放（写回 `null`），否则跑完的 run 在一个 TTL 内仍占着租约。
-
-### 3. 评审方法论（写进了 `.wolf/cerebrum.md`）
-
-spec 自查只查「文档内部一致性」不够，必须把每条断言拿去和被引用模块的**实际行为对撞**。本轮三条阻塞级缺陷全部只有对撞才照得出来。教训：凡是「顺手」引用代码位置而没读上下文的地方，就是下一轮的缺陷来源（`runLoop.ts:734` 那次只看了一行、没看上一行的 `initializeRunFiles`，直接导致第三轮的 M1/M2）。
+- **(a) §4.4**：漏了「运行中的 owner 把所有权转给自己」（`persistBoundaryAnalysis` 就会这么做）。后果是心跳按 epoch 比较会把自己判成被接管，写出 expected 与 observed **完全相同**的假 `lease_lost` 事件，污染 L2–L5 要消费的证据流。规则已补：自转移成功后必须 adopt 刚写下的记录，且 adopt **不得**清除已成立的 supersession。
+- **(b) §8.1**：outcome 表默认所有 re-check 都发生在终态持久化之前，实际有一批在之后。已补明该窗口的语义，包括那句反直觉的结论：**租约丢失的 run 仍可能报告 `succeeded`，事件日志是唯一记录。**
+- **(c) §8.1**：副作用清单漏了 `persistBoundaryAnalysis`（循环里最大的副作用）。
+- **(d) §6**：冗余论证双向纠正——节流**不会**饿死事件路径（旧措辞会诱使后人去修一个不存在的 bug），而真正的丢失检测来自 `assertHeld`。
 
 ## 验证证据
 
 | 项 | 结果 |
 |---|---|
-| `npm test -- --run`（基线） | 17 files / **270** tests 全过 |
-| `npm test -- --run`（补测试后） | 17 files / **274** tests 全过 |
+| `npm test -- --run` | 23 files / **356** tests 全过（本轮起点 274） |
 | `npm run typecheck` / `npm run build` | 均干净 |
+| merge 后在 `main` 上复跑 | 同上，已独立验证 |
 
 运行约定：`ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run`。
-全流程**零付费 Claude 调用**（纯本地推理 + ScriptedAdapter）。
+全流程**零付费 Claude 调用**（ScriptedAdapter + 手写 stub adapter）。
 
-## 待办 / 未擅自执行
+## 收尾事项 / 未擅自执行
 
-1. **push 剩余提交**——本轮已有部分进入 `origin/main`，末尾几笔可能仍在本地。是否 push 由人决定。
-2. **进 `writing-plans` 出 L1 实施计划**——这是明确的下一步。spec 已自足，新 session 只读 spec 即可开工。
-3. **L1 实施**：`src/ownership/lease.ts`（纯）、`src/controller/leaseHeartbeat.ts`、`fileStore` 增 `affirmOwnerLease` / `releaseOwnerLease` / `readOwnerRecordWithoutRecovery`，并改 `evaluateOwnership` 输入。spec §11 有完整签名，§12 有 19 条测试要求。
-4. **`.superpowers/sdd/` 是跨会话共用的扁平目录**（不是本次专属），整删会毁掉前几次会话的 ledger 与 review diff。**建议不删**。
+1. **push** —— `main` 领先 `origin/main` 约 25 笔。是否 push 由人决定。
+2. **worktree 尚未清理** —— `.claude/worktrees/l1-run-lease-heartbeat`（分支 `worktree-l1-run-lease-heartbeat`，处于 locked）。已 FF merge，内容与 main 相同，可以安全移除，但**没有人下过指令，所以没动**。
+3. **`.superpowers/sdd/` 是跨会话共用的扁平目录**。本轮只提交了自己那个子目录里的 ledger 与报告（`git add -f`），并**刻意跳过** 21 个 `review-*.diff`（就是 `git diff` 输出，可重建）和 briefs（可从 plan 抽取）。同级目录属于更早的会话，仍被 ignore，**不要整删**。
 
-## 给实施者的重点提示
+## 两个 tracked follow-up（评审明确判定不在本分支做）
 
-spec §12 的 19 条要求里，至少 6 条是**专门写来打死某个具体错误实现**的，实施时不要弱化它们：
-心跳 expected 自我过期（第 5 条）、只取消定时器不释放（第 17 条）、`assertHeld` 复用节流（第 19 条）、损坏记录被当成「不存在」（第 7 条）、PID 复用（第 2 条）、transfer 后立即 resume 被拒（第 15 条）。
+建议**一起做**，因为第 1 条是第 2 条那个 parked race 的放大器：
 
-`leaseFresh` 改必填会让**所有既有 `evaluateOwnership` 构造点与测试 fixture** 编译不过，需显式传 `"unknown"`——这是计划里一个独立且不小的任务。
+1. **`OwnerTransferLockBusyError`** —— `fileStore` 目前把「锁忙」和「CAS 不匹配」混用同一个 `OwnerTransferPreconditionError`。本轮引入了 owner-transfer 锁的**第一个周期性竞争者**（心跳），所以一次合法的 owner transfer 可能被静默丢弃：`writeOwnerTransferArtifacts` 抢不到锁 → `runLoop` 当成「记录已变」→ 重读重判、**永不重试**，reconciliation record 写成 `newOwnerEpoch: null`。同时这也让 spec §6 那句「吞掉锁竞争」目前不可实现。
+2. **给 `persistBoundaryAnalysis` 加 guard** —— spec 修订 (c) 已把它写进副作用清单，依据明确。注意 Layer A 靠转移 CAS 自保，缺口在 `writeBoundaryArtifacts`。
+
+其余 parked 项（含 adopt 与在飞 affirm 之间几毫秒的窗口、guard 站点计数、`namesSomeoneElse` 对缺失 `supersededByEpoch` 的处理等）全部连同裁决理由记在 `progress.md`，**不要重新发现一遍**。
+
+## 给下一位实施者的重点提示
+
+- **spec §12 的 19 条里有 6 条是专门写来打死某个具体错误实现的**（第 2、5、7、15、17、19 条）。它们现在都已实现并经变异验证，**不要因为「看起来冗余」而弱化或删除**。这是人下过的常驻指令。
+- **本轮最值钱的教训**：给实施者附完整可抄代码的计划风格，效率极高（13 个任务只有 1 次真正的实现偏离），但**会关掉实施者的判断力**——计划里的疏漏会被原样落地，只能靠事后评审捞。三条 Important 缺陷正是这么来的。做 L2 的计划时建议改成「接口签名 + 测试要求 + 明确的陷阱清单」，不给完整实现。
+- **评审要对着代码撞，不要只查文档自洽**。本轮几条关键发现都是评审员跑去读被引用模块的实际行为才照出来的（例如追出 `assertHeld` 先置 `superseded` 导致心跳的事件写入路径永久不可达）。
 
 ## 仍然生效的治理边界
 
 - 每次真实 Claude 调用前须显式获批（付费）。
 - 不覆盖已接受的 `review.json`；`D-01` 保持 `INCONCLUSIVE / CONTRACT_GAP`，重解释走单独的 `review-reclassified.json`。
 - `stale-confirmed` / `reconciliation-record.json` **本身不授权继续执行或接管**；auto-takeover 仍 deny-by-default。resume 只消费已发布 transfer、不自行判断接管。
-- **L1 不得引入任何新授权**：活租约只增加拒绝；租约过期**既不许可也不拒绝**（spec §4.1、§7）。
+- **L1 不引入任何新授权**：活租约只增加拒绝；租约过期**既不许可也不拒绝**。这条已由实现与评审逐点验证成立，后续层不得削弱。
 - 不做 `git clean` / `reset --hard` / 广域 `restore`；不删 `.validation-runs/`、备份分支 `backup/evidence-first-v1-before-memory-history-cleanup`、`stash@{0}` / `stash@{1}`。
 
 ## 参考（按路径读，勿在此复制内容）
 
-- **L1 设计**：`docs/superpowers/specs/2026-07-26-run-lease-and-heartbeat-design.md`（唯一真相源）
-- 父设计：`docs/superpowers/specs/2026-07-22-ownership-and-reconciliation-boundaries-design.md`（§5.5 freshness anchor、§7.1 owner-loss 条件、§17 后续 spec 清单）
+- **L1 设计（含四处修订）**：`docs/superpowers/specs/2026-07-26-run-lease-and-heartbeat-design.md`
+- **L1 计划**：`docs/superpowers/plans/2026-07-26-run-lease-and-heartbeat.md`
+- **执行 ledger + 13 份报告**：`.superpowers/sdd/2026-07-26-run-lease-and-heartbeat/`
+- 父设计：`docs/superpowers/specs/2026-07-22-ownership-and-reconciliation-boundaries-design.md`（§5.5 freshness anchor、§7.1 owner-loss 条件、§17 后续 spec 清单——其中 L5 cleanup/orphan GC 的 spec **至今未写**）
 - 兄弟设计：`docs/superpowers/specs/2026-07-25-resume-adopt-continuation-design.md` 与对应 plan
-- 借鉴/反面参照的外部实现：`reference/loop-engineering/tools/loop-worktree/README.md`、`reference/DoWhiz/DoWhiz_service/scheduler_module/`（spec 内已给到行号）
+- 外部参照：`reference/loop-engineering/tools/loop-worktree/README.md`、`reference/DoWhiz/DoWhiz_service/scheduler_module/`
 - 项目规约：`CLAUDE.md`、`.wolf/OPENWOLF.md`、`.wolf/cerebrum.md`、`.wolf/buglog.json`
 
 ## 建议接手时调用的 skills
 
-- `superpowers:writing-plans` — **下一步**：把 L1 spec 转成实施计划。
-- `superpowers:subagent-driven-development` — 执行该计划。
-- `superpowers:test-driven-development` — §12 的 19 条要求天然是 TDD 的输入。
+- `superpowers:brainstorming` — **下一步做 L2（registry / queue）时的起点**；补 L5（cleanup / orphan GC）spec 时同样。
+- `superpowers:writing-plans` — brainstorming 出 spec 之后。注意上面「重点提示」里关于计划风格的教训。
+- `superpowers:subagent-driven-development` — 执行计划。本轮全程用它，ledger 机制被证明有效（跨压缩仍能准确定位进度）。
+- `superpowers:test-driven-development` — spec 的测试要求天然是 TDD 输入。
 - `superpowers:verification-before-completion` — 声称「通过/完成」前复跑 typecheck / build / 全套件并贴真实输出。
-- `superpowers:brainstorming` — 仅当要开 L2（registry/queue）或补 L5（cleanup/orphan GC）时。
+- `superpowers:using-git-worktrees` — 开始新一层实现前建立隔离工作区。
 - OpenWolf 协议（`.wolf/OPENWOLF.md`）：改文件后更新 `.wolf/anatomy.md` / `memory.md`；修 bug 后写 `.wolf/buglog.json`。
