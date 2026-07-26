@@ -9,6 +9,7 @@ import { parseChangedPathsFromGitStatus, runLoop } from "../../src/controller/ru
 import { SubprocessClaudeAdapter } from "../../src/runtime/claude/subprocessClaudeAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
+import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
 import { evaluateRunBoundary } from "../../src/stop/stopController.js";
 import type { RuntimeAdapter } from "../../src/runtime/types.js";
 import type { RunState } from "../../src/state/types.js";
@@ -1211,7 +1212,7 @@ describe("runLoop", () => {
     expect(reconciliation.eligibleForContinuation).toBe(true);
     expect(reconciliation.takeoverPermission.allowed).toBe(true);
     expect(owner.currentOwnerEpoch).toBe(2);
-    expect(owner.currentProcessInstanceId).toBe(`pid:${process.pid}`);
+    expect(owner.currentProcessInstanceId).toBe(buildProcessInstanceId());
     expect(transfer.priorOwnerEpoch).toBe(1);
     expect(transfer.newOwnerEpoch).toBe(2);
     expect(transfer.eligibleForContinuation).toBe(true);
@@ -1276,11 +1277,11 @@ describe("runLoop", () => {
     };
 
     expect(owner.currentOwnerEpoch).toBe(2);
-    expect(owner.currentProcessInstanceId).toBe(`pid:${process.pid}`);
+    expect(owner.currentProcessInstanceId).toBe(buildProcessInstanceId());
     expect(transfer.priorOwnerEpoch).toBe(1);
     expect(transfer.newOwnerEpoch).toBe(2);
     expect(transfer.eligibleForContinuation).toBe(true);
-    expect(transfer.newProcessInstanceId).toBe(`pid:${process.pid}`);
+    expect(transfer.newProcessInstanceId).toBe(buildProcessInstanceId());
     expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
     expect(reconciliation.priorOwnerEpoch).toBe(1);
     expect(reconciliation.newOwnerEpoch).toBe(2);

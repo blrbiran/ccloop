@@ -26,6 +26,7 @@ import type {
   VerificationResult,
 } from "../runtime/types.js";
 import { isPartialExecutionResult } from "../runtime/types.js";
+import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { FailureFingerprint, LastTrustedBoundary, RunState, StopDecision } from "../state/types.js";
 import { cleanupAttemptWorkspace, createAttemptWorkspace } from "../workspace/worktreeManager.js";
 
@@ -571,7 +572,7 @@ function buildInitialOwnerRecord(contract: LoopContract, state: RunState): Owner
     runId: contract.objective.taskId,
     logicalSessionId: `${contract.objective.taskId}:${state.lastTransitionAt}`,
     currentOwnerEpoch: 1,
-    currentProcessInstanceId: `pid:${process.pid}`,
+    currentProcessInstanceId: buildProcessInstanceId(),
     lastAffirmedAt: state.lastTransitionAt,
     ownerStatus: "current",
     supersededByEpoch: null,
@@ -673,7 +674,7 @@ async function persistBoundaryAnalysis(
       const transfer = await persistOwnerTransfer(
         runDir,
         ownerRecord,
-        `pid:${process.pid}`,
+        buildProcessInstanceId(),
         new Date().toISOString(),
         "owner lost after reconciliation",
       );

@@ -10,6 +10,7 @@ import {
   readRunState,
 } from "../persistence/fileStore.js";
 import type { OwnerRecord, OwnerTransferRecord, ReconciliationRecord, RuntimeAdapter } from "../runtime/types.js";
+import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { RunState, RunStatus } from "../state/types.js";
 import { cleanupAttemptWorkspaceBestEffort, runLoopFromState } from "./runLoop.js";
 
@@ -108,7 +109,7 @@ export async function resumeLoop(runDir: string, adapter: RuntimeAdapter): Promi
 
   const nextOwnerRecord = {
     ...ownerRecord,
-    currentProcessInstanceId: `pid:${process.pid}`,
+    currentProcessInstanceId: buildProcessInstanceId(),
     lastAffirmedAt: new Date().toISOString(),
     leaseAffirmedAt: null,
   };
@@ -122,7 +123,7 @@ export async function resumeLoop(runDir: string, adapter: RuntimeAdapter): Promi
   await appendEvent(runDir, {
     type: "resume_adopted",
     at: new Date().toISOString(),
-    detail: `epoch ${ownerRecord.currentOwnerEpoch}: ${ownerTransfer.priorProcessInstanceId} -> pid:${process.pid}`,
+    detail: `epoch ${ownerRecord.currentOwnerEpoch}: ${ownerTransfer.priorProcessInstanceId} -> ${buildProcessInstanceId()}`,
   });
 
   await cleanupResidualWorktrees(contract.context.repoPath, runDir);

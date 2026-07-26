@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { resumeLoop, ResumeNotEligibleError } from "../../src/controller/resumeLoop.js";
 import { createAttemptWorkspace } from "../../src/workspace/worktreeManager.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
+import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 
 const execFileAsync = promisify(execFile);
@@ -94,7 +95,7 @@ describe("resumeLoop", () => {
     expect(finalState.attemptsUsed).toBe(2); // continued from attempt 2 (attemptsUsed was 1)
 
     const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
-    expect(owner.currentProcessInstanceId).toBe(`pid:${process.pid}`); // claimed
+    expect(owner.currentProcessInstanceId).toBe(buildProcessInstanceId()); // claimed
     expect(owner.currentOwnerEpoch).toBe(2); // epoch unchanged
     // §5.0/§16: a resume CLAIM is not a heartbeat. It says "I own this", not "I am running
     // it right now" — only the heartbeat may write a non-null lease.
