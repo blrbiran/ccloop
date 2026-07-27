@@ -75,6 +75,15 @@ type ExecFileError = Error & {
 
 const BUDGET_EXHAUSTED_REASON = "runtime or token budget exhausted";
 
+// §5.2 of the contention design: a busy owner-transfer lock is a transient condition (a
+// contender's critical section is a handful of file writes), so it gets a short bounded retry.
+// 3 attempts * 50ms backoff <= 150ms total, far below LEASE_TTL_MS (90_000ms, lease.ts) — this
+// window runs inside the exclusive span added in a later task, holding off this process's own
+// heartbeat affirms for its duration, so it must stay small. A CAS mismatch (a stale read, not a
+// busy lock) is never retried here: see the instanceof check in the loop below.
+export const OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS = 3;
+export const OWNER_TRANSFER_LOCK_RETRY_DELAY_MS = 50;
+
 class PhaseExecutionError extends Error {
   readonly elapsedMs: number;
 
@@ -598,6 +607,12 @@ function buildTakeoverReason(allowed: boolean): string {
     : "deny-by-default until strict owner-loss and transfer conditions are fully met";
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 async function persistOwnerTransfer(
   runDir: string,
   expectedOwnerRecord: OwnerRecord,
@@ -606,7 +621,30 @@ async function persistOwnerTransfer(
   reason: string,
 ): Promise<{ ownerRecord: OwnerRecord; eligibleForContinuation: true }> {
   const transfer = applyOwnerEpochTransfer(expectedOwnerRecord, nextProcessInstanceId, at, reason);
-  await writeOwnerTransferArtifacts(runDir, expectedOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord);
+
+  // Bounded retry, lock-busy only. A CAS mismatch (OwnerTransferPreconditionError) is rethrown
+  // immediately on the first attempt: retrying it would re-run the CAS against evidence this
+  // transfer never evaluated, which is a new ownership decision wearing an old one's
+  // justification (§5.2). Only OwnerTransferLockBusyError is retried, and only up to the bound.
+  for (let attempt = 0; attempt < OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await delay(OWNER_TRANSFER_LOCK_RETRY_DELAY_MS);
+    }
+
+    try {
+      await writeOwnerTransferArtifacts(runDir, expectedOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord);
+      break;
+    } catch (error) {
+      const isLastAttempt = attempt === OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS - 1;
+      if (!(error instanceof OwnerTransferLockBusyError) || isLastAttempt) {
+        throw error;
+      }
+    }
+  }
+
+  // appendEvent runs exactly once, reached only after writeOwnerTransferArtifacts above
+  // succeeded — never inside the retry loop, so a retry that eventually succeeds cannot emit
+  // this event more than once.
   await appendEvent(runDir, {
     type: "owner_epoch_transferred",
     at,
@@ -710,9 +748,10 @@ async function persistBoundaryAnalysis(
       eligibleForContinuation = transfer.eligibleForContinuation;
     } catch (error) {
       if (error instanceof OwnerTransferLockBusyError) {
-        // Task 2 adds retry here. For now a busy lock abandons the transfer exactly like a CAS
-        // mismatch does below, plus the evidence: the event stream — not the reconciliation
-        // record (§5.3) — records why newOwnerEpoch stays null.
+        // persistOwnerTransfer already retried the lock a bounded number of times (Task 2)
+        // before giving up and reaching here. A busy lock this persistent abandons the transfer
+        // exactly like a CAS mismatch does below, plus the evidence: the event stream — not the
+        // reconciliation record (§5.3) — records why newOwnerEpoch stays null.
         await appendEvent(runDir, {
           type: "owner_transfer_contended",
           at: new Date().toISOString(),

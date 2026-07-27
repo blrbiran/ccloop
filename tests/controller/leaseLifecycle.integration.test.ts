@@ -378,6 +378,277 @@ describe("lease heartbeat lifecycle", () => {
     expect(await readEventTypes(runDir)).not.toContain("owner_epoch_transferred");
   });
 
+  // Task 2 / spec §5.2 requirement 1: a transfer whose first attempt finds the owner-transfer
+  // lock busy, and whose next attempt finds it free, must still complete. `writeOwnerTransferArtifacts`
+  // is mocked (rather than using a real lock file, as the test above does) so the lock's
+  // "release" is deterministic — gated on a call count, not on racing persistOwnerTransfer's
+  // real ~50ms backoff against a real unlock. The first call simulates a foreign holder; every
+  // call after it delegates to the real implementation.
+  it("retries a busy owner-transfer lock and completes once it clears (spec requirement 1)", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    vi.resetModules();
+    let writeCalls = 0;
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+
+      return {
+        ...actual,
+        writeOwnerTransferArtifacts: async (
+          ...args: Parameters<typeof actual.writeOwnerTransferArtifacts>
+        ) => {
+          writeCalls += 1;
+
+          if (writeCalls === 1) {
+            throw new actual.OwnerTransferLockBusyError("owner transfer already in progress");
+          }
+
+          return actual.writeOwnerTransferArtifacts(...args);
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+            runId: "task-1",
+            logicalSessionId: "task-1:lost",
+            currentOwnerEpoch: 1,
+            currentProcessInstanceId: buildProcessInstanceId(),
+            lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+            ownerStatus: "lost",
+            supersededByEpoch: null,
+          }, null, 2));
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const finalState = await observedRunLoop(contract, runDir, adapter as never);
+
+      const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+        currentOwnerEpoch: number;
+      };
+      const reconciliation = JSON.parse(
+        await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+      ) as { newOwnerEpoch: number | null; eligibleForContinuation: boolean };
+
+      // The decisive assertion: two calls happened (one busy, one that succeeded), not one.
+      // An implementation with no retry would fail this at 1, with the transfer abandoned.
+      expect(writeCalls).toBe(2);
+      expect(owner.currentOwnerEpoch).toBe(2);
+      expect(reconciliation.newOwnerEpoch).toBe(2);
+      expect(reconciliation.eligibleForContinuation).toBe(true);
+      expect(finalState.status).toBe("exhausted");
+      expect(await readEventTypes(runDir)).toContain("owner_epoch_transferred");
+      // Emitted exactly once, by the retry's eventual success, not once per failed attempt.
+      expect(
+        (await readEvents(runDir)).filter((event) => event.type === "owner_epoch_transferred"),
+      ).toHaveLength(1);
+      expect(await readEventTypes(runDir)).not.toContain("owner_transfer_contended");
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
+
+  // Task 2 / spec §5.2 requirement 2: a lock that stays busy for the WHOLE retry window is
+  // abandoned exactly like today (newOwnerEpoch: null, eligibleForContinuation: false), plus the
+  // contention event appended exactly once — never once per retry attempt, and never silently.
+  it("abandons the transfer once the retry bound is exhausted, with the contention event appended exactly once (spec requirement 2)", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    vi.resetModules();
+    let writeCalls = 0;
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+
+      return {
+        ...actual,
+        writeOwnerTransferArtifacts: async () => {
+          writeCalls += 1;
+          throw new actual.OwnerTransferLockBusyError("owner transfer already in progress");
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop, OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS } = await import(
+        "../../src/controller/runLoop.js"
+      );
+
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+            runId: "task-1",
+            logicalSessionId: "task-1:lost",
+            currentOwnerEpoch: 1,
+            currentProcessInstanceId: buildProcessInstanceId(),
+            lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+            ownerStatus: "lost",
+            supersededByEpoch: null,
+          }, null, 2));
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const finalState = await observedRunLoop(contract, runDir, adapter as never);
+
+      const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+        currentOwnerEpoch: number;
+      };
+      const reconciliation = JSON.parse(
+        await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+      ) as { newOwnerEpoch: number | null; eligibleForContinuation: boolean };
+
+      // The decisive assertion: the retry bound was exhausted, not skipped and not unbounded.
+      expect(writeCalls).toBe(OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS);
+      expect(owner.currentOwnerEpoch).toBe(1); // never transferred
+      expect(reconciliation.newOwnerEpoch).toBeNull();
+      expect(reconciliation.eligibleForContinuation).toBe(false);
+      expect(finalState.status).toBe("exhausted");
+      // Exactly once: the caller's catch branch appends this after persistOwnerTransfer's retry
+      // loop gives up, not once per attempt inside the loop.
+      expect(
+        (await readEvents(runDir)).filter((event) => event.type === "owner_transfer_contended"),
+      ).toHaveLength(1);
+      expect(await readEventTypes(runDir)).not.toContain("owner_epoch_transferred");
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
+
+  // Task 2 / spec §5.2 requirement 3, and the trap the plan calls out explicitly: retrying a CAS
+  // mismatch would re-run the CAS against evidence this transfer never evaluated — a new
+  // ownership decision wearing an old one's justification. Asserts the ATTEMPT COUNT, not just
+  // the outcome: an implementation that retried the mismatch and still failed on every retry
+  // would produce the same outcome (abandoned, newOwnerEpoch: null) as one that never retried,
+  // so only the call count distinguishes them.
+  it("retries zero times on a CAS mismatch (spec requirement 3)", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    vi.resetModules();
+    let writeCalls = 0;
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+
+      return {
+        ...actual,
+        writeOwnerTransferArtifacts: async () => {
+          writeCalls += 1;
+          throw new actual.OwnerTransferPreconditionError(
+            "persisted owner record changed before owner transfer could be applied",
+          );
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+            runId: "task-1",
+            logicalSessionId: "task-1:lost",
+            currentOwnerEpoch: 1,
+            currentProcessInstanceId: buildProcessInstanceId(),
+            lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+            ownerStatus: "lost",
+            supersededByEpoch: null,
+          }, null, 2));
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const finalState = await observedRunLoop(contract, runDir, adapter as never);
+
+      const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+        currentOwnerEpoch: number;
+      };
+      const reconciliation = JSON.parse(
+        await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+      ) as { newOwnerEpoch: number | null; eligibleForContinuation: boolean };
+
+      // The decisive assertion: exactly one attempt, never retried.
+      expect(writeCalls).toBe(1);
+      expect(owner.currentOwnerEpoch).toBe(1); // never transferred
+      expect(reconciliation.newOwnerEpoch).toBeNull();
+      expect(reconciliation.eligibleForContinuation).toBe(false);
+      expect(finalState.status).toBe("exhausted");
+      // The existing re-read/re-evaluate path, unchanged: no contention event (this was never
+      // lock contention) and no transfer event (nothing was ever staged).
+      expect(await readEventTypes(runDir)).not.toContain("owner_transfer_contended");
+      expect(await readEventTypes(runDir)).not.toContain("owner_epoch_transferred");
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
+
   // Coverage gap found in review of the test above: that test's rotation is only ever
   // observed by the top-of-loop check (Check 1), one iteration after the rotation, because
   // the heartbeat's only affirmNow() call site is the top of the loop. The retry-boundary
