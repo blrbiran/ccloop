@@ -1479,23 +1479,31 @@ describe("runLoop", () => {
       expect(reconciliation.newOwnerEpoch).toBe(2);
       expect(reconciliation.eligibleForContinuation).toBe(true);
       expect(reconciliation.takeoverPermission.allowed).toBe(true);
-      expect(finalState.status).toBe("exhausted");
-      expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON);
+      // Task 5, human ruling: persistBoundaryAnalysis's write guard is unconditional, so this
+      // process's own (failed-CAS, would-have-preserved-the-winner) write never happens at all
+      // — refused BEFORE persistTerminalState ever runs, not after it. The run therefore never
+      // reaches "exhausted"; "cancelled"/lease_lost is the reported terminal outcome instead.
+      // The reconciliation/owner/transfer field assertions above are unaffected: those files
+      // were written directly by the mocked "other controller" (readOwnerRecord's fake write),
+      // not by this process, so their content is identical whether or not this process's own
+      // (now-refused) write ever lands.
+      expect(finalState.status).toBe("cancelled");
+      expect(finalState.stopReason).toBe("lease_lost");
       expect(await readEventTypes(runDir)).toEqual([
         "loop_planning",
         "attempt_started",
         "execute_started",
-        "loop_exhausted",
-        // Task 13, review finding 3: the other controller's record is what the lease guard
-        // before the post-terminal cleanup now reads, so it concludes supersession — a genuine
-        // foreign takeover here, unlike the self-transfer case above.
-        //
-        // The other half of final-review fix 1, and the reason that fix cannot remove a REAL
-        // refusal: this transfer is not performed by this process. Its CAS fails against the
-        // other controller's record, so persistOwnerTransfer throws and heartbeat.adopt is
-        // never reached — leaving the stale expectation, the refusal, and the retained
-        // worktree exactly as they were. Note the two sides of the detail below differ.
+        // Task 5: the other controller's record is what persistBoundaryAnalysis's OWN write
+        // guard now reads (before this process would have written anything), so it concludes
+        // supersession here — earlier than the old post-terminal-cleanup guard used to. This
+        // is a genuine foreign takeover: this transfer is not performed by this process, its
+        // CAS fails against the other controller's record, and heartbeat.adopt is never
+        // reached — leaving the stale expectation and the refusal exactly as they were. Note
+        // the two sides of the detail below differ.
         "lease_lost",
+        // Emitted by the outer catch's isLeaseStopError branch, since state.status was not yet
+        // terminal when the guard fired (this attempt never got as far as persistTerminalState).
+        "loop_cancelled",
       ]);
       await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
       expect(await readEventDetails(runDir, "lease_lost")).toEqual([
@@ -1595,19 +1603,6 @@ describe("runLoop", () => {
         newProcessInstanceId: string;
         eligibleForContinuation: boolean;
       };
-      const reconciliation = JSON.parse(
-        await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
-      ) as {
-        staleSuspicionBasis: string[];
-        staleConfirmed: boolean;
-        ownershipVerdict: string;
-        lastTrustedBoundary: string;
-        conflictingEvidence: string[];
-        takeoverPermission: { allowed: boolean; reason: string };
-        priorOwnerEpoch: number | null;
-        newOwnerEpoch: number | null;
-        eligibleForContinuation: boolean;
-      };
 
       expect(owner.currentOwnerEpoch).toBe(2);
       expect(owner.currentProcessInstanceId).toBe("pid:other-controller");
@@ -1616,28 +1611,36 @@ describe("runLoop", () => {
       expect(transfer.newOwnerEpoch).toBe(2);
       expect(transfer.newProcessInstanceId).toBe("pid:other-controller");
       expect(transfer.eligibleForContinuation).toBe(true);
-      expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
-      expect(reconciliation.priorOwnerEpoch).toBe(1);
-      expect(reconciliation.newOwnerEpoch).toBe(2);
-      expect(reconciliation.eligibleForContinuation).toBe(true);
-      expect(reconciliation.takeoverPermission.allowed).toBe(true);
-      expect(reconciliation.takeoverPermission.reason).toBe(
-        "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
-      );
-      expect(reconciliation.staleSuspicionBasis).toEqual(["owner transfer already published"]);
-      expect(reconciliation.conflictingEvidence).toEqual([]);
-      expect(reconciliation.lastTrustedBoundary).toBe("execute");
-      expect(finalState.status).toBe("exhausted");
-      expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON);
+      // Task 5, human ruling: persistBoundaryAnalysis's write guard is unconditional. Unlike
+      // the sibling test above (where the mocked "other controller" wrote
+      // reconciliation-record.json directly), THIS test's whole point was that no
+      // reconciliation-record.json exists yet — only owner-record.json / owner-transfer.json,
+      // published by the rival — and it is THIS process's OWN write that used to synthesize
+      // one from them (writeBoundaryArtifacts's `readPersistedSuccessfulTransferArtifacts` /
+      // `resolveSuccessfulReconciliation` path, fileStore.ts). That write is refused before it
+      // ever runs now, so the synthesis never happens: neither reconciliation-record.json nor
+      // boundary-analysis.json is created at all. The old field-by-field assertions about the
+      // synthesized content are removed; a superseded process no longer produces that view —
+      // if it is still wanted, it belongs to whichever process still holds the run (L5's
+      // problem, not this branch's).
+      await expect(access(join(runDir, "reconciliation-record.json"))).rejects.toThrow();
+      await expect(access(join(runDir, "boundary-analysis.json"))).rejects.toThrow();
+      expect(finalState.status).toBe("cancelled");
+      expect(finalState.stopReason).toBe("lease_lost");
       expect(await readEventTypes(runDir)).toEqual([
         "loop_planning",
         "attempt_started",
         "execute_started",
-        "loop_exhausted",
-        // Task 13, review finding 3: same post-terminal lease refusal as the test above, and
-        // like it a genuine foreign takeover whose CAS failure means heartbeat.adopt is never
-        // reached — final-review fix 1 leaves this refusal, and this retained worktree, intact.
+        // Task 5: same mechanism as the sibling test above — persistBoundaryAnalysis's own
+        // write guard now concludes supersession before this process would have written (or,
+        // here, synthesized) anything, earlier than the old post-terminal-cleanup guard used
+        // to. A genuine foreign takeover: this transfer is not performed by this process, its
+        // CAS fails against the other controller's record, and heartbeat.adopt is never
+        // reached.
         "lease_lost",
+        // Emitted by the outer catch's isLeaseStopError branch, since state.status was not yet
+        // terminal when the guard fired.
+        "loop_cancelled",
       ]);
       await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
       expect(await readEventDetails(runDir, "lease_lost")).toEqual([

@@ -1454,13 +1454,19 @@ describe("lease heartbeat lifecycle", () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
+    // Wider margins than the 20ms/20ms shape this was originally modelled on (Minor 7 from
+    // review): the adapter below always times out (it blocks on the abort signal rather than
+    // racing it), so a short perAttemptTimeoutMs alone is enough to reach the "timedOut" branch
+    // deterministically — there is no need to ALSO race a tiny totalRuntimeBudgetMs against
+    // real wall-clock file I/O to get there, and doing so was exactly the shape flagged
+    // elsewhere in this task as flake-prone. totalRuntimeBudgetMs is left at the contract's
+    // generous default so `hasBudgetExceeded` has no realistic chance of firing early and
+    // diverting the run before it ever reaches execute.
     const contract: LoopContract = {
       ...baseContract,
       executionPolicy: {
         ...baseContract.executionPolicy,
-        perAttemptTimeoutMs: 20,
-        totalRuntimeBudgetMs: 20,
-        partialOutcomeRecoveryWindowMs: 10,
+        perAttemptTimeoutMs: 200,
       },
     };
 

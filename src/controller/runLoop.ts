@@ -795,25 +795,16 @@ async function persistBoundaryAnalysis(
   // function, which receives only `heartbeat` as a parameter. Matches how L1's other
   // `assertHeld` call sites are written.
   //
-  // Conditioned on `nextOwnerEpoch !== null` — i.e. only when THIS process's own transfer
-  // just succeeded and was adopted just above — deliberately, not as a broader "any mismatch
-  // refuses" check. When the transfer attempt instead failed (lock busy, or a CAS
-  // precondition mismatch because another controller already completed an equivalent
-  // reconciliation — runLoop.integration.test.ts's "preserves the winner reconciliation view"
-  // tests), `heartbeat`'s `expected` was never updated (adopt() is only reached on success),
-  // so a raw assertHeld here would always see a mismatch against whatever the other
-  // controller wrote — even though `writeBoundaryArtifacts` is already safe in that case:
-  // `preserveSuccessfulReconciliationIfNeeded` (fileStore.ts) exists precisely to let a losing
-  // process's write land without clobbering a winner's already-persisted reconciliation view.
-  // Guarding that path too would refuse a write that was never going to corrupt anything, and
-  // would turn an "exhausted" run into a "cancelled"/lease_lost one — a terminal-outcome
-  // change the design's no-new-authority rule does not call for. The guard here exists for the
-  // one case that safety net does NOT cover: this process's OWN successful transfer, superseded
-  // by a genuinely later rival before the write it earned gets to land.
-  if (nextOwnerEpoch !== null) {
-    await heartbeat.assertHeld();
-  }
-
+  // Unconditional, per human ruling: this layer's thesis is "only ever refuse, never grant."
+  // A process that no longer holds the run must not write into it, including the case where
+  // its own transfer attempt failed and it would otherwise fall back to writing a view of
+  // someone else's already-completed reconciliation — that synthesis, if still wanted, is a
+  // later layer's problem, not this one's. Accepted cost: a process whose own transfer failed
+  // because another controller had already completed an equivalent one used to still write a
+  // preserved/synthesized view of the winner (runLoop.integration.test.ts's two "preserves ...
+  // winner reconciliation view" tests, re-expressed for this task to assert the refusal
+  // instead).
+  await heartbeat.assertHeld();
   await writeBoundaryArtifacts(runDir, {
     boundaryAnalysis,
     reconciliationRecord:
