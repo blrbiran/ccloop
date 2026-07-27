@@ -20,6 +20,7 @@ export type LeaseHeartbeat = {
   adopt: (record: OwnerRecord) => void;
   affirmNow: () => Promise<void>;
   assertHeld: () => Promise<void>;
+  runExclusive: <T>(fn: () => Promise<T>) => Promise<T>;
   stop: () => Promise<void>;
 };
 
@@ -179,6 +180,28 @@ export function startLeaseHeartbeat(options: {
     return queue;
   };
 
+  // Task 3: the second writer of §6's shared serialization, alongside affirmNow. Unlike
+  // runAffirm, `fn` is caller-supplied and CAN reject — so this must not copy affirmNow's
+  // `queue = queue.then(x, x); return queue` shape verbatim. That shape is safe there only
+  // because runAffirm never rejects; reusing it here would store the very promise that
+  // carries fn's rejection back into `queue`, and every future scheduling that promise
+  // partakes in from then on. `result` (returned to the caller) and the value stored back
+  // into `queue` are deliberately two DIFFERENT promises: `result` settles exactly as `fn`
+  // does, while the stored one is derived from `result` but maps both outcomes to a plain
+  // resolution, so the shared queue itself never becomes a rejected promise.
+  //
+  // Takes no position on `stopped` or `superseded` — it only serializes. Refusal is Task 5's
+  // job; duplicating it here would just be a second, weaker copy of a decision that already
+  // has one home.
+  const runExclusive = <T>(fn: () => Promise<T>): Promise<T> => {
+    const result = queue.then(fn, fn);
+    queue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+
   const timer = setInterval(() => {
     void affirmNow();
   }, LEASE_HEARTBEAT_INTERVAL_MS);
@@ -282,5 +305,5 @@ export function startLeaseHeartbeat(options: {
     );
   };
 
-  return { adopt, affirmNow, assertHeld, stop };
+  return { adopt, affirmNow, assertHeld, runExclusive, stop };
 }

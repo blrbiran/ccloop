@@ -835,10 +835,14 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
   }
 }
 
-const INERT_LEASE_HEARTBEAT: LeaseHeartbeat = {
+// Task 3: exported so tests can pin `runExclusive` directly. A no-op here would silently
+// delete every owner transfer performed without a live heartbeat (this is the default
+// heartbeat for runLoopFromState, below) — it must execute `fn` and return its result.
+export const INERT_LEASE_HEARTBEAT: LeaseHeartbeat = {
   adopt: () => {},
   affirmNow: async () => {},
   assertHeld: async () => {},
+  runExclusive: (fn) => fn(),
   stop: async () => {},
 };
 

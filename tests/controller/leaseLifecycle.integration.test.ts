@@ -691,6 +691,7 @@ describe("lease heartbeat lifecycle", () => {
         affirmNowCalls += 1;
       },
       assertHeld: async () => {},
+      runExclusive: (fn) => fn(),
       stop: async () => {},
     };
 
@@ -832,6 +833,7 @@ describe("lease heartbeat lifecycle", () => {
           throw new RunLeaseLostError("run lease lost: test-injected supersession");
         }
       },
+      runExclusive: (fn) => fn(),
       stop: async () => {},
     };
 
@@ -907,6 +909,7 @@ describe("lease heartbeat lifecycle", () => {
           throw new RunLeaseLostError("run lease lost: test-injected supersession");
         }
       },
+      runExclusive: (fn) => fn(),
       stop: async () => {},
     };
 

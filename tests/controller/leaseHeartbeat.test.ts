@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startLeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
+import { INERT_LEASE_HEARTBEAT } from "../../src/controller/runLoop.js";
 import { LEASE_HEARTBEAT_INTERVAL_MS, LEASE_TTL_MS } from "../../src/ownership/lease.js";
 import type { OwnerRecord } from "../../src/runtime/types.js";
 
@@ -309,6 +310,144 @@ describe("startLeaseHeartbeat", () => {
     expect((await readOwner(runDir)).leaseAffirmedAt).not.toBeNull();
     expect(lost).toHaveLength(0);
     await heartbeat.stop();
+  });
+
+  // Task 3 / spec requirement 10 — the poisoned-chain killer. Requirement 10 asks for two
+  // things: the rejection reaches the runExclusive caller, and the queue is still usable for a
+  // subsequent affirm afterward (not deadlocked, not silently swallowed). A second runExclusive
+  // call is checked too, for its own result rather than the first call's stale rejection: that
+  // is the sharper version of "usable afterward" — an implementation that stores the very
+  // promise carrying fn's rejection back into `queue` (rather than a distinct, always-resolving
+  // one) can leave a single-handler-style consumer of `queue` inheriting that rejection forever
+  // instead of ever invoking its own fn.
+  it("runExclusive: a rejecting fn propagates to its caller, and the queue stays usable for what follows", async () => {
+    const runDir = await seed(record());
+    const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
+
+    const boom = new Error("boom");
+    await expect(heartbeat.runExclusive(async () => {
+      throw boom;
+    })).rejects.toBe(boom);
+
+    // A subsequent runExclusive call must run ITS OWN fn and carry ITS OWN result — not inherit
+    // the previous call's rejection.
+    await expect(heartbeat.runExclusive(async () => "second-result")).resolves.toBe("second-result");
+
+    // Spec requirement 10's own wording: a subsequent affirm still runs too.
+    await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS);
+    await heartbeat.affirmNow();
+
+    expect((await readOwner(runDir)).leaseAffirmedAt).not.toBeNull();
+    await heartbeat.stop();
+  });
+});
+
+// Task 3: runExclusive is the second writer of §6's shared serialization queue, alongside
+// affirmNow. This proves the two share it: a due affirm queued behind an in-flight
+// runExclusive `fn` must not reach its own write until `fn` settles.
+//
+// affirmOwnerLease is mocked to a test-controlled deferred promise rather than left as real
+// filesystem I/O. A real affirm's completion depends on several real fs round trips (lock,
+// read, write, rename, unlock — see the environment note on the first test in this file), so
+// polling disk state or counting microtask turns while it is "supposed to be" blocked cannot
+// distinguish correct serialization from a bug that lets it start early: neither the correct
+// nor the broken run would have reached disk yet after a handful of microtask flushes, for
+// unrelated real-I/O-timing reasons. Mocking removes that variable: both `fn` and the affirm
+// are now plain, fully deterministic JS promises under this test's control, so "was the
+// affirm's write even INVOKED before fn resolved" becomes an exact, race-free assertion.
+describe("runExclusive shares the serialization queue with affirmNow", () => {
+  afterEach(() => {
+    vi.doUnmock("../../src/persistence/fileStore.js");
+    vi.resetModules();
+  });
+
+  it("does not invoke the due affirm's write until an in-flight runExclusive fn resolves", async () => {
+    vi.resetModules();
+
+    const order: string[] = [];
+    let releaseAffirm: (updated: OwnerRecord) => void = () => {};
+    const affirmGate = new Promise<OwnerRecord>((resolve) => {
+      releaseAffirm = resolve;
+    });
+
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+      return {
+        ...actual,
+        affirmOwnerLease: async () => {
+          order.push("affirm:start");
+          const updated = await affirmGate;
+          order.push("affirm:end");
+          return updated;
+        },
+      };
+    });
+
+    const { startLeaseHeartbeat: mockedStartLeaseHeartbeat } = await import(
+      "../../src/controller/leaseHeartbeat.js"
+    );
+    const runDir = await seed(record());
+    const heartbeat = mockedStartLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
+
+    let releaseFn: () => void = () => {};
+    const fnGate = new Promise<void>((resolve) => {
+      releaseFn = resolve;
+    });
+
+    const exclusive = heartbeat.runExclusive(async () => {
+      order.push("fn:start");
+      await fnGate;
+      order.push("fn:end");
+      return "fn-result";
+    });
+
+    // The due affirm: queued on the same shared queue immediately behind fn, exactly as the
+    // interval timer queues it in production.
+    const affirmPromise = heartbeat.affirmNow();
+
+    // A couple of microtask turns are enough here (unlike the real-I/O case) because reaching
+    // the mocked affirmOwnerLease requires no real I/O — only correct queue chaining. If
+    // runExclusive failed to chain fn onto `queue`, affirmNow's own chain would find `queue`
+    // still at its initial resolved state and invoke runAffirm immediately, pushing
+    // "affirm:start" right here, before fn has even resolved.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(["fn:start"]);
+
+    releaseFn();
+    await expect(exclusive).resolves.toBe("fn-result");
+
+    // Now that fn has resolved, runAffirm's callback can run and reach the mocked
+    // affirmOwnerLease.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(["fn:start", "fn:end", "affirm:start"]);
+
+    releaseAffirm(record({ leaseAffirmedAt: "2026-07-26T10:05:00.000Z" }));
+    await affirmPromise;
+
+    expect(order).toEqual(["fn:start", "fn:end", "affirm:start", "affirm:end"]);
+    await heartbeat.stop();
+  });
+});
+
+describe("INERT_LEASE_HEARTBEAT.runExclusive", () => {
+  // Task 3: INERT_LEASE_HEARTBEAT is the default heartbeat for runLoopFromState when a run is
+  // driven without a live one. A no-op runExclusive would silently discard whatever `fn` does
+  // — in production, an owner transfer — so it must actually execute `fn` and hand back its
+  // result.
+  it("executes fn and returns its result", async () => {
+    await expect(INERT_LEASE_HEARTBEAT.runExclusive(async () => "transferred")).resolves.toBe(
+      "transferred",
+    );
+
+    const calls: string[] = [];
+    await INERT_LEASE_HEARTBEAT.runExclusive(async () => {
+      calls.push("ran");
+    });
+    expect(calls).toEqual(["ran"]);
   });
 });
 
