@@ -137,30 +137,16 @@ of `queue` (a second `runExclusive` call, in a mutation using `.then(fn)` with n
 `onRejected`) inheriting the stale rejection instead of running its own `fn` — check 2
 targets exactly that.
 
-**Mutation (matches brief's mutation 2, single-handler variant):**
-```ts
-const runExclusive = <T>(fn: () => Promise<T>): Promise<T> => {
-  queue = queue.then(fn) as unknown as Promise<void>; // same object stored AND returned
-  return queue as unknown as Promise<T>;
-};
-```
-**Observed failure:**
-```
-AssertionError: promise rejected "Error: boom" instead of resolving
-Caused by: Error: boom
-```
-The second `runExclusive(async () => "second-result")` call rejected with the *first*
-call's stale `boom`, never invoking its own `fn` — exactly the poisoned-chain failure mode.
-I also tried the more literal dual-handler mirror (`queue = queue.then(fn, fn); return
-queue`) as a first attempt at this mutation and confirmed — as the Node experiment
-predicted — that it does **not** fail this test (or any test in the suite): dual-handler
-`.then` self-heals regardless of the previous promise's settlement, so it doesn't actually
-violate requirement 10's stated properties even though it violates the "distinct promises"
-structural requirement from the brief. I've recorded this as a known limit of test-based
-verification for that specific structural shape (see "not done" below) — the check 2
-addition is the strongest *behavioral* test available for the broken class of mutation, and
-the source comment and design-doc citation explain why it must be a distinct promise. Both
-mutations restored; suite re-verified green.
+**Correction (review round 2):** the mutation I originally recorded here — `queue =
+queue.then(fn) as unknown as Promise<void>; return queue as unknown as Promise<T>;` — needs
+two `as unknown as` casts to even compile, because it reuses `queue = queue.then(...)`
+directly against a variable typed `Promise<void>`. That is not a mutation a plausible wrong
+implementation would produce, so while it does make this test fail (second
+`runExclusive(async () => "second-result")` rejects with the first call's stale `boom`
+instead of running its own `fn`), it doesn't discharge the verification this test is
+actually for. See "Fix (review round 2)" below for the realistic mutation
+(`queue = result.then(() => undefined)`, no casts needed) and why it passes this test in
+full — the actual gap it exposes needed a different, new test.
 
 ### 3. `INERT_LEASE_HEARTBEAT.runExclusive` — "executes fn and returns its result"
    (new describe block `INERT_LEASE_HEARTBEAT.runExclusive`)
@@ -217,14 +203,151 @@ new required field.
   actually discriminate correct from broken (see test 1 above), I replaced the real I/O with
   a mocked `affirmOwnerLease` rather than reach for a real timer/sleep, since the suite
   already carries one timing-dependent test flagged as a flake risk.
-- **Left the dual-handler mirror mutation formally uncaught by any test.** I could not
-  construct an observable-behavior test that distinguishes `queue = queue.then(fn, fn);
-  return queue` (same object, dual-handler) from the correct implementation — it happens to
-  self-heal for every consumer currently in the codebase (both `affirmNow` and a subsequent
-  `runExclusive`, since JS's `.then(onFulfilled, onRejected)` invokes `onRejected` on an
-  already-rejected promise regardless of when `.then` was called). I verified this with a
-  standalone Node script rather than assert it from memory. This is flagged here rather than
-  silently left as an assumed-covered case — the requirement 10 test still passes for the
-  right reason (it covers the single-handler mutation, which is the one that actually
-  breaks), but "same object for stored and returned" as a structural property is enforced by
-  source comment and design-doc reference, not by a test that can currently fail on it.
+- **Correction (review round 2) — the dual-handler mirror claim below was wrong as
+  originally stated.** I had written that the dual-handler mirror (`queue = queue.then(fn,
+  fn); return queue`) was *undistinguishable from the correct implementation by any test* —
+  that conclusion was wrong. My empirical finding underneath it was right (it self-heals for
+  every *awaited* consumer in this suite, via the same `.then(onFulfilled, onRejected)`
+  self-healing on an already-rejected promise I verified with a standalone Node script), but
+  self-healing for an *awaited* caller says nothing about a fire-and-forget or
+  deferred-`await` caller: with one of those, the rejection lands on `queue` and nothing
+  consumes it until the next write to `queue` — up to a full `LEASE_HEARTBEAT_INTERVAL_MS`
+  away — producing an `unhandledRejection` the correct implementation cannot produce. See
+  "Fix (review round 2)" below for the test that exercises exactly that shape. It is still
+  true that this specific mirror needs two `as unknown as` casts to compile (unlike the
+  realistic mutation in the fix below), which is why I did not chase a test built
+  specifically against it — but "no test could exist" was the wrong conclusion to draw from
+  that.
+
+## Fix (review round 2)
+
+Review finding (Important): the untested case was misidentified. The dual-handler mirror
+needs two casts to compile and isn't what a real implementer would write. The mutation that
+actually is plausible — and that no existing test caught — is dropping `onRejected` from
+just the *stored* mapper, keeping the read side (`queue.then(fn, fn)`) untouched:
+
+```ts
+const result = queue.then(fn, fn);
+queue = result.then(() => undefined);   // one argument, not two — the bug
+return result;
+```
+
+This **typechecks cleanly** (`Promise<undefined>` unifies with `Promise<void>` with no cast
+needed — unlike either mutation I'd tried before). It also **passes the existing
+requirement-10 test in full**, which I re-confirmed by applying it and running that test in
+isolation: the second `runExclusive` call's own read of `queue` (`queue.then(fn2, fn2)`) is
+itself dual-handler, so it self-heals a rejected `queue` regardless of what shape the
+*previous* write used — the requirement-10 test can never observe this bug, no matter how
+it's extended, as long as it only ever drives further *awaited* operations through `queue`.
+
+What it actually produces: `queue` sits rejected with no handler attached to it until the
+next write — the next timer-driven `affirmNow()`, up to a full `LEASE_HEARTBEAT_INTERVAL_MS`
+away. Nothing in `src/` installs a `process.on("unhandledRejection", ...)` listener, so in
+production this is Node's default unhandled-rejection behavior: process termination. On a
+lease-holding run loop, that turns a normal, expected outcome under contention (a transfer's
+`fn` rejecting with `OwnerTransferPreconditionError`, or a real I/O failure) into a crash.
+
+### New test
+
+`tests/controller/leaseHeartbeat.test.ts`, in the real-timer describe block
+`runExclusive shares the serialization queue with affirmNow` (not the fake-timer
+`startLeaseHeartbeat` block, since nothing about this test needs the fake clock):
+
+```
+it("runExclusive: a rejecting fn leaves the shared queue resolved — no unhandled rejection", async () => {
+  const runDir = await seed(record());
+  const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
+
+  const unhandled: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandledRejection);
+
+  try {
+    const boom = new Error("boom");
+    await expect(heartbeat.runExclusive(async () => {
+      throw boom;
+    })).rejects.toBe(boom);
+
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+    await heartbeat.stop();
+  }
+});
+```
+
+The `setImmediate` gap is deliberate: it ends the turn with nothing else chained onto
+`queue` (no `affirmNow`, no second `runExclusive`), so a rejected-and-unhandled `queue` has
+nowhere to hide behind a self-healing read.
+
+### Mutation evidence
+
+Applied the exact mutation from the finding to `src/controller/leaseHeartbeat.ts`:
+```ts
+const runExclusive = <T>(fn: () => Promise<T>): Promise<T> => {
+  const result = queue.then(fn, fn);
+  queue = result.then(() => undefined);
+  return result;
+};
+```
+
+`npm run typecheck` — clean, confirming the mutation compiles with no casts:
+```
+> tsc --noEmit -p tsconfig.json
+(clean)
+```
+
+`ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run tests/controller/leaseHeartbeat.test.ts`:
+```
+(node:86497) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 169)
+ ❯ tests/controller/leaseHeartbeat.test.ts (19 tests | 1 failed) 319ms
+   × runExclusive shares the serialization queue with affirmNow > runExclusive: a rejecting fn leaves the shared queue resolved — no unhandled rejection 6ms
+     → expected [ Error: boom ] to deeply equal []
+
+ FAIL  tests/controller/leaseHeartbeat.test.ts > runExclusive shares the serialization queue with affirmNow > runExclusive: a rejecting fn leaves the shared queue resolved — no unhandled rejection
+AssertionError: expected [ Error: boom ] to deeply equal []
+- Array []
++ Array [
++   [Error: boom],
++ ]
+ ❯ tests/controller/leaseHeartbeat.test.ts:476:25
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 18 passed (19)
+```
+
+Exactly as predicted: `boom` reached `process`'s `unhandledRejection` event. The other 18
+tests were unaffected — this specific bug is invisible to all of them, confirming the
+finding that it was genuinely untested before this fix.
+
+Reverted the mutation (restored the correct two-argument absorbing mapper) and re-ran full
+verification:
+
+```
+$ npm run typecheck
+> tsc --noEmit -p tsconfig.json
+(clean)
+
+$ npm run build
+> tsc -p tsconfig.json && ...
+(clean)
+
+$ ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run tests/controller/leaseHeartbeat.test.ts
+ Test Files  1 passed (1)
+      Tests  19 passed (19)
+
+$ ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run
+ Test Files  23 passed (23)
+      Tests  367 passed (367)
+```
+
+367 = 363 baseline + 4 new tests (the 3 from the first pass, plus this one). No source
+change was needed or made — the implementation was already correct; only the missing test
+was added.
+
