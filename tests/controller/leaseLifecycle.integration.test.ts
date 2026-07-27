@@ -12,7 +12,7 @@ import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
 import type { LeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import type { RunState } from "../../src/state/types.js";
-import type { RuntimeAdapter } from "../../src/runtime/types.js";
+import type { OwnerRecord, RuntimeAdapter } from "../../src/runtime/types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -643,6 +643,354 @@ describe("lease heartbeat lifecycle", () => {
       // lock contention) and no transfer event (nothing was ever staged).
       expect(await readEventTypes(runDir)).not.toContain("owner_transfer_contended");
       expect(await readEventTypes(runDir)).not.toContain("owner_epoch_transferred");
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
+
+  // Task 4 / spec §12 (owner-transfer-contention design) requirement 4: an affirm that becomes
+  // due while a transfer is in flight must not execute until the transfer's exclusive span
+  // completes; the transfer sees zero CAS failures and no lease_lost is appended.
+  //
+  // Driven deterministically (no real 30s timer, no wall-clock racing): readOwnerRecord — the
+  // span's OWN first statement — is mocked to pause on a test-controlled deferred promise, so
+  // "did the affirm's own CAS attempt start before the span released" becomes an exact,
+  // race-free observation rather than a real-timing guess (the same technique
+  // leaseHeartbeat.test.ts uses for the equivalent unit-level property). Gating at the read
+  // rather than at the transfer's write matters: it is the earliest point inside the span, so
+  // it kills both a runExclusive that never chains fn onto the queue at all AND a span that
+  // starts one statement too late (after readOwnerRecord instead of at it) — either mutation
+  // leaves the queue unoccupied at this point, letting the concurrent affirm through early.
+  //
+  // runLoopFromState (not runLoop()) is driven directly so the test holds the SAME heartbeat
+  // instance persistBoundaryAnalysis uses, and can call affirmNow() on it — simulating the
+  // interval timer landing mid-span. The owner record already shows ownerStatus "lost" under
+  // the SAME processInstanceId the heartbeat is constructed with: a self-transfer (defect 2's
+  // scenario — this process reclaiming its own record), not a foreign takeover.
+  it("blocks a due affirm until the transfer's exclusive span completes, with zero CAS failures and no lease_lost (spec requirement 4)", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const processInstanceId = buildProcessInstanceId();
+    const initialOwnerRecord: OwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1:t0",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: processInstanceId,
+      lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+      ownerStatus: "lost",
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    await writeFile(join(runDir, "owner-record.json"), JSON.stringify(initialOwnerRecord, null, 2));
+
+    vi.resetModules();
+    const order: string[] = [];
+    let releaseSpanRead: () => void = () => {};
+    const spanReadGate = new Promise<void>((resolve) => {
+      releaseSpanRead = resolve;
+    });
+    // Gates only the FIRST readOwnerRecord call — persistBoundaryAnalysis's own span read. The
+    // catch path's re-read (only reached on a CAS mismatch, which this scenario never hits)
+    // would otherwise also match and deadlock the test.
+    let readCalls = 0;
+
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+
+      return {
+        ...actual,
+        readOwnerRecord: async (...args: Parameters<typeof actual.readOwnerRecord>) => {
+          readCalls += 1;
+          if (readCalls === 1) {
+            order.push("span:readStart");
+            await spanReadGate;
+          }
+          const result = await actual.readOwnerRecord(...args);
+          if (readCalls === 1) {
+            order.push("span:readEnd");
+          }
+          return result;
+        },
+        affirmOwnerLease: async (...args: Parameters<typeof actual.affirmOwnerLease>) => {
+          order.push("affirm:start");
+          const result = await actual.affirmOwnerLease(...args);
+          order.push("affirm:end");
+          return result;
+        },
+      };
+    });
+
+    try {
+      const { runLoopFromState: observedRunLoopFromState } = await import("../../src/controller/runLoop.js");
+      const { startLeaseHeartbeat: mockedStartLeaseHeartbeat } = await import(
+        "../../src/controller/leaseHeartbeat.js"
+      );
+
+      // Injected clock: runLoopFromState's own top-of-loop `heartbeat.affirmNow()` (unthrottled,
+      // since it is the very first affirm) fires at clock=0, before the transfer is even
+      // reached. Without advancing the clock past LEASE_AFFIRM_THROTTLE_MS before THIS test's
+      // own mid-span affirmNow() call, that call would be silently throttled away and never
+      // even attempt its CAS — masking the very race this test exists to exercise.
+      let clock = 0;
+
+      const lost: unknown[] = [];
+      const leaseLoss = createLeaseLossSignal();
+      const heartbeat = mockedStartLeaseHeartbeat({
+        runDir,
+        ownerRecord: initialOwnerRecord,
+        onLeaseLost: (error) => {
+          lost.push(error);
+          leaseLoss.lost = error as never;
+        },
+        now: () => clock,
+      });
+
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const runPromise = observedRunLoopFromState(
+        contract,
+        runDir,
+        adapter,
+        planningRunState(contract),
+        heartbeat,
+        leaseLoss,
+      );
+
+      // Wait until the span's own read has actually started — the earliest point inside
+      // heartbeat.runExclusive's fn, proving the span is already occupying the queue at the
+      // moment specified by the exact boundary ("starts at readOwnerRecord").
+      while (!order.includes("span:readStart")) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+
+      // The top-of-loop affirm (clock=0) already ran and completed by this point (it precedes
+      // the span chronologically). Clear its throttle window before triggering ours.
+      clock = LEASE_AFFIRM_THROTTLE_MS + 1;
+      const affirmStartsBefore = order.filter((entry) => entry === "affirm:start").length;
+
+      // An affirm becoming due mid-span: called directly (no real 30s timer needed) on the
+      // SAME heartbeat instance persistBoundaryAnalysis is using.
+      const affirmPromise = heartbeat.affirmNow();
+
+      // Several microtask turns: plenty of opportunity for a broken runExclusive (one that
+      // executes fn directly instead of chaining it onto the queue), or a span that starts one
+      // statement too late, to let this affirm's own CAS attempt start early.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(order.filter((entry) => entry === "affirm:start")).toHaveLength(affirmStartsBefore);
+
+      releaseSpanRead();
+      await affirmPromise;
+      const finalState = await runPromise;
+
+      // The decisive ordering: THIS affirm's own CAS attempt (the second one — the first was
+      // the harmless top-of-loop affirm, long since finished) never starts until the span's own
+      // read has finished.
+      expect(order.lastIndexOf("affirm:start")).toBeGreaterThan(order.indexOf("span:readEnd"));
+
+      // Zero CAS failures for the blocked-then-released affirm, and no lease_lost: checked
+      // before the other, more granular assertions below so a failure here (the blocked affirm
+      // wrongly concluding self-supersession) is reported as exactly that, not as a downstream
+      // symptom.
+      expect(lost).toHaveLength(0);
+      expect(await readEventTypes(runDir)).not.toContain("lease_lost");
+      expect(await readEventTypes(runDir)).toContain("owner_epoch_transferred");
+      expect(await readEventTypes(runDir)).not.toContain("owner_transfer_contended");
+      // Exactly one owner_epoch_transferred event, never retried or abandoned because the
+      // blocked affirm couldn't invalidate the transfer's CAS base.
+      expect(
+        (await readEvents(runDir)).filter((event) => event.type === "owner_epoch_transferred"),
+      ).toHaveLength(1);
+
+      // Read the record BEFORE heartbeat.stop(), which — correctly, per requirement 17 — clears
+      // leaseAffirmedAt back to null on release; checking after stop() would conflate that with
+      // this assertion (the blocked affirm ran to completion rather than being dropped).
+      const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+        currentOwnerEpoch: number;
+        leaseAffirmedAt: string | null;
+      };
+      expect(owner.currentOwnerEpoch).toBe(2);
+      // The blocked affirm still ran to completion afterward (against the now-adopted record),
+      // proving it was queued and eventually served, not dropped.
+      expect(owner.leaseAffirmedAt).not.toBeNull();
+
+      await heartbeat.stop();
+      expect(finalState.status).toBe("exhausted");
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
+
+  // Task 4 / spec §12 (owner-transfer-contention design) requirement 5: adopt() must run
+  // INSIDE the exclusive span, synchronously after the CAS that produced the record — the
+  // residual L1's final review parked. Same deterministic gate-and-queue technique as the
+  // requirement 4 test above (a real timing race here would be exactly the second flake risk
+  // the plan told us not to add), but the affirm is fired while the transfer's CAS write is
+  // STILL pending (not yet committed) and the assertions are the adopt-specific ones: no
+  // lease_lost event, and the record's identity survives the round trip. Under the mutation
+  // this test exists to kill — adopt() moved outside the exclusive span — the queue no longer
+  // holds this affirm behind the transfer's full completion, so a call that lands before
+  // `expected` has been synced to the transferred record reads the (already-updated) record on
+  // disk as a foreign takeover and concludes a self-named lease_lost.
+  it("a self-performed transfer with adopt inside the exclusive span appends no lease_lost event (spec requirement 5)", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const processInstanceId = buildProcessInstanceId();
+    const initialOwnerRecord: OwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1:t0",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: processInstanceId,
+      lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+      ownerStatus: "lost",
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    await writeFile(join(runDir, "owner-record.json"), JSON.stringify(initialOwnerRecord, null, 2));
+
+    vi.resetModules();
+    const order: string[] = [];
+    let releaseTransferWrite: () => void = () => {};
+    const transferGate = new Promise<void>((resolve) => {
+      releaseTransferWrite = resolve;
+    });
+    // Injected clock — same rationale as the requirement 4 test: without advancing it past
+    // LEASE_AFFIRM_THROTTLE_MS before firing our own affirm below, runLoopFromState's own
+    // unthrottled top-of-loop affirm would silently throttle this one away before it ever
+    // attempted its CAS, masking the race entirely.
+    let clock = 0;
+
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+
+      return {
+        ...actual,
+        writeOwnerTransferArtifacts: async (
+          ...args: Parameters<typeof actual.writeOwnerTransferArtifacts>
+        ) => {
+          order.push("transfer:writeStart");
+          await transferGate;
+          return actual.writeOwnerTransferArtifacts(...args);
+        },
+        // Marks the instant runAffirm actually attempts its CAS — a pure ordering signal, not a
+        // completion one, so the assertion below never depends on how long the real CAS I/O
+        // underneath it happens to take.
+        affirmOwnerLease: async (...args: Parameters<typeof actual.affirmOwnerLease>) => {
+          order.push("affirm:attempted");
+          return actual.affirmOwnerLease(...args);
+        },
+      };
+    });
+
+    try {
+      const { runLoopFromState: observedRunLoopFromState } = await import("../../src/controller/runLoop.js");
+      const { startLeaseHeartbeat: mockedStartLeaseHeartbeat } = await import(
+        "../../src/controller/leaseHeartbeat.js"
+      );
+
+      const lost: unknown[] = [];
+      const leaseLoss = createLeaseLossSignal();
+      const heartbeat = mockedStartLeaseHeartbeat({
+        runDir,
+        ownerRecord: initialOwnerRecord,
+        onLeaseLost: (error) => {
+          lost.push(error);
+          leaseLoss.lost = error as never;
+        },
+        now: () => clock,
+      });
+
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const runPromise = observedRunLoopFromState(
+        contract,
+        runDir,
+        adapter,
+        planningRunState(contract),
+        heartbeat,
+        leaseLoss,
+      );
+
+      while (!order.includes("transfer:writeStart")) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+
+      clock = LEASE_AFFIRM_THROTTLE_MS + 1;
+      const attemptsBefore = order.filter((entry) => entry === "affirm:attempted").length;
+      const affirmPromise = heartbeat.affirmNow();
+
+      // A pure ordering check: with the transfer's own CAS still pending behind the gate, a
+      // correct runExclusive cannot have let this affirm reach its own CAS attempt yet.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(order.filter((entry) => entry === "affirm:attempted")).toHaveLength(attemptsBefore);
+
+      releaseTransferWrite();
+      await affirmPromise;
+      await runPromise;
+      await heartbeat.stop();
+
+      expect(await readEventTypes(runDir)).not.toContain("lease_lost");
+      expect(lost).toHaveLength(0);
+
+      const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+        currentOwnerEpoch: number;
+        currentProcessInstanceId: string;
+      };
+      expect(owner.currentOwnerEpoch).toBe(2);
+      expect(owner.currentProcessInstanceId).toBe(processInstanceId);
     } finally {
       vi.doUnmock("../../src/persistence/fileStore.js");
       vi.resetModules();

@@ -719,53 +719,64 @@ async function persistBoundaryAnalysis(
     });
   };
 
-  let ownerRecord = await readOwnerRecord(runDir);
-  let ownership = evaluateOwnershipFor(ownerRecord);
-  let nextOwnerRecord: OwnerRecord | null = null;
-  let nextOwnerEpoch: number | null = null;
-  let eligibleForContinuation = false;
+  // Task 4 / owner-transfer-contention design §4: the whole read → evaluate → CAS transfer →
+  // adopt span runs inside the heartbeat's own serialization queue, so no affirm (whether the
+  // interval timer's or a directly-invoked one) can land between the read and the CAS — the
+  // race defect 2 exploited — or between the CAS and `adopt()` — the residual L1's review
+  // parked. `writeBoundaryArtifacts` below stays OUTSIDE: there is no reason to make the
+  // heartbeat wait behind artifact writes.
+  const { ownerRecord, ownership, nextOwnerEpoch, eligibleForContinuation } = await heartbeat.runExclusive(
+    async () => {
+      let ownerRecord = await readOwnerRecord(runDir);
+      let ownership = evaluateOwnershipFor(ownerRecord);
+      let nextOwnerRecord: OwnerRecord | null = null;
+      let nextOwnerEpoch: number | null = null;
+      let eligibleForContinuation = false;
 
-  if (boundaryAnalysis.status === "stale_candidate" && ownership.verdict === "OWNER_LOST" && ownership.takeoverAllowed) {
-    try {
-      const transfer = await persistOwnerTransfer(
-        runDir,
-        ownerRecord,
-        buildProcessInstanceId(),
-        new Date().toISOString(),
-        "owner lost after reconciliation",
-      );
-      // §6.1: this process just rotated the epoch TO ITSELF, so the record the heartbeat is
-      // comparing against is stale exactly as it is after an affirm — and a stale expectation
-      // here reads as a takeover by this same process (identical expected and observed
-      // instance IDs) and refuses every side effect that follows, including the post-terminal
-      // worktree cleanup. Adopting removes only that spurious refusal: this process
-      // demonstrably still holds the record, because the CAS above only succeeded against the
-      // record it expected. A genuine foreign transfer fails that CAS instead, and never
-      // reaches this line.
-      heartbeat.adopt(transfer.ownerRecord);
-      nextOwnerRecord = transfer.ownerRecord;
-      nextOwnerEpoch = transfer.ownerRecord.currentOwnerEpoch;
-      eligibleForContinuation = transfer.eligibleForContinuation;
-    } catch (error) {
-      if (error instanceof OwnerTransferLockBusyError) {
-        // persistOwnerTransfer already retried the lock a bounded number of times (Task 2)
-        // before giving up and reaching here. A busy lock this persistent abandons the transfer
-        // exactly like a CAS mismatch does below, plus the evidence: the event stream — not the
-        // reconciliation record (§5.3) — records why newOwnerEpoch stays null.
-        await appendEvent(runDir, {
-          type: "owner_transfer_contended",
-          at: new Date().toISOString(),
-          detail: "owner transfer abandoned: owner-transfer lock busy",
-        });
-      } else if (!(error instanceof OwnerTransferPreconditionError)) {
-        throw error;
+      if (boundaryAnalysis.status === "stale_candidate" && ownership.verdict === "OWNER_LOST" && ownership.takeoverAllowed) {
+        try {
+          const transfer = await persistOwnerTransfer(
+            runDir,
+            ownerRecord,
+            buildProcessInstanceId(),
+            new Date().toISOString(),
+            "owner lost after reconciliation",
+          );
+          // §6.1: this process just rotated the epoch TO ITSELF, so the record the heartbeat is
+          // comparing against is stale exactly as it is after an affirm — and a stale expectation
+          // here reads as a takeover by this same process (identical expected and observed
+          // instance IDs) and refuses every side effect that follows, including the post-terminal
+          // worktree cleanup. Adopting removes only that spurious refusal: this process
+          // demonstrably still holds the record, because the CAS above only succeeded against the
+          // record it expected. A genuine foreign transfer fails that CAS instead, and never
+          // reaches this line.
+          heartbeat.adopt(transfer.ownerRecord);
+          nextOwnerRecord = transfer.ownerRecord;
+          nextOwnerEpoch = transfer.ownerRecord.currentOwnerEpoch;
+          eligibleForContinuation = transfer.eligibleForContinuation;
+        } catch (error) {
+          if (error instanceof OwnerTransferLockBusyError) {
+            // persistOwnerTransfer already retried the lock a bounded number of times (Task 2)
+            // before giving up and reaching here. A busy lock this persistent abandons the transfer
+            // exactly like a CAS mismatch does below, plus the evidence: the event stream — not the
+            // reconciliation record (§5.3) — records why newOwnerEpoch stays null.
+            await appendEvent(runDir, {
+              type: "owner_transfer_contended",
+              at: new Date().toISOString(),
+              detail: "owner transfer abandoned: owner-transfer lock busy",
+            });
+          } else if (!(error instanceof OwnerTransferPreconditionError)) {
+            throw error;
+          }
+
+          ownerRecord = await readOwnerRecord(runDir);
+          ownership = evaluateOwnershipFor(ownerRecord);
+        }
       }
 
-      ownerRecord = await readOwnerRecord(runDir);
-      ownership = evaluateOwnershipFor(ownerRecord);
-    }
-  }
-
+      return { ownerRecord, ownership, nextOwnerEpoch, eligibleForContinuation };
+    },
+  );
   await writeBoundaryArtifacts(runDir, {
     boundaryAnalysis,
     reconciliationRecord:
