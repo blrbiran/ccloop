@@ -73,7 +73,12 @@ tests/controller/leaseLifecycle.integration.test.ts` → **22 passed (22)**, run
 with zero flakes.
 
 Full suite: `ECC_GATEGUARD=off DISABLE_OMC=1 ./node_modules/.bin/vitest run` →
-**369 passed (369), 23 test files**.
+**369 passed (369), 23 test files**, run 4 times consecutively after the commit with zero
+failures. One earlier ad-hoc run (before the final commit) showed 1 failure out of 369; on
+investigation this was the pre-existing, previously-documented real-filesystem-timing flake noted
+in the L1 spec and this task's own brief ("L1 already carries one test that depends on real
+filesystem timing and it was flagged as a flake risk") — not one of the two tests added by this
+task, and not reproducible across 4 subsequent full-suite runs with an unchanged working tree.
 
 `npm run typecheck` → clean (no output, exit 0).
 `npm run build` → clean (no output, exit 0).
