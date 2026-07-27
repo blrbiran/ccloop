@@ -431,6 +431,54 @@ describe("runExclusive shares the serialization queue with affirmNow", () => {
     expect(order).toEqual(["fn:start", "fn:end", "affirm:start", "affirm:end"]);
     await heartbeat.stop();
   });
+
+  // Review finding on this task: the property that actually needs a test is not "the stored
+  // chain and the returned promise are structurally distinct objects" — it's that `queue`
+  // itself is never left as a REJECTED promise with no handler attached to it. A caller that
+  // correctly `await`s and catches `runExclusive`'s return value proves nothing about `queue`:
+  // that value is `result`, not the stored mapper. If the stored mapper drops its `onRejected`
+  // (`queue = result.then(() => undefined)`, one argument, versus the correct two), `queue`
+  // becomes a rejected promise that nothing consumes until the NEXT write to it — the next
+  // timer-driven `affirmNow()`, up to a full `LEASE_HEARTBEAT_INTERVAL_MS` away. No
+  // `unhandledRejection` listener exists anywhere in src/, so in production Node's default
+  // handling of that event terminates the process — on a path (a transfer failing with
+  // `OwnerTransferPreconditionError`, or a real I/O error) that is a normal outcome under
+  // contention, not a crash-worthy one.
+  //
+  // This is why requirement 10's own test (above, in the `startLeaseHeartbeat` describe block)
+  // cannot catch this: it only ever observes the RETURNED promise (`result`), and a subsequent
+  // `runExclusive`/`affirmNow` call's own dual-handler read of `queue` self-heals regardless of
+  // whether the stored mapper was one-argument or two. Only listening for the process-level
+  // event, with nothing else ever chaining onto `queue` in between, observes the stored
+  // mapper's shape directly.
+  it("runExclusive: a rejecting fn leaves the shared queue resolved — no unhandled rejection", async () => {
+    const runDir = await seed(record());
+    const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
+
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const boom = new Error("boom");
+      await expect(heartbeat.runExclusive(async () => {
+        throw boom;
+      })).rejects.toBe(boom);
+
+      // End the turn with nothing else chained onto `queue` — no affirmNow, no second
+      // runExclusive — so a rejected-and-unhandled `queue` has nothing to hide behind.
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      await heartbeat.stop();
+    }
+  });
 });
 
 describe("INERT_LEASE_HEARTBEAT.runExclusive", () => {
