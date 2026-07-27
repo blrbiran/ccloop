@@ -9,6 +9,7 @@ import { resumeLoop } from "../../src/controller/resumeLoop.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import { LEASE_AFFIRM_THROTTLE_MS, LEASE_TTL_MS, RunLeaseLostError } from "../../src/ownership/lease.js";
 import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
+import { startLeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
 import type { LeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import type { RunState } from "../../src/state/types.js";
@@ -1308,5 +1309,226 @@ describe("lease heartbeat lifecycle", () => {
     expect(guardCalls).toBe(successPathGuardSites.length);
     expect(phases).toEqual(["plan", "execute", "verify"]);
     expect(finalState.status).toBe("succeeded");
+  });
+
+  // Task 5 / spec §12 requirement 6: persistBoundaryAnalysis's entry guard must precede
+  // readOwnerRecord, because readOwnerRecord runs recoverInterruptedOwnerTransfer
+  // (fileStore.ts) — a WRITE that finalizes any interrupted owner transfer it finds staged.
+  // A superseded process must not perform that recovery on a run it no longer owns.
+  //
+  // Reached via the non-timeout "execute returned no result" branch (runLoop.ts, the
+  // `if (execution === null)` check right after the execute phase), because NO assertHeld
+  // guard sits between adapter.execute() returning and persistBoundaryAnalysis being called
+  // on that branch — unlike the timeout branch, which passes through guardedWriteArtifacts
+  // first. That makes persistBoundaryAnalysis's own entry guard unambiguously the first (and
+  // only) assertHeld call to observe the rotation below, rather than one of several.
+  //
+  // "assert that no recovery-on-read write occurred, not merely that the call threw"
+  // (task-5-brief.md step 1.1): a real interrupted-transfer fixture (transaction marker +
+  // pending owner/transfer records, fileStore.ts's OWNER_TRANSFER_MARKER_FILE etc.) is staged
+  // before the run starts. If recoverInterruptedOwnerTransfer ran, it would finalize that
+  // fixture — deleting the marker and overwriting owner-record.json with the pending record.
+  // A guard placed anywhere else in the function (e.g. only before the write) would still let
+  // that finalization happen and this test would catch it; only a guard preceding
+  // readOwnerRecord keeps the fixture untouched.
+  //
+  // Built with a manually-constructed heartbeat (not the `runLoop()` convenience wrapper)
+  // whose `stop()` is deliberately never called: `stop()` releases the lease via
+  // `releaseOwnerLease` -> `updateOwnerRecordWithPrecondition`, which ALSO runs
+  // `recoverInterruptedOwnerTransfer` (with `lockHeld: true`) as an unrelated, pre-existing
+  // cleanup step — finalizing the same staged fixture for a completely different reason and
+  // confounding the assertions below. Checking file state right after `runLoopFromState`
+  // resolves, before any `stop()`, isolates persistBoundaryAnalysis's own guard from that
+  // unrelated path.
+  //
+  // The staged fixture is written from inside adapter.execute(), NOT before the run starts:
+  // `affirmOwnerLease` (the heartbeat's OWN top-of-loop affirm, called once per iteration
+  // before this attempt even begins) routes through the SAME `updateOwnerRecordWithPrecondition`
+  // -> `recoverInterruptedOwnerTransfer` path — a second, legitimate, pre-existing caller of
+  // recovery-on-write that is out of this task's scope. Staging the fixture only after that
+  // first affirm has already run (and no-opped, against the clean initial record) isolates
+  // what this test targets: persistBoundaryAnalysis's OWN read, not the heartbeat's.
+  it("refuses persistBoundaryAnalysis before readOwnerRecord can finalize a staged transfer, once superseded (spec requirement 6)", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    const ownerRecord: OwnerRecord = {
+      runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 1,
+      currentProcessInstanceId: buildProcessInstanceId(), lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+      ownerStatus: "current", supersededByEpoch: null, leaseAffirmedAt: "2026-07-25T00:00:00.000Z",
+    };
+    await mkdir(join(runDir, "attempts"), { recursive: true });
+    await writeFile(join(runDir, "loop-contract.json"), JSON.stringify(contract, null, 2));
+    await writeFile(join(runDir, "events.jsonl"), "");
+    await writeFile(join(runDir, "owner-record.json"), JSON.stringify(ownerRecord, null, 2));
+
+    // A staged-but-uncommitted owner transfer: if readOwnerRecord's recovery-on-read ever ran,
+    // finalizePendingOwnerTransfer would rename these into owner-record.json / owner-transfer.json
+    // and delete the marker. Distinct epoch/process from anything else in this test, so any
+    // trace of it landing in owner-record.json is unambiguous.
+    const pendingOwner = {
+      runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 555,
+      currentProcessInstanceId: "pid:recovered", lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+      ownerStatus: "current", supersededByEpoch: null,
+    };
+    const pendingTransfer = {
+      priorOwnerEpoch: 1, newOwnerEpoch: 555, priorProcessInstanceId: buildProcessInstanceId(),
+      newProcessInstanceId: "pid:recovered", transferredAt: "2026-07-25T00:00:00.000Z",
+      reason: "staged before crash", eligibleForContinuation: true,
+    };
+    const marker = {
+      version: 1, stagedAt: "2026-07-25T00:00:00.000Z",
+      finalizeOrder: ["owner-transfer.json", "owner-record.json"],
+    };
+
+    const rivalRecord = {
+      runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 42,
+      currentProcessInstanceId: "pid:rival", lastAffirmedAt: new Date().toISOString(),
+      ownerStatus: "current", supersededByEpoch: null,
+    };
+
+    const adapter = {
+      plan: async () => ({ summary: "s", primaryTargetPaths: ["src/index.ts"] }),
+      execute: async () => {
+        // Stage the interrupted-transfer fixture only now — after the top-of-loop affirm has
+        // already run once, harmlessly, against the clean record above — then simulate this
+        // process being superseded by a rival: discovered only when persistBoundaryAnalysis's
+        // guard next checks.
+        await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(pendingOwner, null, 2));
+        await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(pendingTransfer, null, 2));
+        await writeFile(join(runDir, ".owner-transfer.transaction.json"), JSON.stringify(marker, null, 2));
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify(rivalRecord, null, 2));
+        return null; // resolves immediately: no timeout, so no guard runs between this and persistBoundaryAnalysis
+      },
+      verify: async () => { throw new Error("verify must not run"); },
+    };
+
+    const leaseLoss = createLeaseLossSignal();
+    const heartbeat = startLeaseHeartbeat({
+      runDir,
+      ownerRecord,
+      onLeaseLost: (error) => {
+        leaseLoss.lost = error as never;
+      },
+    });
+
+    const finalState = await runLoopFromState(
+      contract,
+      runDir,
+      adapter as never,
+      planningRunState(contract),
+      heartbeat,
+      leaseLoss,
+    );
+
+    expect(finalState.stopReason).toBe("lease_lost");
+
+    // The decisive assertions: the staged transfer was never finalized. If recovery-on-read
+    // had run, the marker would be gone and owner-record.json would show epoch 555 / pid:recovered.
+    await expect(access(join(runDir, ".owner-transfer.transaction.json"))).resolves.toBeUndefined();
+    await expect(access(join(runDir, ".owner-record.pending.json"))).resolves.toBeUndefined();
+    await expect(access(join(runDir, ".owner-transfer.pending.json"))).resolves.toBeUndefined();
+
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
+    expect(owner.currentOwnerEpoch).toBe(42); // still the rival's record, untouched by recovery
+    expect(owner.currentProcessInstanceId).toBe("pid:rival");
+    await expect(access(join(runDir, "owner-transfer.json"))).rejects.toThrow(); // never finalized either
+  });
+
+  // Task 5 / spec §12 requirement 7: once persistBoundaryAnalysis's entry guard has passed, a
+  // process superseded WHILE the function runs — specifically, after it completes its own
+  // owner-transfer CAS and adopts the result, but before it writes boundary/reconciliation
+  // artifacts — must write neither artifact. The transfer itself is real and already committed
+  // to disk (§4/Task 4: it happens inside the heartbeat's exclusive span and is not undone);
+  // what this guards is only the write that follows the span.
+  //
+  // Modelled on the "owner_transfer_contended" test's OWNER_LOST + takeoverAllowed fixture
+  // (same execute-timeout shape, same "lost" owner record), reaching the SAME call site
+  // (persistBoundaryAnalysis with executionRecovery) that test exercises. The difference: here
+  // writeOwnerTransferArtifacts is mocked to let the real CAS transfer succeed, then
+  // immediately rotate owner-record.json to a THIRD, unrelated rival — simulating a takeover
+  // that lands in the instant between this process's own adopted transfer and its artifact
+  // write.
+  it("writes no boundary or reconciliation artifacts when superseded after its own transfer completes (spec requirement 7)", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    vi.resetModules();
+    const rivalRecord = {
+      runId: "task-1", logicalSessionId: "task-1:lost", currentOwnerEpoch: 77,
+      currentProcessInstanceId: "pid:rival-9000", lastAffirmedAt: new Date().toISOString(),
+      ownerStatus: "current", supersededByEpoch: null,
+    };
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+
+      return {
+        ...actual,
+        writeOwnerTransferArtifacts: async (
+          ...args: Parameters<typeof actual.writeOwnerTransferArtifacts>
+        ) => {
+          await actual.writeOwnerTransferArtifacts(...args);
+          // The real self-transfer just committed and will be adopted next. A rival now takes
+          // over before this attempt can write its boundary/reconciliation artifacts.
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify(rivalRecord, null, 2));
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+            runId: "task-1",
+            logicalSessionId: "task-1:lost",
+            currentOwnerEpoch: 1,
+            currentProcessInstanceId: buildProcessInstanceId(),
+            lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+            ownerStatus: "lost",
+            supersededByEpoch: null,
+          }, null, 2));
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const finalState = await observedRunLoop(contract, runDir, adapter as never);
+
+      expect(finalState.stopReason).toBe("lease_lost");
+      // The decisive assertion: the transfer committed (owner-transfer.json exists, and named
+      // this process before the rival's rotation overwrote owner-record.json), but NEITHER
+      // boundary artifact was written.
+      await expect(access(join(runDir, "owner-transfer.json"))).resolves.toBeUndefined();
+      await expect(access(join(runDir, "boundary-analysis.json"))).rejects.toThrow();
+      await expect(access(join(runDir, "reconciliation-record.json"))).rejects.toThrow();
+
+      const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
+      expect(owner.currentOwnerEpoch).toBe(77); // the rival's record stands, untouched by this process
+      expect(owner.currentProcessInstanceId).toBe("pid:rival-9000");
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
   });
 });

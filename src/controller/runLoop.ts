@@ -679,11 +679,21 @@ async function writeCompletedAttemptArtifacts(
 async function persistBoundaryAnalysis(
   runDir: string,
   state: RunState,
-  // §6.1: only so a transfer this function performs ITSELF can be adopted — see the adopt call
-  // below. Nothing here is guarded by it.
+  // §6.1: guards the two side effects below — readOwnerRecord's recovery-on-read (via the
+  // entry guard immediately below) and the boundary/reconciliation artifact write (via the
+  // guard just before it) — in addition to letting a transfer this function performs ITSELF
+  // be adopted; see the adopt call further down.
   heartbeat: LeaseHeartbeat,
   executionRecovery?: ExecutionRecovery,
 ): Promise<void> {
+  // Task 5 / §5.4 / §12 requirement 6: precedes EVERYTHING, including readOwnerRecord just
+  // below (inside the exclusive span), because readOwnerRecord runs
+  // recoverInterruptedOwnerTransfer (fileStore.ts) — a write that finalizes any interrupted
+  // owner transfer it finds staged. A superseded process must not perform that recovery on a
+  // run it no longer owns. Placed before the healthy early return just below on purpose:
+  // moving it after would look like a free optimization but would let a superseded process
+  // evaluate a boundary and return normally, as though it still held the lease.
+  await heartbeat.assertHeld();
   const boundaryEvidence = buildBoundaryEvidence(executionRecovery ?? null);
   const boundaryAnalysis = evaluateRunBoundary({
     now: new Date().toISOString(),
@@ -777,6 +787,33 @@ async function persistBoundaryAnalysis(
       return { ownerRecord, ownership, nextOwnerEpoch, eligibleForContinuation };
     },
   );
+
+  // Task 5 / §5.4 / §12 requirement 7: closes the drift window between the entry guard above
+  // and this write — a window that contains a potentially complete epoch transfer. Inlined
+  // rather than routed through runLoopFromState's `guardedWriteArtifacts` closure: that
+  // wrapper is defined inside runLoopFromState and is not reachable from this module-level
+  // function, which receives only `heartbeat` as a parameter. Matches how L1's other
+  // `assertHeld` call sites are written.
+  //
+  // Conditioned on `nextOwnerEpoch !== null` — i.e. only when THIS process's own transfer
+  // just succeeded and was adopted just above — deliberately, not as a broader "any mismatch
+  // refuses" check. When the transfer attempt instead failed (lock busy, or a CAS
+  // precondition mismatch because another controller already completed an equivalent
+  // reconciliation — runLoop.integration.test.ts's "preserves the winner reconciliation view"
+  // tests), `heartbeat`'s `expected` was never updated (adopt() is only reached on success),
+  // so a raw assertHeld here would always see a mismatch against whatever the other
+  // controller wrote — even though `writeBoundaryArtifacts` is already safe in that case:
+  // `preserveSuccessfulReconciliationIfNeeded` (fileStore.ts) exists precisely to let a losing
+  // process's write land without clobbering a winner's already-persisted reconciliation view.
+  // Guarding that path too would refuse a write that was never going to corrupt anything, and
+  // would turn an "exhausted" run into a "cancelled"/lease_lost one — a terminal-outcome
+  // change the design's no-new-authority rule does not call for. The guard here exists for the
+  // one case that safety net does NOT cover: this process's OWN successful transfer, superseded
+  // by a genuinely later rival before the write it earned gets to land.
+  if (nextOwnerEpoch !== null) {
+    await heartbeat.assertHeld();
+  }
+
   await writeBoundaryArtifacts(runDir, {
     boundaryAnalysis,
     reconciliationRecord:
