@@ -121,6 +121,40 @@ describe("resumeLoop", () => {
     expect(await readEventTypes(runDir)).toContain("resume_denied");
   });
 
+  // Task 1 / spec §3 + §12 requirement 8: resume stays fail-closed on a busy owner-transfer
+  // lock exactly as it does on a CAS mismatch, but the two failures are no longer the same
+  // class, so the resume_denied detail must stop asserting a CAS failure that never happened.
+  it("stays fail-closed when the claim hits a busy owner-transfer lock, without claiming a CAS failure", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    // Fabricate a busy lock the same way tests/persistence/fileStore.test.ts does: a live pid
+    // (this process) so stale-recovery declines to break it.
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: new Date().toISOString() }, null, 2),
+    );
+
+    const ownerBefore = await readFile(join(runDir, "owner-record.json"), "utf8");
+
+    await expect(resumeLoop(runDir, new ScriptedAdapter([successFrame()]))).rejects.toBeInstanceOf(
+      ResumeNotEligibleError,
+    );
+
+    expect(await readFile(join(runDir, "owner-record.json"), "utf8")).toBe(ownerBefore); // untouched
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; detail: string });
+    const denied = events.filter((event) => event.type === "resume_denied");
+
+    expect(denied).toHaveLength(1);
+    expect(denied[0].detail).not.toContain("claim CAS failed");
+    expect(denied[0].detail).toContain("lock busy");
+  });
+
   it("aborts when a concurrent owner-record change breaks the claim CAS", async () => {
     const repoPath = await createRepo();
     const contract = createContract(repoPath);

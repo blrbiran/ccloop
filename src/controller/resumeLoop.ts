@@ -4,6 +4,7 @@ import { loadContract } from "../contract/loadContract.js";
 import {
   appendEvent,
   claimOwnerRecordWithPrecondition,
+  OwnerTransferLockBusyError,
   readOwnerRecord,
   readOwnerTransferRecord,
   readReconciliationRecord,
@@ -134,8 +135,13 @@ export async function resumeLoop(runDir: string, adapter: RuntimeAdapter): Promi
   try {
     await claimOwnerRecordWithPrecondition(runDir, ownerRecord, nextOwnerRecord);
   } catch (error) {
-    await appendEvent(runDir, { type: "resume_denied", at: new Date().toISOString(), detail: `claim CAS failed: ${String(error)}` });
-    throw new ResumeNotEligibleError(`claim CAS failed: ${String(error)}`);
+    // §3: stays fail-closed either way, but a busy lock never evaluated a CAS, so the detail
+    // must not claim one did.
+    const detail = error instanceof OwnerTransferLockBusyError
+      ? `owner-transfer lock busy: ${String(error)}`
+      : `claim CAS failed: ${String(error)}`;
+    await appendEvent(runDir, { type: "resume_denied", at: new Date().toISOString(), detail });
+    throw new ResumeNotEligibleError(detail);
   }
 
   await appendEvent(runDir, {

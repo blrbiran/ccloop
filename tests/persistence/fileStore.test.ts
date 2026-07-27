@@ -6,6 +6,7 @@ import {
   appendEvent,
   claimOwnerRecordWithPrecondition,
   initializeRunFiles,
+  OwnerTransferLockBusyError,
   OwnerTransferPreconditionError,
   readOwnerRecord,
   readRunState,
@@ -277,9 +278,12 @@ describe("fileStore", () => {
       JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-07-22T10:04:59.000Z" }, null, 2),
     );
 
+    // §3: a busy lock is now its own class, a SIBLING of OwnerTransferPreconditionError, not
+    // a subclass — this test used to assert the latter, which was the bug the taxonomy split
+    // fixes (a busy lock and a stale CAS base used to be indistinguishable to every consumer).
     await expect(
       writeOwnerTransferArtifacts(runDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord),
-    ).rejects.toBeInstanceOf(OwnerTransferPreconditionError);
+    ).rejects.toBeInstanceOf(OwnerTransferLockBusyError);
 
     const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
       currentOwnerEpoch: number;
@@ -289,6 +293,67 @@ describe("fileStore", () => {
     expect(owner.currentOwnerEpoch).toBe(1);
     expect(owner.currentProcessInstanceId).toBe("pid:12345");
     await expect(readFile(join(runDir, "owner-transfer.json"), "utf8")).rejects.toThrow();
+  });
+
+  // Task 1 / spec §3: OwnerTransferLockBusyError and OwnerTransferPreconditionError are
+  // SIBLINGS, both extending Error directly — not a hierarchy. A subclass relationship would
+  // let every existing `instanceof OwnerTransferPreconditionError` consumer keep matching a
+  // busy lock as though it were a stale CAS base, silently reinstating the exact defect this
+  // task fixes. Both halves are asserted in the failure case AND the non-instanceof direction.
+  it("throws OwnerTransferLockBusyError for a busy lock and OwnerTransferPreconditionError for a CAS mismatch, and neither is an instance of the other", async () => {
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    // Half 1: the lock is held by a live pid (this process), so stale-recovery declines to
+    // break it — a genuine busy lock, not a CAS mismatch.
+    const busyRunDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await writeOwnerRecord(busyRunDir, initialOwnerRecord);
+    await writeFile(
+      join(busyRunDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-07-22T10:04:59.000Z" }, null, 2),
+    );
+
+    let lockBusyError: unknown;
+    try {
+      await writeOwnerTransferArtifacts(busyRunDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord);
+    } catch (error) {
+      lockBusyError = error;
+    }
+
+    expect(lockBusyError).toBeInstanceOf(OwnerTransferLockBusyError);
+    expect(lockBusyError).not.toBeInstanceOf(OwnerTransferPreconditionError);
+
+    // Half 2: no lock at all, but the persisted record has moved on — a genuine CAS mismatch.
+    const casRunDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await writeOwnerRecord(casRunDir, {
+      ...initialOwnerRecord,
+      currentOwnerEpoch: 2,
+      currentProcessInstanceId: "pid:other-controller",
+    });
+
+    let casMismatchError: unknown;
+    try {
+      await writeOwnerTransferArtifacts(casRunDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord);
+    } catch (error) {
+      casMismatchError = error;
+    }
+
+    expect(casMismatchError).toBeInstanceOf(OwnerTransferPreconditionError);
+    expect(casMismatchError).not.toBeInstanceOf(OwnerTransferLockBusyError);
   });
 
   it("rejects owner transfer when the expected owner record is stale inside the locked section", async () => {
@@ -381,9 +446,11 @@ describe("fileStore", () => {
     await writeOwnerRecord(runDir, initialOwnerRecord);
     await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
 
+    // §3: malformed-and-non-recoverable is a lock-busy outcome (fileStore.ts's
+    // acquireOwnerTransferLock, not the CAS check), so it is the sibling class now.
     await expect(
       writeOwnerTransferArtifacts(runDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord),
-    ).rejects.toBeInstanceOf(OwnerTransferPreconditionError);
+    ).rejects.toBeInstanceOf(OwnerTransferLockBusyError);
   });
 
   it("cleans up staged owner transfer files when the lock-holder sees leftover pending files without a marker", async () => {
@@ -811,9 +878,11 @@ describe("fileStore", () => {
     await writeOwnerRecord(runDir, initialOwnerRecord);
     await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
 
+    // §3: malformed-and-non-recoverable is a lock-busy outcome (fileStore.ts's
+    // acquireOwnerTransferLock, not the CAS check), so it is the sibling class now.
     await expect(
       writeOwnerTransferArtifacts(runDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord),
-    ).rejects.toBeInstanceOf(OwnerTransferPreconditionError);
+    ).rejects.toBeInstanceOf(OwnerTransferLockBusyError);
   });
 
   it("releases the lock after rejecting a stale precondition under the critical section", async () => {

@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import {
   appendEvent,
   initializeRunFiles,
+  OwnerTransferLockBusyError,
   OwnerTransferPreconditionError,
   readOwnerRecord,
   writeAttemptArtifacts,
@@ -708,7 +709,16 @@ async function persistBoundaryAnalysis(
       nextOwnerEpoch = transfer.ownerRecord.currentOwnerEpoch;
       eligibleForContinuation = transfer.eligibleForContinuation;
     } catch (error) {
-      if (!(error instanceof OwnerTransferPreconditionError)) {
+      if (error instanceof OwnerTransferLockBusyError) {
+        // Task 2 adds retry here. For now a busy lock abandons the transfer exactly like a CAS
+        // mismatch does below, plus the evidence: the event stream — not the reconciliation
+        // record (§5.3) — records why newOwnerEpoch stays null.
+        await appendEvent(runDir, {
+          type: "owner_transfer_contended",
+          at: new Date().toISOString(),
+          detail: "owner transfer abandoned: owner-transfer lock busy",
+        });
+      } else if (!(error instanceof OwnerTransferPreconditionError)) {
         throw error;
       }
 

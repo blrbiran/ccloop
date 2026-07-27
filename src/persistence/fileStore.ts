@@ -391,6 +391,18 @@ export class OwnerTransferPreconditionError extends Error {
   }
 }
 
+// Sibling of OwnerTransferPreconditionError, deliberately NOT a subclass: the two errors mean
+// different things (lock contention vs. a stale CAS base) and every consumer must re-decide its
+// own behaviour for each. A subclass would let every existing `instanceof
+// OwnerTransferPreconditionError` branch keep matching, silently retaining behaviour that was
+// only ever correct for a CAS mismatch.
+export class OwnerTransferLockBusyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OwnerTransferLockBusyError";
+  }
+}
+
 async function safeUnlink(path: string): Promise<void> {
   try {
     await unlink(path);
@@ -496,12 +508,12 @@ async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () =
       }
 
       if (!(await tryRecoverStaleOwnerTransferLock(runDir))) {
-        throw new OwnerTransferPreconditionError("owner transfer already in progress");
+        throw new OwnerTransferLockBusyError("owner transfer already in progress");
       }
     }
   }
 
-  throw new OwnerTransferPreconditionError("owner transfer already in progress");
+  throw new OwnerTransferLockBusyError("owner transfer already in progress");
 }
 
 async function cleanupOwnerTransferStagingWithoutMarker(runDir: string): Promise<void> {

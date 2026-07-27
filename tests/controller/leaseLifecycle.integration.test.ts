@@ -12,6 +12,7 @@ import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
 import type { LeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import type { RunState } from "../../src/state/types.js";
+import type { RuntimeAdapter } from "../../src/runtime/types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -102,6 +103,16 @@ async function readEvents(runDir: string): Promise<{ type: string; detail: strin
 
 async function readEventTypes(runDir: string): Promise<string[]> {
   return (await readEvents(runDir)).map((event) => event.type);
+}
+
+async function waitForAbort(signal?: AbortSignal): Promise<void> {
+  if (!signal || signal.aborted) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
 }
 
 // What runLoop hands runLoopFromState after its own "planning" transition, for the tests that
@@ -287,6 +298,84 @@ describe("lease heartbeat lifecycle", () => {
     expect(owner.currentOwnerEpoch).toBe(99); // the new owner's record is untouched
     expect(owner.currentProcessInstanceId).toBe("pid:999:9000");
     expect(owner.leaseAffirmedAt).toBe(rotated.leaseAffirmedAt);
+  });
+
+  // Task 1 / spec §3, §5.3 and §12 requirement 2 (partial — the event only): a transfer
+  // abandoned because the owner-transfer lock stayed busy must leave the same trace shape as
+  // any other abandoned transfer (newOwnerEpoch: null) PLUS an event naming the reason — the
+  // reconciliation record itself is frozen (§5.3) and stays silent about WHY.
+  //
+  // Modelled on runLoop.integration.test.ts's "persists owner transfer artifacts..." test
+  // (same boundary/ownership setup, same OWNER_LOST-and-takeover-allowed path into
+  // persistBoundaryAnalysis's stale_candidate branch), with one addition: a live-pid holder on
+  // .owner-transfer.lock so the CAS this attempt would perform never gets past lock
+  // acquisition. No retry in this task (Task 2 adds it), so the transfer is abandoned exactly
+  // as it is today for any other reason — but now with the contention event as evidence.
+  it("appends owner_transfer_contended and abandons the transfer when the owner-transfer lock stays busy", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+          runId: "task-1",
+          logicalSessionId: "task-1:lost",
+          currentOwnerEpoch: 1,
+          currentProcessInstanceId: buildProcessInstanceId(),
+          lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+          ownerStatus: "lost",
+          supersededByEpoch: null,
+        }, null, 2));
+        // A live-pid holder (this process), so stale-recovery declines to break it: the
+        // owner-transfer lock stays genuinely busy for the CAS this attempt is about to make.
+        await writeFile(
+          join(runDir, ".owner-transfer.lock"),
+          JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: new Date().toISOString() }, null, 2),
+        );
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+      currentOwnerEpoch: number;
+      currentProcessInstanceId: string;
+    };
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as { ownershipVerdict: string; newOwnerEpoch: number | null; eligibleForContinuation: boolean };
+
+    // The transfer never happened: the record still names the ORIGINAL (lost) owner, not this
+    // process, and the reconciliation record reports the same "abandoned" shape as any other
+    // dropped transfer.
+    expect(owner.currentOwnerEpoch).toBe(1);
+    expect(reconciliation.newOwnerEpoch).toBeNull();
+    expect(reconciliation.eligibleForContinuation).toBe(false);
+    expect(finalState.status).toBe("exhausted");
+    await expect(access(join(runDir, "owner-transfer.json"))).rejects.toThrow(); // never staged
+
+    expect(await readEvents(runDir)).toContainEqual(
+      expect.objectContaining({ type: "owner_transfer_contended" }),
+    );
+    expect(await readEventTypes(runDir)).not.toContain("owner_epoch_transferred");
   });
 
   // Coverage gap found in review of the test above: that test's rotation is only ever

@@ -269,6 +269,47 @@ describe("startLeaseHeartbeat", () => {
     await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS);
     await heartbeat.stop();
   });
+
+  // Task 1 / spec §3 + §12 requirement 9: OwnerTransferLockBusyError is a SIBLING of
+  // OwnerTransferPreconditionError, not a subclass, so `!(error instanceof
+  // OwnerTransferPreconditionError)` here already treats it as transient by construction —
+  // this test pins that the swallow-and-retry contract holds for the new class specifically,
+  // not merely "some error class or other".
+  it("treats a busy owner-transfer lock as transient: no lease_lost, no supersession concluded, retried next tick", async () => {
+    const runDir = await seed(record());
+    const lost: unknown[] = [];
+    const heartbeat = startLeaseHeartbeat({
+      runDir,
+      ownerRecord: record(),
+      onLeaseLost: (error) => lost.push(error),
+    });
+
+    // Fabricate a busy lock the same way tests/persistence/fileStore.test.ts does: a live pid
+    // (this process) so stale-recovery declines to break it.
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: new Date().toISOString() }, null, 2),
+    );
+
+    await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS);
+    await heartbeat.affirmNow();
+
+    expect(lost).toHaveLength(0);
+    expect(await readEventTypes(runDir)).not.toContain("lease_lost");
+    // The affirm never went through (the lock acquisition failed before any read or write of
+    // owner-record.json), so the record is exactly what seed() wrote: leaseAffirmedAt null.
+    expect((await readOwner(runDir)).leaseAffirmedAt).toBeNull();
+
+    // Free the lock: the NEXT tick must affirm normally, proving this was a retried transient
+    // failure and not a permanent refusal.
+    await rm(join(runDir, ".owner-transfer.lock"));
+    await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS);
+    await heartbeat.affirmNow();
+
+    expect((await readOwner(runDir)).leaseAffirmedAt).not.toBeNull();
+    expect(lost).toHaveLength(0);
+    await heartbeat.stop();
+  });
 });
 
 describe("assertHeld", () => {
