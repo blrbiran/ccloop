@@ -848,17 +848,23 @@ describe("lease heartbeat lifecycle", () => {
     }
   });
 
-  // Task 4 / spec §12 (owner-transfer-contention design) requirement 5: adopt() must run
-  // INSIDE the exclusive span, synchronously after the CAS that produced the record — the
-  // residual L1's final review parked. Same deterministic gate-and-queue technique as the
+  // Task 4 / spec §12 (owner-transfer-contention design) requirement 5: a self-performed
+  // transfer appends no lease_lost event. Same deterministic gate-and-queue technique as the
   // requirement 4 test above (a real timing race here would be exactly the second flake risk
-  // the plan told us not to add), but the affirm is fired while the transfer's CAS write is
-  // STILL pending (not yet committed) and the assertions are the adopt-specific ones: no
-  // lease_lost event, and the record's identity survives the round trip. Under the mutation
-  // this test exists to kill — adopt() moved outside the exclusive span — the queue no longer
-  // holds this affirm behind the transfer's full completion, so a call that lands before
-  // `expected` has been synced to the transferred record reads the (already-updated) record on
-  // disk as a foreign takeover and concludes a self-named lease_lost.
+  // the plan told us not to add): writeOwnerTransferArtifacts is left UNMOCKED (the real CAS
+  // write), gated only by the deferred promise below, so the transfer's CAS genuinely runs
+  // inside the span while an affirm is fired mid-flight. What this fences is that a due affirm
+  // cannot reach its own CAS attempt while that write is still pending, and that the
+  // self-transfer this produces appends no lease_lost event and leaves the record's identity
+  // intact.
+  //
+  // This test does NOT independently fence "adopt specifically must sit inside the span,
+  // synchronously after the CAS" — see task-4-report.md's mutation evidence: moving adopt() to
+  // just outside the runExclusive callback (with no other change) is provably unobservable to
+  // any deterministic test, since the caller's post-await continuation and a competing queued
+  // call settle in the same relative promise order either way. That property is fenced instead
+  // by the requirement 4 test's `expect(owner.leaseAffirmedAt).not.toBeNull()` assertion, which
+  // fails when adopt is moved past a genuinely later point (e.g. past writeBoundaryArtifacts).
   it("a self-performed transfer with adopt inside the exclusive span appends no lease_lost event (spec requirement 5)", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));

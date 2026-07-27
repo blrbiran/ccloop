@@ -231,3 +231,91 @@ caught by *some* test in the pair, which is what Step 5 requires.
 - No other concerns. All global constraints honored: zero paid Claude calls (ScriptedAdapter-style
   hand-written adapters only), no CAS/ownership/takeover authority changed, no terminal-state or
   `ReconciliationRecord` schema changes, no new test-requirement weakening.
+
+## Fix report (review round 1)
+
+Two findings from review. Both addressed; no production code was touched for either.
+
+### Important 1 — test 5's header comment claimed a mutation kill it does not perform
+
+**What was wrong:** the comment said test 5 "exists to kill" the mutation "adopt() moved outside
+the exclusive span," and asserted that under that mutation "the queue no longer holds this affirm
+behind the transfer's full completion." Both claims are false: moving only `adopt()`'s position
+does not change what the queue holds (the span's callback — read, evaluate, CAS — is unchanged;
+only where `adopt()` sits relative to it moves), and my own mutation-evidence section already
+recorded that `lease_lost` was never observed by either test under either placement I tried. The
+comment asserted a kill that contradicts my own recorded findings.
+
+**Fix:** rewrote the comment (`tests/controller/leaseLifecycle.integration.test.ts`, the block
+directly above the `it(...)` for requirement 5) to state only what the test actually fences:
+`writeOwnerTransferArtifacts` is left unmocked so the transfer's real CAS write runs inside the
+span, a due affirm cannot reach its own CAS attempt while that write is pending, and the
+resulting self-transfer appends no `lease_lost` event. The mutation-kill claim was dropped
+entirely. Added an explicit note that requirement 5's "adopt must be positioned inside the span"
+clause is fenced by test 4's `expect(owner.leaseAffirmedAt).not.toBeNull()` assertion instead (the
+one that does demonstrably fail when `adopt()` is moved past `writeBoundaryArtifacts`), not by
+test 5's own assertions.
+
+**Covering tests / command / output** — same two tests, comment-only change, re-run to confirm
+no regression:
+
+```
+$ ECC_GATEGUARD=off DISABLE_OMC=1 ./node_modules/.bin/vitest run tests/controller/leaseLifecycle.integration.test.ts -t "spec requirement 4|spec requirement 5" --reporter=verbose
+
+ ✓ tests/controller/leaseLifecycle.integration.test.ts > lease heartbeat lifecycle > blocks a due affirm until the transfer's exclusive span completes, with zero CAS failures and no lease_lost (spec requirement 4)
+ ✓ tests/controller/leaseLifecycle.integration.test.ts > lease heartbeat lifecycle > a self-performed transfer with adopt inside the exclusive span appends no lease_lost event (spec requirement 5)
+
+ Test Files  1 passed (1)
+      Tests  2 passed | 20 skipped (22)
+```
+
+### Important 2 — the 1-in-369 transient failure was attributed without naming the test
+
+**What was wrong:** commit `82d0483` recorded prose ("the pre-existing flake") with no test name
+and no assertion output — an unfalsifiable attribution, exactly what Rule 12 forbids.
+
+**Investigation:** re-ran the full suite (`ECC_GATEGUARD=off DISABLE_OMC=1 npx vitest run`) 10
+times consecutively with an unchanged working tree (git status confirmed clean / only the
+Important-1 comment edit staged throughout). **Reproduced on run 1 of 10; runs 2–10 were clean
+(369/369).**
+
+Full name and assertion, from `/tmp/run_1.log`:
+
+```
+FAIL  tests/controller/runLoop.integration.test.ts > runLoop > treats execute timeout with no adapter result as exhausted even if files changed in the worktree
+AssertionError: expected 'execute phase exceeded per-attempt ti…' to be 'runtime or token budget exhaus…' // Object.is equality
+
+Expected: "runtime or token budget exhausted"
+Received: "execute phase exceeded per-attempt timeout of 20ms"
+
+ ❯ tests/controller/runLoop.integration.test.ts:1811:35
+    1809|
+    1810|     expect(finalState.status).toBe("exhausted");
+    1811|     expect(finalState.stopReason).toBe("runtime or token budget exhaus…
+```
+
+**Root cause, traced (not guessed):** the test's own contract
+(`tests/controller/runLoop.integration.test.ts:1770`, "treats execute timeout with no adapter
+result...") sets `perAttemptTimeoutMs: 20` and `totalRuntimeBudgetMs: 20` to the *same* value. The
+stop reason it asserts is chosen at `src/controller/runLoop.ts:1030`:
+`hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("execute", executeTimeoutMs)`.
+`hasBudgetExceeded` reads `state.budgetSnapshot.timeRemainingMs`, a value fixed at line 1009 —
+`state = applyPhaseUsage(state, executeOutcome.elapsedMs, ...)` — **before** `persistBoundaryAnalysis`
+(line 1025, this task's own change) is ever called. `executeOutcome.elapsedMs` is real wall-clock
+time consumed by the plan phase plus the execute phase's own timeout handling, racing against the
+fixed 20ms budget; whether it lands at exactly 0ms remaining (budget reason) or a hair above zero
+(phase-timeout reason) depends on machine scheduling jitter across those two identical 20ms
+values — a pre-existing tie-race, structurally identical in kind to the L1 real-filesystem-timing
+flake this task's own brief already documented, just in a different test and file.
+
+This is **not** something Task 4's change could have introduced: `hasBudgetExceeded(state)` is a
+pure function of a `state` snapshot computed *before* line 1025 runs, so however much latency
+`persistBoundaryAnalysis`'s new `runExclusive` wrapping adds is irrelevant to it — that snapshot
+was already frozen one line earlier. `tests/controller/runLoop.integration.test.ts` itself was
+last modified in commit `f90a819`, well before any Task 4 commit, and `git log --oneline --follow`
+confirms it predates this branch's work entirely; this task did not touch that file.
+
+**Outcome:** reproduced once in 10 runs, name and assertion captured above, traced to a
+pre-existing tied-timeout race in a different file untouched by this task — not a regression this
+task's change could cause. No test was weakened, deleted, or restructured to address this; no
+production code was changed.
