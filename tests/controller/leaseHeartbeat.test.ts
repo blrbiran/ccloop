@@ -432,6 +432,83 @@ describe("runExclusive shares the serialization queue with affirmNow", () => {
     await heartbeat.stop();
   });
 
+  // Final whole-branch review, Final-1: the test above fences only ONE of the two interleaving
+  // directions §4 claims holds "by construction". It starts the span first and only then calls
+  // affirmNow, so it proves "an affirm queued AFTER the span waits for the span". The named
+  // mutation for requirement 4 — `const result = queue.then(fn, fn)` replaced by
+  // `const result = fn()` — SURVIVES that test, because it leaves `queue = result.then(...)`
+  // intact and therefore keeps blocking everything queued behind the span. What it breaks is
+  // the mirror direction: the span no longer waits for an affirm that is ALREADY IN FLIGHT.
+  //
+  // That direction is the ordinary case, not the exotic one: the interval timer fires
+  // `void affirmNow()` at arbitrary points during an attempt (leaseHeartbeat.ts's setInterval),
+  // so an affirm being mid-CAS when persistBoundaryAnalysis reaches its span is precisely the
+  // contention design's defect 2 — an affirm landing between the span's record read and its CAS,
+  // invalidating the CAS base with a write this process made itself.
+  //
+  // Same deterministic gate as the test above, with the two calls swapped: the affirm is
+  // started and gated first, then runExclusive is called, and `fn` must not begin until the
+  // affirm has settled.
+  it("does not invoke an incoming runExclusive fn until an already-in-flight affirm settles", async () => {
+    vi.resetModules();
+
+    const order: string[] = [];
+    let releaseAffirm: (updated: OwnerRecord) => void = () => {};
+    const affirmGate = new Promise<OwnerRecord>((resolve) => {
+      releaseAffirm = resolve;
+    });
+
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+      return {
+        ...actual,
+        affirmOwnerLease: async () => {
+          order.push("affirm:start");
+          const updated = await affirmGate;
+          order.push("affirm:end");
+          return updated;
+        },
+      };
+    });
+
+    const { startLeaseHeartbeat: mockedStartLeaseHeartbeat } = await import(
+      "../../src/controller/leaseHeartbeat.js"
+    );
+    const runDir = await seed(record());
+    const heartbeat = mockedStartLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
+
+    // The in-flight affirm, exactly as the interval timer produces it, started BEFORE the span.
+    const affirmPromise = heartbeat.affirmNow();
+
+    // Let it reach — and block inside — the mocked CAS, so the queue is genuinely occupied by a
+    // half-finished affirm at the moment runExclusive is called below.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(["affirm:start"]);
+
+    const exclusive = heartbeat.runExclusive(async () => {
+      order.push("fn:start");
+      return "fn-result";
+    });
+
+    // The decisive assertion. A runExclusive that executes `fn` directly instead of chaining it
+    // onto `queue` pushes "fn:start" here — in fact synchronously, at the call above — while the
+    // affirm is still mid-CAS. That is defect 2's exact interleaving: the span reading the owner
+    // record while an affirm is about to rewrite it.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(["affirm:start"]);
+
+    releaseAffirm(record({ leaseAffirmedAt: "2026-07-26T10:05:00.000Z" }));
+    await affirmPromise;
+    await expect(exclusive).resolves.toBe("fn-result");
+
+    expect(order).toEqual(["affirm:start", "affirm:end", "fn:start"]);
+    await heartbeat.stop();
+  });
+
   // Review finding on this task: the property that actually needs a test is not "the stored
   // chain and the returned promise are structurally distinct objects" — it's that `queue`
   // itself is never left as a REJECTED promise with no handler attached to it. A caller that
