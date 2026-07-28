@@ -77,8 +77,9 @@ const BUDGET_EXHAUSTED_REASON = "runtime or token budget exhausted";
 
 // §5.2 of the contention design: a busy owner-transfer lock is a transient condition (a
 // contender's critical section is a handful of file writes), so it gets a short bounded retry.
-// 3 attempts * 50ms backoff <= 150ms total, far below LEASE_TTL_MS (90_000ms, lease.ts) — this
-// window runs inside the exclusive span added in a later task, holding off this process's own
+// 3 attempts with the backoff preceding attempts 2 and 3 only, so 2 * 50ms = 100ms of waiting at
+// worst — far below LEASE_TTL_MS (90_000ms, lease.ts, ~0.11% of it). This window
+// runs inside the exclusive span added in a later task, holding off this process's own
 // heartbeat affirms for its duration, so it must stay small. A CAS mismatch (a stale read, not a
 // busy lock) is never retried here: see the instanceof check in the loop below.
 export const OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS = 3;

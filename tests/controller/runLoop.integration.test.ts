@@ -1515,7 +1515,7 @@ describe("runLoop", () => {
     }
   });
 
-  it("preserves a synthesized winner reconciliation view when another controller already completed the transfer before success reconciliation was written", async () => {
+  it("writes no synthesized winner reconciliation view when another controller already completed the transfer before success reconciliation was written", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);

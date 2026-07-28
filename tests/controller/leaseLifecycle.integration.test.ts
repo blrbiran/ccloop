@@ -316,13 +316,20 @@ describe("lease heartbeat lifecycle", () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
+    // Timing shape shared by every contention test in this file, widened from the original
+    // 20ms/20ms/10ms (final whole-branch review, Final-3): the adapter below always times out
+    // (it blocks on the abort signal rather than racing it), so perAttemptTimeoutMs alone
+    // reaches the "timedOut, no result" branch deterministically. Pinning totalRuntimeBudgetMs
+    // to 20ms as well added nothing and raced real wall-clock file I/O — under load
+    // hasBudgetExceeded fires first and diverts the run before persistBoundaryAnalysis is ever
+    // called, which would fail every decisive assertion below. It is left at the contract's
+    // generous default; that branch terminates the run in one attempt either way, so the wider
+    // budget cannot let a second attempt run.
     const contract: LoopContract = {
       ...baseContract,
       executionPolicy: {
         ...baseContract.executionPolicy,
-        perAttemptTimeoutMs: 20,
-        totalRuntimeBudgetMs: 20,
-        partialOutcomeRecoveryWindowMs: 10,
+        perAttemptTimeoutMs: 200,
       },
     };
 
@@ -393,9 +400,7 @@ describe("lease heartbeat lifecycle", () => {
       ...baseContract,
       executionPolicy: {
         ...baseContract.executionPolicy,
-        perAttemptTimeoutMs: 20,
-        totalRuntimeBudgetMs: 20,
-        partialOutcomeRecoveryWindowMs: 10,
+        perAttemptTimeoutMs: 200,
       },
     };
 
@@ -486,9 +491,7 @@ describe("lease heartbeat lifecycle", () => {
       ...baseContract,
       executionPolicy: {
         ...baseContract.executionPolicy,
-        perAttemptTimeoutMs: 20,
-        totalRuntimeBudgetMs: 20,
-        partialOutcomeRecoveryWindowMs: 10,
+        perAttemptTimeoutMs: 200,
       },
     };
 
@@ -576,9 +579,7 @@ describe("lease heartbeat lifecycle", () => {
       ...baseContract,
       executionPolicy: {
         ...baseContract.executionPolicy,
-        perAttemptTimeoutMs: 20,
-        totalRuntimeBudgetMs: 20,
-        partialOutcomeRecoveryWindowMs: 10,
+        perAttemptTimeoutMs: 200,
       },
     };
 
@@ -820,9 +821,7 @@ describe("lease heartbeat lifecycle", () => {
       ...baseContract,
       executionPolicy: {
         ...baseContract.executionPolicy,
-        perAttemptTimeoutMs: 20,
-        totalRuntimeBudgetMs: 20,
-        partialOutcomeRecoveryWindowMs: 10,
+        perAttemptTimeoutMs: 200,
       },
     };
 
@@ -1017,9 +1016,7 @@ describe("lease heartbeat lifecycle", () => {
       ...baseContract,
       executionPolicy: {
         ...baseContract.executionPolicy,
-        perAttemptTimeoutMs: 20,
-        totalRuntimeBudgetMs: 20,
-        partialOutcomeRecoveryWindowMs: 10,
+        perAttemptTimeoutMs: 200,
       },
     };
 
