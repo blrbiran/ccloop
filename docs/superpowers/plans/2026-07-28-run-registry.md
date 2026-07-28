@@ -25,7 +25,7 @@ Every task inherits these. They come from the spec; values are verbatim.
 1. **Zero writes.** The scanner must not create, modify, delete, or rename anything under the scanned tree. This is the layer's entire premise (spec §3).
 2. **`readOwnerRecord` (`src/persistence/fileStore.ts:566`) must never be called.** It runs `recoverInterruptedOwnerTransfer` (`:549`), which renames and unlinks. Use `readOwnerRecordWithoutRecovery` (`:628`) (spec §7.1).
 3. **`checkRunLease` (`src/controller/leaseGate.ts:16`) must never be called.** It appends a `lease_expired_observed` event at `:58`. It writes (spec §7.4).
-4. **No L1 or L1b code may be modified**, including write paths and the lease gate (spec §2.7). The only file outside `src/registry/` and `tests/registry/` that this plan touches is `src/cli.ts`.
+4. **No L1 or L1b code may be modified**, including write paths and the lease gate (spec §2.7). Outside `src/registry/` and `tests/registry/`, this plan touches exactly two files: `src/cli.ts` (add the `ls` subcommand) and `tests/cli/cli.test.ts` (its tests). Touching anything else is a finding.
 5. **No derived fields.** No eligibility, resumability, freshness, staleness, or expiry is computed or reported (spec §3, §6.1).
 6. **None of L1 spec §12's nineteen constraints may be weakened**; #2, #5, #7, #15, #17, #19 are under a standing order never to be weakened or deleted.
 7. **Test command:** `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run`. Add a path to scope it. **Never pipe verification runs through `| tail -N`** — truncation loses test names and makes failures unfalsifiable.
@@ -109,8 +109,11 @@ export function observeFields(parsed: unknown, spec: ObservedFileSpec): FileObse
 1. A field present with the right type → `present` carrying the value.
 2. A field missing from a parsed object → `absent`. *Kills:* an implementation that treats missing as `unreadable`, collapsing spec §11's rows 4 and 5.
 3. A field present with the wrong JSON type → `unreadable` with `reason: "shape"`. Cover at minimum `currentOwnerEpoch` as a string and `leaseAffirmedAt` as a number.
-4. **`runId` missing → `unreadable`/`shape` or `absent` (per requirement 2), and specifically NOT silently accepted.** *Kills:* an implementation that reached for `parseOwnerRecordForLease` (`src/ownership/lease.ts:64-94`), which validates only `currentProcessInstanceId`, `currentOwnerEpoch`, and `leaseAffirmedAt` — it would pass a record with no `runId`. This is spec §12.2's third case and the reason per-field observation exists at all.
-5. Same for `ownerStatus` — the other field `parseOwnerRecordForLease` does not validate.
+4. **Observation granularity is per-field, not per-file.** An owner record with a valid `runId` and a **non-integer `currentOwnerEpoch`** must yield `runId`: `present`, `currentOwnerEpoch`: `unreadable`/`shape`, and the remaining three fields observed independently on their own merits.
+
+   *Kills:* an implementation that delegates to `parseOwnerRecordForLease` (`src/ownership/lease.ts:64-94`). That parser **throws** on a bad `currentOwnerEpoch`, so a delegating implementation can only mark the whole file unreadable — losing the four fields that were fine. This is spec §7.3 consequence 1, and it is the only assertion here that actually distinguishes the two designs. (Asserting merely that a missing `runId` is "not silently accepted" does **not** distinguish them: a delegating implementation reads `parsed.runId`, gets `undefined`, and reports `absent` too.)
+
+5. **`runId` and `ownerStatus` are observed at all.** Both are `absent` when missing and `unreadable`/`shape` when present with a non-string value. `parseOwnerRecordForLease` validates neither, so an implementation that treats "the parser passed" as "the record is fine" would never surface either field's corruption.
 6. `stopReason: null` → `present` with value `null`, **not** `absent`. *Kills:* an implementation using a truthiness check.
 7. `leaseAffirmedAt` absent entirely → `absent`. Note `OwnerRecord` documents absent-means-null for legacy records (`src/runtime/types.ts:90-93`); the registry reports the raw observation and does **not** normalize.
 8. `eligibleForContinuation: false` or `"true"` → `unreadable`/`shape`. The declared type is the literal `true` (`src/runtime/types.ts:103`), so anything else means corruption (spec §6.2).
