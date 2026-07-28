@@ -19,6 +19,10 @@ implementation defect. Index:
   killed the *correct* implementation.
 - **(h)** §7.3, §15.4 — unqualified "§12" cross-references colliding with this
   document's own §12.
+- **(i)** §11 — the table had no row for a file that is present but unreadable
+  for a reason other than parse failure (`EACCES`). Found while writing the
+  implementation plan; the omission would have forced the implementer to
+  misreport such a file as `absent` or as a parse failure.
 
 Layer position: L2 in the ownership-and-coordination stack. Parent design:
 `2026-07-22-ownership-and-reconciliation-boundaries-design.md` §17 item 2.
@@ -355,6 +359,7 @@ Tests live in `tests/registry/`, mirroring `src/` as the existing suite does.
 | Malformed JSON, atomic file | every field from that file `unreadable(parse)`; no retry |
 | Field missing from a parsed object | that field `absent` |
 | Field present with wrong JSON type | that field `unreadable(shape)` |
+| File unreadable for another reason (e.g. `EACCES`) | every field from that file `unreadable(io)`; no retry |
 | Directory unreadable | row recording the failure; scan continues |
 | Depth limit hit | row recording truncation |
 | Root missing / unreadable | exit `1` |
