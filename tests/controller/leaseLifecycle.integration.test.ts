@@ -650,6 +650,149 @@ describe("lease heartbeat lifecycle", () => {
     }
   });
 
+  // Final whole-branch review, Final-2 (human-ruled): the CAS-mismatch / lock-busy catch path
+  // re-reads the owner record, and `readOwnerRecord` runs recoverInterruptedOwnerTransfer — a
+  // WRITE. That is the very side effect the entry guard exists to prevent (§5.4: "a superseded
+  // process must not perform crash recovery on a run it no longer owns"), and this instance sits
+  // on the path that most strongly indicates a rival now owns the run, up to a full retry
+  // backoff after the entry guard passed.
+  //
+  // Fixture: the requirement 3 (CAS mismatch) path, driven through runLoopFromState so the test
+  // owns the heartbeat and can assert file state BEFORE stop() — releaseOwnerLease routes
+  // through the same recovery-on-write path and would finalize the staged fixture afterwards,
+  // confounding the evidence (the same reason the requirement 6 test asserts pre-stop).
+  // writeOwnerTransferArtifacts is mocked to do three things at the instant the CAS fails:
+  // stage an interrupted-transfer fixture, rotate owner-record.json to an unrelated rival, and
+  // throw the precondition error. With the guard, the re-read never happens and the staged
+  // transfer is untouched; without it, recovery-on-read finalizes a transfer to `pid:recovered`
+  // inside a run this process has already lost.
+  it("refuses the catch-path re-read once superseded, rather than finalizing a staged transfer it no longer owns", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 200,
+      },
+    };
+
+    const processInstanceId = buildProcessInstanceId();
+    const initialOwnerRecord: OwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1:t0",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: processInstanceId,
+      lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+      ownerStatus: "lost",
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    await writeFile(join(runDir, "owner-record.json"), JSON.stringify(initialOwnerRecord, null, 2));
+
+    // Staged-but-uncommitted owner transfer, with a distinct epoch/process so any trace of it
+    // reaching owner-record.json is unambiguous.
+    const pendingOwner = {
+      runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 555,
+      currentProcessInstanceId: "pid:recovered", lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+      ownerStatus: "current", supersededByEpoch: null,
+    };
+    const pendingTransfer = {
+      priorOwnerEpoch: 1, newOwnerEpoch: 555, priorProcessInstanceId: processInstanceId,
+      newProcessInstanceId: "pid:recovered", transferredAt: "2026-07-25T00:00:00.000Z",
+      reason: "staged before crash", eligibleForContinuation: true,
+    };
+    const marker = {
+      version: 1, stagedAt: "2026-07-25T00:00:00.000Z",
+      finalizeOrder: ["owner-transfer.json", "owner-record.json"],
+    };
+    const rivalRecord = {
+      runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 42,
+      currentProcessInstanceId: "pid:rival", lastAffirmedAt: new Date().toISOString(),
+      ownerStatus: "current", supersededByEpoch: null,
+    };
+
+    vi.resetModules();
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+
+      return {
+        ...actual,
+        writeOwnerTransferArtifacts: async () => {
+          await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(pendingOwner, null, 2));
+          await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(pendingTransfer, null, 2));
+          await writeFile(join(runDir, ".owner-transfer.transaction.json"), JSON.stringify(marker, null, 2));
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify(rivalRecord, null, 2));
+          throw new actual.OwnerTransferPreconditionError(
+            "persisted owner record changed before owner transfer could be applied",
+          );
+        },
+      };
+    });
+
+    try {
+      const { runLoopFromState: observedRunLoopFromState } = await import("../../src/controller/runLoop.js");
+      const { startLeaseHeartbeat: mockedStartLeaseHeartbeat } = await import(
+        "../../src/controller/leaseHeartbeat.js"
+      );
+
+      const leaseLoss = createLeaseLossSignal();
+      const heartbeat = mockedStartLeaseHeartbeat({
+        runDir,
+        ownerRecord: initialOwnerRecord,
+        onLeaseLost: (error) => {
+          leaseLoss.lost = error as never;
+        },
+      });
+
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const finalState = await observedRunLoopFromState(
+        contract,
+        runDir,
+        adapter,
+        planningRunState(contract),
+        heartbeat,
+        leaseLoss,
+      );
+
+      expect(finalState.stopReason).toBe("lease_lost");
+
+      // The decisive assertions: the staged transfer was never finalized. An unguarded re-read
+      // renames these into owner-transfer.json / owner-record.json and deletes the marker.
+      await expect(access(join(runDir, ".owner-transfer.transaction.json"))).resolves.toBeUndefined();
+      await expect(access(join(runDir, ".owner-record.pending.json"))).resolves.toBeUndefined();
+      await expect(access(join(runDir, ".owner-transfer.pending.json"))).resolves.toBeUndefined();
+      await expect(access(join(runDir, "owner-transfer.json"))).rejects.toThrow();
+
+      const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+        currentOwnerEpoch: number;
+        currentProcessInstanceId: string;
+      };
+      expect(owner.currentOwnerEpoch).toBe(42); // still the rival's record, untouched by recovery
+      expect(owner.currentProcessInstanceId).toBe("pid:rival");
+
+      await heartbeat.stop();
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
+
   // Task 4 / spec §12 (owner-transfer-contention design) requirement 4: an affirm that becomes
   // due while a transfer is in flight must not execute until the transfer's exclusive span
   // completes; the transfer sees zero CAS failures and no lease_lost is appended.

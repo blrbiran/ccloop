@@ -779,6 +779,18 @@ async function persistBoundaryAnalysis(
             throw error;
           }
 
+          // Final review / §5.4, per human ruling: the entry guard's own justification applies
+          // to THIS read more strongly than to the first one. `readOwnerRecord` runs
+          // recoverInterruptedOwnerTransfer, which WRITES — and reaching this line means the
+          // transfer just failed its CAS or found the lock busy for the whole retry window,
+          // i.e. the strongest available evidence that a rival now owns the run, up to
+          // OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS * OWNER_TRANSFER_LOCK_RETRY_DELAY_MS of backoff
+          // after the entry guard passed. A superseded process must not perform crash recovery
+          // on a run it no longer owns; that is the same rule, at a later instant.
+          //
+          // This does NOT guard the transfer CAS itself — that keeps relying on its CAS alone,
+          // which is what §5.4's "no third guard" was about.
+          await heartbeat.assertHeld();
           ownerRecord = await readOwnerRecord(runDir);
           ownership = evaluateOwnershipFor(ownerRecord);
         }
