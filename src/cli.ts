@@ -4,6 +4,8 @@ import { pathToFileURL } from "node:url";
 import { loadContract } from "./contract/loadContract.js";
 import { resumeLoop } from "./controller/resumeLoop.js";
 import { runLoop } from "./controller/runLoop.js";
+import { renderScanTable, scanRootFailureDetail, toScanResult } from "./registry/renderRuns.js";
+import { defaultScanDeps, scanRuns } from "./registry/scanRuns.js";
 import { SubprocessClaudeAdapter } from "./runtime/claude/subprocessClaudeAdapter.js";
 import { ScriptedAdapter } from "./runtime/scriptedAdapter.js";
 import type { RuntimeAdapter } from "./runtime/types.js";
@@ -21,6 +23,11 @@ export type ParsedArgs =
       runDir: string;
       adapter: "scripted" | "claude";
       adapterConfigPath: string;
+    }
+  | {
+      command: "ls";
+      root: string;
+      json: boolean;
     };
 
 type ScriptedAdapterConfig = {
@@ -29,8 +36,21 @@ type ScriptedAdapterConfig = {
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const command = argv[0];
+
+  // `ls` takes a positional root and, unlike `run`/`resume`, needs neither an adapter nor a
+  // contract — it runs no loop (spec §9, §10). Handled before the `run`/`resume` flag parsing
+  // below so it is never forced through their required-flags check.
+  if (command === "ls") {
+    const root = argv[1];
+    if (!root) {
+      throw new Error("missing required root argument");
+    }
+    const json = argv.slice(2).includes("--json");
+    return { command, root, json };
+  }
+
   if (command !== "run" && command !== "resume") {
-    throw new Error("expected `run` or `resume` command");
+    throw new Error("expected `run`, `resume`, or `ls` command");
   }
 
   const values = new Map<string, string>();
@@ -73,7 +93,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   };
 }
 
-async function loadAdapter(parsed: ParsedArgs): Promise<RuntimeAdapter> {
+async function loadAdapter(parsed: Exclude<ParsedArgs, { command: "ls" }>): Promise<RuntimeAdapter> {
   const config = JSON.parse(await readFile(parsed.adapterConfigPath, "utf8")) as unknown;
 
   if (parsed.adapter === "scripted") {
@@ -86,6 +106,22 @@ async function loadAdapter(parsed: ParsedArgs): Promise<RuntimeAdapter> {
 export async function main(argv: string[]): Promise<number> {
   try {
     const parsed = parseArgs(argv);
+
+    // `ls` runs no loop and has no run outcome to report, so it never goes through the
+    // succeeded/failed -> 0/2 mapping below (spec §9): exit 1 iff the scan itself failed
+    // (root missing or unreadable), else 0 — including when rows themselves are `unreadable`.
+    if (parsed.command === "ls") {
+      const rows = await scanRuns(parsed.root, defaultScanDeps);
+      const failureDetail = scanRootFailureDetail(rows, parsed.root);
+      if (failureDetail !== undefined) {
+        console.error(failureDetail);
+        return 1;
+      }
+      const result = toScanResult(rows);
+      console.log(parsed.json ? JSON.stringify(result, null, 2) : renderScanTable(result));
+      return 0;
+    }
+
     const adapter = await loadAdapter(parsed);
     if (parsed.command === "resume") {
       const finalState = await resumeLoop(parsed.runDir, adapter);
