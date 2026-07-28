@@ -41,11 +41,14 @@ export function parseArgs(argv: string[]): ParsedArgs {
   // contract — it runs no loop (spec §9, §10). Handled before the `run`/`resume` flag parsing
   // below so it is never forced through their required-flags check.
   if (command === "ls") {
-    const root = argv[1];
+    const rest = argv.slice(1);
+    // The positional root may follow a flag (e.g. `ls --json <root>`), so it is the first
+    // token that isn't itself a `--`-prefixed flag, not simply `argv[1]`.
+    const root = rest.find((arg) => !arg.startsWith("--"));
     if (!root) {
       throw new Error("missing required root argument");
     }
-    const json = argv.slice(2).includes("--json");
+    const json = rest.includes("--json");
     return { command, root, json };
   }
 

@@ -94,6 +94,16 @@ describe("parseArgs ls", () => {
     });
   });
 
+  // Finding: `ls --json <root>` (flag before the positional root) is a normal invocation and
+  // must not be misparsed as root === "--json".
+  it("parses --json before the positional root", () => {
+    expect(parseArgs(["ls", "--json", "/tmp/some-root"])).toEqual({
+      command: "ls",
+      root: "/tmp/some-root",
+      json: true,
+    });
+  });
+
   // Trap named in the task brief: `ls` must not require --adapter, --adapter-config, or
   // --contract the way `run`/`resume` do.
   it("does not require --adapter, --adapter-config, or --contract", () => {

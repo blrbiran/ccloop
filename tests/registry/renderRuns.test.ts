@@ -4,7 +4,9 @@
 
 import { describe, expect, it } from "vitest";
 import { toScanResult, renderScanTable, scanRootFailureDetail } from "../../src/registry/renderRuns.js";
-import type { ScanRow } from "../../src/registry/scanRuns.js";
+import { scanRuns, MAX_SCAN_DEPTH } from "../../src/registry/scanRuns.js";
+import type { DirEntry, DirReader, ScanDeps, ScanRow } from "../../src/registry/scanRuns.js";
+import type { RunFileReaders } from "../../src/registry/readObservedFile.js";
 
 const fullyObservedRun: ScanRow = {
   kind: "run",
@@ -105,6 +107,140 @@ describe("toScanResult", () => {
     // fixture never contained the field.
     expect(keys.has("eligibleForContinuation")).toBe(true);
   });
+
+  // Finding: the test above walks module-local `ScanRow` literals, hand-authored in this file.
+  // That constrains this file's shape, not what `scanRuns`/`observeRun` actually produce — a
+  // new *optional* field added to production `RunObservation` and populated in production code
+  // would ship unnoticed, because the literals above would still typecheck unchanged. This
+  // test instead drives the real pipeline (`scanRuns` -> `observeRun` -> `readObservedFile` ->
+  // `observeFields`, all production code) over a fake `DirReader`/`RunFileReaders` boundary —
+  // the same seam tests/registry/scanRuns.test.ts uses — so a row actually assembled by that
+  // pipeline is what gets serialized and checked (spec §15 #3: "enforced by a test, not by
+  // convention").
+  it("contains no derived fields when the rows are produced by the real scanRuns/observeRun pipeline, not test literals", async () => {
+    const root = "/pipeline-root";
+    const fullRun = `${root}/run-full`;
+    const emptyRun = `${root}/run-empty`;
+    const lockedDir = `${root}/locked`;
+
+    // A chain one directory longer than MAX_SCAN_DEPTH allows, so the deepest directory is
+    // truncated before it is ever listed or recognized (scanRuns.ts checks depth before both).
+    const chainNames = Array.from({ length: MAX_SCAN_DEPTH + 1 }, (_, i) => `d${i + 1}`);
+    const chainPaths: string[] = [];
+    for (const name of chainNames) {
+      chainPaths.push(`${chainPaths.at(-1) ?? root}/${name}`);
+    }
+    const truncatedPath = chainPaths.at(-1)!;
+
+    const readDirMap = new Map<string, DirEntry[]>();
+    readDirMap.set(root, [
+      { name: "run-full", isDirectory: true, isSymbolicLink: false },
+      { name: "run-empty", isDirectory: true, isSymbolicLink: false },
+      { name: "locked", isDirectory: true, isSymbolicLink: false },
+      { name: chainNames[0]!, isDirectory: true, isSymbolicLink: false },
+    ]);
+    readDirMap.set(fullRun, [
+      { name: "loop-state.json", isDirectory: false, isSymbolicLink: false },
+      { name: "owner-record.json", isDirectory: false, isSymbolicLink: false },
+      { name: "owner-transfer.json", isDirectory: false, isSymbolicLink: false },
+    ]);
+    readDirMap.set(emptyRun, [{ name: "events.jsonl", isDirectory: false, isSymbolicLink: false }]);
+    // Every chain directory but the last lists its single child; the last is never listed —
+    // it is truncated on entry, before scanDir would call readDir on it.
+    for (let i = 0; i < chainNames.length - 1; i++) {
+      readDirMap.set(chainPaths[i]!, [{ name: chainNames[i + 1]!, isDirectory: true, isSymbolicLink: false }]);
+    }
+
+    const markerSet = new Set<string>([
+      `${fullRun}/loop-state.json`,
+      `${fullRun}/owner-record.json`,
+      `${fullRun}/owner-transfer.json`,
+      `${emptyRun}/events.jsonl`,
+    ]);
+
+    const dir: DirReader = {
+      readDir: async (path: string) => {
+        if (path === lockedDir) {
+          const error = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+        const entries = readDirMap.get(path);
+        if (!entries) throw new Error(`fake fs: no directory registered for ${path}`);
+        return entries;
+      },
+      fileExists: async (path: string) => markerSet.has(path),
+    };
+
+    function enoentError(): NodeJS.ErrnoException {
+      const error = new Error("ENOENT: no such file or directory") as NodeJS.ErrnoException;
+      error.code = "ENOENT";
+      return error;
+    }
+
+    const readers: RunFileReaders = {
+      readRunState: async (runDir: string) => {
+        if (runDir === fullRun) {
+          return {
+            status: "queued",
+            currentAttempt: 1,
+            attemptsUsed: 0,
+            lastTransitionAt: "2026-07-28T00:00:00.000Z",
+            stopReason: null,
+          };
+        }
+        throw enoentError();
+      },
+      readOwnerRecordWithoutRecovery: async (runDir: string) => {
+        if (runDir === fullRun) {
+          return {
+            runId: "run-full",
+            currentOwnerEpoch: 1,
+            ownerStatus: "active",
+            currentProcessInstanceId: "proc-1",
+            leaseAffirmedAt: "2026-07-28T00:00:00.000Z",
+          };
+        }
+        throw enoentError();
+      },
+      readOwnerTransferRecord: async (runDir: string) => {
+        if (runDir === fullRun) {
+          return { eligibleForContinuation: true };
+        }
+        throw enoentError();
+      },
+    };
+
+    const deps: ScanDeps = {
+      readers,
+      sleep: async () => {},
+      now: () => new Date("2026-07-28T00:00:00.000Z"),
+      dir,
+    };
+
+    const rows = await scanRuns(root, deps);
+
+    // Sanity check the fixture actually produced one of each row kind — otherwise a bug in the
+    // fixture, not the guard, would be why no derived field ever showed up.
+    expect(rows.filter((r) => r.kind === "run").map((r) => r.path).sort()).toEqual([emptyRun, fullRun]);
+    expect(rows.some((r) => r.kind === "directory_unreadable" && r.path === lockedDir)).toBe(true);
+    expect(rows.some((r) => r.kind === "depth_truncated" && r.path === truncatedPath)).toBe(true);
+
+    const result = toScanResult(rows);
+    const serialized = JSON.parse(JSON.stringify(result)) as unknown;
+
+    const keys = new Set<string>();
+    collectKeys(serialized, keys);
+
+    for (const key of keys) {
+      expect(key).not.toMatch(/resumable|fresh|stale|expired/i);
+      if (/eligible/i.test(key)) {
+        expect(key).toBe("eligibleForContinuation");
+      }
+    }
+
+    expect(keys.has("eligibleForContinuation")).toBe(true);
+  });
 });
 
 describe("renderScanTable", () => {
@@ -115,6 +251,14 @@ describe("renderScanTable", () => {
     const table = renderScanTable(toScanResult([fullyObservedRun]));
     expect(table).toMatch(/independent observation/i);
     expect(table).toMatch(/do not constitute a consistent snapshot|not a consistent snapshot/i);
+  });
+
+  // Finding: eligibleForContinuation can read true for a run with no reconciliation record on
+  // disk (spec §13.1 #1) — the one field a hurried operator could misread as permission to
+  // resume. The notice must caveat it explicitly.
+  it("states plainly that eligibleForContinuation is observed, not a resumability decision", () => {
+    const table = renderScanTable(toScanResult([fullyObservedRun]));
+    expect(table).toMatch(/eligibleForContinuation is an observed field, not a decision/i);
   });
 
   // Requirement 5: a row whose every field is absent must still render a visible line —

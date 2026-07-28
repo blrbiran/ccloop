@@ -3,7 +3,7 @@
 // run, never follow symlinks, bound depth, and turn every condition the scan cannot handle
 // into a row rather than a swallowed error or a shorter list.
 
-import { access, readdir } from "node:fs/promises";
+import { access, lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { defaultObserveDeps } from "./readObservedFile.js";
 import { observeRun } from "./observeRun.js";
@@ -44,11 +44,26 @@ export const defaultScanDeps: ScanDeps = {
   dir: {
     async readDir(path: string): Promise<DirEntry[]> {
       const entries = await readdir(path, { withFileTypes: true });
-      return entries.map((entry) => ({
-        name: entry.name,
-        isDirectory: entry.isDirectory(),
-        isSymbolicLink: entry.isSymbolicLink(),
-      }));
+      return Promise.all(
+        entries.map(async (entry) => {
+          // Some filesystems (network mounts, FUSE) leave d_type unpopulated, in which case
+          // every Dirent.is*() check — including isFile() — returns false (Node reports this
+          // as DT_UNKNOWN, without resolving it itself). Left alone, such an entry looks like
+          // neither a directory nor a symlink and is silently skipped at the descent check
+          // below, which for a directory entry means a shorter scan with no issue row —
+          // exactly what spec §5 / §15 #1 forbid. Resolve the real type with lstat only in
+          // that unresolved case.
+          if (entry.isDirectory() || entry.isSymbolicLink() || entry.isFile()) {
+            return {
+              name: entry.name,
+              isDirectory: entry.isDirectory(),
+              isSymbolicLink: entry.isSymbolicLink(),
+            };
+          }
+          const stat = await lstat(join(path, entry.name));
+          return { name: entry.name, isDirectory: stat.isDirectory(), isSymbolicLink: stat.isSymbolicLink() };
+        }),
+      );
     },
     async fileExists(path: string): Promise<boolean> {
       try {

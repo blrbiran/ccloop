@@ -56,7 +56,8 @@ function renderIssueRow(row: ScanIssue): string {
 // Spec §8.2: this notice is part of the contract, not decoration — a row assembles several
 // files that may have been read at different instants, and the combination is not a snapshot.
 const CONSISTENCY_NOTICE =
-  "Fields within a row are independent observations and do not constitute a consistent snapshot.";
+  "Fields within a row are independent observations and do not constitute a consistent snapshot. " +
+  "eligibleForContinuation is an observed field, not a decision that the run may be resumed.";
 
 // Renders every row in scan order — never sorted or filtered, so an issue row can never be
 // pushed out of view by run rows (spec §15 #1, task brief trap).
