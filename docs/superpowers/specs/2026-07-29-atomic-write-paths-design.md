@@ -7,7 +7,7 @@
 
 ## 1. 目的
 
-`src/persistence/fileStore.ts` 里有四处用裸 `writeFile` 写 JSON。裸 `writeFile` 不是原子的：读者可以观测到写了一半的文件。L2 registry 为此付出了每个非原子文件最多 `LEASE_VERIFY_READ_ATTEMPTS = 3` 次读、`LEASE_VERIFY_RETRY_DELAY_MS = 50` 的有界重读代价（`src/registry/readObservedFile.ts:99-101`），而**任何后续需要连贯读这些文件的消费者都继承同一问题与同一代价**。
+`src/persistence/fileStore.ts` 里有多处用裸 `writeFile` 写 JSON，**本分支纳入其中五处**（其余的排除理由见 §2.2）。裸 `writeFile` 不是原子的：读者可以观测到写了一半的文件。L2 registry 为此付出了每个非原子文件最多 `LEASE_VERIFY_READ_ATTEMPTS = 3` 次读、`LEASE_VERIFY_RETRY_DELAY_MS = 50` 的有界重读代价（`src/registry/readObservedFile.ts:99-101`），而**任何后续需要连贯读这些文件的消费者都继承同一问题与同一代价**。
 
 本设计消除写侧的根因。
 
@@ -17,14 +17,17 @@
 
 ### 2.1 在范围内
 
-四处裸 `writeFile`（第四处是裁决记录漏列、本轮探索新发现的，已获人批准纳入）：
+五处裸 `writeFile`：
 
 | 位置 | 文件 | 说明 |
 |---|---|---|
 | `fileStore.ts:81` | `loop-state.json` | `writeRunState`，**每次状态转移都重写**，最热 |
+| `fileStore.ts:76` | `loop-state.json` | `initializeRunFiles` 内的**创建**写。见下方「为什么必须纳入」 |
 | `fileStore.ts:379-381` | `owner-record.json` | `writeOwnerRecord`，生产唯一调用者 `runLoop.ts:868`，即**首次创建** |
 | `fileStore.ts:308` | `boundary-analysis.json` | `writeBoundaryArtifacts` 内，无条件写 |
 | `fileStore.ts:316` | `reconciliation-record.json` | `writeBoundaryArtifacts` 内，条件写 |
+
+**为什么 `:76` 必须纳入（初稿把它排除了，那是本设计的一个结构性缺陷，已更正）**：`loop-state.json` 有**两个**写者，`:76` 创建、`:81` 每次转移重写。初稿只纳入 `:81`，排除理由是「创建期没有并发读者」——**该理由不成立**。`ccloop ls` 可在任意时刻扫描根目录，**包括某个 run 正在初始化的那一刻**，而 `loop-state.json` 既是 `RUN_MARKER_FILES` 之一、又是 L2 唯一逐字段观测的三个文件之一。`ensureFreshRunDir` 只阻止同一 run 被重复初始化，**不阻止外部扫描**。只改 `:81` 而不改 `:76`，本设计对它最想修的那个文件就是半截的。
 
 外加 M-1 标记（§6）与 L2 注释更正（§5）。
 
@@ -34,8 +37,9 @@
 - **不改 `reconciliation-record.json` 的写入时机**。那是债 1 的范围，属于 L3。本分支只改「怎么写」。已知本分支对该文件所做的一部分工作可能在 L3 中被取代，这是裁决记录已接受的代价。
 - **不改 L2 的读行为**（`atomic` 标志保持 `false`）。见 §5。
 - **不设性能门禁**。见 §8。
-- **不改 `events.jsonl`**：它是 `appendFile` 追加，不是全文件重写，不属于本类问题。
-- **不改 `initializeRunFiles`（`:75-77`）与 `writeAttemptArtifacts`（`:712+`）**：它们写的是创建期或 attempt 目录内的产物，没有并发读者依赖其连贯性，且不在裁决记录的范围内。若后续证明需要，另开一笔。
+- **不改 `events.jsonl`**：`appendEvent` 是 `appendFile` 追加，不是全文件重写；`initializeRunFiles:77` 写的是空串，原子性对空内容无意义。
+- **不改 `initializeRunFiles:75`（`loop-contract.json`）**：它**不在 `OBSERVED_FILES` 里**，L2 只把它当作存在性 marker 用（`RUN_MARKER_FILES`），从不读其内容；没有任何消费者依赖它的连贯性。**注意这与 `:76` 的处置不同**——`:76` 写的 `loop-state.json` 既是 marker 又被逐字段观测，故必须纳入。
+- **不改 `writeAttemptArtifacts`（`:712+`）**：写的是 attempt 目录内的产物，不在 run 目录顶层，L2 不观测，且无并发读者依赖其连贯性。若后续证明需要，另开一笔。
 
 ## 3. 新增接口
 
@@ -45,11 +49,15 @@ async function writeJsonFileAtomically(path: string, value: unknown): Promise<vo
 
 私有于 `src/persistence/fileStore.ts`，**不导出**。
 
-其临时名生成拆成一个**可导出的纯函数**以便单测（见 §7.2 第 3 条）：
+其临时名生成拆成一个**可导出的函数**以便单测（见 §7.2）：
 
 ```
 function buildAtomicTempPath(targetPath: string): string
 ```
+
+**它不是纯函数**（初稿如此描述，与唯一性要求自相矛盾，已更正）：唯一性要求同一进程内相同输入的连续两次调用返回**不同**路径，这只能靠模块级计数器实现——纯函数做不到。它是一个带内部状态的生成器。
+
+**代价，明说**：这会把 `fileStore` 的公开接口面扩大一个符号，仅仅为了可测。取舍理由：替代方案是只做间接测试（写两次、比较临时文件残留或 inode），**那证明不了「两个并发写者拿到不同的名字」这条本设计的核心安全性质**——而这条性质错了会重新引入撕裂（§4.1）。一个多出来的导出符号，换一条能直接断言的核心不变量，值得。
 
 ### 3.1 必须满足的性质
 
@@ -130,11 +138,16 @@ function buildAtomicTempPath(targetPath: string): string
 - `rename(tmp, target)` 让 `target` **指向新的 inode**。
 - `writeFile(target)` 对已存在的文件是**截断并原地重写**，inode **不变**。
 
-所以对四个替换点各写一条测试：
+所以对五个替换点各写一条测试：
 
 1. 写一次，`stat(target).ino` 记为 `ino1`；
-2. 用不同内容再写一次，取 `ino2`；
-3. 断言 `ino2 !== ino1`。
+2. **`open(target)` 持有一个文件句柄，直到断言结束才关闭**（见下方「必须做，否则测试会随机失败」）；
+3. 用不同内容再写一次，取 `ino2`；
+4. 断言 `ino2 !== ino1`。
+
+**第 2 步必须做，否则测试会随机失败。** `rename` 会释放被替换文件的 inode，而文件系统**可以立刻把同一个 inode 号复用**给下一个新建的临时文件，于是 `ino2 === ino1` 偶发成立、测试偶发变红。持有一个打开的句柄会把旧 inode 钉住，使其不可被复用，判据随之变确定。
+
+**不要省略这一步再把偶发失败当成 flake 记账。** 本项目已背着 5 个 flake 债，而 L1b 的最终评审专门为「明知形状易 flake 仍照抄」立过案（Final-3）。
 
 这不需要任何注入，且**变异验证天然成立**：把实现换回裸 `writeFile`，inode 不再变化，测试失败。
 
@@ -142,21 +155,24 @@ function buildAtomicTempPath(targetPath: string): string
 
 ### 7.2 其余要求
 
-2. **无临时文件残留**：成功路径写完后目录中无临时文件；`rename` 失败时同样无残留，且错误向上抛出（不吞）。失败注入用真实手段（例如让目标路径是一个目录，或临时目录只读），不用 mock。
-3. **临时名唯一性**：为使其可测，把临时名生成做成一个**可导出的纯函数**（例如 `buildAtomicTempPath(targetPath): string`）。这是接口设计，不是注入缝。对它单测：同一进程内连续两次调用返回**不同**路径，且路径中含进程标识。**不接受「读注释相信」。**
-4. **字节等价**：替换前后目标文件内容逐字节一致（`JSON.stringify(value, null, 2)`）。
-5. **变异验证（强制）**：把 `writeJsonFileAtomically` 内部换回裸 `writeFile`，要求 §7.1 的 inode 测试失败。**注入点必须在生产函数上，不得在测试的数据结构里注入。** 上一轮最贵的一条缺陷正是「守护测试遍历自己的手写字面量」——往测试数组里注入只证明匹配器有效，没证明覆盖到位。
-6. **回归**：`tests/registry/zeroWrite.test.ts` 必须仍然全绿。临时文件出现在 run 目录里，而 registry 只读，理论上不受影响——**但必须实跑证明，不接受推理。**
+**要求 R1 是 §7.1 的 inode 判据。以下为 R2–R6。**
+
+- **R2 无临时文件残留**：成功路径写完后目录中无临时文件；`rename` 失败时同样无残留，且错误向上抛出（不吞）。失败注入用真实手段（例如让目标路径是一个目录，或临时目录只读），不用 mock。
+- **R3 临时名唯一性**：对 `buildAtomicTempPath`（§3）单测——同一进程内连续两次调用返回**不同**路径，且路径中含进程标识。**不接受「读注释相信」。**
+- **R4 字节等价**：替换前后目标文件内容逐字节一致（`JSON.stringify(value, null, 2)`）。
+- **R5 变异验证（强制）**：把 `writeJsonFileAtomically` 内部换回裸 `writeFile`，要求 R1 的 inode 测试失败。**注入点必须在生产函数上，不得在测试的数据结构里注入。** 上一轮最贵的一条缺陷正是「守护测试遍历自己的手写字面量」——往测试数组里注入只证明匹配器有效，没证明覆盖到位。
+- **R6 回归**：`tests/registry/zeroWrite.test.ts` 必须仍然全绿。临时文件出现在 run 目录里，而 registry 只读，理论上不受影响——**但必须实跑证明，不接受推理。**
 
 ## 8. 性能
 
-`writeRunState` 是热路径（每次状态转移重写），temp+rename 把每次写从 1 个 syscall 变成 2 个。
+`writeRunState` 是热路径（每次状态转移重写），temp+rename 给每次写**多加一次 `rename`**（不给更精确的数字：`writeFile` 本身已是 open+write+close，把它算成「1 个 syscall」是错的，而本项目刚为一句不精确的算术注释付过代价）。
 
 **不设性能门禁。** 该循环每次迭代都包含 Claude 调用与文件系统 I/O，多一次 rename 在量级上不可见。**不要为找它而专门跑基准。** 若实施者在正常测试中观察到可测量的退化，如实上报并停下等裁决——不要悄悄降级实现。
 
 ## 9. 验收标准
 
-- 四个替换点全部只经 `rename` 落地，§7 的六条测试要求全部满足且变异验证有据。
+- **五个**替换点全部只经 `rename` 落地，§7 的六条要求（R1–R6）全部满足且变异验证有据。
+- `loop-state.json` 的**两个**写者（`:76`、`:81`）都已原子化——只改其一即为未达标。
 - `src/registry/` 内零逻辑改动（只有注释）。
 - `writeOwnerTransferRecord` 带有 §6 要求的警示注释，签名与调用点未变。
 - 转移事务路径（§2.2 列出的四个符号）**逐字节未改**。
