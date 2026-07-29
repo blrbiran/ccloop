@@ -5,6 +5,7 @@
 .codegraph
 
 # openwolf
+.wolf/_archive/
 .wolf/buglog.json
 .wolf/hooks/_session.json
 .wolf/memory.md
