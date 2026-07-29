@@ -1,9 +1,10 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import {
   appendEvent,
+  buildAtomicTempPath,
   claimOwnerRecordWithPrecondition,
   initializeRunFiles,
   OwnerTransferLockBusyError,
@@ -1473,5 +1474,56 @@ describe("strict persisted-artifact readers", () => {
     };
     await writeFile(join(runDir, "reconciliation-record.json"), JSON.stringify(rec));
     expect(await readReconciliationRecord(runDir)).toEqual(rec);
+  });
+});
+
+// buildAtomicTempPath is exported purely so these four properties can be asserted directly
+// (design §3). Requirement R3 of the design (§7.2) is the uniqueness one: two concurrent
+// writers must never pick the same temp name, because a shared fixed temp name would
+// reintroduce exactly the torn publish that temp+rename is meant to remove (§4.1).
+describe("buildAtomicTempPath", () => {
+  it("returns a different path on two consecutive calls for the same target path", () => {
+    const target = join(tmpdir(), "ccloop-fs-temp-path", "loop-state.json");
+
+    // Not a pure function by design (§3): uniqueness per call is the whole point, so a
+    // pure function of targetPath cannot satisfy this.
+    expect(buildAtomicTempPath(target)).not.toBe(buildAtomicTempPath(target));
+  });
+
+  it("embeds the process id so two processes writing the same target cannot collide", () => {
+    const target = join(tmpdir(), "ccloop-fs-temp-path", "loop-state.json");
+
+    expect(basename(buildAtomicTempPath(target))).toContain(String(process.pid));
+  });
+
+  it("places the temp file in the same directory as the target so rename cannot cross a filesystem", () => {
+    const target = join(tmpdir(), "ccloop-fs-temp-path", "loop-state.json");
+
+    expect(dirname(buildAtomicTempPath(target))).toBe(dirname(target));
+  });
+
+  // §4.1 last paragraph: the owner-transfer transaction locates and cleans up its staged
+  // files by these *fixed* names. Handing one of them out here would let an unlocked
+  // independent write be mistaken for transaction staging, and crash recovery would act on
+  // it. The names are spelled out because getOwnerTransferPaths is module-private; the same
+  // literals are already used by the transfer fixtures earlier in this file.
+  it("never returns a path used by the owner-transfer transaction", () => {
+    const runDir = join(tmpdir(), "ccloop-fs-temp-path");
+    const ownerTransferPaths = [
+      "owner-record.json",
+      "owner-transfer.json",
+      ".owner-record.publish.tmp",
+      ".owner-transfer.publish.tmp",
+      ".owner-record.pending.json",
+      ".owner-transfer.pending.json",
+      ".owner-transfer.transaction.json",
+      ".owner-transfer.lock",
+    ].map((file) => join(runDir, file));
+
+    for (const target of [join(runDir, "owner-record.json"), join(runDir, "loop-state.json")]) {
+      for (let i = 0; i < 3; i += 1) {
+        expect(ownerTransferPaths).not.toContain(buildAtomicTempPath(target));
+      }
+    }
   });
 });

@@ -1,5 +1,5 @@
 import { access, appendFile, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { LoopContract } from "../contract/schema.js";
 import type {
   ExecutionRecovery,
@@ -366,6 +366,50 @@ function getOwnerTransferPaths(runDir: string): OwnerTransferPaths {
 
 async function writeJsonFile(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value, null, 2));
+}
+
+// Deliberately NOT a pure function, and deliberately NOT shared with the owner-transfer
+// transaction's fixed temp names (OWNER_RECORD_TEMP_FILE / OWNER_TRANSFER_TEMP_FILE).
+//
+// writeJsonFileAtomically has no lock around it, so two processes can be publishing the same
+// target at the same moment. With a shared fixed temp name, B's writeFile would overwrite A's
+// staged bytes before A's rename, and A would publish B's content — temp+rename would have
+// manufactured a new torn-write source instead of removing one. Hence pid plus a per-process
+// counter, and hence a fresh path on every call.
+//
+// The transaction's fixed names must stay fixed for the opposite reason: crash recovery finds
+// leftover staged files by name. The two helpers are different things; do not merge them.
+//
+// Exported only so its uniqueness, pid and same-directory properties can be asserted directly.
+let atomicTempPathSequence = 0;
+
+export function buildAtomicTempPath(targetPath: string): string {
+  atomicTempPathSequence += 1;
+  return join(dirname(targetPath), `.${basename(targetPath)}.${process.pid}.${atomicTempPathSequence}.tmp`);
+}
+
+// Publishes `path` only through rename, so a concurrent reader sees either the previous
+// complete file or the new complete file, never a partial one. Same directory as the target,
+// because rename across filesystems fails.
+async function writeJsonFileAtomically(path: string, value: unknown): Promise<void> {
+  const serialized = JSON.stringify(value, null, 2);
+  const tempPath = buildAtomicTempPath(path);
+
+  try {
+    await writeFile(tempPath, serialized);
+    await rename(tempPath, path);
+  } catch (error) {
+    // Best effort, and intentionally not safeUnlink: cleanup here runs while an error is
+    // already in flight, and a cleanup failure must not replace the error the caller needs
+    // to see. safeUnlink rethrows anything that is not ENOENT, which would do exactly that.
+    try {
+      await unlink(tempPath);
+    } catch {
+      // swallowed on purpose; the original error is rethrown below
+    }
+
+    throw error;
+  }
 }
 
 async function readOwnerRecordRaw(runDir: string): Promise<OwnerRecord> {
