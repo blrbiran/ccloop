@@ -64,7 +64,7 @@ function buildAtomicTempPath(targetPath: string): string
 1. **目标路径只经 `rename` 落地**，从不被 `writeFile` 直接写。
 2. **临时文件名进程唯一**。见 §4.1——这是本设计最容易做错的一点。
 3. **临时文件不残留**：成功路径由 `rename` 消费掉；失败路径必须 `unlink` 后再向上抛。
-4. **序列化格式与被替换的调用逐字节一致**：现有四处都是 `JSON.stringify(value, null, 2)`。**改变缩进或键序都会让无关测试以看不出原因的方式失败**，且超出「只改怎么写」。
+4. **序列化格式与被替换的调用逐字节一致**：现有五处都是 `JSON.stringify(value, null, 2)`（含 `:76` 的 `JSON.stringify(initialState, null, 2)`）。**改变缩进或键序都会让无关测试以看不出原因的方式失败**，且超出「只改怎么写」。
 5. **错误向上传播**，不吞。写失败必须让调用者看见（Rule 12）。
 
 ## 4. 关键约束
