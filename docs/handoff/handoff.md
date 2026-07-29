@@ -70,7 +70,15 @@ ls src/registry tests/registry           # L2 的 12 个文件
 
 1. **push** —— 用上面第三条命令看实际待 push 的是哪几笔，**不要假设数量**。push 由人决定。
    - 观察到一个未解释的现象：早前三笔文档提交在无人 push 的情况下出现在 `origin/main`，但本轮合并后 `main` 确实领先。**只记录现象，未做归因。**
-2. **已知 flake 债（刻意未修）**：`tests/controller/runLoop.integration.test.ts` 的四个 `BUDGET_EXHAUSTED_REASON` 测试（约 `:1002 / :1258 / :1655 / :1773`）把 `perAttemptTimeoutMs` 与 `totalRuntimeBudgetMs` 都钉在 20ms 互相赛跑。**修法：只抬 `perAttemptTimeoutMs`，`totalRuntimeBudgetMs` 必须保持 20**——它们断言的是「预算超限」那一侧，抬预算会悄悄改变断言内容。另有 L1 留下的一个依赖真实文件系统计时的交错测试。
+2. **已知 flake 债（刻意未修）——现为 6 个，不是 5 个**：
+
+   - `tests/controller/runLoop.integration.test.ts` 的四个 `BUDGET_EXHAUSTED_REASON` 测试（约 `:1002 / :1258 / :1655 / :1773`）把 `perAttemptTimeoutMs` 与 `totalRuntimeBudgetMs` 都钉在 20ms 互相赛跑。**修法：只抬 `perAttemptTimeoutMs`，`totalRuntimeBudgetMs` 必须保持 20**——它们断言的是「预算超限」那一侧，抬预算会悄悄改变断言内容。
+   - L1 留下的一个依赖真实文件系统计时的交错测试。
+   - **【2026-07-29 新增，第 6 个】** `tests/validation/evidence.test.ts > run-scenario CLI > records env names only and tracks descendants rooted at the spawned pid`。症状：全套件并行负载下 **5000ms 超时**；隔离复跑连过两次（85 passed / 0 failed）。形状是「真实子进程 + 计时」，与前五个同族但位置不同。**发现于债 4 worktree 的基线跑，当时源码零改动（`871c2d7` 干净检出），故与该分支因果无关。** 未做归因，未修。
+
+   **给实施者与评审员**：在债 4 分支上跑全套件时，这两条具名失败**可以**出现且**不构成**新缺陷——
+   `runLoop.integration.test.ts > treats execute timeout with no adapter result as exhausted even if files changed in the worktree`（断言期望 `'runtime or token budget exhausted'`、实得 `'execute phase exceeded per-attempt ti…'`）与上面第 6 个。
+   **但「像是已知 flake」不等于「是已知 flake」**：必须先捕获**完整测试名与失败块**再比对，**绝不允许 `| tail -N` 后凭印象归因**——L1b 正是这样丢过一次失败身份，ledger 里留有记录。任何**不在上述名单内**的失败一律按新缺陷处理。
 3. **L2 挂账 5 条 Minor**（评审逐条判定可延后，见 ledger）：`ObservedFileSpec.file` 未收窄成字面量联合；`scanRootFailureDetail` 落在 `renderRuns.ts` 名不副实；`DT_UNKNOWN` 回退无测试（模拟不现实，**已如实记录而非写空壳测试充数**）；两条夹具注释瑕疵。
 4. **`.superpowers/sdd/` 是跨会话共用的扁平目录**。三轮都只提交自己子目录里的 ledger 与报告（`git add -f`），**刻意跳过** `review-*.diff`（可从 `git diff` 重建）与 briefs（可从 plan 抽取）。同级目录属于更早的会话，**不要整删**。
 
