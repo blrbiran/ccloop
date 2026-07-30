@@ -123,6 +123,56 @@ DEFERRED (recorded, not fixed):
   `finalizePendingOwnerTransfer`'s own catch (`:586-590`) has the SAME latent masking bug D2
   describes — two `safeUnlink` calls that can replace an in-flight error.
 
+=== TASK 1 FIX ROUND 1/5 — complete (commit deb8036) ===
+Dispatched to the ORIGINAL implementer (resumed from its transcript, so it kept its context).
+All three items addressed, zero rework of reviewed code, zero production call sites replaced.
+
+- **Imp-2 FIXED.** Test renamed to "puts this process's id and start time at fixed positions in
+  the temp file name" — narrowed to what it proves, with a comment stating explicitly that it
+  does NOT prove two processes cannot collide. Assertion replaced with a both-ends-anchored
+  regex `^\.loop-state\.json\.${process.pid}\.\d+\.\d+\.tmp$`.
+  TWO-SIDED EVIDENCE, produced by the implementer and independently re-derived by the
+  controller: under mutation B (pid dropped from the production template) the OLD
+  `toContain(String(process.pid))` SURVIVES at a forced pid of 1, while the NEW anchored regex
+  fails at both the real pid and a forced pid of 1. The kill no longer depends on the pid's
+  digits. The regex additionally kills a mutation that drops `timeOrigin` instead (two trailing
+  numeric groups where three are required), so Minor-3's fix is guarded too.
+- **Minor-3 FIXED.** Name shape is now `.<basename>.<pid>.<timeOrigin>.<seq>.tmp`.
+  `buildProcessInstanceId()` deliberately NOT called — its `pid:<pid>:<origin>` form embeds
+  colons, which do not belong in a filename; the two components are derived the same way and a
+  comment at `:383-387` records that this is the same decision as `processIdentity.ts:3-7` and
+  why the function was not reused. `import { performance } from "node:perf_hooks"` matches
+  `processIdentity.ts:1` exactly.
+- **Minor-6 FIXED.** `let atomicTempPathSequence = 0` moved above the doc comment.
+- Optional durability note added at `:404-406` per spec §3.1 item 6.
+
+CONTROLLER'S INDEPENDENT VERIFICATION (did not accept the fix report):
+- New assertion read from the file: anchored at both ends with the pid interpolated at a fixed
+  position. Dropping the pid from the template leaves only two numeric groups where the regex
+  demands pid plus two — so the kill holds BY CONSTRUCTION, independent of the pid's value.
+- Mutation scaffolding fully reverted: grep for mutation markers in both files returns nothing.
+- `git diff --name-only 4bcde7b..HEAD` contains NO `src/registry/` path.
+- All four protected transfer symbols re-hashed base vs head: IDENTICAL.
+- Full suite in the worktree, unpiped: 29 files / 431 tests pass. typecheck exit 0, build exit 0.
+
+IMPLEMENTER'S OWN DISCLOSURES, both accepted as honest and correct:
+1. It stated that its D1 write-up overreached — it asserted "no third path" on the strength of
+   the spec's 「已核实」 instead of spending one grep, and only the load-bearing half (an
+   unexported binding is unreachable regardless of mocking) was actually verified. Recording
+   this because the same failure mode produced the controller's Imp-1: trusting a written
+   「已核实」 rather than re-deriving it.
+2. NEW MINOR, deliberately not acted on, FOR THE WHOLE-BRANCH REVIEW: `buildAtomicTempPath` and
+   `buildProcessInstanceId` now independently derive the same two components from the same
+   reasoning, joined only by a comment. If `processIdentity.ts`'s recipe changes (e.g. gains a
+   random suffix), nothing here fails. The implementer declined to extract a shared
+   filename-safe helper because that grows API surface Task 1 was told not to grow. Correct
+   scope discipline; the coupling is real and unguarded.
+
+STATUS: **No separate re-review of this fix round has been run.** The controller verified every
+load-bearing claim against the code (above), which is not self-certification but is weaker than
+a fresh-eyes pass. Whether to spend one before Task 2 is a live decision for the human — the
+fixes touched one assertion, one test name, one comment position and one expression.
+
 NOT YET DONE ON TASK 1: **no code review has been run.** The session that produced Task 1 hit
 its context and budget ceiling immediately after. Per the project's standing rule, a task-level
 review is mandatory and the whole-branch review at the end is non-skippable — the most valuable
