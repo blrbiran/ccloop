@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, open, readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
@@ -1554,5 +1554,129 @@ describe("buildAtomicTempPath", () => {
         expect(ownerTransferPaths).not.toContain(buildAtomicTempPath(target));
       }
     }
+  });
+});
+
+// loop-state.json has two writers — initializeRunFiles creates it, writeRunState rewrites it
+// on every state transition — and it is both a RUN_MARKER_FILE and one of the three files L2
+// observes field by field, so `ccloop ls` can be reading it at any moment, including while a
+// run is initializing (design §2.1). Both writers therefore have to publish it the same way.
+//
+// Scope of this whole block, stated narrowly on purpose: these tests show that the target
+// *path* is replaced rather than written through. They do NOT show that no intermediate state
+// is ever observable to a concurrent reader — that is not deterministically provable on a real
+// filesystem (§7.1) — and nothing here should be read as claiming it. Crash durability is
+// likewise out of scope: this repository has no fsync anywhere (§3.1 item 6).
+describe("loop-state.json is published by replacing the path, not by writing through it", () => {
+  // R1 (§7.1). rename makes the name point at a new inode; writeFile on an existing file
+  // truncates and rewrites the same one. That is the whole discriminator.
+  it("gives loop-state.json a new inode when writeRunState overwrites it", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-atomic-state-"));
+    const target = join(runDir, "loop-state.json");
+
+    await writeRunState(runDir, state);
+    const inodeBefore = (await stat(target)).ino;
+
+    // Held open across the second write and not closed until after the assertion. rename frees
+    // the inode of the file it replaces, and the filesystem is free to hand that same inode
+    // number straight back to the next file created in this directory — which would make the
+    // two inodes compare equal intermittently. An open descriptor pins the old inode so it
+    // cannot be reused, which is what makes this comparison deterministic instead of flaky
+    // (§7.1). Omitting it and then booking the intermittent red as a flake is exactly the
+    // failure mode §7.1 calls out.
+    const pinOldInode = await open(target, "r");
+    try {
+      await writeRunState(runDir, { ...state, status: "verifying", currentAttempt: 1 });
+
+      expect((await stat(target)).ino).not.toBe(inodeBefore);
+    } finally {
+      await pinOldInode.close();
+    }
+
+    // Guard, not the point of the test: an inode change on a file that never received the new
+    // state would prove nothing worth having.
+    expect((await readRunState(runDir)).status).toBe("verifying");
+  });
+
+  // initializeRunFiles cannot use the write-twice-and-compare-inode shape: it runs
+  // ensureFreshRunDir first, which refuses a directory that already contains a loop-state.json,
+  // so the target can never pre-exist as a regular file and there is no old inode to replace.
+  //
+  // The discriminator used instead is a *dangling* symlink at the target path. ensureFreshRunDir
+  // probes with access(), which follows the link and gets ENOENT, so the fresh-directory check
+  // still passes — and the two candidate implementations then diverge observably:
+  //
+  //   - writeFile(path) opens through the symlink and creates the file it points at, leaving
+  //     the symlink itself in place.
+  //   - rename(temp, path) replaces the directory entry, so the symlink is gone and the path
+  //     it pointed at was never created.
+  //
+  // Same property as the inode test above — the path was replaced, not written through — with
+  // no inode-reuse hazard at all, since no inode is freed. It does lean on ensureFreshRunDir
+  // probing with access() rather than lstat(); if that ever changes, this test goes red on
+  // "runDir already contains prior run data" rather than passing for the wrong reason.
+  it("replaces the loop-state.json path when initializeRunFiles creates it, never creating what that path pointed at", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-atomic-init-"));
+    const target = join(runDir, "loop-state.json");
+    const writtenThrough = join(runDir, "written-through.json");
+    await symlink(writtenThrough, target);
+
+    await initializeRunFiles(runDir, contract, state);
+
+    expect((await lstat(target)).isSymbolicLink()).toBe(false);
+    await expect(stat(writtenThrough)).rejects.toMatchObject({ code: "ENOENT" });
+
+    // Guard: the run state still has to be readable at the target path afterwards. This one
+    // cannot discriminate on its own — reading follows a surviving symlink just as happily.
+    expect(await readRunState(runDir)).toEqual(state);
+  });
+
+  // R4 (§7.2, §3.1 item 4). This branch changes only *how* loop-state.json is written, so the
+  // bytes must stay exactly what the plain writeFile calls produced at both sites. Pinned to
+  // the literal expression rather than to a parsed object, because a changed indent or key
+  // order would otherwise surface later as unrelated tests failing for no visible reason.
+  it("writes the same bytes from both writers as the plain writeFile calls they replaced", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-atomic-bytes-"));
+    const target = join(runDir, "loop-state.json");
+
+    await initializeRunFiles(runDir, contract, state);
+    expect(await readFile(target, "utf8")).toBe(JSON.stringify(state, null, 2));
+
+    const advanced: RunState = { ...state, status: "verifying", currentAttempt: 1 };
+    await writeRunState(runDir, advanced);
+    expect(await readFile(target, "utf8")).toBe(JSON.stringify(advanced, null, 2));
+  });
+
+  // R2, success half (§7.2). The staging file is an implementation detail; a stray
+  // .loop-state.json.<pid>.<...>.tmp left in a run directory is a file the registry scanner
+  // would then have to reason about. Asserted as the complete directory listing rather than by
+  // filtering for names ending in .tmp, so a staging file under any other name fails too.
+  it("leaves no staging file behind in the run directory after a successful write", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-atomic-residue-"));
+
+    await initializeRunFiles(runDir, contract, state);
+    await writeRunState(runDir, { ...state, status: "verifying", currentAttempt: 1 });
+
+    expect((await readdir(runDir)).sort()).toEqual([
+      "attempts",
+      "events.jsonl",
+      "loop-contract.json",
+      "loop-state.json",
+    ]);
+  });
+
+  // R2, failure half (§7.2). The failure is produced for real — a directory sitting at the
+  // target path makes rename fail with EISDIR — rather than by mocking node:fs/promises, per
+  // the §7 preference for real techniques. A real errno also carries the second half of the
+  // requirement: cleanup runs inside that catch, and a cleanup failure replacing the caller's
+  // error with its own is the specific way this path goes wrong (§3.1 item 3), so the test
+  // pins which error comes out, not merely that one does.
+  it("removes the staging file and rethrows the failure when the target path cannot be replaced", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-atomic-fail-"));
+    await mkdir(join(runDir, "loop-state.json"));
+
+    await expect(writeRunState(runDir, state)).rejects.toMatchObject({ code: "EISDIR" });
+
+    expect(await readdir(runDir)).toEqual(["loop-state.json"]);
   });
 });

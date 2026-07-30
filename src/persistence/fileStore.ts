@@ -74,12 +74,12 @@ export async function initializeRunFiles(runDir: string, contract: LoopContract,
   await ensureFreshRunDir(runDir);
   await mkdir(join(runDir, "attempts"), { recursive: true });
   await writeFile(join(runDir, "loop-contract.json"), JSON.stringify(contract, null, 2));
-  await writeFile(join(runDir, "loop-state.json"), JSON.stringify(initialState, null, 2));
+  await writeJsonFileAtomically(join(runDir, "loop-state.json"), initialState);
   await writeFile(join(runDir, "events.jsonl"), "");
 }
 
 export async function writeRunState(runDir: string, state: RunState): Promise<void> {
-  await writeFile(join(runDir, "loop-state.json"), JSON.stringify(state, null, 2));
+  await writeJsonFileAtomically(join(runDir, "loop-state.json"), state);
 }
 
 export async function appendEvent(runDir: string, event: RunEvent): Promise<void> {
