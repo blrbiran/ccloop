@@ -22,6 +22,7 @@ import {
 } from "../../src/persistence/fileStore.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { applyOwnerEpochTransfer } from "../../src/ownership/ownerController.js";
+import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
 import type { RunState } from "../../src/state/types.js";
 import type { OwnerRecord } from "../../src/runtime/types.js";
 
@@ -1490,19 +1491,34 @@ describe("buildAtomicTempPath", () => {
     expect(buildAtomicTempPath(target)).not.toBe(buildAtomicTempPath(target));
   });
 
-  // Scope of this test, stated narrowly on purpose: it proves the process id sits at one
-  // fixed position in the name, followed by a start-time component and a sequence number.
-  // It does NOT prove that two processes cannot collide — that needs two processes.
+  // Scope of this test, stated narrowly on purpose: it proves the process id and this
+  // process's start time each sit at one fixed position in the name, ahead of the sequence
+  // number. It does NOT prove that two processes cannot collide — that needs two processes.
   //
-  // The regex is anchored at both ends rather than asserting `toContain(String(process.pid))`,
-  // because a containment check is position-blind and its ability to catch a dropped pid
-  // depends on the pid's digits. Under a container pid of 1, `.loop-state.json.1.tmp` still
-  // "contains" "1", so a mutation that drops the pid entirely would survive.
+  // Both segments are taken from buildProcessInstanceId() rather than recomputed here, and
+  // the start-time segment is pinned to that exact value rather than matched as `\d+`. Two
+  // reasons:
+  //
+  //   - `\d+` cannot tell a start time from any other run of digits, so it leaves the
+  //     anti-PID-recycling component with no coverage at all: replacing it with 0, with a
+  //     literal, or with a second copy of the pid would keep this test green.
+  //   - fileStore.ts and processIdentity.ts derive that component independently from the
+  //     same reasoning, joined only by a comment. Asserting across the two modules is what
+  //     makes either one drifting a test failure rather than a silent divergence.
+  //
+  // Anchoring at both ends also matters. `toContain(String(process.pid))` is position-blind:
+  // it passes whenever the digits occur anywhere, including inside the start-time or sequence
+  // segments, so whether it kills a dropped-pid mutation is a matter of digit coincidence
+  // rather than of the property being tested.
   it("puts this process's id and start time at fixed positions in the temp file name", () => {
     const target = join(tmpdir(), "ccloop-fs-temp-path", "loop-state.json");
+    const [, pid, startTime] = buildProcessInstanceId().split(":");
 
+    // Fails loudly here, rather than through an "undefined" in the regex below, if
+    // processIdentity.ts ever stops emitting `pid:<pid>:<start time>`.
+    expect(startTime).toMatch(/^\d+$/);
     expect(basename(buildAtomicTempPath(target))).toMatch(
-      new RegExp(String.raw`^\.loop-state\.json\.${process.pid}\.\d+\.\d+\.tmp$`),
+      new RegExp(String.raw`^\.loop-state\.json\.${pid}\.${startTime}\.\d+\.tmp$`),
     );
   });
 

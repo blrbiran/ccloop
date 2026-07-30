@@ -369,6 +369,21 @@ async function writeJsonFile(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value, null, 2));
 }
 
+// Same recipe as processIdentity.ts:7, and cached the same way because performance.timeOrigin
+// is fixed for the life of the process: pid identifies the process, Math.trunc(timeOrigin)
+// distinguishes it from a later process that gets handed the same recycled pid. Held as a
+// module constant rather than rebuilt per call so the two sites cannot drift in shape.
+//
+// buildProcessInstanceId() is not called here only because its `pid:<pid>:<origin>` form embeds
+// colons, which do not belong in a filename. The recipe is nevertheless the same one and must
+// stay in sync with it; the temp-name test pins that by asserting this stamp against
+// buildProcessInstanceId()'s own components.
+//
+// A third and deliberately weaker form exists in acquireOwnerTransferLock (`pid:<pid>`, no
+// start time). It is correct as written — its only consumer, parsePid, extracts the pid for a
+// liveness probe and never compares process identity — so do not "unify" it with this one.
+const ATOMIC_TEMP_PROCESS_STAMP = `${process.pid}.${Math.trunc(performance.timeOrigin)}`;
+
 let atomicTempPathSequence = 0;
 
 // Deliberately NOT a pure function, and deliberately NOT shared with the owner-transfer
@@ -377,14 +392,8 @@ let atomicTempPathSequence = 0;
 // writeJsonFileAtomically has no lock around it, so two processes can be publishing the same
 // target at the same moment. With a shared fixed temp name, B's writeFile would overwrite A's
 // staged bytes before A's rename, and A would publish B's content — temp+rename would have
-// manufactured a new torn-write source instead of removing one. Hence a process-instance
+// manufactured a new torn-write source instead of removing one. Hence the process-instance
 // stamp plus a per-process counter, and hence a fresh path on every call.
-//
-// The process-instance stamp is pid plus Math.trunc(performance.timeOrigin), which is the same
-// decision already recorded in processIdentity.ts:3-7 for the same hazard: PIDs are recycled,
-// so pid alone can be reissued to an unrelated later process. buildProcessInstanceId() is not
-// reused here only because its `pid:<pid>:<origin>` form embeds colons, which do not belong in
-// a filename; the two components are the same and must stay in sync with that decision.
 //
 // The transaction's fixed names must stay fixed for the opposite reason: crash recovery finds
 // leftover staged files by name. The two helpers are different things; do not merge them.
@@ -393,8 +402,10 @@ let atomicTempPathSequence = 0;
 // directly.
 export function buildAtomicTempPath(targetPath: string): string {
   atomicTempPathSequence += 1;
-  const processStamp = `${process.pid}.${Math.trunc(performance.timeOrigin)}`;
-  return join(dirname(targetPath), `.${basename(targetPath)}.${processStamp}.${atomicTempPathSequence}.tmp`);
+  return join(
+    dirname(targetPath),
+    `.${basename(targetPath)}.${ATOMIC_TEMP_PROCESS_STAMP}.${atomicTempPathSequence}.tmp`,
+  );
 }
 
 // Publishes `path` only through rename, so a concurrent reader sees either the previous
