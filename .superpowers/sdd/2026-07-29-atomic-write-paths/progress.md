@@ -346,11 +346,154 @@ Recorded in `docs/handoff/handoff.md` 遗留事項 2 as flake 7. Not root-caused
 The count of known flakes has gone 5 → 6 → 7 during this branch, all found by running the suite
 honestly rather than by piping it through `tail`. None was introduced here.
 
-NOT YET DONE ON TASK 1: **no code review has been run.** The session that produced Task 1 hit
-its context and budget ceiling immediately after. Per the project's standing rule, a task-level
-review is mandatory and the whole-branch review at the end is non-skippable — the most valuable
-defect of the previous round came from the latter. **Task 1 must be reviewed before Task 2 is
-dispatched**, by a reviewer that reads the code rather than this ledger.
+~~NOT YET DONE ON TASK 1: **no code review has been run.**~~ **STRUCK 2026-07-30 by the Task 2
+controller — this entry was stale, and it contradicts three review blocks in this same file.**
+It was written before the reviews and never retracted. The reviews that did run are recorded at
+`=== TASK 1 CODE REVIEW ===`, `=== FIX ROUND 1/5 RE-REVIEW ===` and `=== NARROW RE-REVIEW OF FIX
+ROUND 2 ===`, and Task 1 is closed at `=== TASK 1 CLOSED ===`. Task 1 is NOT re-reviewed on the
+strength of this line. Recorded rather than deleted because this branch's own rule is that a
+retraction leaves a trace.
 
 REMAINING: Tasks 2-5, each needing its own review, then a whole-branch review, then
 verification-before-completion, then finishing-a-development-branch.
+
+=== TASK 2 DISPATCHED (2026-07-30) — BASE ee001ba ===
+Brief: `.superpowers/sdd/2026-07-29-atomic-write-paths/task-2-brief.md`
+Report: `.superpowers/sdd/2026-07-29-atomic-write-paths/task-2-report.md`
+Implementer model: opus (NOT mechanical — the plan deliberately leaves the `initializeRunFiles`
+fixture problem unsolved, and this task carries R2/R4/R5 mutation work).
+
+PRE-FLIGHT DEFECT FOUND BY THE CONTROLLER AND RESOLVED IN THE DISPATCH, not left for the
+implementer to trip over — **the spec's and plan's `:76` / `:81` are now STALE BY ONE LINE.**
+Verified by reading both revisions rather than trusting either document:
+- at base `5e0b75a`: `:75` loop-contract.json, `:76` loop-state.json, `:81` loop-state.json.
+- at head `ee001ba`: Task 1's `node:perf_hooks` import shifted everything down one, so
+  **`:76` is now `loop-contract.json`** — the one file spec §2.1 line 41 explicitly EXCLUDES —
+  and the two real writers are at `:77` (`initializeRunFiles`) and `:82` (`writeRunState`).
+Taken literally, the plan would have had the implementer edit the excluded file and miss a
+required one. Dispatch anchors on the string `loop-state.json`, never on a line number.
+Same defect class as D4 (stale line number), but this instance was not cosmetic.
+
+Also done in this step: struck the stale "no code review has been run" entry above (it
+contradicted three review blocks in this same file), and ticked Task 1's checkboxes in the plan
+file to match this ledger, which is the source of truth for progress.
+
+=== TASK 2 IMPLEMENTED (commit 5cc5202) — status DONE_WITH_CONCERNS ===
+Report: `.superpowers/sdd/2026-07-29-atomic-write-paths/task-2-report.md`
+Claimed: 29 files / 436 tests (431 + 5 new), typecheck 0, build 0, no known flake fired.
+
+CONTROLLER'S OWN VERIFICATION OF THE PRODUCTION DIFF (run, not read from the report):
+- `git diff ee001ba..5cc5202 -- src/` is EXACTLY 2 lines: both `loop-state.json` writers now
+  call `writeJsonFileAtomically`. Nothing else in `src/` moved.
+- `git diff ee001ba..5cc5202 -- src/registry/` is EMPTY.
+- `loop-contract.json` (`:76`) and both `events.jsonl` sites (`:78`, `:86`) are untouched —
+  i.e. the stale-line-number trap identified pre-flight did NOT fire.
+Byte-equivalence, transfer-path hashes and all test-quality claims are NOT taken from the
+report; they are the reviewer's job and are being re-derived independently.
+
+THREE CONCERNS RAISED BY THE IMPLEMENTER, recorded now, adjudicated after the review:
+
+- **D-1 (forward-looking, likely real)**: the stale-by-one-line drift is NOT confined to Task 2.
+  Spec §2.1's table and §9 still carry base-relative numbers, and the implementer reports the
+  other three replacement points (`:379-381`, `:308`, `:316`) are shifted by the same import.
+  Tasks 3 and 4 walk into the identical trap. PROPOSED: re-anchor the spec on filename +
+  function name. **Not yet verified by the controller — will be checked before Task 3 is
+  dispatched, not accepted on the report's say-so.**
+
+- **D-2/D-3 (a genuine spec gap, if it holds)**: the inode criterion is not merely awkward for
+  `initializeRunFiles`, it is INAPPLICABLE — with no pre-existing target, `rename` and
+  `writeFile` leave identical end states, so no fixture can rescue that shape. The implementer
+  substituted a dangling-symlink criterion (`access()` follows the link and reports ENOENT so
+  the freshness check passes; `writeFile` writes THROUGH the link, `rename` REPLACES it).
+  If it holds it also settles Task 3, whose `writeOwnerRecord` is likewise a first-create.
+  **This is the single highest-risk judgement call in the task and the review was pointed at it
+  explicitly, with instructions to attack the stated mechanism rather than confirm it.**
+
+- **R5 outcome as reported**: dropping either call site leaves exactly one R1 test red — which,
+  if it reproduces, is the concrete evidence for spec §9's "changing only one is a failure".
+
+MINOR, correctly observed by the implementer: the worktree was not clean at handoff. Those are
+the controller's Step 0 edits (this ledger + the plan's Task 1 checkboxes), not the
+implementer's, and it correctly left them alone.
+
+TASK 2 REVIEW DISPATCHED — independent reviewer, opus, mutation-driven, read-only, sandboxed
+outside the worktree. Package: `review-ee001ba..5cc5202.diff`. No findings were pre-judged for
+it and it was given no instruction to spare anything.
+
+=== TASK 2 CODE REVIEW (independent, opus, mutation-driven, sandboxed outside the worktree) ===
+Verdict: **Spec ✅ / quality approved. 0 Critical, 0 Important.** Worktree left untouched
+(HEAD still 5cc5202, same two controller-owned dirty files).
+
+Nine mutations, all applied to PRODUCTION code in a throwaway copy, all re-derived by the
+reviewer rather than taken from the implementer's report:
+- M1 revert ONLY `initializeRunFiles` → 1 test red; M2 revert ONLY `writeRunState` → a
+  DIFFERENT test red. **This pair is the concrete evidence for spec §9's "changing only one is
+  a failure": each writer has its own independent killer, neither test is a tautology.**
+- M3 helper body → bare `writeFile` (R5) → exactly those two red, one per writer.
+- M4 delete the `unlink` from the catch (R2) → residue test red; reviewer pasted its OWN
+  verbatim output (`.loop-state.json.4386.1785428129987.1.tmp` alongside `loop-state.json`).
+- M5 catch rethrows a NEW error → red; M6 catch swallows → red. Together these answer the
+  controller's question directly: the tests do NOT survive a cleanup that masks or eats the
+  original error.
+- M7 `rename` → `copyFile` → 3 red. M8 drop the `, null, 2` → R4 byte test red.
+- M9 `access()` → `lstat()` in `ensureFreshRunDir` → symlink test red LOUDLY with
+  `runDir already contains prior run data`, exactly as its comment predicts.
+
+Byte-equivalence proved STRONGER than the implementer did: reviewer ran the same inputs against
+the `ee001ba` and `5cc5202` copies of `fileStore.ts` and compared on-disk bytes —
+sha256 identical (`869a52b2…`), `cmp` clean. Serialization moving inside the helper changed
+nothing on disk.
+Transfer path: whole-file diff is those 2 lines and nothing else, both revisions 804 lines, so
+all four protected symbols are byte-identical by construction.
+Suite 29 files / 436 tests (431 + exactly 5 new), typecheck 0, build 0. No known flake fired.
+
+**THE DANGLING-SYMLINK FIXTURE — ATTACKED, AND IT HOLDS.** The reviewer did not confirm the
+mechanism, it probed it: `access()` on the dangling link → ENOENT (freshness check passes);
+`writeFile` → link survives + destination created; `rename` → link gone + destination never
+created. Both halves observed directly on APFS. 40 consecutive runs, 0 failures. No inode is
+freed, so the inode-reuse hazard that motivates the open-handle step **does not exist here at
+all**. It also searched for a simpler criterion and reported there is none: any entry `access()`
+can resolve (file, dir, FIFO) trips `ensureFreshRunDir`, so a dangling symlink is essentially
+the unique entry that survives the freshness check while still being replaceable by `rename`.
+
+REVIEWER'S OWN DISCIPLINE, worth recording: its first suite run showed `tests/cli/cli.test.ts >
+parseArgs > returns 0 for the scripted example run` failing. **That name is not on the 7-flake
+list, so it refused to wave it through** and root-caused it: `examples/v1/minimal-contract.json`
+has `repoPath: "."` with `worktreeRequired: true`, and its scratch copy had no `.git`. After
+`git init` the suite is 436/436. Artifact of its own harness, not a branch defect. This is the
+branch rule working as intended.
+
+DEFERRED MINORS (recorded for the whole-branch review, not fixed):
+- `fileStore.test.ts:1654` success-path residue test asserts the directory listing but not file
+  content, so a writer that wrote nothing would pass it. Content is pinned by the neighbouring
+  R4 test (`:1638`) and the inode test's guard (`:1612`), so the block as a whole is not blind.
+- New tests `mkdtemp` into `os.tmpdir()` and never clean up — matches 36 pre-existing sites in
+  the same file (no `afterEach`, no `rm`). Pre-existing, branch-wide, Rule 11 conformance.
+
+FOUR ⚠️-CANNOT-VERIFY ITEMS, ALL RESOLVED BY THE CONTROLLER BY EXECUTION, not by reading:
+1. The other three replacement points — Task 3/4's problem, correctly out of scope here.
+2. **D-1 CONFIRMED, and it is WORSE than "off by one" for Task 3.** Controller grepped head:
+   `boundary-analysis.json` is at `:309` (spec says `:308`), the reconciliation write at
+   `:317-318` (spec says `:316`) — one line, as expected. But `writeOwnerRecord` is at **`:447`,
+   not `:379-381`**: Task 1 inserted ~67 lines of helper BEFORE it, so the spec's `:379-381`
+   now points INTO Task 1's new helper block. Task 3's own trap text told the implementer to
+   "confirm you are editing `:379-381`" — following that instruction literally would have
+   edited the atomic helper. FIXED: spec §2.1 re-anchored on function names with the measured
+   drift spelled out; spec §9 de-referenced; plan Tasks 3 and 4 re-anchored the same way.
+3. **Transient `.tmp` entries in run dirs — swept by the controller, no other consumer is
+   affected.** `scanRuns.ts` recognises run dirs via `fileExists` on the exact
+   `RUN_MARKER_FILES` names and only descends into DIRECTORIES, so a dot-prefixed `.tmp` file is
+   never opened or counted. `directoryHasEntries` (`fileStore.ts:39`) is only ever called on
+   `runDir/attempts` and `runDir/worktrees`, never on `runDir` itself, so a temp file at the run
+   root cannot make `ensureFreshRunDir` throw. `resumeLoop.ts:73` reads only `runDir/worktrees`.
+   Those are all four `readdir` sites in `src/`.
+4. Flakes 6 and 7 did not fire — one green run is not evidence they are gone. Still on the list.
+
+**D-2/D-3 ADOPTED INTO THE SPEC as new §7.1a** (creating writes: inode criterion INAPPLICABLE,
+not merely awkward — with no pre-existing target `rename` and `writeFile` leave identical end
+states, so no fixture can rescue it). §7.1a documents the dangling-symlink criterion, why it has
+no flake window, and its one cost (it depends on `ensureFreshRunDir` probing with `access`, and
+fails loudly rather than silently if that becomes `lstat` — measured, M9). This closes Task 3
+before it opens: `writeOwnerRecord`'s first write is the same shape.
+
+Task 2: complete (commits ee001ba..5cc5202, review clean, 0 Critical, 0 Important, no fix round)

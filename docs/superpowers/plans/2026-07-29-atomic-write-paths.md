@@ -48,11 +48,11 @@
 
 **本任务不改变任何现有行为。** 五个调用点在后续任务替换。
 
-- [ ] **Step 1: 读 spec §3、§4.1、§4.2，以及 `fileStore.ts` 现有的 `writeJsonFile`(:367) 与 `writeOwnerRecordAtomically`(:632)**
+- [x] **Step 1: 读 spec §3、§4.1、§4.2，以及 `fileStore.ts` 现有的 `writeJsonFile`(:367) 与 `writeOwnerRecordAtomically`(:632)**
 
 理解为什么不能复用后者。**不要跳过这一步**——本任务最可能的错误就是"顺手泛化"。
 
-- [ ] **Step 2: 写失败的测试（先测 `buildAtomicTempPath`）**
+- [x] **Step 2: 写失败的测试（先测 `buildAtomicTempPath`）**
 
 测试必须证明（spec §7.2 R3）：
 1. 同一进程内、**相同 `targetPath`** 连续两次调用返回**不同**路径；
@@ -62,12 +62,12 @@
 
 **陷阱**：第 1 条决定了它**不是纯函数**（spec §3 已更正此措辞）。若你实现成纯函数，第 1 条必然失败。
 
-- [ ] **Step 3: 跑测试确认失败**
+- [x] **Step 3: 跑测试确认失败**
 
 `ECC_GATEGUARD=off DISABLE_OMC=1 npx vitest run tests/persistence/fileStore.test.ts -t "AtomicTempPath"`
 Expected: FAIL —— 函数不存在。
 
-- [ ] **Step 4: 实现两个函数**
+- [x] **Step 4: 实现两个函数**
 
 `writeJsonFileAtomically` 必须满足 spec §3.1 全部五条。要点：写临时文件 → `rename` 到目标；失败路径 `unlink` 临时文件后**再向上抛**（不吞）。
 
@@ -81,12 +81,12 @@ Expected: FAIL —— 函数不存在。
 
 **不得用弱替代凑数**：此时对着仍是裸 `writeFile` 的 `writeRunState` 写 R2，测试会从一开始就绿并永远绿（裸 `writeFile` 同样不留临时文件、同样对目录目标抛错），那是 Rule 9 违规。Task 1 实施者正确地拒绝了这条路，改为**在生产函数上做变异验证后回退脚手架**（删掉 catch 里的 `unlink`，失败路径断言变红），证据记在 ledger。
 
-- [ ] **Step 6: 跑测试确认全过 + 全套件不回归**
+- [x] **Step 6: 跑测试确认全过 + 全套件不回归**
 
 `ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run`
 Expected: 427 + 新增数量，**零失败**。**不加 `| tail`。**
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/persistence/fileStore.ts tests/persistence/fileStore.test.ts
@@ -162,21 +162,23 @@ git commit -m "feat: write loop-state.json atomically from both of its writers"
 ### Task 3: 原子化 `owner-record.json` 的首次创建
 
 **Files:**
-- Modify: `src/persistence/fileStore.ts:379-381`（`writeOwnerRecord`）
+- Modify: `src/persistence/fileStore.ts` 里的 `export async function writeOwnerRecord`（**基线行号 `:379-381` 已失效**——Task 1 在它之前插入了约 67 行，head 上它在 `:447`。**以函数名为锚，动手前 grep 确认，不要照行号。**）
 - Test: `tests/persistence/fileStore.test.ts`
 
 **Interfaces:**
 - Consumes: Task 1 的 `writeJsonFileAtomically`
 
-- [ ] **Step 1: 写失败的 inode 测试**
+- [ ] **Step 1: 写失败的落地判据测试**
 
-形状同 Task 2 Step 1，含**持有文件句柄**那一步与"不越界声称"的约束。
+⚠️ **不要照抄 Task 2 的 inode 形状。** `writeOwnerRecord` 的生产唯一调用者是**首次创建**，目标不存在时 `rename` 与 `writeFile` 终态相同，**inode 判据不适用**（spec §7.1a，Task 2 发现并已实测）。用 §7.1a 的**悬挂符号链接判据**：目标路径放一个指向不存在路径的符号链接，`writeFile` 会穿过它写（链接存续 + 目标被创建），`rename` 会替换它（链接消失 + 目标从未创建）。
+
+若该写者在你的夹具里目标已存在，则 inode 判据仍可用，此时**必须含持有文件句柄那一步**。两种判据都**不得越界声称证明了原子性**。
 
 - [ ] **Step 2: 跑测试确认失败**
 
 - [ ] **Step 3: 替换 `writeOwnerRecord`**
 
-**陷阱 —— 本任务最容易越界的地方**：`writeOwnerRecordAtomically`(:632-637) 名字相近、写同一个文件，**但它属于转移事务路径，一个字符都不能动**（Global Constraints 第 1 条）。改错对象会破坏崩溃恢复。**动手前确认你改的是 `:379-381` 这个导出函数。**
+**陷阱 —— 本任务最容易越界的地方**：`writeOwnerRecordAtomically`（head 上在 `:700`）名字相近、写同一个文件，**但它属于转移事务路径，一个字符都不能动**（Global Constraints 第 1 条）。改错对象会破坏崩溃恢复。**动手前用 `grep -n "writeOwnerRecord" src/persistence/fileStore.ts` 确认你改的是那个 `export async function writeOwnerRecord`，不是带 `Atomically` 后缀的那个。**
 
 - [ ] **Step 4: 跑测试通过 + R5 变异验证**
 
@@ -195,8 +197,10 @@ git commit -m "feat: write the initial owner record atomically"
 ### Task 4: 原子化 `writeBoundaryArtifacts` 内的两处写
 
 **Files:**
-- Modify: `src/persistence/fileStore.ts:308`（`boundary-analysis.json`）、`:316`（`reconciliation-record.json`）
+- Modify: `src/persistence/fileStore.ts` 里 `writeBoundaryArtifacts` 内写 `boundary-analysis.json` 与 `reconciliation-record.json` 的两行（**基线行号 `:308` / `:316` 已失效**，head 上在 `:309` / `:317` 附近。**以文件名字符串为锚，grep 确认，不要照行号。**）
 - Test: `tests/persistence/fileStore.test.ts`
+
+⚠️ **判据选择**：先确定这两处在你的夹具里目标是否已存在。已存在 → inode 判据（含**持有文件句柄**那一步）；首次创建 → spec §7.1a 的**悬挂符号链接判据**。**不要默认照抄 Task 2**。
 
 **Interfaces:**
 - Consumes: Task 1 的 `writeJsonFileAtomically`

@@ -19,13 +19,19 @@
 
 五处裸 `writeFile`：
 
-| 位置 | 文件 | 说明 |
-|---|---|---|
-| `fileStore.ts:81` | `loop-state.json` | `writeRunState`，**每次状态转移都重写**，最热 |
-| `fileStore.ts:76` | `loop-state.json` | `initializeRunFiles` 内的**创建**写。见下方「为什么必须纳入」 |
-| `fileStore.ts:379-381` | `owner-record.json` | `writeOwnerRecord`，生产唯一调用者 `runLoop.ts:868`，即**首次创建** |
-| `fileStore.ts:308` | `boundary-analysis.json` | `writeBoundaryArtifacts` 内，无条件写 |
-| `fileStore.ts:316` | `reconciliation-record.json` | `writeBoundaryArtifacts` 内，条件写 |
+> ⚠️ **锚点是函数名 + 文件名，不是行号。** 下表的行号是**分支基线 `5e0b75a` 上的**，Task 1 在
+> `:379` 之前插入了原子写辅助（约 67 行）并加了一行 import，**这些行号在当前 head 上全部失效**。
+> 已实测的漂移：`:76` 现在指向 `loop-contract.json`（本设计**排除**的文件），`:379-381` 现在落在
+> Task 1 新增的辅助块里。**照行号动手会改错文件。** 每次动手前先 grep 文件名字符串确认。
+> （此警告由 Task 2 的实施者提出、控制器实测确认后写入。）
+
+| 位置（基线行号，已失效） | 锚点 | 文件 | 说明 |
+|---|---|---|---|
+| `fileStore.ts:81` | `writeRunState` 内写 `loop-state.json` 那一行 | `loop-state.json` | **每次状态转移都重写**，最热 |
+| `fileStore.ts:76` | `initializeRunFiles` 内写 `loop-state.json` 那一行 | `loop-state.json` | **创建**写。见下方「为什么必须纳入」 |
+| `fileStore.ts:379-381` | `export async function writeOwnerRecord`（**不是** `writeOwnerRecordAtomically`） | `owner-record.json` | 生产唯一调用者 `runLoop.ts:868`，即**首次创建** |
+| `fileStore.ts:308` | `writeBoundaryArtifacts` 内写 `boundary-analysis.json` 那一行 | `boundary-analysis.json` | 无条件写 |
+| `fileStore.ts:316` | `writeBoundaryArtifacts` 内写 `reconciliation-record.json` 那一行 | `reconciliation-record.json` | 条件写 |
 
 **为什么 `:76` 必须纳入（初稿把它排除了，那是本设计的一个结构性缺陷，已更正）**：`loop-state.json` 有**两个**写者，`:76` 创建、`:81` 每次转移重写。初稿只纳入 `:81`，排除理由是「创建期没有并发读者」——**该理由不成立**。`ccloop ls` 可在任意时刻扫描根目录，**包括某个 run 正在初始化的那一刻**，而 `loop-state.json` 既是 `RUN_MARKER_FILES` 之一、又是 L2 唯一逐字段观测的三个文件之一。`ensureFreshRunDir` 只阻止同一 run 被重复初始化，**不阻止外部扫描**。只改 `:81` 而不改 `:76`，本设计对它最想修的那个文件就是半截的。
 
@@ -167,6 +173,35 @@ function buildAtomicTempPath(targetPath: string): string
 
 这不需要任何注入，且**变异验证天然成立**：把实现换回裸 `writeFile`，inode 不再变化，测试失败。
 
+#### 7.1a 创建型写入：inode 判据**不适用**，改用悬挂符号链接判据
+
+**本节是初稿的一个结构性缺陷，由 Task 2 的实施者发现、Task 2 的评审员实测确认后补入。**
+
+上面的判据默认目标文件已存在。五个替换点里有**两个是创建型写入**——`initializeRunFiles` 的
+`loop-state.json` 与 `writeOwnerRecord` 的 `owner-record.json`（首次创建）。对它们，目标不存在时
+`rename` 与 `writeFile` 的**终态完全相同**，没有 inode 可比。**这不是「夹具不好搭」，是判据本身
+不适用——任何夹具都救不回来。** 初稿把它当成夹具问题，是错的。
+
+**替代判据（已在 Task 2 落地并经独立变异验证）**：在目标路径上放一个**悬挂符号链接**（指向一个
+不存在的路径）。
+
+- `ensureFreshRunDir` 经 `pathExists` 用 `access()` 探测，`access` **跟随**链接、对悬挂链接报
+  ENOENT，所以新鲜度检查放行；
+- 之后 `writeFile` 会**穿过**链接写：链接存续，它指向的目标被创建；
+- 而 `rename` 会**替换**这个目录项：链接消失，它指向的目标从未被创建。
+
+断言 `lstat(target).isSymbolicLink() === false` 且 `stat(链接指向的路径)` 以 ENOENT 拒绝。
+
+**为什么它比 inode 判据更稳**：没有 inode 被释放，所以**根本不存在 inode 号复用的偶发窗口**。
+Task 2 连跑 40 次零失败。
+
+**已知代价，必须在测试里写明**：它依赖 `ensureFreshRunDir` 用 `access()`（跟随链接）而非
+`lstat()`（不跟随）探测。若那里改成 `lstat`，本测试会**大声变红**（`runDir already contains
+prior run data`），不会静默失效——评审员实测确认了这一点。
+
+**同样不得越界声称**：本判据证明的是「落地经过了 `rename`」，与 inode 判据一样，**不证明**
+「不存在任何中间可见状态」。
+
 **已知限制，必须在测试里写明**：inode 判据证明的是「落地经过了 rename」，**不是**「不存在任何中间可见状态」。后者在真实文件系统上无法确定性证明。**不要在测试名或注释里声称证明了后者**——本项目上一轮最贵的缺陷正是「测试声称杀 A、实际杀不掉」。
 
 ### 7.2 其余要求
@@ -188,7 +223,8 @@ function buildAtomicTempPath(targetPath: string): string
 ## 9. 验收标准
 
 - **五个**替换点全部只经 `rename` 落地，§7 的六条要求（R1–R6）全部满足且变异验证有据。
-- `loop-state.json` 的**两个**写者（`:76`、`:81`）都已原子化——只改其一即为未达标。
+- `loop-state.json` 的**两个**写者（`initializeRunFiles` 与 `writeRunState`，基线 `:76`、`:81`，
+  行号已失效见 §2.1）都已原子化——只改其一即为未达标。
 - `src/registry/` 内零逻辑改动（只有注释）。
 - `writeOwnerTransferRecord` 带有 §6 要求的警示注释，签名与调用点未变。
 - 转移事务路径（§2.2 列出的四个符号）**逐字节未改**。
