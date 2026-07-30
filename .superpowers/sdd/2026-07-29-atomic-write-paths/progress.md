@@ -333,6 +333,19 @@ no callers.
 NEXT: Task 2 (`loop-state.json`'s two writers, `:76` and `:81`), which also carries R2 as Step 4b
 per defect D1, and must RE-RUN the residue mutation itself rather than cite this ledger.
 
+SEVENTH FLAKE, found on Task 1's closing verification run and handled by the branch's own rule
+rather than waved through: `tests/controller/runLoop.integration.test.ts > runLoop > records
+retained cleanupStatus in execution recovery when cleanup fails` failed once at 430/431.
+It is in NEITHER known family — not `BUDGET_EXHAUSTED_REASON` (it asserts cleanupStatus retention
+on a cleanup failure, nothing to do with budgets) and not the spawned-pid one.
+Classified, not assumed: full name and failure block captured without `| tail`; passes in
+isolation; full suite then passed TWICE more at 431/431; and the commit under test was
+comment-only — `git diff` shows exactly 4 changed comment lines in `fileStore.test.ts`, so it
+cannot have caused a failure in `runLoop.integration.test.ts`.
+Recorded in `docs/handoff/handoff.md` 遗留事項 2 as flake 7. Not root-caused, not fixed.
+The count of known flakes has gone 5 → 6 → 7 during this branch, all found by running the suite
+honestly rather than by piping it through `tail`. None was introduced here.
+
 NOT YET DONE ON TASK 1: **no code review has been run.** The session that produced Task 1 hit
 its context and budget ceiling immediately after. Per the project's standing rule, a task-level
 review is mandatory and the whole-branch review at the end is non-skippable — the most valuable
