@@ -168,10 +168,71 @@ IMPLEMENTER'S OWN DISCLOSURES, both accepted as honest and correct:
    filename-safe helper because that grows API surface Task 1 was told not to grow. Correct
    scope discipline; the coupling is real and unguarded.
 
-STATUS: **No separate re-review of this fix round has been run.** The controller verified every
-load-bearing claim against the code (above), which is not self-certification but is weaker than
-a fresh-eyes pass. Whether to spend one before Task 2 is a live decision for the human — the
-fixes touched one assertion, one test name, one comment position and one expression.
+=== FIX ROUND 1/5 RE-REVIEW (independent, fresh eyes, mutation-driven) ===
+Human chose to spend on it. It paid for itself: **the fix reintroduced its own target defect in
+narrower form**, which is the failure mode this repo already has on record for fix waves.
+
+CONFIRMED: all three fixes plus the durability note landed. All four legs of the two-sided
+mutation evidence reproduce exactly as claimed. All six scope constraints verified by execution
+— `src/registry/` zero files changed across the whole range, four protected symbols `cmp`
+byte-identical, `writeJsonFileAtomically` still has ZERO callers anywhere (so Task 1 remains a
+pure addition), serialization exactly `JSON.stringify(value, null, 2)`, no injection seam, and
+the mutation scaffolding is genuinely gone (no `setupFiles` in vitest.config.ts, no pid stub
+anywhere). Suite 29 files / 431 tests, both known flakes passed, typecheck and build exit 0.
+Also verified `performance.timeOrigin` is filename-safe: fractional in reality (so `Math.trunc`
+is load-bearing and dropping it IS killed), always positive, never exponential, stable within a
+process, distinct per worker under vitest's `forks` pool.
+
+**NEW Important, introduced by fix round 1 — OPEN, dispatched as fix round 2/5:**
+The new test name claims the pid AND START TIME sit at fixed positions, but the assertion for
+the start-time slot is only `\.\d+\.` — it cannot tell the start time from any digit string.
+Verified by execution: `Math.trunc(performance.timeOrigin)` replaced by `0`, by `12345`, or by
+`process.pid` again ALL SURVIVE with the whole suite green. **So the anti-PID-recycling
+component added for Minor-3 shipped with zero test coverage under a name claiming to cover it.**
+Same defect class as Imp-2, narrower scope, created by the commit meant to remove it.
+RULING: assert that segment against the numeric tail of `buildProcessInstanceId()`
+(`src/runtime/processIdentity.ts`, already exported and already consumed by resumeLoop.ts and
+runLoop.ts, so zero new API surface). This closes the Important, gives Minor-3 real coverage,
+AND becomes the mechanical cross-file guard the previous round flagged as missing.
+The reviewer's framing is sharper than the implementer's: the missing guard is not cross-file,
+it is local — nothing fails if `buildAtomicTempPath`'s OWN recipe changes.
+
+**NEW Minor — a false argument propagated through four hands into committed code:**
+The first review claimed that at a container pid of 1 the pre-fix name would be
+`.loop-state.json.1.tmp` and so "contains 1". **That arithmetic is wrong**: by the time that
+test runs `atomicTempPathSequence` is already 3 (test 1 consumes two calls), so the name is
+`.loop-state.json.3.tmp`, which does NOT contain "1" — the old assertion would have KILLED that
+mutation. The re-review still reproduced a genuine survival, but by a DIFFERENT mechanism: under
+the post-fix template the name is `.loop-state.json.1785422763967.3.tmp` and the timeOrigin
+digits happen to contain "1".
+CONCLUSION UNCHANGED (containment is position-blind and its kill power depends on digit
+coincidence). ARGUMENT WAS WRONG. Chain of custody: first reviewer → controller's report to the
+human → controller's dispatch message → implementer's committed comment. **The controller
+repeated it without verifying it, in a round whose entire subject was comments and test names
+not over-claiming.** Being corrected in fix round 2/5.
+
+**NEW Minor**: `fileStore.ts:396` recomputes `Math.trunc(performance.timeOrigin)` per call while
+`processIdentity.ts:7` caches it in a module const — no behavioural difference, but the two
+"same decision" sites now differ in shape, which is exactly the drift the fix's own comment says
+must not happen. Being hoisted to a module const in fix round 2/5.
+
+NOTED, not a defect: there is a THIRD spelling of process identity in this file —
+`fileStore.ts:543` writes `pid:${process.pid}` with no timeOrigin. Pre-existing, inside
+byte-identical protected code, and legitimate: its only consumer is `parsePid()` (`:512`), which
+extracts the pid for a liveness check. The fix's comment saying "the two components" undercounts
+the sites; wording being corrected, the code is not.
+
+REVIEWER'S JUDGEMENT ON THE FLAGGED COUPLING, accepted: NOT extracting a shared helper is the
+right call — the two sites need genuinely different output formats (`pid:<pid>:<origin>` vs
+`<pid>.<origin>`), so a shared helper would need to return components or take a separator, which
+is new API surface for two callers against Task 1's scope. And drift is not a correctness
+coupling: a changed recipe upstream would still leave names unique per process instance.
+
+PROCESS LESSON FOR THIS BRANCH AND THE NEXT: two separate defects this round came from the same
+habit — **trusting a written 「已核实」 instead of re-deriving it.** The controller's Imp-1 (the
+false zero-`vi.mock` premise) and the implementer's over-scoped D1 write-up both did it, and so
+did the controller repeating the pid-1 arithmetic. A claim marked as verified by someone else is
+still an unverified claim until you run it.
 
 NOT YET DONE ON TASK 1: **no code review has been run.** The session that produced Task 1 hit
 its context and budget ceiling immediately after. Per the project's standing rule, a task-level
