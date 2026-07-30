@@ -1,5 +1,6 @@
 import { access, appendFile, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
 import type { LoopContract } from "../contract/schema.js";
 import type {
   ExecutionRecovery,
@@ -368,29 +369,41 @@ async function writeJsonFile(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value, null, 2));
 }
 
+let atomicTempPathSequence = 0;
+
 // Deliberately NOT a pure function, and deliberately NOT shared with the owner-transfer
 // transaction's fixed temp names (OWNER_RECORD_TEMP_FILE / OWNER_TRANSFER_TEMP_FILE).
 //
 // writeJsonFileAtomically has no lock around it, so two processes can be publishing the same
 // target at the same moment. With a shared fixed temp name, B's writeFile would overwrite A's
 // staged bytes before A's rename, and A would publish B's content — temp+rename would have
-// manufactured a new torn-write source instead of removing one. Hence pid plus a per-process
-// counter, and hence a fresh path on every call.
+// manufactured a new torn-write source instead of removing one. Hence a process-instance
+// stamp plus a per-process counter, and hence a fresh path on every call.
+//
+// The process-instance stamp is pid plus Math.trunc(performance.timeOrigin), which is the same
+// decision already recorded in processIdentity.ts:3-7 for the same hazard: PIDs are recycled,
+// so pid alone can be reissued to an unrelated later process. buildProcessInstanceId() is not
+// reused here only because its `pid:<pid>:<origin>` form embeds colons, which do not belong in
+// a filename; the two components are the same and must stay in sync with that decision.
 //
 // The transaction's fixed names must stay fixed for the opposite reason: crash recovery finds
 // leftover staged files by name. The two helpers are different things; do not merge them.
 //
-// Exported only so its uniqueness, pid and same-directory properties can be asserted directly.
-let atomicTempPathSequence = 0;
-
+// Exported only so its uniqueness, naming and same-directory properties can be asserted
+// directly.
 export function buildAtomicTempPath(targetPath: string): string {
   atomicTempPathSequence += 1;
-  return join(dirname(targetPath), `.${basename(targetPath)}.${process.pid}.${atomicTempPathSequence}.tmp`);
+  const processStamp = `${process.pid}.${Math.trunc(performance.timeOrigin)}`;
+  return join(dirname(targetPath), `.${basename(targetPath)}.${processStamp}.${atomicTempPathSequence}.tmp`);
 }
 
 // Publishes `path` only through rename, so a concurrent reader sees either the previous
 // complete file or the new complete file, never a partial one. Same directory as the target,
 // because rename across filesystems fails.
+//
+// Scope: this buys visibility atomicity for concurrent readers, not durability. There is no
+// fsync on the temp file or its directory (spec §3.1 item 6; the repository has zero fsync
+// calls anywhere), so a power loss or kernel crash can still lose or truncate the write.
 async function writeJsonFileAtomically(path: string, value: unknown): Promise<void> {
   const serialized = JSON.stringify(value, null, 2);
   const tempPath = buildAtomicTempPath(path);

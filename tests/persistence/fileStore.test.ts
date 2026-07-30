@@ -1490,10 +1490,20 @@ describe("buildAtomicTempPath", () => {
     expect(buildAtomicTempPath(target)).not.toBe(buildAtomicTempPath(target));
   });
 
-  it("embeds the process id so two processes writing the same target cannot collide", () => {
+  // Scope of this test, stated narrowly on purpose: it proves the process id sits at one
+  // fixed position in the name, followed by a start-time component and a sequence number.
+  // It does NOT prove that two processes cannot collide — that needs two processes.
+  //
+  // The regex is anchored at both ends rather than asserting `toContain(String(process.pid))`,
+  // because a containment check is position-blind and its ability to catch a dropped pid
+  // depends on the pid's digits. Under a container pid of 1, `.loop-state.json.1.tmp` still
+  // "contains" "1", so a mutation that drops the pid entirely would survive.
+  it("puts this process's id and start time at fixed positions in the temp file name", () => {
     const target = join(tmpdir(), "ccloop-fs-temp-path", "loop-state.json");
 
-    expect(basename(buildAtomicTempPath(target))).toContain(String(process.pid));
+    expect(basename(buildAtomicTempPath(target))).toMatch(
+      new RegExp(String.raw`^\.loop-state\.json\.${process.pid}\.\d+\.\d+\.tmp$`),
+    );
   });
 
   it("places the temp file in the same directory as the target so rename cannot cross a filesystem", () => {
