@@ -445,7 +445,7 @@ async function readOwnerTransferRecordRaw(runDir: string): Promise<OwnerTransfer
 }
 
 export async function writeOwnerRecord(runDir: string, ownerRecord: OwnerRecord): Promise<void> {
-  await writeJsonFile(join(runDir, OWNER_RECORD_FILE), ownerRecord);
+  await writeJsonFileAtomically(join(runDir, OWNER_RECORD_FILE), ownerRecord);
 }
 
 export async function writeOwnerTransferRecord(runDir: string, transferRecord: OwnerTransferRecord): Promise<void> {

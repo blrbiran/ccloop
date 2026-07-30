@@ -1680,3 +1680,73 @@ describe("loop-state.json is published by replacing the path, not by writing thr
     expect(await readdir(runDir)).toEqual(["loop-state.json"]);
   });
 });
+
+// owner-record.json is the second of the three files L2 observes field by field, and
+// `ccloop ls` can read it at any moment, so it has to be published the same way
+// loop-state.json is (design §2.1).
+//
+// Scope of this block, stated as narrowly as the loop-state block above: these tests show the
+// target *path* is replaced rather than written through. They do NOT show that no intermediate
+// state is ever observable to a concurrent reader — not deterministically provable on a real
+// filesystem (§7.1) — and they say nothing about crash durability, since this repository has
+// no fsync anywhere (§3.1 item 6).
+describe("owner-record.json is published by replacing the path, not by writing through it", () => {
+  const ownerRecord: OwnerRecord = {
+    runId: "task-1",
+    logicalSessionId: "task-1/session-1",
+    currentOwnerEpoch: 1,
+    currentProcessInstanceId: "pid:12345",
+    lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+    ownerStatus: "current",
+    supersededByEpoch: null,
+    leaseAffirmedAt: null,
+  };
+
+  // R1 (§7.1a). The write-twice-and-compare-inode shape does not discriminate here: the only
+  // production caller, runLoop.ts:868, runs after initializeRunFiles, so it is a first create,
+  // and when the target does not pre-exist rename and writeFile leave identical end states —
+  // there is no old inode to replace. No fixture recovers that; the criterion itself does not
+  // apply (§7.1a).
+  //
+  // The discriminator used instead is a *dangling* symlink at the target path:
+  //
+  //   - writeFile(path) opens through the symlink and creates the file it points at, leaving
+  //     the symlink itself in place.
+  //   - rename(temp, path) replaces the directory entry, so the symlink is gone and the path
+  //     it pointed at was never created.
+  //
+  // Both halves are asserted, because either one alone is satisfiable for the wrong reason.
+  //
+  // Unlike the initializeRunFiles test above, this one carries no dependency on how freshness
+  // is probed: writeOwnerRecord has no ensureFreshRunDir call in front of it, so nothing here
+  // has to follow or refuse the dangling link before the write is attempted.
+  it("replaces the owner-record.json path when writeOwnerRecord creates it, never creating what that path pointed at", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-atomic-owner-"));
+    const target = join(runDir, "owner-record.json");
+    const writtenThrough = join(runDir, "written-through.json");
+    await symlink(writtenThrough, target);
+
+    await writeOwnerRecord(runDir, ownerRecord);
+
+    expect((await lstat(target)).isSymbolicLink()).toBe(false);
+    await expect(stat(writtenThrough)).rejects.toMatchObject({ code: "ENOENT" });
+
+    // Guard: the record still has to be readable at the target path afterwards. This cannot
+    // discriminate on its own — reading follows a surviving symlink just as happily.
+    expect(await readOwnerRecord(runDir)).toEqual(ownerRecord);
+  });
+
+  // R4 (§7.2, §3.1 item 4). This branch changes only *how* owner-record.json is written, so the
+  // bytes must stay exactly what the plain writeFile call produced. Pinned to the literal
+  // expression rather than to a parsed object, because a changed indent or key order would
+  // otherwise surface later as unrelated tests failing for no visible reason.
+  it("writes the same bytes as the plain writeFile call it replaced", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-atomic-owner-bytes-"));
+
+    await writeOwnerRecord(runDir, ownerRecord);
+
+    expect(await readFile(join(runDir, "owner-record.json"), "utf8")).toBe(
+      JSON.stringify(ownerRecord, null, 2),
+    );
+  });
+});
