@@ -1504,7 +1504,10 @@ describe("buildAtomicTempPath", () => {
   //     literal, or with a second copy of the pid would keep this test green.
   //   - fileStore.ts and processIdentity.ts derive that component independently from the
   //     same reasoning, joined only by a comment. Asserting across the two modules is what
-  //     makes either one drifting a test failure rather than a silent divergence.
+  //     makes either side changing the pid or start-time components a test failure rather
+  //     than a silent divergence. Scoped deliberately: drift that leaves both components
+  //     where they are — a renamed prefix, or an extra trailing segment on the instance id —
+  //     does NOT fail this test, and was measured not to.
   //
   // Anchoring at both ends also matters. `toContain(String(process.pid))` is position-blind:
   // it passes whenever the digits occur anywhere, including inside the start-time or sequence

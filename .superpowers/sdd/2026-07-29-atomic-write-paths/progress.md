@@ -277,13 +277,61 @@ the invariant the comment previously asserted only in prose. It would become tau
 `buildAtomicTempPath` were implemented in terms of `buildProcessInstanceId()`, and in that case
 the test passing is the correct outcome.
 
-STATUS: narrow re-review of `deb8036..131167b` dispatched to the SAME reviewer that found the
-Important (it holds full context, so this costs far less than a fresh pass). Asked specifically
-whether the fix introduced anything new, including four concerns the controller could NOT settle
-by inspection: module-load-time vs test-run-time divergence of the two stamps under
-`vi.resetModules()` (24 `vi.doMock` sites exist); whether `split(":")[1]/[2]` degrades silently
-if `buildProcessInstanceId()`'s shape changes; whether the cross-module assertion is a disguised
-tautology; and whether a non-incrementing sequence still dies now that the regex changed.
+=== NARROW RE-REVIEW OF FIX ROUND 2 (`deb8036..131167b`) — verdict: YES, clean ===
+Same reviewer, resumed with its context. Sandbox outside the worktree; worktree left clean.
+
+- All three previously-surviving mutants KILLED (`timeOrigin` → `0`, → `12345`, → `process.pid`).
+- **The reviewer added the leg nobody asked for and it is the one that settles the tautology
+  question**: it mutated `processIdentity.ts`'s recipe ALONE, leaving `fileStore.ts` untouched
+  → also KILLED. A tautological assertion would fail only when both sides move together; this
+  one fails from either side independently. The cross-module pin is real.
+- Correctly narrowed what the pin guarantees: "the two modules agree", NOT "this value really is
+  the start time". The latter cannot be asserted independently inside one process; the former is
+  the strongest reachable guarantee.
+
+The four controller concerns, all settled BY MEASUREMENT:
+- (a) Load-time constant vs run-time call CANNOT diverge — `process.pid` and
+  `performance.timeOrigin` are process-level constants, so recomputation at any moment in the
+  same process yields the same value. Probed with the repo's real `vi.resetModules()` +
+  `vi.doMock` pattern in both directions (reload fileStore only; reload processIdentity only).
+  Non-issue. **Side observation, pre-existing since `4bcde7b` and NOT introduced by these fixes**:
+  after a module reload the fresh `fileStore` instance restarts `atomicTempPathSequence` at 0, so
+  two module instances in one process can emit the same temp path. Unreachable in production
+  (one ESM registry).
+- (b) `split(":")` does NOT degrade silently. Measured per hypothetical format change: dropping
+  the origin, a component containing colons, and reordering all FAIL LOUDLY via the
+  `/^\d+$/` guard or the regex. Only a renamed prefix or an appended trailing segment survive,
+  and neither can move index [1]/[2]. The guard is sufficient.
+- (c) Not a tautology — see the two-directional evidence above.
+- (d) A non-incrementing sequence still dies, both as a frozen counter and as a literal in the
+  template — killed by test 1 in both forms.
+
+Existing tests NOT weakened: tests 1, 3 and 4 each still uniquely kill a targeted mutation; none
+became vacuous from the extra name segment.
+
+Reviewer also checked, unprompted: no TDZ or evaluation-order problem from hoisting the constant;
+no import cycle from the test's new `processIdentity` import; and every factual claim in the new
+comments — the `processIdentity.ts:7` line reference, "timeOrigin is fixed within a process", and
+"the third form `pid:<pid>`'s only consumer is `parsePid` and it never compares identity"
+(confirmed by grep: zero equality comparisons on `holderProcessInstanceId` repo-wide).
+
+ONE MINOR FOUND, FIXED IMMEDIATELY BY THE CONTROLLER (comment wording only, no behaviour):
+the new comment claimed asserting across the modules makes "either one drifting" a failure. Not
+true for every drift — a renamed prefix or an appended trailing segment leaves both components in
+place and the test stays green, which the reviewer measured. Narrowed to "either side changing
+the pid or start-time components", with the surviving drift classes named explicitly and marked
+as measured. Reported precisely because this branch's recurring defect is comments claiming more
+than was verified — including, twice already, the controller's own.
+
+=== TASK 1 CLOSED ===
+Commits: 4bcde7b (implementation) → deb8036 (fix round 1) → 131167b (fix round 2) → comment
+narrowing. Two reviews and two fix rounds. Zero production call sites replaced, zero behaviour
+change, zero Critical at any point.
+Final state: 29 files / 431 tests green, typecheck and build clean, `src/registry/` untouched,
+four protected transfer symbols byte-identical to `5e0b75a`, `writeJsonFileAtomically` still has
+no callers.
+NEXT: Task 2 (`loop-state.json`'s two writers, `:76` and `:81`), which also carries R2 as Step 4b
+per defect D1, and must RE-RUN the residue mutation itself rather than cite this ledger.
 
 NOT YET DONE ON TASK 1: **no code review has been run.** The session that produced Task 1 hit
 its context and budget ceiling immediately after. Per the project's standing rule, a task-level
