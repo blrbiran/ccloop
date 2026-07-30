@@ -234,6 +234,57 @@ false zero-`vi.mock` premise) and the implementer's over-scoped D1 write-up both
 did the controller repeating the pid-1 arithmetic. A claim marked as verified by someone else is
 still an unverified claim until you run it.
 
+=== TASK 1 FIX ROUND 2/5 — complete (commit 131167b) ===
+Same implementer, resumed. All three items from the re-review addressed.
+
+- **Important CLOSED.** The assertion now takes both segments from
+  `buildProcessInstanceId().split(":")` and interpolates the real start time into the regex:
+  `^\.loop-state\.json\.${pid}\.${startTime}\.\d+\.tmp$`. Implementer reports all three
+  previously-surviving mutants (`.0`, `.12345`, `.${process.pid}`) are now killed, each applied
+  to the production constant and reverted from a pristine backup between runs.
+  Beyond the ruling it added `expect(startTime).toMatch(/^\d+$/)` so a format change in
+  `processIdentity.ts` fails legibly instead of interpolating `undefined` into the regex —
+  accepted; it hardens the new cross-module pin rather than widening scope.
+- **Minor (false arithmetic) CLOSED, and closed the right way.** The implementer did NOT
+  substitute another unrun mechanism for the wrong one. It REPRODUCED the survival: same
+  pid-dropped mutant, same template, old `toContain` assertion — real pid → killed, pid forced
+  to 1 → survived (`.loop-state.json.1785424204699.1.tmp`, the timeOrigin digits carrying the
+  "1"). The comment now claims only that containment's kill power is digit coincidence, and
+  asserts neither outcome, because neither is general.
+- **Minor (per-call recompute) CLOSED.** Hoisted to `ATOMIC_TEMP_PROCESS_STAMP`
+  (`fileStore.ts:385`), matching `processIdentity.ts:7`'s shape. Comment reworded to "recipe",
+  and it now names `pid:<pid>` at `:543` as a legitimate third form with `parsePid`'s
+  liveness-probe rationale and an explicit do-not-unify note.
+
+CONTROLLER'S INDEPENDENT VERIFICATION: the regex interpolates the actual start time obtained from
+a DIFFERENT module, so a constant in that slot cannot match — the kill holds BY CONSTRUCTION, not
+by the implementer's say-so. Scaffolding grep clean in both files. Suite 29 files / 431 tests
+green, typecheck exit 0.
+
+IMPLEMENTER'S OWN DISCLOSURE, recorded because it names the mechanism better than the finding did:
+"I hardened the pid assertion for exactly this failure mode, then in the same edit introduced
+`\d+` for the new segment and wrote a test name asserting coverage of it. I was treating 'the
+test name is honest about SCOPE' as the lesson, when the lesson is 'every clause in the name must
+have an assertion that can fail.' **Adding a component and its coverage are one change, not
+two.**" It also adopted a standing rule for the rest of the task: any mechanism it puts in a
+comment gets executed first.
+
+On the tautology question the controller raised: the implementer argued, and the controller
+accepts, that pinning `buildAtomicTempPath`'s stamp to `buildProcessInstanceId()`'s tail is NOT
+tautological — the two modules compute `Math.trunc(performance.timeOrigin)` from independent
+expressions, so the assertion pins one to the other ACROSS a module boundary, which is exactly
+the invariant the comment previously asserted only in prose. It would become tautological only if
+`buildAtomicTempPath` were implemented in terms of `buildProcessInstanceId()`, and in that case
+the test passing is the correct outcome.
+
+STATUS: narrow re-review of `deb8036..131167b` dispatched to the SAME reviewer that found the
+Important (it holds full context, so this costs far less than a fresh pass). Asked specifically
+whether the fix introduced anything new, including four concerns the controller could NOT settle
+by inspection: module-load-time vs test-run-time divergence of the two stamps under
+`vi.resetModules()` (24 `vi.doMock` sites exist); whether `split(":")[1]/[2]` degrades silently
+if `buildProcessInstanceId()`'s shape changes; whether the cross-module assertion is a disguised
+tautology; and whether a non-incrementing sequence still dies now that the regex changed.
+
 NOT YET DONE ON TASK 1: **no code review has been run.** The session that produced Task 1 hit
 its context and budget ceiling immediately after. Per the project's standing rule, a task-level
 review is mandatory and the whole-branch review at the end is non-skippable — the most valuable
