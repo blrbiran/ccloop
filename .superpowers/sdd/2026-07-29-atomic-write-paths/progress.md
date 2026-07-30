@@ -46,15 +46,82 @@ code rather than accepting the report:
   hardcoded the 8 fixed names, matching existing convention (`fileStore.test.ts:225-228`,
   `leaseLifecycle.integration.test.ts:726-728` already do the same) and commented the
   duplication. Accepted.
-- **D4 (cosmetic)**: stale line number in the plan — `finalizePendingOwnerTransfer`'s catch is
-  at :542-546, not :539-543. Not worth amending the plan for; recorded here.
+- **D4 (cosmetic)**: stale line number in the plan. CORRECTED TWICE — the plan said :539-543,
+  this ledger first said :542-546, and the review established the catch is at **:586-590** in
+  the head file (:541-545 at base). Both earlier numbers were wrong. Plan amended.
 
 Task 1: judgement calls beyond the plan, all disclosed by the implementer and accepted —
 serialize before entering the try (a stringify failure cannot leave a temp file); temp format
 `.<basename>.<pid>.<n>.tmp`; both helpers placed next to `writeJsonFile` so §4.2's
 "keep two, do not merge" comment sits where a reader would confuse them.
-Task 1: implementer explicitly did NOT claim anything about intermediate visible state in any
-test name or comment — the one over-claim this branch is most at risk of.
+Task 1: ~~implementer explicitly did NOT claim anything about intermediate visible state in any
+test name or comment~~ — **THIS LEDGER ENTRY WAS WRONG.** The review found `fileStore.ts:390-391`
+does make exactly such a claim ("a concurrent reader sees either the previous complete file or
+the new complete file, never a partial one"). It is defensible for POSIX same-filesystem rename
+and it sits on the production function rather than on a test claiming proof, so it is not a
+spec §7.1 violation — but the controller's blanket assertion above was inaccurate and is struck.
+Durability is the real gap: there is no `fsync`/`fdatasync` anywhere in `src/` (0 hits), so the
+comment must not be read as surviving power loss. Spec §3.1 now has a sixth property declaring
+crash durability out of scope.
+
+=== TASK 1 CODE REVIEW (independent reviewer, mutation-driven, read-only) ===
+Verdict: **Ready to proceed to Task 2 — with fixes. 0 Critical.**
+Reviewer worked in a throwaway copy for all mutations; worktree HEAD unmoved, tree clean.
+Controller independently re-verified the three most consequential claims before accepting them.
+
+CONFIRMED BY EXECUTION, not by reading the implementer's report:
+- Transfer path byte-identical: per-symbol SHA-256 across base vs head for all four protected
+  symbols plus 5 related helpers and all 8 `OWNER_*` constants — identical. `git diff
+  --unified=0` shows only the `node:path` import line and one insertion block in the source file.
+- All four `buildAtomicTempPath` tests DIE under mutations applied to the production function
+  (drop counter → test 1; drop pid → test 2; stage in /tmp → test 3; hand out the transaction's
+  fixed temp name → tests 1, 2, 4). No test survived its named target.
+- The D2 fix is correct AND the plan's cited pattern is wrong: reviewer constructed a real case
+  (directory at the exact next temp path) where `writeFile` throws EISDIR and `unlink` throws
+  EPERM. Shipped bare `try/catch {}` propagates EISDIR; substituting `safeUnlink` (the pattern
+  the plan cited) propagates EPERM — the original error is replaced. Verified by running it.
+- Temp names cannot collide with anything the system keys on, by construction: every
+  `RUN_MARKER_FILES` entry is non-dotted, and all 8 transfer fixed names have a non-numeric
+  third segment (publish/pending/transaction/lock) while generated names have a numeric pid there.
+- Full suite in the real worktree, unpiped: 29 files / 431 tests pass. Neither known flake fired.
+  typecheck and build exit 0.
+
+OPEN — MUST BE FIXED BEFORE TASK 2 IS DISPATCHED:
+- **Imp-1 (spec + plan defect, controller's own)**: the "zero `vi.mock` (已核实)" premise is
+  FALSE. `vi.mock(` is genuinely 0, but `vi.doMock` appears **24 times across 5 test files,
+  including `tests/persistence/fileStore.test.ts` itself**, where it mocks `node:fs/promises` to
+  make `writeFile` throw for a specific path. Same facility, runtime-scoped. Root cause: the
+  controller grepped the literal `vi.mock` and never `doMock`. The error's direction matters —
+  it was used to invoke Rule 11 against mocking, while the actual established convention in the
+  very file under edit is the opposite. D1's conclusion still stands independently (an
+  unexported function is unreachable regardless of mocking), but one of its stated premises was
+  false. FIXED: spec §7 and the plan's Global Constraints now state a preference, not a ban, and
+  no longer cite Rule 11. Task 2's Step 4b inherits the corrected version.
+- **Imp-2 (implementation, OPEN — dispatched as a fix round)**: `fileStore.test.ts:1493`'s name
+  claims "两个进程不会碰撞" but the test only shows the pid appears in the name; and the
+  assertion is position-blind (`toContain(String(process.pid))`). The mutation that removed the
+  pid went red only because the pid happened to be 62630 — **under pid 1 in a container,
+  `.loop-state.json.1.tmp` contains "1" and that mutation SURVIVES.** This is exactly the
+  "test claims to kill A but cannot" defect class this project keeps paying for.
+- **Minor-3 upgraded to should-fix by controller ruling**: `buildAtomicTempPath` uses bare
+  `process.pid` while `src/runtime/processIdentity.ts:7` already rules on this exact concern
+  (`pid:${process.pid}:${Math.trunc(performance.timeOrigin)}`, with a comment that PIDs are
+  recycled) and exports `buildProcessInstanceId()`. Reviewer honestly reported it could NOT
+  construct a single-machine failure, so this is not a correctness bug — but it is a silent fork
+  from a same-repo primitive for the same problem, which Rule 7 says to surface rather than
+  duplicate. Ruling: adopt `performance.timeOrigin` — one expression, closes the gap outright,
+  and it also fixes Imp-2's position-blind assertion in the same edit.
+
+DEFERRED (recorded, not fixed):
+- Minor: test 4 (`:1512-1527`) has no independent kill power — any name keeping the
+  `.<numeric pid>.<n>.` shape can never equal one of the 8 fixed literals, so breaking test 4
+  requires first breaking the format, which trips tests 1 and 2. Not vacuous, but treat it as
+  documentation of an invariant, NOT as independent coverage.
+- Minor: the 12-line doc block at `:371-386` is separated from the function it documents by
+  `let atomicTempPathSequence = 0`, so it visually reads as documenting the counter.
+- Out of scope by spec §2.2, correctly untouched, worth booking for a future layer:
+  `finalizePendingOwnerTransfer`'s own catch (`:586-590`) has the SAME latent masking bug D2
+  describes — two `safeUnlink` calls that can replace an in-flight error.
 
 NOT YET DONE ON TASK 1: **no code review has been run.** The session that produced Task 1 hit
 its context and budget ceiling immediately after. Per the project's standing rule, a task-level

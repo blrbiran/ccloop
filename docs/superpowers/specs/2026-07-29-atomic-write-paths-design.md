@@ -64,6 +64,8 @@ function buildAtomicTempPath(targetPath: string): string
 1. **目标路径只经 `rename` 落地**，从不被 `writeFile` 直接写。
 2. **临时文件名进程唯一**。见 §4.1——这是本设计最容易做错的一点。
 3. **临时文件不残留**：成功路径由 `rename` 消费掉；失败路径必须 `unlink` 后再向上抛。
+   **清理失败不得替换正在传播的原始错误。** 注意：`safeUnlink`（`fileStore.ts`）**会重抛非 ENOENT**，所以它**不能**用在这个 catch 里——已由 Task 1 的评审以实跑证实（构造出 `writeFile` 抛 `EISDIR`、`unlink` 抛 `EPERM` 的场景，用 `safeUnlink` 会把 `EISDIR` 替换成 `EPERM`）。
+6. **崩溃持久性不在本设计范围内。** 本设计提供的是**并发读者**的可见性（同文件系统的 `rename` 是原子的），**不是**掉电或内核崩溃后的持久性——仓库全域 `fsync` / `fdatasync` 为 **0 处**，本分支也不引入。任何注释或测试都不得暗示更强的保证。
 4. **序列化格式与被替换的调用逐字节一致**：现有五处都是 `JSON.stringify(value, null, 2)`（含 `:76` 的 `JSON.stringify(initialState, null, 2)`）。**改变缩进或键序都会让无关测试以看不出原因的方式失败**，且超出「只改怎么写」。
 5. **错误向上传播**，不吞。写失败必须让调用者看见（Rule 12）。
 
@@ -129,7 +131,21 @@ function buildAtomicTempPath(targetPath: string): string
 
 **不写竞态测试。** 用真实并发去证明原子性既不确定又不可复现。
 
-**不引入 `vi.mock`，也不给 `fileStore.ts` 加文件系统注入缝。** 本仓库测试套件中**零处** `vi.mock`（已核实），约定是真实 tmpdir 测试，只在已有缝处注入假件（如 registry 的 `scanDeps`）。为了测试而给生产代码开缝，既违反 Rule 11（遵从既有约定），也超出「只改怎么写」的范围。
+**不给 `fileStore.ts` 加文件系统注入缝。** 为了测试而给生产代码开缝超出「只改怎么写」的范围。
+
+**关于模块 mock —— 初稿这里写了一个假前提，已更正。**
+
+初稿写：「本仓库测试套件中**零处** `vi.mock`（已核实），…… 为了测试而给生产代码开缝，既违反 Rule 11（遵从既有约定）」。
+
+**那个「已核实」是错的。** `vi.mock(` 字面量确实是 0 处，但 `vi.doMock` 有 **24 处、跨 5 个测试文件**——**其中就包括本设计要改的 `tests/persistence/fileStore.test.ts` 本身**，用来 mock `node:fs/promises` 使 `writeFile` 对特定路径抛错。`vi.doMock` 是 `vi.mock` 的运行时作用域版本，同一套设施。缺陷来源：grep 只搜了 `vi.mock` 字面量，没搜 `doMock`。
+
+**这条错误的方向是反的**：它被用来援引 Rule 11 禁掉 mock，而**真实的既有约定恰好相反**——模块级 fs mock 正是 `fileStore.test.ts` 已确立的失败注入手法。
+
+**更正后的立场（是偏好，不是禁令，且不再援引 Rule 11）**：
+
+- **优先**真实 tmpdir 测试。理由是它证明的东西更强：真实的 `rename`、真实的 inode、真实的错误码。
+- **允许**在真实手段做不到时使用 `vi.doMock`，与 `fileStore.test.ts` 现有 4 处保持同一形状。**使用时必须在测试里写明为什么真实手段不可行**——不接受「mock 更方便」。
+- 无论哪种，**都不给生产代码开注入缝**。这一条不变，且它本来就不依赖上面那个假前提。
 
 ### 7.1 核心判据：inode 替换
 

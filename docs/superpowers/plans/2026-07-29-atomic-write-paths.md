@@ -6,7 +6,7 @@
 
 **Architecture:** 新增一个模块私有的原子写辅助与一个可导出的临时名生成器；五个调用点逐一替换；转移事务路径一行不动；L2 读侧只改注释。
 
-**Tech Stack:** TypeScript / Node `node:fs/promises` / vitest / 真实 tmpdir 测试（本仓库零 `vi.mock`）
+**Tech Stack:** TypeScript / Node `node:fs/promises` / vitest / 优先真实 tmpdir 测试，必要时 `vi.doMock`（仓库既有 24 处）
 
 **唯一真相源：** `docs/superpowers/specs/2026-07-29-atomic-write-paths-design.md`
 **上位裁决：** `docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md` 债 4
@@ -24,7 +24,8 @@
 - **转移事务路径逐字节未改**：`finalizePendingOwnerTransfer`、`writeOwnerRecordAtomically`、`acquireOwnerTransferLock`、`recoverInterruptedOwnerTransfer` 及相关常量。理由：它们靠**固定**临时路径做崩溃恢复，换成唯一名会让恢复静默失效（spec §4.2）。
 - **`src/registry/` 内零逻辑改动**，只允许注释行变动。`atomic: false` 保留为纵深防御（spec §5）。
 - **序列化格式不变**：五处全部是 `JSON.stringify(value, null, 2)`，缩进与键序不得变（spec §3.1 第 4 条）。
-- **不引入 `vi.mock`，不给 `fileStore.ts` 加文件系统注入缝**。本仓库测试套件零处 `vi.mock`，约定是真实 tmpdir（spec §7）。
+- **不给 `fileStore.ts` 加文件系统注入缝**（spec §7）。
+- **模块 mock：优先真实 tmpdir，允许 `vi.doMock`。** ⚠️ **本计划初稿在这里写了一个假前提**：「本仓库测试套件零处 `vi.mock`」——`vi.mock(` 字面量确实为 0，但 `vi.doMock` 有 **24 处、跨 5 个文件，包括 `tests/persistence/fileStore.test.ts` 自己**（用来让 `writeFile` 对特定路径抛错）。**真实约定与初稿说的相反**，且初稿据此援引 Rule 11 是站不住的。更正后：优先真实手段（证明力更强），真实手段做不到时可用 `vi.doMock`，**但必须在测试里写明为什么真实手段不可行**。详见 spec §7。
 - **不写竞态测试**（spec §7）。
 - **不设性能门禁，不专门跑基准**（spec §8）。
 - **不改任何文件的写入时机、条件或内容**——只改「怎么写」。`reconciliation-record.json` 的时机属于债 1 / L3。
@@ -70,7 +71,9 @@ Expected: FAIL —— 函数不存在。
 
 `writeJsonFileAtomically` 必须满足 spec §3.1 全部五条。要点：写临时文件 → `rename` 到目标；失败路径 `unlink` 临时文件后**再向上抛**（不吞）。
 
-**陷阱**：`unlink` 本身可能失败（临时文件根本没创建成功）。清理失败不得掩盖原始错误——参照 `finalizePendingOwnerTransfer`(:539-543) 的 catch 写法。
+**陷阱**：`unlink` 本身可能失败（临时文件根本没创建成功）。清理失败不得掩盖原始错误。
+
+⚠️ **本计划初稿在这里引错了范例**（缺陷 D2，实施者发现、评审以实跑证实）：初稿说「参照 `finalizePendingOwnerTransfer` 的 catch 写法」，但那个 catch 用的是 `safeUnlink`，而 **`safeUnlink` 会重抛非 ENOENT**——照抄会把正在传播的原始错误替换掉，**正好违反本条要求本身**。评审构造出真实场景证实：`writeFile` 抛 `EISDIR`、`unlink` 抛 `EPERM`，用 `safeUnlink` 则调用者收到 `EPERM` 而非 `EISDIR`。**正确做法是裸 `try/catch {}` 的尽力清理**，并在原地注释说明为何不复用 `safeUnlink`。（顺带记录：`finalizePendingOwnerTransfer` 自己的 catch，位置在 head 文件 `:586-590`，**有同一个潜在掩盖缺陷**——它在 spec §2.2 的不动范围内，本分支正确地未碰。）
 
 - [x] ~~**Step 5: 补 R2 测试（残留与错误传播）**~~ —— **已移入 Task 2，本任务不做。**
 
