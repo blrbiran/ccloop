@@ -100,8 +100,8 @@ export async function readObservedFile(
   const reader = pickReader(deps.readers, spec.file);
   // Keys off the `atomic` flag, not off how the file is in fact written: both files flagged
   // false are rename-published too, and stay false only as defence in depth (see the file
-  // header). true → read once; false → retry a parse failure up to LEASE_VERIFY_READ_ATTEMPTS
-  // times (spec §8.1).
+  // header). true → read once; false → read up to LEASE_VERIFY_READ_ATTEMPTS times on a parse
+  // failure, i.e. 2 retries (spec §8.1).
   const maxAttempts = spec.atomic ? 1 : LEASE_VERIFY_READ_ATTEMPTS;
 
   let lastParseError: unknown;
