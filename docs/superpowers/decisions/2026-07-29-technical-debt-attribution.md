@@ -102,8 +102,9 @@ L3 的「触发」定义就是让 eligible run 继续执行，而继续必须走
 **可行的方向**：把 reconciliation 加入转移**已有的**事务。`fileStore.ts:327-330` 已定义 `.owner-record.pending.json` / `.owner-transfer.pending.json` / `.owner-transfer.transaction.json` 事务标记，配合 `:536-538` 的双 rename 与 `recoverInterruptedOwnerTransfer` 的崩溃修复。reconciliation 可作为第三个文件加入同一事务，**不需要新发明一套原子性**。
 
 **与 `preserveSuccessfulReconciliationIfNeeded` 无冲突**（本轮专门验证的一点）：它在 `fileStore.ts:282` 一进门就 `if (nextReconciliationRecord.eligibleForContinuation) return`。
+⚠️ **`:282` 差一行**（实为 283；282 是 `): Promise<ReconciliationRecord> {`）。**这是先于本分支就有的错**——`fileStore.ts` 在 `07180a7..HEAD` 字节未变，不是被本分支顶掉的，按 Rule 3 不改数字，就地勘误。定位用 `grep -n 'async function preserveSuccessfulReconciliationIfNeeded(' src/persistence/fileStore.ts`。
 
-**论据已更正。** 初稿给的理由是「loser 的转移根本没进入事务」——**那条从未验证过**，而且与 staging/CAS 的先后有关，本记录无权断言。真正的理由不依赖事务，而且强得多：`persistOwnerTransfer` 的返回类型 `Promise<{ ownerRecord: OwnerRecord; eligibleForContinuation: true }>` 就把 `eligibleForContinuation` 钉成**字面量 `true`**，函数末尾的 `return` 兑现。所以赢家**必然**命中 `preserveSuccessfulReconciliationIfNeeded` 的早退，loser（`eligibleForContinuation` 保持 `runLoop.ts` 里 `let eligibleForContinuation = false;` 的初值）**必然**不命中。**这是类型级保证，与事务机制无关。** 两者不相交。
+**论据已更正。** 初稿给的理由是「loser 的转移根本没进入事务」——**那条从未验证过**，而且与 staging/CAS 的先后有关，本记录无权断言。真正的理由不依赖事务，而且强得多：`persistOwnerTransfer` 的返回类型 `Promise<{ ownerRecord: OwnerRecord; eligibleForContinuation: true }>` 就把 `eligibleForContinuation` 钉成**字面量 `true`**，函数末尾的 `return` 兑现。所以赢家**必然**命中 `async function preserveSuccessfulReconciliationIfNeeded(` 的早退（**锚点带前缀是必需的**：裸符号名在 `fileStore.ts` 里命中 4 行，其中一行属另一个函数 `preserveSuccessfulReconciliationIfNeededFromArtifacts`；带 `async function ` 前缀才唯一），loser（`eligibleForContinuation` 保持 `runLoop.ts` 里 `let eligibleForContinuation = false;` 的初值）**必然**不命中。**这是类型级保证，与事务机制无关。** 两者不相交。
 
 **留给 L3 spec 回答、本轮不预设答案的两个问题：**
 
