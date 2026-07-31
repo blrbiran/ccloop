@@ -15,7 +15,8 @@
 5. **「为什么长这样」先读 ledger**：`.superpowers/sdd/2026-07-29-atomic-write-paths/progress.md`——全部裁决、四条计划缺陷、两条 spec 缺陷、每一轮评审与修复都在里面。**不要重新推理。** 它已用 `git add -f` 入库。
 6. **常驻禁令**：L1 spec §12 十九条中的第 2/5/7/15/17/19 条不得弱化或删除（已变异验证，人下过指令）。
 7. 运行约定：`ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run`；**真实 Claude 调用须事先获批（付费）**。
-8. **已知 flake：5 条已观测 + 1 条仅理论**（见遗留事项 2 的更正后清单）。债 4 未新增、未修。**旧版说的「7 个」是错的**——一条被数了两次、一条分类为假、一条从未具名，2026-07-31 已按代码更正。别当新 bug 查，但也别拿这份清单挥手放过没核过的失败。
+8. **已知 flake（2026-07-31 两次更正后）**：`BUDGET_EXHAUSTED_REASON` 家族 4 条**已修**；剩 1 条已观测（`evidence.test.ts`）+ 2 条已具名但**从未观测到失败**（第五个家族成员、L1 交错测试）。详见遗留事项 2。
+   **两次更正都值得知道**：旧版「7 个」是错的（一条被数了两次、一条分类为假、一条从未具名）；而更正后的版本**仍然带着一条被实测证伪的修法**——「只抬 `perAttemptTimeoutMs`」是空操作。**别拿这份清单挥手放过没核过的失败，也别照抄没跑过的修法。**
 9. **验证跑绝不要 `| tail -N`**；**计划不要附完整可抄代码**；**评审必须对着代码撞、不接受实施者自证**。三条铁律，全部有案底。
 
 ## 如何定位当前状态（不要照抄 commit hash）
@@ -72,19 +73,31 @@ grep -c "^- \[x\]\|^- \[ \]" docs/superpowers/plans/2026-07-29-atomic-write-path
 
    > ⚠️ **本清单在 2026-07-31 被更正过一次，因为它自己犯了它要防的错。** 旧版声称「7 个」并附「具名清单」，实际是：**一条被数了两次**，**一条的分类是假的**，**一条从未具名**。更正依据全部来自读代码，不是推理。**下面每一条都能自己核。**
 
-   **(A) `BUDGET_EXHAUSTED_REASON` 家族——4 条，同一个根因**，全在 `tests/controller/runLoop.integration.test.ts`：
+   **(A) `BUDGET_EXHAUSTED_REASON` 家族——已修，4 条。** 全在 `tests/controller/runLoop.integration.test.ts`，**对着测试名比对，不要用行号**：
 
-   | `it(` 行 | 测试名 | 两个旋钮 |
-   |---|---|---|
-   | `:1002` | writes stale reconciliation conflicting evidence when execute aborts after changing files | `:1010-1011` |
-   | `:1258` | persists owner transfer artifacts and continuation eligibility after a controller-owned OWNER_LOST takeover-allowed verdict without resuming execution | `:1266-1267` |
-   | `:1655` | records retained cleanupStatus in execution recovery when cleanup fails | `:1663-1664` |
-   | `:1773` | treats execute timeout with no adapter result as exhausted even if files changed in the worktree | `:1781-1782` |
+   - writes stale reconciliation conflicting evidence when execute aborts after changing files
+   - persists owner transfer artifacts and continuation eligibility after a controller-owned OWNER_LOST takeover-allowed verdict without resuming execution
+   - records retained cleanupStatus in execution recovery when cleanup fails
+   - treats execute timeout with no adapter result as exhausted even if files changed in the worktree
 
-   四条**逐一核实**都把 `perAttemptTimeoutMs: 20` 与 `totalRuntimeBudgetMs: 20` 同时钉死，互相赛跑。
-   **修法：只抬 `perAttemptTimeoutMs`，`totalRuntimeBudgetMs` 必须保持 20**——它们断言的是「预算超限」那一侧，抬预算会悄悄改变断言内容。
+   ⚠️ **这份 handoff 之前给的修法（「只抬 `perAttemptTimeoutMs`，保持 `totalRuntimeBudgetMs: 20`」）是个空操作，已由实施者与评审员各自实测证伪。** `getPhaseTimeoutMs`（`src/controller/runLoop.ts:388-390`）是 `Math.min(perAttemptTimeoutMs, timeRemainingMs)`，而 `timeRemainingMs` 从预算起步、只减不增——**`min()` 本来就选预算那一侧，抬另一个操作数不改变任何会被求值的表达式**。照做的人会得到一个全绿的套件和一个原封不动的 flake。
+   实测：把 `perAttemptTimeoutMs` 抬到 1000 后跑 160 次隔离，`chosenTimeoutMs` **100% 仍是 20/19**，失败 12/160（未改动的基线是 15/160），且失败信息报的是 `"timeout of 20ms"` 而非 1000。
 
-   **旧版把 `:1655` 记成了独立的「第 7 个」，并写明「与 `BUDGET_EXHAUSTED_REASON` 家族无关」。那句话是假的**：该测试的断言就是 `expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON)`（`:1709`），旋钮也双双钉在 20（`:1663-1664`）。当初那条分类是**照测试名判的，没读测试体**——名字讲的是 cleanupStatus，形状却是这个家族的。**清单里少了一条，不是多了一条。**
+   **真实根因**：`setTimeout` 与 `elapsedMs`（由 `Date.now()` 算）读数相差 ≤1ms，而控制器又把这个 elapsed 记回**同一个**预算（`applyPhaseUsage`），于是 `hasBudgetExceeded` 的 `=== 0` 判定落在硬币两面。实测余量 **−1..+4ms**。
+   **（注意：只验证到「差 ≤1ms」这个可观测量，没验证到成因。** 两次 1ms 精度的 `Date.now()` 截断能预测同样的现象。不要把成因写成已证实的。）
+
+   **修法（已落地）**：两个旋钮**一个都不动**，改让四个 execute adapter 在 abort 后再工作约 10ms——依据是 `prompts.ts:46` 本来就承诺 adapter 一个 `partialOutcomeRecoveryWindowMs` 的 flush 窗口，而这些测试早已把它设为 10。余量结构性下限变成「该窗口减去 ≤1ms 偏移」≈ **9ms**，比 1ms 高一个数量级。
+
+   ⚠️ **反直觉但已双方实测：负载让这些测试更安全，空闲才危险。** 拥塞会推迟定时器回调、抬高 `elapsedMs`，预算侧因此获胜——基线在 `2×ncpu` 负载下 0/100 失败，空闲下 15/160 失败。**所以全套件并行跑绿是弱证据；空闲机器上的单条隔离跑才是对抗条件。**
+
+   **旧版把其中一条记成了独立的「第 7 个」，并写明「与家族无关」。那句话是假的**——该测试的断言就是 `toBe(BUDGET_EXHAUSTED_REASON)`，旋钮也双双钉在 20。当初那条分类是**照测试名判的，没读测试体**（名字讲 cleanupStatus，形状却属这个家族）。
+
+   **(A′) 第五个家族成员——已具名、已测量、刻意未修**：
+   `tests/controller/runLoop.integration.test.ts > caps phase timeout by the remaining runtime budget`。
+   同一根因，且**它本来就处在上面那个空操作配方会产生的状态**（`perAttemptTimeoutMs: 1_000` + `totalRuntimeBudgetMs: 20`）。
+   两次独立测量一致：200 次隔离跑 **0 失败**，但余量分布 `{0:1, 1:87, 2:87, 3:25}`——**约 0.5% 的跑距离变红只有 1ms**。从未观测到失败。
+   **(A) 的修法对它不适用**：plan 阶段没有 `awaitAbortedResult`（`runLoop.ts:993`），abort 之后 adapter 做什么都不计入 `elapsedMs`，**没有测试侧的杠杆**。
+   **评审员给出的真正解法，属生产改动、需单独一支分支**：把 `runPhaseWithTimeout` 里的相位耗时从 `Date.now()` 换成 `performance.now()`。单调、亚毫秒的时钟不可能相对于已触发的 `setTimeout` 读短，**这会一次性拔掉整个家族的根因**——四条、第五条，以及下面 (D) 那三处——而不是一处处糊。
 
    **(B) `tests/validation/evidence.test.ts > run-scenario CLI > records env names only and tracks descendants rooted at the spawned pid`**——全套件并行负载下 5000ms 超时，隔离连过两次。发现于债 4 基线跑，**当时源码零改动**。
 
@@ -92,7 +105,15 @@ grep -c "^- \[x\]\|^- \[ \]" docs/superpowers/plans/2026-07-29-atomic-write-path
    旧版只描述为「L1 留下的一个依赖真实文件系统计时的交错测试」，**没有名字**——而规则是「不在名单内的失败一律按新缺陷处理」，**一条没名字的成员根本没法比对**。
    已按代码定名：`:662` 是 `vi.useRealTimers()`，`:655-660` 的注释自述其排序依赖「roughly eight filesystem round trips against one」。**L1 ledger 把它记为「a theoretical flake risk under heavy CI I/O contention」——是风险登记，不是观测记录。** 保留这个区分：**它不构成把一次真实失败挥手放过的理由。**
 
-   **给实施者与评审员**：跑全套件时，**只有 (A) 的四条与 (B)** 可以出现且不构成新缺陷。**(C) 若真的失败，按新缺陷处理并立刻上报**——那将是它第一次被观测到。
+   **(D) 三处带着同一赛跑、但当前没有任何断言看得见它**（`totalRuntimeBudgetMs: 20` 在该文件共 **11** 处，只有上面 5 处在家族里）：`persists execution-recovery.json when execute is entered but returns no result before exhaustion`、`keeps changed-path stale reconciliation on OWNER_UNDECIDABLE…`、`writes an OWNER_LOST reconciliation record with transferred ownership…`。三条都不断言 `stopReason`，也不断言 `failureBoundary`（后者是预算派生的，会暴露赛跑）。**今天无害；谁给它们加一条 `stopReason` 或 `failureBoundary` 断言，它们当天就变 flaky。**
+
+   **(E) 修 (A) 时挂下的 4 条，已具名、已测量、刻意未做**（无第二轮修复波，全部带裁定记录在此）：
+   1. `runLoop.integration.test.ts` 里那句「窗口设为 0 会让这些测试**重回刀尖**」**过度声称**。实测：窗口=0 时余量 +1..+4、160 次 **0 失败**；而真正的修复前状态是余量 −1..+4、**15/160 失败**（`delay(0)` 被 Node 钳到 1ms，仍买到一个定时器回合）。**警告本身该留**（约 9ms 的缓冲确实塌成约 1ms），但准确说法是「只剩约 1ms 余量，而非约 9ms」。
+   2. 同一注释块有一处**折行错位**（`// contract that set the`），纯外观。
+   3. 该注释承诺「区间都带样本数」，但**只有一台机器的带了**；且另一台标注的 `+10..+13` 在重测后扩为 `+10..+15`。
+   4. **根治办法仍未做**：把 `runPhaseWithTimeout` 的相位耗时从 `Date.now()` 换成 `performance.now()`。**它是唯一能真正消除 (A′) 与 (D) 的手段**，其余都只是管理症状。属生产改动，需单独分支与评审。
+
+   **给实施者与评审员**：跑全套件时，**只有 (B)** 可以出现且不构成新缺陷。**(A) 的四条已修——它们若再失败，是回归，按新缺陷处理。** **(A′) 与 (C) 从未被观测到失败：任一失败都是首次观测，必须立刻上报，不得挥手放过。**
    **「像是已知 flake」不等于「是已知 flake」**：必须先捕获**完整测试名与失败块**再比对，**绝不允许 `| tail -N` 后凭印象归因**——L1b 正是这样丢过一次失败身份。**任何不在名单内的失败一律按新缺陷处理。**
    **比对时对着上表的测试名，不要对着行号**——行号会腐坏，本项目已有六处自造的失效引用案底。
 3. **L2 挂账 5 条 Minor**（可延后，见 L2 ledger）：`ObservedFileSpec.file` 未收窄成字面量联合；`scanRootFailureDetail` 落在 `renderRuns.ts` 名不副实；`DT_UNKNOWN` 回退无测试（**已如实记录而非写空壳测试充数**）；两条夹具注释瑕疵。
@@ -122,6 +143,13 @@ grep -c "^- \[x\]\|^- \[ \]" docs/superpowers/plans/2026-07-29-atomic-write-path
 - **修复波要一次派完，不要一个 finding 派一个。** 每个修复者都要重建上下文、重跑套件，上一轮分支的最终修复波因此比它全部任务加起来还贵。
 - **提取器要能大声失败。** 两个评审员各自写函数体哈希比对时，朴素版本对 `acquireOwnerTransferLock` **静默地提取出 1 行函数体**——因为它的返回类型 `Promise<{ release: () => Promise<void> }>` 里带大括号。**带「函数体过短就报错」的防护栏两次把静默的假通过变成了被抓住的错误。**
 - **定罪前先验明正身。** 评审员发现两处测试文件里的行号引用在 HEAD 上是错的，**没有直接算在本分支头上**，而是回到 merge-base 去查，证实它们在分支开始前就已经错了（L2 时期的漂移）。
+
+## flake 修复轮新增的教训（2026-07-31）
+
+- **配方要先跑一遍再写进文档。** handoff 上传了不知多少轮的「只抬 `perAttemptTimeoutMs`」是个**空操作**——`getPhaseTimeoutMs` 是 `min(perAttempt, timeRemaining)`，预算本来就是较小的那个。实施者**照做了一遍再证伪**（抬到 1000 后仍 12/160 失败、报的仍是 `20ms`），而不是读代码推理出来就交差。**照它做的人会得到一个全绿的套件和一个原封不动的 flake。**
+- **一个区间的可信度不会超过它背后的抽样数。** 本轮同一个错误犯了三次、三个人各一次：实施者用约 12 个样本报了 `+12..+14`；评审员用 160 个样本报 `+10..+13` 并据此说对方「乐观 2ms」；重测后两者都扩了（`+11..+15` / `+10..+15`），**所谓的分歧其实是两边的边缘抽样不足，不是硬件差异。** 评审员主动把这一条算在自己头上，并顺带撤回了「偏移**恰好**被 1ms 界定」——那是拿 320 个样本的尾部说了一个界。**写区间必须带样本数；没带的一律当未定。**
+- **反直觉且已双方实测：负载让计时测试更安全，空闲才危险。** 拥塞推迟定时器回调、抬高 elapsed。**所以「全套件并行跑绿」对这类问题是弱证据，空闲机器上的单条隔离跑才是对抗条件。**
+- **改了 helper 的签名就等于改了代码，不是改注释。** 实施者在无人要求的情况下对改造后的 helper 重跑了变异，理由是「本仓库 ledger 记着修复波会自带缺陷」。**这条规矩现在是自发执行的了。**
 
 ## 更早的教训（仍然有效）
 

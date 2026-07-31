@@ -11,7 +11,7 @@ import type { LoopContract } from "../../src/contract/schema.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
 import { evaluateRunBoundary } from "../../src/stop/stopController.js";
-import type { RuntimeAdapter } from "../../src/runtime/types.js";
+import type { AttemptContext, RuntimeAdapter } from "../../src/runtime/types.js";
 import type { RunState } from "../../src/state/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -103,6 +103,42 @@ async function waitForAbort(signal?: AbortSignal): Promise<void> {
   await new Promise<void>((resolve) => {
     signal.addEventListener("abort", () => resolve(), { once: true });
   });
+}
+
+// For the tests that assert the BUDGET_EXHAUSTED side of an execute timeout.
+//
+// getPhaseTimeoutMs clamps the phase timeout to min(perAttemptTimeoutMs, timeRemainingMs), so
+// once totalRuntimeBudgetMs is 20 the execute timeout IS the remaining budget — raising
+// perAttemptTimeoutMs cannot separate them. The controller then charges the measured elapsed
+// time back against that same budget, so the two land on the same millisecond and a single
+// millisecond decides the stop reason.
+//
+// The observable is that a setTimeout(N) which has already fired can be measured as N-1 ms of
+// elapsed time by Date.now(). Only that is claimed here: it was observed directly, whereas the
+// cause is not established from this repo — 1ms truncation across two Date.now() reads predicts
+// the same observable as any difference in clock source, and nothing in this codebase
+// distinguishes them. One leftover millisecond makes hasBudgetExceeded's `=== 0` false, so the
+// per-attempt-timeout reason wins instead of BUDGET_EXHAUSTED_REASON.
+//
+// Because the execute phase is awaited with awaitAbortedResult, whatever the adapter does after
+// the abort is included in the elapsed time. So the adapter spends the flush window the
+// controller's own prompt promises it after an abort — partialOutcomeRecoveryWindowMs, read
+// from the contract below rather than duplicated as a literal. The margin
+// (elapsed - remaining budget) therefore has a floor of that window minus the <=1ms skew,
+// structurally ~9ms, instead of hovering at 0. That floor is the load-bearing claim; the
+// measured bands are hardware-dependent and are recorded only as observations, with their
+// sample sizes, because a band is only as wide as the number of draws behind it: without the
+// flush, -1..+3ms over 20 samples here and -1..+4ms elsewhere; with it, +11..+15ms over 160
+// samples here and +10..+13ms elsewhere. The coupling runs the other way too, deliberately: a
+// contract that set the
+// window to 0 would put these tests back on the knife edge, and that is visible here instead of
+// buried in a constant.
+//
+// It does not weaken the assertion: the budget must still reach exactly 0 for these tests to
+// pass, and mutating the budget path still turns every one of them red.
+async function waitForAbortThenFlush(context: AttemptContext): Promise<void> {
+  await waitForAbort(context.abortSignal);
+  await delay(context.contract.executionPolicy.partialOutcomeRecoveryWindowMs);
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -1019,7 +1055,7 @@ describe("runLoop", () => {
       },
       async execute(context) {
         await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 3;\n");
-        await waitForAbort(context.abortSignal);
+        await waitForAbortThenFlush(context);
         throw new DOMException("The operation was aborted", "AbortError");
       },
       async verify() {
@@ -1284,7 +1320,7 @@ describe("runLoop", () => {
           ownerStatus: "lost",
           supersededByEpoch: null,
         }, null, 2));
-        await waitForAbort(context.abortSignal);
+        await waitForAbortThenFlush(context);
         return null;
       },
       async verify() {
@@ -1688,7 +1724,7 @@ describe("runLoop", () => {
         },
         async execute(context) {
           await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 4;\n");
-          await waitForAbort(context.abortSignal);
+          await waitForAbortThenFlush(context);
           return null;
         },
         async verify() {
@@ -1797,7 +1833,7 @@ describe("runLoop", () => {
       },
       async execute(context) {
         await writeFile(join(context.worktreePath, "secret.txt"), "partial output\n");
-        await waitForAbort(context.abortSignal);
+        await waitForAbortThenFlush(context);
         return null;
       },
       async verify() {
