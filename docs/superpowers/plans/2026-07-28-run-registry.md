@@ -421,6 +421,6 @@ export function renderScanTable(result: ScanResult): string;
 Carried forward from spec §13, listed so no one "helpfully" fixes them here:
 
 1. Reconciliation synthesis is unowned — L5.
-2. `persistTerminalState` writes into a run it no longer owns (`runLoop.ts`, the `persistTerminalState` call sites) — L5.
+2. `persistTerminalState` writes into a run it no longer owns (`runLoop.ts`, the `persistTerminalState` calls reached from the lease-loss branches `if (leaseLoss.lost !== null)` and `if (isLeaseStopError(error))` — four of the symbol's fifteen call sites, **not** all of them; see spec §13.2) — L5.
 3. `heartbeat.stop()`'s release window (`leaseHeartbeat.ts:223`, `:231`) — currently unreachable; must be re-evaluated by whichever layer adds a triggering caller. **This layer adds none.**
 4. `writeRunState` (`fileStore.ts:80-82`) and the initial `writeOwnerRecord` (`fileStore.ts:379-381` → `:367-369`) are non-atomic bare `writeFile` calls. This layer works around it with a bounded re-read (Task 2) rather than fixing it, because Global Constraint 4 forbids a discovery layer from rewriting another layer's write path.

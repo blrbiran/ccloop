@@ -105,8 +105,8 @@ different times by different code and a run can die between any two of them:
   `loop-contract.json`, then `loop-state.json`, then `events.jsonl`, plus an
   `attempts/` directory. A crash between those three lines leaves a partial set.
 - `owner-record.json` is **not** written by init. It first appears at
-  `runLoop.ts`, the `writeOwnerRecord` call just below the lease gate, after the lease gate — so a directory can hold a complete init
-  set and no owner record at all.
+  `runLoop.ts`, the `writeOwnerRecord` call just below the lease gate — so a
+  directory can hold a complete init set and no owner record at all.
 - `owner-transfer.json` is renamed into place (`fileStore.ts:536`) *before* the
   owner record (`:538`) during transfer recovery, so the two can be observed out
   of step.
@@ -481,7 +481,14 @@ Debt 4 is new, and is recorded by this layer rather than taken by it.
    disk; that is the debt showing through, not a registry defect.
 
 2. **`persistTerminalState` writes into a run it no longer owns**
-   (`src/controller/runLoop.ts`, the three `persistTerminalState` call sites).
+   (`src/controller/runLoop.ts`, the `persistTerminalState` calls reached from
+   the lease-loss branches — `if (leaseLoss.lost !== null)` and
+   `if (isLeaseStopError(error))`, two of each). "The three call sites" was
+   wrong in both halves: the symbol has fifteen call sites in that file, and the
+   subset this debt is about is four, not three. Re-derive both numbers with
+   `grep -n 'persistTerminalState' src/controller/runLoop.ts` and
+   `grep -nE 'leaseLoss\.lost !== null|isLeaseStopError\(error\)' src/controller/runLoop.ts`
+   rather than trusting either.
    *Effect here:* none. The registry adds no caller.
 
 3. **`heartbeat.stop()` release window** — a `runExclusive` begun after the queue
