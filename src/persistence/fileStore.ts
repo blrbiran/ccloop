@@ -454,8 +454,8 @@ export async function writeOwnerRecord(runDir: string, ownerRecord: OwnerRecord)
 //
 // Production must publish owner-transfer.json only through finalizePendingOwnerTransfer.
 // Reaching for this instead silently defeats L2's single-read assumption for that file:
-// OBSERVED_FILES marks owner-transfer.json `atomic: true` (observeFields.ts:45), which
-// readObservedFile turns into maxAttempts = 1 (readObservedFile.ts:103), so a torn read is
+// OBSERVED_FILES marks owner-transfer.json `atomic: true` (observeFields.ts:46), which
+// readObservedFile turns into maxAttempts = 1 (readObservedFile.ts:105), so a torn read is
 // reported unreadable(parse) with no retry behind it to absorb it.
 //
 // Do not "fix" this by making it atomic. Atomicity is not its defect — it bypasses the entire

@@ -12,7 +12,7 @@ export const OBSERVED_FILES: readonly ObservedFileSpec[] = [
     // would change L2's read behaviour, which is outside that branch's scope (spec §5).
     //
     // The retained cost is bounded and rarely paid: readObservedFile retries only on a parse
-    // failure (readObservedFile.ts:116 continues for SyntaxError alone — ENOENT becomes `absent`
+    // failure (readObservedFile.ts:118 continues for SyntaxError alone — ENOENT becomes `absent`
     // and any other error becomes unreadable(io), both without retrying), and it is capped at
     // LEASE_VERIFY_READ_ATTEMPTS = 3 attempts spaced by LEASE_VERIFY_RETRY_DELAY_MS = 50ms
     // (lease.ts:7-8). Sleeps run between attempts only, so the worst case is 2 × 50ms ≈ 100ms.
@@ -27,10 +27,11 @@ export const OBSERVED_FILES: readonly ObservedFileSpec[] = [
   },
   {
     file: "owner-record.json",
-    // Same story as loop-state.json above: owner-record.json is published by rename on both of
-    // its paths (writeOwnerRecord via writeJsonFileAtomically, and writeOwnerRecordAtomically
-    // inside the transfer transaction), and this stays false as the same defence in depth, at the
-    // same bounded cost.
+    // Same story as loop-state.json above: owner-record.json is published by rename on every path
+    // that writes it (writeOwnerRecord via writeJsonFileAtomically, plus the transfer
+    // transaction's writeOwnerRecordAtomically and finalizePendingOwnerTransfer, which both
+    // rename into place), and this stays false as the same defence in depth, at the same bounded
+    // cost.
     atomic: false,
     fields: [
       { name: "runId", type: "string" },
