@@ -15,7 +15,7 @@
 5. **「为什么长这样」先读 ledger**：`.superpowers/sdd/2026-07-29-atomic-write-paths/progress.md`——全部裁决、四条计划缺陷、两条 spec 缺陷、每一轮评审与修复都在里面。**不要重新推理。** 它已用 `git add -f` 入库。
 6. **常驻禁令**：L1 spec §12 十九条中的第 2/5/7/15/17/19 条不得弱化或删除（已变异验证，人下过指令）。
 7. 运行约定：`ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run`；**真实 Claude 调用须事先获批（付费）**。
-8. **已知 flake 仍为 7 个**（见遗留事项 2 的具名清单），本分支未新增、未修。别当新 bug 查。
+8. **已知 flake：5 条已观测 + 1 条仅理论**（见遗留事项 2 的更正后清单）。债 4 未新增、未修。**旧版说的「7 个」是错的**——一条被数了两次、一条分类为假、一条从未具名，2026-07-31 已按代码更正。别当新 bug 查，但也别拿这份清单挥手放过没核过的失败。
 9. **验证跑绝不要 `| tail -N`**；**计划不要附完整可抄代码**；**评审必须对着代码撞、不接受实施者自证**。三条铁律，全部有案底。
 
 ## 如何定位当前状态（不要照抄 commit hash）
@@ -68,16 +68,33 @@ grep -c "^- \[x\]\|^- \[ \]" docs/superpowers/plans/2026-07-29-atomic-write-path
 
 1. **push** —— 用上面的命令看实际待 push 的是哪几笔，**不要假设数量**。push 由人决定。
    - 早前记录的「`origin/main` 无人 push 却自动前进」**已澄清：是人自己 push 的，不是环境异常**。原遗留事项 10 撤销。
-2. **已知 flake 债（刻意未修）——现为 7 个**：
+2. **已知 flake 债（刻意未修）——实为 5 条已观测 + 1 条仅理论。**
 
-   - `tests/controller/runLoop.integration.test.ts` 的四个 `BUDGET_EXHAUSTED_REASON` 测试（约 `:1002 / :1258 / :1655 / :1773`）把 `perAttemptTimeoutMs` 与 `totalRuntimeBudgetMs` 都钉在 20ms 互相赛跑。**修法：只抬 `perAttemptTimeoutMs`，`totalRuntimeBudgetMs` 必须保持 20**——它们断言的是「预算超限」那一侧，抬预算会悄悄改变断言内容。
-   - L1 留下的一个依赖真实文件系统计时的交错测试。
-   - **【第 6 个】** `tests/validation/evidence.test.ts > run-scenario CLI > records env names only and tracks descendants rooted at the spawned pid`——全套件并行负载下 5000ms 超时，隔离连过两次。发现于债 4 基线跑，**当时源码零改动**。
-   - **【第 7 个】** `tests/controller/runLoop.integration.test.ts > runLoop > records retained cleanupStatus in execution recovery when cleanup fails`——偶发失败，隔离通过、其后全套件连过两次。发现于 Task 1 收口跑，**当次提交是纯注释（4 行）**，因果上不可能造成它。与 `BUDGET_EXHAUSTED_REASON` 家族无关。
+   > ⚠️ **本清单在 2026-07-31 被更正过一次，因为它自己犯了它要防的错。** 旧版声称「7 个」并附「具名清单」，实际是：**一条被数了两次**，**一条的分类是假的**，**一条从未具名**。更正依据全部来自读代码，不是推理。**下面每一条都能自己核。**
 
-   **给实施者与评审员**：在本分支跑全套件时，这三条具名失败**可以**出现且**不构成**新缺陷——
-   `runLoop.integration.test.ts > treats execute timeout with no adapter result as exhausted even if files changed in the worktree`、上面第 6 个、上面第 7 个。
-   **但「像是已知 flake」不等于「是已知 flake」**：必须先捕获**完整测试名与失败块**再比对，**绝不允许 `| tail -N` 后凭印象归因**——L1b 正是这样丢过一次失败身份。**任何不在名单内的失败一律按新缺陷处理。**
+   **(A) `BUDGET_EXHAUSTED_REASON` 家族——4 条，同一个根因**，全在 `tests/controller/runLoop.integration.test.ts`：
+
+   | `it(` 行 | 测试名 | 两个旋钮 |
+   |---|---|---|
+   | `:1002` | writes stale reconciliation conflicting evidence when execute aborts after changing files | `:1010-1011` |
+   | `:1258` | persists owner transfer artifacts and continuation eligibility after a controller-owned OWNER_LOST takeover-allowed verdict without resuming execution | `:1266-1267` |
+   | `:1655` | records retained cleanupStatus in execution recovery when cleanup fails | `:1663-1664` |
+   | `:1773` | treats execute timeout with no adapter result as exhausted even if files changed in the worktree | `:1781-1782` |
+
+   四条**逐一核实**都把 `perAttemptTimeoutMs: 20` 与 `totalRuntimeBudgetMs: 20` 同时钉死，互相赛跑。
+   **修法：只抬 `perAttemptTimeoutMs`，`totalRuntimeBudgetMs` 必须保持 20**——它们断言的是「预算超限」那一侧，抬预算会悄悄改变断言内容。
+
+   **旧版把 `:1655` 记成了独立的「第 7 个」，并写明「与 `BUDGET_EXHAUSTED_REASON` 家族无关」。那句话是假的**：该测试的断言就是 `expect(finalState.stopReason).toBe(BUDGET_EXHAUSTED_REASON)`（`:1709`），旋钮也双双钉在 20（`:1663-1664`）。当初那条分类是**照测试名判的，没读测试体**——名字讲的是 cleanupStatus，形状却是这个家族的。**清单里少了一条，不是多了一条。**
+
+   **(B) `tests/validation/evidence.test.ts > run-scenario CLI > records env names only and tracks descendants rooted at the spawned pid`**——全套件并行负载下 5000ms 超时，隔离连过两次。发现于债 4 基线跑，**当时源码零改动**。
+
+   **(C) 仅理论，从未观测到失败**：`tests/controller/leaseHeartbeat.test.ts:661 > appends one lease_lost event when a guard concludes while an affirm is already in flight`。
+   旧版只描述为「L1 留下的一个依赖真实文件系统计时的交错测试」，**没有名字**——而规则是「不在名单内的失败一律按新缺陷处理」，**一条没名字的成员根本没法比对**。
+   已按代码定名：`:662` 是 `vi.useRealTimers()`，`:655-660` 的注释自述其排序依赖「roughly eight filesystem round trips against one」。**L1 ledger 把它记为「a theoretical flake risk under heavy CI I/O contention」——是风险登记，不是观测记录。** 保留这个区分：**它不构成把一次真实失败挥手放过的理由。**
+
+   **给实施者与评审员**：跑全套件时，**只有 (A) 的四条与 (B)** 可以出现且不构成新缺陷。**(C) 若真的失败，按新缺陷处理并立刻上报**——那将是它第一次被观测到。
+   **「像是已知 flake」不等于「是已知 flake」**：必须先捕获**完整测试名与失败块**再比对，**绝不允许 `| tail -N` 后凭印象归因**——L1b 正是这样丢过一次失败身份。**任何不在名单内的失败一律按新缺陷处理。**
+   **比对时对着上表的测试名，不要对着行号**——行号会腐坏，本项目已有六处自造的失效引用案底。
 3. **L2 挂账 5 条 Minor**（可延后，见 L2 ledger）：`ObservedFileSpec.file` 未收窄成字面量联合；`scanRootFailureDetail` 落在 `renderRuns.ts` 名不副实；`DT_UNKNOWN` 回退无测试（**已如实记录而非写空壳测试充数**）；两条夹具注释瑕疵。
 4. **`.superpowers/sdd/` 是跨会话共用的扁平目录**，且是 gitignored——提交自己子目录的 ledger 要用 `git add -f`。**刻意跳过** `review-*.diff` 与 briefs（都可重建）。同级目录属于更早的会话，**不要整删**。
 5. **本分支范围外、但已查实、留给后续层的两笔**（都属 L3 / L5 的归属域）：
