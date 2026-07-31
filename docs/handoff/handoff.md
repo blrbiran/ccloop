@@ -24,7 +24,14 @@ cd .claude/worktrees/perfnow-probe && ECC_GATEGUARD=off DISABLE_OMC=1 npm test -
 
 1. ✅ **修复波 2 已于 2026-08-01 做完**（六条，第三轮评审五条 + 复核时撞出的第六条，全部是实施者自己带进去的）。留档：
    - 「the three `persistTerminalState` call sites」是**指错的符号锚点**——该符号在 `runLoop.ts` 有 **15** 个调用点，按原意（丢租约后仍写终态）收窄是 **4** 个，`three` 两头都不对。已改成 `if (leaseLoss.lost !== null)` / `if (isLeaseStopError(error))` 两个可 grep 的分支锚点，spec 与同名 plan 各一处。**错的符号锚点比陈旧行号更糟，因为它看起来是永久的。**
-   - **引用清扫不完整，而 `9e554ce` 的提交信息声称「十处全部改完」**。已按「在 merge-base `07180a7` 上本来是否有效」逐条判定全部 44 条 tracked 引用：**15 条**在分支起点有效、被本分支顶掉 → 已改成符号锚点；**2 条**位移为 0 未被顶掉；**27 条**在分支起点就已经错（L1/L1b/L2 时期漂移，动它们违反 Rule 3）→ **未动**，判定依据见修复波 2 的报告。
+   - **引用清扫不完整，而 `9e554ce` 的提交信息声称「十处全部改完」**。已按「在 merge-base `07180a7` 上本来是否有效」逐条判定 `docs/` + `src/` + `tests/` 范围内全部 44 条 tracked 引用：**15 条**在分支起点有效、被本分支顶掉 → 已改成符号锚点；**2 条**位移为 0 未被顶掉；**27 条**在分支起点就已经错（L1/L1b/L2 时期漂移，动它们违反 Rule 3）→ **未动**，判定依据见修复波 2 的报告。
+     **范围声明（修复波 3 补，此前从未写出来，而结论却被说成对「tracked」穷尽）**：`.superpowers/sdd/` 里另有 **23 条** `runLoop.ts:NNN` 引用，git 确实 track 它们（ledger 用 `git add -f` 入库）。**它们按不可改写的历史过程记录处理，刻意一条未动**——与下方第 8 项对 `9e554ce` 提交信息的处理同一立场：就地勘误，不改原件。修复波 3 已逐条回 `07180a7` 复核这 23 条（另有 2 处裸续接 `:1066` `:1098` 不计入 23）：**10 条 + 那 2 处裸续接 = 12 处**在分支起点有效且被本分支顶掉——`owner-transfer-contention/final-fix-wave-report.md` 的 `:910`、同目录 `progress.md` 的 `:774` `:788` `:1049`、`atomic-write-paths/progress.md` 的 `:821` `:862` `:864`×2 `:865`×2 与那 2 处裸续接；其余 **13 条**在分支起点就已经错。**所以「全部 44 条」是 `docs/`+`src/`+`tests/` 范围内的穷尽，不是仓库范围内的穷尽。**
+
+     ```bash
+     git grep -o -E 'runLoop\.ts:[0-9]+' -- '.superpowers/sdd/' | wc -l   # 期望 23
+     ```
+
+     **注意 44 是「引用」数、不是 grep 出现次数**：同一条命令改指 `docs src tests`，在 `07180a7` 上数出 53、在本分支 HEAD 上数出 29（一条 `:864-866` 或一串裸续接算一条引用、多次出现）。修复波 3 复核的是 `.superpowers/` 那 23 条，**没有重数 44 / 15 / 2 / 27**——要用这四个数先自己重数。
    - `runLoop.ts` 超时分支注释里「本文件测试套大多是这么配置的」是没核的数量声明，实测 **10/49 ≈ 20%**（复现了评审员的数）。已改成「少数」并附再推导命令。
    - 「没有任何测试在任一方向钉住 `failureBoundary`」**为假**——`runLoop.integration.test.ts` 在 `07180a7` 上就有一条断言 `runtime_exhausted`。已改成「没有测试把它钉为配额下限的后果」。**注意该句不在 `runLoop.ts` 的注释里**（评审员写成「同一注释」），实际在 `runLoop.integration.test.ts` 的测试上方注释里。
    - `run-registry-design.md` 那处 perl 替换留下的重复短语（"after the lease gate" 说了两遍）已去重。
