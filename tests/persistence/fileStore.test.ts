@@ -1879,7 +1879,7 @@ describe("writeBoundaryArtifacts publishes each of its two files by replacing th
   // preserveSuccessfulReconciliationIfNeeded hands back the record it was passed. The
   // eligibleForContinuation: true early return short-circuits to that same value, so the two
   // paths agree here and neither is load-bearing on its own: deleting that early return from
-  // preserveSuccessfulReconciliationIfNeeded leaves all 51 tests in this file green.
+  // preserveSuccessfulReconciliationIfNeeded leaves all 53 tests in this file green.
   const reconciliationRecord: ReconciliationRecord = {
     staleSuspicionBasis: ["continuity evidence missing"],
     staleConfirmed: true,
