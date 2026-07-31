@@ -794,3 +794,361 @@ as a standing conflict between CLAUDE.md Rule 6 and this branch's review standar
 not for me to resolve.**
 
 Task 4: complete (commits f0566fa..aebe942, review clean, 0 Critical, 0 Important, no fix round)
+
+=== TASK 5 IMPLEMENTED (commits c610812 + 8db732b) — status DONE_WITH_CONCERNS ===
+Report: `.superpowers/sdd/2026-07-29-atomic-write-paths/task-5-report.md`
+Claimed: 29 files / 441 tests — exactly the baseline, as a comment-only task must be. typecheck 0,
+build 0, `zeroWrite` 2/2 as a REAL run (spec §7.2 R6 satisfied by execution, not by argument).
+
+CONTROLLER'S OWN VERIFICATION (run, not read from the report):
+- `git diff 6377bf3..8db732b -- src/registry/` is **100% comment lines** — 15 insertions in
+  `observeFields.ts`, 4 in `readObservedFile.ts`, zero deletions of code.
+- Both `atomic: false` are still false (`observeFields.ts:19`, `:34`); `:45`'s `atomic: true` for
+  `owner-transfer.json` is untouched. The one flag that must not flip did not flip.
+
+FIVE CONCERNS, all adjudicated by the controller:
+
+1. **The BRIEF contradicts the task, and the fault is the controller's.** `task-5-brief.md:6` says
+   「無測試文件改動」 and its `git add` lists 3 files — both stale, because the controller folded
+   Task 4's deferred minor (the false test comment) into this task AFTER the brief was generated.
+   The implementer correctly followed the task message over the brief. **Recorded, brief not
+   edited**: the ledger is the record, and rewriting a brief after dispatch hides the drift.
+2. **It reproduced BOTH mutations itself.** Deleting the `eligibleForContinuation` early return →
+   51/51 still pass, so the old comment's mechanism is confirmed vacuous by its own run rather than
+   by citing the reviewer. It then ran the CONVERSE (publish the persisted record instead of the
+   passed one) → exactly one failure, at the guard line `:1887`, with the inode assertion above it
+   still passing. That second leg is what makes the new comment's claim — guard and inode check are
+   non-redundant — evidenced rather than merely better-sounding.
+3. **IT FELL INTO THE STALE-LINE-NUMBER TRAP INSIDE THE COMMIT THAT WAS FIXING FALSE COMMENTS.**
+   Its own 11 inserted lines moved `atomic: true` from `:30` to `:45` and `readObservedFile.ts`
+   `:101/:114` to `:103/:116`, and its first draft had copied the pre-edit numbers out of the spec.
+   Caught by mechanically printing every cited line; fixed in `8db732b`.
+   **RULE EXTENSION ADOPTED, proposed by the implementer**: this branch's "verify before citing"
+   rule covered READING and not WRITING. **Re-verify every line citation AFTER all edits land —
+   your own edits move the lines you cite.**
+4. Two commits rather than one. **Ruling: leave them.** The global rule prefers new commits over
+   amending, and the split records what actually happened.
+5. **A THIRD stale comment of the same class, deliberately left and flagged rather than silently
+   fixed**: `readObservedFile.ts:101-102` ("an atomic file (written by rename) is read once") still
+   implies the `atomic: false` files are not rename-written — the same falsehood as the `:3`
+   sentence, weaker form. Spec §5, the brief and the dispatch all enumerate exactly two sites, so
+   it invoked Rule 3 and asked.
+   **CONTROLLER'S RULING: FIX IT, and the flag-don't-widen instinct was still correct.** Rule 3
+   protects against improving UNRELATED adjacent code; this is the same false proposition, in the
+   same file, about the same flag, falsified by the same commits. Leaving a known-false comment
+   standing in the file this branch exists to change is worse than a one-line widening — and it is
+   the exact defect class that produced this branch's most expensive findings. Dispatched back to
+   the same implementer, with instructions to key the sentence on the FLAG rather than on the fact
+   of rename-writing, to touch no logic, and to re-read the two neighbouring comments it just wrote
+   so three comments about one flag do not start drifting apart.
+
+§9 checked line by line by the implementer, including the four transfer symbols hashed per-function
+across `main` vs `HEAD` **with an extraction-failure guard so an empty match cannot silently
+"pass"** — that guard is the kind of thing this branch has learned to require.
+Independent review still pending; none of the above is accepted as final until it runs.
+
+=== TASK 5, RULING FOLLOW-UP (commit 7a3490d) — status DONE_WITH_CONCERNS ===
+441 tests (baseline exact), zeroWrite 2/2, typecheck 0.
+Controller re-verified: `git diff 6377bf3..7a3490d -- src/registry/` has **zero non-comment changed
+lines** (checked mechanically by filtering the diff for added/removed lines that are not `//` and
+not blank — the filter returned nothing). Both `atomic: false` unchanged.
+
+**THE IMPLEMENTER CAUGHT AN ERROR IN THE CONTROLLER'S OWN RULING. It is right and I was wrong.**
+My instruction said to write that "every file it names is now rename-written". **That is false for
+`OBSERVED_FILES` as a whole**: the third entry, `owner-transfer.json`, is flagged `atomic: true`
+and still has a non-atomic writer — `writeOwnerTransferRecord`, the very M-1 function this same
+task was documenting. Written literally, my ruling would have produced a SECOND false comment in
+the commit fixing false comments. It scoped the claim to the two `atomic: false` files instead,
+matching the scoping the `:3` header already used, and verified the enumeration from code.
+Recording this at full strength: the controller has now been the source of a false claim twice on
+this branch (the `vi.mock` premise in Task 1, this one), and both times a subagent caught it.
+**The instruction to verify rather than accept applies to instructions from me too, and it worked.**
+
+TWO MORE SELF-INFLICTED DRIFTS, both found by the rule adopted one round earlier:
+- Its own earlier comment said `owner-record.json` is "published by rename on **both** of its
+  paths" and named two. **There are three** (`writeOwnerRecord:448`, `finalizePendingOwnerTransfer:619`,
+  `writeOwnerRecordAtomically:717`). Fixed by not hardcoding a count.
+  **NEW LESSON, and it generalises past this branch: hardcoded QUANTITIES ("both", "the two") are
+  the same rot class as hardcoded line numbers, but stealthier — a wrong line number shows up the
+  moment you `sed` it; a wrong count only surfaces if someone re-enumerates.**
+- The line-citation rule fired again immediately: inserting 4 lines at `:101` and 1 in
+  `observeFields.ts` pushed lines cited by its OTHER comments (`observeFields.ts:45`→`:46`,
+  `readObservedFile.ts:103`→`:105`, `:116`→`:118`). All fixed, 7/7 citations re-resolved.
+  **Running total: 6 stale citations across two rounds, every one self-inflicted.**
+
+IMPLEMENTER'S PROPOSED ESCALATION, recorded for L3 and NOT acted on here: given that recurrence
+rate, cross-file line citations in this repo cost more than they return — nothing compiles, tests
+or lints them, and the only guard is a human re-running a `sed` loop. Its new `:101` comment uses
+ZERO line numbers (it references the flag name and "the file header") and it argues no precision
+was lost. It deliberately did NOT bulk-convert the existing citations — outside the ruling's scope
+and a Rule 3 violation. **Correct scope discipline; the proposal is for the next layer to decide.**
+
+TASK 5 REVIEW DISPATCHED (`6377bf3..7a3490d`, 3 commits) — fresh reviewer, opus. Framing: this task
+changed no logic, so a comment's only failure mode is being false, misleading or stale, and
+fact-checking every assertion against the code IS the review. It was given the specific claims with
+teeth (the 100ms bound and its 2×50ms-vs-3×50ms question, zero production callers, the writer
+enumerations, every line citation at HEAD, the rewritten test comment's mechanism, and whether the
+`:101` rescope stayed accurate without going vague), and told the stale brief is known and not a
+finding.
+
+=== TASK 5 CODE REVIEW (independent, fresh, opus) — Spec ✅ / approved, 0 Critical, 0 Important ===
+Framing that paid off: a comment's only failure mode is being false, so fact-checking every
+assertion IS the review. Eleven claims checked, every one re-derived, none accepted from the report.
+
+VERIFIED BY EXECUTION: suite 29 files / 441 tests — EXACTLY the baseline, as a comment-only task
+must land; typecheck 0; build 0; `zeroWrite` 2/2 as a real run (§7.2 R6 satisfied by running, not
+arguing). `src/registry/` diff across the WHOLE BRANCH (`ee001ba..7a3490d`), filtered for
+non-comment lines, is EMPTY. `git diff -- tests/ | grep -c writeOwnerTransferRecord` = 0, so §6's
+"call sites unchanged" holds.
+
+**The four transaction symbols: the reviewer did it its own way and its guard earned its keep.**
+Its first extractor anchored on the first `{` after the signature and silently produced a 1-LINE
+body for `acquireOwnerTransferLock`, because that function's return type is
+`Promise<{ release: () => Promise<void> }>`. **The short-body guard caught it instead of hashing an
+empty match and reporting IDENTICAL.** After fixing the anchor: all four identical (21/6/43/16
+lines), all 8 `OWNER_*_FILE` constants identical. This is the second time on this branch that a
+fail-loud guard turned a silent false pass into a caught error.
+
+FACT-CHECKS THAT PASSED, each re-derived:
+- The 100ms bound: `LEASE_VERIFY_READ_ATTEMPTS = 3` / `LEASE_VERIFY_RETRY_DELAY_MS = 50`
+  (`lease.ts:7-8`, citation exact), and the sleep at `readObservedFile.ts:124` is guarded by
+  `if (attempt < maxAttempts)`, so 3 attempts yield **2** sleeps. **Worst case really is 2 × 50ms,
+  not 3 × 50ms — the comment is right**, and it agrees with the L2 spec §8.1's own "+100 ms".
+- Retry trigger clauses all three correct: ENOENT → `absent` (`:114`), non-SyntaxError →
+  `unreadable(io)` (`:118`), only `SyntaxError` falls through.
+- Zero production callers for `writeOwnerTransferRecord` — grepped independently; only the three
+  test files the comment names, zero `src/` importers.
+- `loop-state.json` exactly two writers (`:77`, `:82`); `owner-record.json` three rename publish
+  sites (`:448`, `:716-717`, `:618-619`) and zero direct writers. The implementer's self-correction
+  from "both" to three was right.
+- **Every line citation re-resolved at HEAD: ZERO residual stale citations.** And the reviewer
+  noticed something worth keeping: the implementer did NOT propagate the stale numbers its own
+  inputs handed it — the brief and spec §6 both say `observeFields.ts:30`, and it shipped `:46`.
+- Both mutations reconstructed independently. A (delete the early return) → 51/51 green, so the old
+  mechanism was indeed vacuous and the count of 51 is exact. B (publish the persisted record) → 1
+  failed at `:1893` with the inode assertion at `:1883` still passing, so the content guard is the
+  ONLY thing that catches it. The rewritten comment names a genuinely load-bearing mechanism.
+- The `:101` rescope the implementer made against the controller's wrong instruction is correctly
+  scoped AND did not go vague — `:104` still states the operative rule.
+
+TWO MINORS — recorded here, NOT entered into a fix loop, and the final whole-branch review is
+pointed at them to triage before merge:
+- **Minor 1 (introduced by this task, and it is an internal contradiction):**
+  `readObservedFile.ts:104` says "retry a parse failure up to LEASE_VERIFY_READ_ATTEMPTS times", but
+  that constant counts ATTEMPTS — 3 attempts is 2 retries. Read literally it says three retries, and
+  a maintainer budgeting scan latency from it computes 150ms. `observeFields.ts:17-18`, describing
+  the SAME code, says 2 × 50ms ≈ 100ms, and the code agrees with `observeFields`. So it is also the
+  one place the three `atomic`-flag comments disagree. The line it replaced gave no count at all.
+  One word fixes it.
+- **Minor 2 (pointer to a section this branch falsified):** the new header ends by citing L2 design
+  spec §8.1, which is titled "Torn reads are real, for two of the three files" and contains a table
+  asserting `writeRunState` and `writeOwnerRecord` are bare `writeFile`, "Atomic? no". **This branch
+  made both rename-published, so the cited section now contradicts the comment citing it.**
+  Mitigated by the two sentences before the pointer, and updating that spec was outside this task's
+  scope — but it is a live stale assertion one hop from a corrected comment.
+
+WEAK, RECORDED FOR COMPLETENESS RATHER THAN PRESSED (reviewer's own framing): the header's "every
+writer of those files now publishes by rename" is unqualified, while four TEST files write
+`loop-state.json` with bare `writeFile` to build fixtures. The natural reading of a `src/` header is
+"every writer in the product", and `observeFields.ts:9` is precise.
+
+PRE-EXISTING STALE CITATIONS, DATED AND EXONERATED — this is the right way to book one:
+`readObservedFile.test.ts:97` cites `fileStore.ts:535-536` and `zeroWrite.test.ts:6,92` cite
+`:549-563`; at HEAD those live at `:617/:619` and `:630-645`. The reviewer checked `ee001ba` and
+found they were ALREADY wrong at the merge-base (`:595`/`:617`) — L2-era drift, ~70 lines, this
+branch's +13 only widened it. **Not this branch's doing, and it proved that rather than assuming it.**
+
+⚠️ CANNOT VERIFY, carried forward: crash durability (unclaimed, zero `fsync`); real concurrent torn
+reads (the redundancy of the retry rests on static enumeration, not an observed race); and one
+full-suite run under mutation A showed the known `BUDGET_EXHAUSTED_REASON` flake — full name
+captured first and matched to 遗留事项 2 line 75, did not reproduce, but one run cannot prove it is
+not mutation-sensitive. The comment's actual claim ("all 51 tests in this file") was verified
+directly and is unaffected.
+
+Task 5: complete (commits 6377bf3..7a3490d, review clean, 0 Critical, 0 Important, 2 minors deferred)
+
+ALL FIVE TASKS COMPLETE. Whole-branch review next.
+
+=== WHOLE-BRANCH REVIEW (opus, mutation-driven, sandboxed with its own git init + initial commit) ===
+Verdict: **ready with fixes.** 2 Important, 3 Minor. Eleven mutations, each a full-suite run.
+
+**IT FOUND THE THING TASK REVIEWS STRUCTURALLY COULD NOT — and it is this branch's OWN declared
+core risk, shipped unguarded.**
+
+**Important 1 — the wiring to the unique temp-name generator is not pinned by any test.**
+Spec §4.1 calls process-unique temp names 「本设计的核心风险」: `writeRunState` has NO lock, so a
+SHARED FIXED temp name would MANUFACTURE a new torn-write source (A stages → B overwrites the
+stage → A renames and publishes B's bytes → B renames and gets ENOENT). All three uniqueness tests
+(`:1516`, `:1528`, `:1539`) call the exported `buildAtomicTempPath` DIRECTLY. **Nothing observes the
+temp path the production write path actually uses.** Mutation M8 — replace `fileStore.ts:420` with a
+fixed per-target name — **passes the entire suite, 441/441, twice.** Every inode test still passes
+(rename is still used), both symlink tests pass, both residue tests pass, all byte tests pass, and
+the three generator unit tests pass because the generator itself is untouched.
+This is the handoff's own lesson — **「加一个成分和加它的覆盖是一件事，不是两件事」** — reappearing
+one level up: Task 1 added the generator WITH its coverage, and this branch made the property live
+at five sites WITHOUT pinning the wiring.
+Scope note the reviewer made rather than ducking: the helper landed in `4bcde7b` (already on main),
+but at `ee001ba` it had ZERO callers — dead code. **This branch is what made the property live, so
+it is this branch's to pin.**
+The third M8 run showed one failure — `runLoop.integration.test.ts > ... OWNER_LOST takeover-allowed
+verdict without resuming execution`, starting at `:1258`, one of the four named
+`BUDGET_EXHAUSTED_REASON` flakes, with that family's exact 20ms race signature. **Captured in full
+and matched to the list before being classified. Not a kill.**
+
+**Important 2 — this branch falsified L2's design spec and then pointed a NEW comment at it.**
+`readObservedFile.ts:5` says "every writer of those files now publishes by rename" and cites
+`2026-07-28-run-registry-design.md` §8.1 — a section whose writer-by-writer table (`:267-280`) still
+asserts `writeOwnerRecord` and `writeRunState` are bare `writeFile`, **"Atomic? no"**, repeated at
+`:476`. Both false as of this branch. The pointer sends the reader straight into the contradiction,
+and L3 is the next consumer. That document already has an amendment convention in use.
+(The code comment itself is CORRECT — the reviewer verified the `owner-record.json` writer
+enumeration is complete.)
+
+**Minor 1 — "cleanup must not replace the in-flight error" has no regression guard.** M9
+(substitute `safeUnlink`, the exact thing spec §3.1 item 3 forbids) → **441/441 green.** The R2
+failure test injects `EISDIR` on `rename`, and in that scenario `unlink` SUCCEEDS, so `safeUnlink`
+never rethrows. Proven once by hand in Task 1's review; nothing encodes it.
+**Minor 2** — crash residue (`SIGKILL` between write and rename) is never reclaimed. Reviewer found
+NO functional breakage — unbounded litter, not a fault. Missing from spec §10.
+**Minor 3** — unstated behaviour change: these five paths are no longer written THROUGH a symlink.
+
+TRIAGE OF THE 7 CARRIED ITEMS: #1 must-fix (off-by-one, branch-introduced, contradicts a sibling
+comment 30 lines away); #2 must-fix (= Important 2); #3 ship (content pinned by the sibling byte
+test; folding it in would blur which property failed); #4 ship (Rule 11 — 48 `mkdtemp` and 0 `rm`
+in that file; cleaning only the new 12 forks the convention silently); #5 **no residual — all 8
+citations in the branch's new text re-resolved at HEAD, plus the hardcoded "51 tests" verified
+against an actual count of 51**; #6 agree it ships unfixed BUT **promote the correction from this
+ledger into `docs/handoff/handoff.md`**, or the next layer reads the false comment and never the
+refutation; #7 ship (inside the byte-identical protected region — touching it would break the
+branch's hardest constraint for a latent bug needing two concurrent failures).
+
+**THE CROSS-TASK QUESTION, ANSWERED: exactly one surviving mutation, M8.** Everything else died
+CLEANLY — one distinct test per call site (M1-M5), no test doing double duty, no overlap masking a
+gap. M6 (helper writes target directly) killed 5. M7 (helper branches on existence) killed the 3
+inode tests. M11 (`atomic: false` → `true`) killed 4 across 2 files. M10 (`unlink` + `writeFile`,
+no rename) died only incidentally — consistent with §7.1a's own admission that neither criterion
+kills that shape.
+
+CLEAN, verified by execution and stated plainly: transfer region byte-identical (fail-loud extractor
+requiring one match, a closing `^}`, and a minimum body length — `acquireOwnerTransferLock` came out
+at 43 lines, so the 1-line-body trap did not fire), plus two more helpers and all 8 constants;
+`src/registry/` comments-only; serialization identical at all five paths; **no consumer trips over
+the temp files** (not in `RUN_MARKER_FILES`; `scanDir` never lists a recognized run's entries;
+`ensureFreshRunDir` does not enumerate top-level entries; no `fs.watch`, no `createReadStream`, no
+persistent `FileHandle`, no `.ino` dependence anywhere in `src/`); no over-claims anywhere.
+
+ONE FIX WAVE DISPATCHED (all five findings in a single dispatch — per-finding fixers each rebuild
+context and re-run suites, which cost the previous branch more than all its tasks combined).
+It was told: prove each new test kills its target and paste its own output, never cite the dispatch
+as evidence; and for Minor 1, **if the scenario cannot be built deterministically with real
+filesystem means, say so and stop rather than ship a weaker assertion that passes for the wrong
+reason** — a previous implementer made exactly that call on this branch and was right.
+
+=== WHOLE-BRANCH FIX WAVE (commits 8bd689b, 02e1ccd, 1c96c8d, 99c4507) + SCOPED RE-REVIEW ===
+Re-review verdict: **all five findings ADDRESSED. Ready to merge.** Same reviewer, resumed —
+deliberately, because it is the one who found M8 survives, so its own mutation had to be the one
+that now kills it. Baseline at `99c4507`: 443/443, typecheck 0, build 0.
+
+- **Important 1 ADDRESSED.** Reviewer re-applied ITS OWN M8 (fixed per-target temp name at
+  `fileStore.ts:420`) at `99c4507`: **2 failed | 441 passed (443)**, both failures the new tests.
+  The mutation that passed the entire suite twice last round now dies.
+  **The fix is TEST-ONLY and that is the correct shape** — the finding was a guard gap, not a
+  defect; production code already consumed the generator, so a `src/` change would have been the
+  wrong response. Controller flagged the test-only shape to the reviewer rather than assuming it
+  was fine, and the reviewer ruled on it explicitly.
+  Not vacuous: the prediction rule is EXECUTED
+  (`expect(predictNextTempPath(buildAtomicTempPath(scratch))).toBe(buildAtomicTempPath(scratch))`),
+  so a change to the name shape goes red at that line instead of silently mis-planting. Names
+  claim only what is proved; the block comment frames the fixed name as motivation, not as a claim
+  that multi-process safety is proven.
+  **LATENT DEPENDENCY, recorded for the next layer**: the fixture relies on within-file sequential
+  execution (no `it.concurrent`, no `sequence.concurrent` in `vitest.config.ts`) so the module
+  counter cannot be raced. **Switching vitest to concurrent-within-file would silently break it —
+  a config change away, not a present risk.**
+- **Important 2 ADDRESSED.** The L2 amendment reaches BOTH targets (the reviewer re-derived the
+  displaced line: its original `:476` is now `:499`, moved by the +23 lines above it), follows that
+  document's existing `(a)`–`(i)` + `*Amended (x)*` convention exactly, and **`--numstat` is
+  `31 0` — thirty-one insertions, ZERO deletions**, so the original "Atomic? no" rows stand as the
+  recorded reason the ruling exists. History annotated, not rewritten.
+  The reviewer re-derived the `fsync` claim itself rather than accepting it: zero calls repo-wide,
+  four comment mentions.
+- **Finding 3 ADDRESSED.** Arithmetic re-checked against the code: loop is `attempt <= maxAttempts`
+  with the sleep guarded by `attempt < maxAttempts` → **3 reads, 2 sleeps, 2 retries.** The new
+  clause agrees with `observeFields.ts:17-18`. The contradiction between the two sibling comments
+  is gone.
+- **Minor 1 ADDRESSED.** Reviewer re-applied its own M9 (`safeUnlink` in the catch): **2 failed**,
+  with `EPERM` visibly replacing `EISDIR` — the exact masking spec §3.1 item 3 forbids. This
+  mutation passed 441/441 before the fix wave.
+- **Minor 2 / 3 ADDRESSED and CORRECTLY SCOPED** — the reviewer checked they were not inflated
+  into defects. §10 item 4 says 「无界垃圾，不是故障」 with an explicit 「不要把它上报成缺陷」, which
+  is the reviewer's own finding rather than an escalation of it; item 5 states the symlink change
+  「不上调为风险」. It re-verified item 5's 「已核实」 by grep rather than trusting it — this
+  project's own first lesson, applied to the document recording that lesson.
+
+RULINGS ON THE FIX-WAVE IMPLEMENTER'S THREE DISCLOSURES:
+1. **Coupled fixtures: ACCEPTABLE, and the coupling is narrower than the implementer feared.** The
+   reviewer ran the mutations independently — under M9 the wiring is intact and the cleanup
+   mutation is still caught; under M8 the cleanup code is intact and the wiring mutation is still
+   caught. **Each property IS independently pinned.** Only the test NAME that goes red is coupled,
+   and the failure messages are disjoint and unambiguous. Narrow regression in review ergonomics,
+   not in coverage.
+   **A verified decoupling exists and is recorded because it is expensive to rediscover**: plant a
+   `0o444` regular file instead of a directory — `writeFile` → `EACCES` but `unlink` **succeeds**
+   (unlink depends on the DIRECTORY's write bit, not the file's), so cleanup succeeds and that test
+   dies under M8 alone. The reviewer measured this and explicitly did NOT ask for it.
+2. **No executable guard on the L2 amendment: accepted.** A doc-lint for one amendment would be the
+   speculative abstraction Rule 2 forbids. What is durable is the convention: **L2's `(a)`–`(j)`
+   index is now that document's de facto drift ledger, and `(j)` is the first entry whose cause is
+   a LATER BRANCH CHANGING THE CODE rather than a defect in the document.** If L3 falsifies anything
+   else there, the form is `(k)`, annotated in place.
+3. **Deviation from "one word": accepted, revert declined.** "One word" was the controller's
+   estimate of the minimal fix, not a scope constraint. `i.e. 2 retries` names the number that must
+   match `observeFields.ts:17-18`; reverting would restore the ambiguity that produced the defect.
+
+ONE NEW MINOR FOUND IN THE FIX DIFF — self-inflicted, and exactly the class this branch polices:
+`fileStore.test.ts:1882` still says "all **51** tests in this file green". True at `7a3490d`
+(reviewer measured 51 last round); **the fix wave added 2 tests to that same file, so it is 53.**
+A hardcoded quantity falsified by the branch's own edit — deferred item 5's class, one round later,
+in the branch whose subject is comments that stopped being true. Substance holds; only the number
+is stale. Dispatched to the fix-wave implementer with instructions to COUNT IT ITSELF rather than
+take 53 from the dispatch.
+
+DECIDED, not deferred: `final-fix-report.md` is NOT force-added. Consistent with this branch's
+convention — only `progress.md` is force-added; task reports and review diffs are rebuildable and
+deliberately skipped. The implementer correctly treated force-adding into a gitignored tree as the
+controller's call.
+
+=== RESIDUAL MINOR CLOSED (commit 818909a) + CLAIM RE-EARNED ===
+The stale `51` → `53` fix landed alone. The implementer counted it TWO independent ways before
+editing and took neither from the dispatch: runner (`Tests 53 passed (53)`) and a static count of
+`it(` declarations (53).
+
+**It then flagged that the number was fixed but the CLAIM was not re-measured** — the comment
+asserts "deleting the early return leaves all 53 tests green" on the strength of a measurement
+taken at 51 plus a read-only argument. Controller took that: **re-earn, do not inherit.** It
+re-ran the mutation (deleted the `eligibleForContinuation` early return, `fileStore.ts:283-285`)
+at 53 tests: **53/53 green, exit 0.** Revert confirmed by grep AND by
+`git diff -- src/persistence/fileStore.ts` being empty. No edit was needed and none was made.
+This is the branch's own lesson applied one last time, by the implementer to itself, unprompted.
+
+Scope honestly stated by it: the mutation was run at FILE level (which is exactly what the comment
+claims); whether some other file's test catches that early return is unmeasured, and the comment
+does not claim otherwise.
+
+DEFERRED, recorded, deliberately NOT fixed: several other comments and the spec carry measured
+quantities (`441/443`, `48/48`, the 40-run note). **All currently true, nothing enforces them.**
+Fixing them now would be speculative churn. What matters is the pattern: **this branch produced
+TWO independent instances of a hardcoded quantity falsified by its own later edit, which makes it
+a recurring failure mode rather than an accident.** Promoted to handoff 遗留事项 7 for L3.
+
+=== BRANCH COMPLETE — 10 tasks-worth of work, 6 reviews, 3 fix rounds, 0 Critical throughout ===
+Final: 29 files / 443 tests, typecheck 0, build 0. Five call sites atomic. Transfer path
+byte-identical. `src/registry/` comments-only. Whole-branch review: **ready to merge.**
+
+NOT DONE, DELIBERATELY, AND REQUIRING THE HUMAN:
+- **push and merge** — both are the human's call and neither has been done.
+- **workspace NOT deleted.** The skill says to delete the plan workspace once the final review is
+  clean, but `CLAUDE.md`'s data-safety rule outranks it: the task reports and review diffs in this
+  directory have not been seen by the human yet, and `progress.md` is the only force-added file.
+  Deleting now would destroy the reports before anyone read them. **Ask first.**
+- **worktree NOT removed.** Use `ExitWorktree`, not `git worktree remove`, and only after merge.
