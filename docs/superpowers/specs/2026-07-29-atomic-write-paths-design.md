@@ -279,3 +279,19 @@ prior run data`），不会静默失效——评审员实测确认了这一点�
 1. **跨文件不一致仍在**：`boundary-analysis.json` 与 `reconciliation-record.json` 之间、`owner-transfer.json` 与 `owner-record.json` 之间。属于债 1，归 L3。
 2. **L2 的有界重读变成冗余**：故意保留为纵深防御，见 §5。
 3. **`writeOwnerTransferRecord` 仍可被误用**：只加了注释，没有机制强制。真正的防线是 L3 的评审。
+4. **崩溃残留的临时文件没有任何机制会清理**：`SIGKILL` 落在 `writeFile(temp)` 与 `rename` 之间时，
+   `.{basename}.{pid}.{startTime}.{seq}.tmp` 会**永久**留在 run 目录里。两条现存清理路径都够不着它，
+   已逐一核对代码：`ensureFreshRunDir` 只对三个具名文件（`loop-contract.json`、`loop-state.json`、
+   `events.jsonl`）加 `attempts/`、`worktrees/` 两个目录的条目做阻塞；
+   `recoverInterruptedOwnerTransfer` 经 `cleanupOwnerTransferStagingWithoutMarker` 只清
+   `getOwnerTransferPaths` 的**四个固定名**——而临时名按 §4.1 的要求本就必须不在那四个之内。
+
+   **定性要准确：这是无界垃圾，不是故障。** 未发现任何功能性破坏：临时名不在 `RUN_MARKER_FILES`
+   （`scanRuns.ts:30-36`，五个具名文件）里，所以它不会把一个目录误认成 run；L2 只读
+   `OBSERVED_FILES` 的三个文件，不会读到它；`ensureFreshRunDir` 也不会因它而拒绝初始化。
+   代价只是崩溃次数足够多之后 run 目录内文件数无上限增长。**不要把它上报成缺陷。** 清理归属未分配。
+5. **一处未在 §2 声明的行为变更：这五条路径不再「穿过」符号链接写**。`writeFile` 跟随符号链接、
+   写它指向的目标；`rename` 替换目录项，链接本身随之消失。这正是 §7.1a 拿来当判据的那个差异，
+   分支内有两条测试正面断言它。§2 的「只改怎么写」框架没有提到这一点，而对任何把这些路径做成
+   符号链接的部署来说，它是可观测的行为变更。**在此记录，不上调为风险**：仓库内没有任何生产代码
+   创建符号链接（已核实），也没有证据表明有任何东西给这五个文件做链接。
