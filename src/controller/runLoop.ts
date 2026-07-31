@@ -424,9 +424,20 @@ async function runPhaseWithTimeout<T>(
       // derives timeoutMs from min(perAttemptTimeoutMs, timeRemainingMs), so when the budget is
       // the smaller operand this keeps hasBudgetExceeded's `timeRemainingMs === 0` a consequence
       // of the timeout firing rather than of two clock reads happening to span the full window.
-      // When perAttemptTimeoutMs is the smaller operand the floor is below the remaining budget
-      // and nothing is forced to exhaust. timeoutMs > 0 here (the <= 0 case returned above), so
-      // this floor also subsumes the non-negative clamp it replaces.
+      // When perAttemptTimeoutMs is STRICTLY the smaller operand the floor sits below the
+      // remaining budget and nothing is forced to exhaust. When the two are EQUAL the floor
+      // equals the remaining budget and exhaustion is forced — which is the right answer (a
+      // phase granted exactly the rest of the budget, that then timed out, has spent it), but
+      // it is forced, so do not read the previous sentence as covering that case. Much of this
+      // file's integration suite is configured that way.
+      //
+      // One contract-visible consequence, on the execute phase only: getExecutionFailureBoundary
+      // branches on timeRemainingMs === 0, so a budget-capped execute timeout that recovers no
+      // result now persists failureBoundary "runtime_exhausted" where a clock read that fell
+      // short would have persisted "timeout". The new value is the accurate one.
+      //
+      // timeoutMs > 0 here (the <= 0 case returned above), so this floor also subsumes the
+      // non-negative clamp it replaces.
       if (!options?.awaitAbortedResult) {
         void operationPromise.catch(() => undefined);
         return { timedOut: true, elapsedMs: Math.max(elapsedMs, timeoutMs) };
@@ -877,9 +888,17 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
   // pre-existing loop-contract.json, loop-state.json or events.jsonl, plus a non-empty
   // attempts/ or worktrees/ — owner-record.json is not on that list. And checkRunLease returns
   // rather than refuses for a record carrying no lease (leaseGate.ts §5.0) and for an expired
-  // one (§7); only a fresh lease naming another process refuses. So a stray owner-record.json
-  // reaches this gate, "no owner record" is the ordinary observation and not the only reachable
-  // one, and the writeOwnerRecord below is not guaranteed to be a creation.
+  // one (§7). It still REFUSES on three paths, so do not read the above as "anything passes
+  // through": a non-ENOENT read failure rethrows, a structurally invalid record throws out of
+  // parseOwnerRecordForLease (ownership/lease.ts), and a fresh lease naming another process
+  // throws RunLeaseHeldError. leaseGate.ts and lease.ts both say so at their own call sites.
+  //
+  // So "no owner record" is the ordinary observation here and not the only reachable one, and
+  // the writeOwnerRecord below is not guaranteed to be a creation. Reaching that overwrite does
+  // require out-of-band tampering rather than any path this codebase takes: initializeRunFiles
+  // writes loop-contract.json and never owner-record.json, and owner-record.json is first
+  // written below this gate, so a directory this code produced always trips ensureFreshRunDir
+  // first. It is constructible by deleting the blocking files while keeping owner-record.json.
   //
   // The code is unchanged: the gate taking no position on those two states is leaseGate's
   // stated design, not an oversight. Only the claim about what can be observed was wrong.

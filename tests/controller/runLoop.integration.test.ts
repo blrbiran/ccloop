@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseChangedPathsFromGitStatus, runLoop } from "../../src/controller/runLoop.js";
 import { SubprocessClaudeAdapter } from "../../src/runtime/claude/subprocessClaudeAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
@@ -2193,6 +2193,109 @@ describe("runLoop", () => {
     expect(finalState.stopReason).toBe("runtime or token budget exhausted");
     expect(finalState.budgetSnapshot.timeRemainingMs).toBe(0);
     expect(executeCalled).toBe(false);
+  });
+
+  // The three tests above and below freeze Date. Their own try/finally cannot restore it if the
+  // test itself times out while runLoop is pending, and a frozen Date would then leak into every
+  // later test in this file. Cheap to close, so closed.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // The plan-phase test above only reaches the non-awaited timeout return. The execute phase is
+  // the one that passes awaitAbortedResult, and it has TWO further returns — one for an
+  // operation that resolves after the abort, one for an operation that rejects after it. Both
+  // carry their own quota floor, and a whole-branch review proved by running that reverting both
+  // of them leaves the suite green: the change shipped three behaviour changes and guarded one.
+  // These two tests guard the other two.
+  //
+  // This one also pins a contract-visible consequence that no test pinned in either direction:
+  // getExecutionFailureBoundary branches on timeRemainingMs === 0, so the persisted
+  // failureBoundary is what proves the floor was applied and not merely that the run stopped.
+  it("accounts an execute timeout that resolves after the abort as exhaustion, and records the boundary as runtime_exhausted", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 1_000,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await waitForAbortThenFlush(context);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let finalState;
+    try {
+      finalState = await runLoop(contract, runDir, adapter);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const recovery = JSON.parse(
+      await readFile(join(runDir, "attempts", "1", "execution-recovery.json"), "utf8"),
+    ) as { failureBoundary: string };
+
+    expect(finalState.stopReason).toBe("runtime or token budget exhausted");
+    expect(finalState.budgetSnapshot.timeRemainingMs).toBe(0);
+    expect(recovery.failureBoundary).toBe("runtime_exhausted");
+  });
+
+  // The sibling of the above: the operation REJECTS after the abort, which is a different return
+  // statement carrying its own floor. Asserting the same exhaustion from a rejection is what
+  // separates the two — revert only this one's floor and only this test goes red.
+  it("accounts an execute timeout that rejects after the abort as exhaustion", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 1_000,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await waitForAbortThenFlush(context);
+        throw new Error("adapter failed after the abort");
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let finalState;
+    try {
+      finalState = await runLoop(contract, runDir, adapter);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(finalState.stopReason).toBe("runtime or token budget exhausted");
+    expect(finalState.budgetSnapshot.timeRemainingMs).toBe(0);
   });
 
   it("persists phase usage evidence from the subprocess adapter without recomputing controller totals", async () => {

@@ -25,7 +25,7 @@ git log --oneline --decorate -12          # 最近应能看到三笔 merge：债
 git rev-list --count origin/main..main    # 待 push 笔数，以此为准，不要照抄本文
 git worktree list                         # 期望只有主仓库；债 4 的 worktree 已移除
 git branch --list                         # 期望只有 main；债 4 与 flake 分支都已删
-ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run   # 期望 29 files / 443 tests
+ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run   # main 上期望 29 files / 443 tests；相位计时分支上为 446
 ```
 
 **核对状态时不要相信本文的数字，相信命令的输出。** 本项目已有多次「文档里的数字被自己的编辑证伪」的案底，见下方教训。
@@ -90,7 +90,7 @@ ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run   # 期望 29 files / 443 test
 
    **旧版把其中一条记成了独立的「第 7 个」，并写明「与家族无关」。那句话是假的**——该测试的断言就是 `toBe(BUDGET_EXHAUSTED_REASON)`，旋钮也双双钉在 20。当初那条分类是**照测试名判的，没读测试体**（名字讲 cleanupStatus，形状却属这个家族）。
 
-   **(A′) 第五个家族成员——已具名、已测量、刻意未修**：
+   **(A′) 第五个家族成员——已具名、已测量，✅ 现已被「超时按配额计账」结构性修掉（2026-07-31）**。下面保留的是修复前的测量记录，**不再是当前状态**：该测试的 `perAttemptTimeoutMs: 1_000` / `totalRuntimeBudgetMs: 20` 使超时值取自预算，超时触发即确定性归零，亚毫秒余量不再参与判定。**它不该再被当作「从未观测到失败、任一失败都是首次观测」那一类**：
    `tests/controller/runLoop.integration.test.ts > caps phase timeout by the remaining runtime budget`。
    同一根因，且**它本来就处在上面那个空操作配方会产生的状态**（`perAttemptTimeoutMs: 1_000` + `totalRuntimeBudgetMs: 20`）。
    两次独立测量一致：200 次隔离跑 **0 失败**，但余量分布 `{0:1, 1:87, 2:87, 3:25}`——**约 0.5% 的跑距离变红只有 1ms**。从未观测到失败。
@@ -106,7 +106,7 @@ ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run   # 期望 29 files / 443 test
    旧版只描述为「L1 留下的一个依赖真实文件系统计时的交错测试」，**没有名字**——而规则是「不在名单内的失败一律按新缺陷处理」，**一条没名字的成员根本没法比对**。
    已按代码定名：`:662` 是 `vi.useRealTimers()`，`:655-660` 的注释自述其排序依赖「roughly eight filesystem round trips against one」。**L1 ledger 把它记为「a theoretical flake risk under heavy CI I/O contention」——是风险登记，不是观测记录。** 保留这个区分：**它不构成把一次真实失败挥手放过的理由。**
 
-   **(D) 三处带着同一赛跑、但当前没有任何断言看得见它**（`totalRuntimeBudgetMs: 20` 在该文件共 **11** 处，只有上面 5 处在家族里）：`persists execution-recovery.json when execute is entered but returns no result before exhaustion`、`keeps changed-path stale reconciliation on OWNER_UNDECIDABLE…`、`writes an OWNER_LOST reconciliation record with transferred ownership…`。三条都不断言 `stopReason`，也不断言 `failureBoundary`（后者是预算派生的，会暴露赛跑）。**今天无害；谁给它们加一条 `stopReason` 或 `failureBoundary` 断言，它们当天就变 flaky。**
+   **(D) 三处带着同一赛跑、但当前没有任何断言看得见它**（`totalRuntimeBudgetMs: 20` 在该文件共 **14** 处——修复前为 11，本轮的三条守护测试各加一处；**这个数字每加一条测试就会腐坏，别照抄，用 `grep -c "totalRuntimeBudgetMs: 20," tests/controller/runLoop.integration.test.ts` 现数**）：`persists execution-recovery.json when execute is entered but returns no result before exhaustion`、`keeps changed-path stale reconciliation on OWNER_UNDECIDABLE…`、`writes an OWNER_LOST reconciliation record with transferred ownership…`。三条都不断言 `stopReason`，也不断言 `failureBoundary`（后者是预算派生的，会暴露赛跑）。~~**今天无害；谁给它们加一条 `stopReason` 或 `failureBoundary` 断言，它们当天就变 flaky。**~~ **这条警告自 2026-07-31 起为假，不要再照它行事。** 三条都设 `perAttemptTimeoutMs` 等于 `totalRuntimeBudgetMs`（皆为 20），超时值取自预算，「超时按配额计账」使其确定性归零——现在给它们加 `stopReason` 或 `failureBoundary` 断言会得到**稳定**的测试，不是 flaky 的。本轮新增的三条守护测试正是这么做的（其中一条就断言 `failureBoundary` 为 `runtime_exhausted`）。
 
    **(E) 修 (A) 时挂下的 4 条，已具名、已测量、刻意未做**（无第二轮修复波，全部带裁定记录在此）：
    1. `runLoop.integration.test.ts` 里那句「窗口设为 0 会让这些测试**重回刀尖**」**过度声称**。实测：窗口=0 时余量 +1..+4、160 次 **0 失败**；而真正的修复前状态是余量 −1..+4、**15/160 失败**（`delay(0)` 被 Node 钳到 1ms，仍买到一个定时器回合）。**警告本身该留**（约 9ms 的缓冲确实塌成约 1ms），但准确说法是「只剩约 1ms 余量，而非约 9ms」。
