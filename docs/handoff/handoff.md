@@ -22,12 +22,13 @@ cd .claude/worktrees/perfnow-probe && ECC_GATEGUARD=off DISABLE_OMC=1 npm test -
 
 **未完成——必须先做完这四件，再开 L3：**
 
-1. **修复波 2**（第三轮评审已列出，全部是实施者自己带进去的）：
-   - `docs/superpowers/specs/2026-07-28-run-registry-design.md` 里「the three `persistTerminalState` call sites」是**指错的符号锚点**——该符号在 `runLoop.ts` 有 15 个调用点，按原意收窄也有 4 个。**错的符号锚点比陈旧行号更糟，因为它看起来是永久的。** 同类问题另见同名 plan 文件。
-   - **引用清扫不完整，而提交信息声称「十处全部改完」**。至少另有 13 处在分支起点有效、现已失效的 `runLoop.ts:NNN` 引用未动，含 `tests/persistence/fileStore.test.ts`、本文遗留事项 5 自己那条 `:864-866`、以及 `docs/superpowers/decisions/2026-07-29-*.md` 的十处。**修的是评审点名的文件，不是这一整类引用。**
-   - `runLoop.ts` 超时分支注释里「本文件测试套大多是这么配置的」**是没核的数量声明**，实测 10/49 ≈ 20%。
-   - 同一注释里「没有任何测试在任一方向钉住 `failureBoundary`」**为假**——早有测试断言 `runtime_exhausted`；准确说法是「没有测试把它钉为配额下限的后果」。
-   - `run-registry-design.md` 有一处 perl 替换留下的重复短语（"after the lease gate" 说了两遍）。
+1. ✅ **修复波 2 已于 2026-08-01 做完**（六条，第三轮评审五条 + 复核时撞出的第六条，全部是实施者自己带进去的）。留档：
+   - 「the three `persistTerminalState` call sites」是**指错的符号锚点**——该符号在 `runLoop.ts` 有 **15** 个调用点，按原意（丢租约后仍写终态）收窄是 **4** 个，`three` 两头都不对。已改成 `if (leaseLoss.lost !== null)` / `if (isLeaseStopError(error))` 两个可 grep 的分支锚点，spec 与同名 plan 各一处。**错的符号锚点比陈旧行号更糟，因为它看起来是永久的。**
+   - **引用清扫不完整，而 `9e554ce` 的提交信息声称「十处全部改完」**。已按「在 merge-base `07180a7` 上本来是否有效」逐条判定全部 44 条 tracked 引用：**15 条**在分支起点有效、被本分支顶掉 → 已改成符号锚点；**2 条**位移为 0 未被顶掉；**27 条**在分支起点就已经错（L1/L1b/L2 时期漂移，动它们违反 Rule 3）→ **未动**，判定依据见修复波 2 的报告。
+   - `runLoop.ts` 超时分支注释里「本文件测试套大多是这么配置的」是没核的数量声明，实测 **10/49 ≈ 20%**（复现了评审员的数）。已改成「少数」并附再推导命令。
+   - 「没有任何测试在任一方向钉住 `failureBoundary`」**为假**——`runLoop.integration.test.ts` 在 `07180a7` 上就有一条断言 `runtime_exhausted`。已改成「没有测试把它钉为配额下限的后果」。**注意该句不在 `runLoop.ts` 的注释里**（评审员写成「同一注释」），实际在 `runLoop.integration.test.ts` 的测试上方注释里。
+   - `run-registry-design.md` 那处 perl 替换留下的重复短语（"after the lease gate" 说了两遍）已去重。
+   - `9e554ce` 提交信息里的位移算术错误，已在下方遗留事项 8 就地更正。
 2. **修复波 2 之后必须再评审一次**（铁律；本轮已是「修复波自带缺陷」的第三次案底）。
 3. **一条名单外的失败仍未定性**：`runLoop.integration.test.ts > continues normally when execute returns a complete result during the recovery window`，分支上 12 次全套件跑中 1 次，base 上 12 次中 0 次。**这个样本量分辨不出两者**（真实失败率若约 8%，base 跑出 0/12 的概率约 37%）。要定性需双臂各 50–100 次隔离跑。**在定性之前，它既不能进 flake 名单，也不能算作回归。**
 4. push 与 merge 都只在人明确下指令时执行。
@@ -153,11 +154,21 @@ ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run   # main 上期望 29 files / 
 4. **`.superpowers/sdd/` 是跨会话共用的扁平目录**，且是 gitignored——提交自己子目录的 ledger 要用 `git add -f`。**刻意跳过** `review-*.diff` 与 briefs（都可重建）。同级目录属于更早的会话，**不要整删**。
 5. **本分支范围外、但已查实、留给后续层的两笔**（都属 L3 / L5 的归属域）：
    - `finalizePendingOwnerTransfer` 自己的 catch 有与 D2 同型的潜在错误掩盖——两个 `safeUnlink` 都可能替换正在传播的错误。它在 spec §2.2 的不动范围内，本分支正确地未碰。**整分支评审复核后同意可以带着它合并**：修它需要动那个必须逐字节不变的保护区，而触发条件是「清理失败与转移失败同时发生」。
-   - **【本轮实测新增】** `runLoop.ts:864-866` 的注释断言了**两件已被实测证伪**的事：「`ensureFreshRunDir` 已经对任何既存 run 文件抛过了」和「此处只可能观测到『无 owner record』」。实测：`ensureFreshRunDir` 的 `blockingPaths` **不含** `owner-record.json`，且 `checkRunLease` 对空租约（`leaseGate.ts:38-42`）与**已过期**租约（`:44-64`）**都只返回、不拒绝**——所以一个只含 owner record 的 run 目录会以**覆写**形式到达 `writeOwnerRecord`（已实测：inode 发生变化）。
+   - **【本轮实测新增】** `runLoop.ts` 里 `checkRunLease` 之上那段 `§7.0` 注释（`grep -n "ensureFreshRunDir" src/controller/runLoop.ts` 定位）断言了**两件已被实测证伪**的事：「`ensureFreshRunDir` 已经对任何既存 run 文件抛过了」和「此处只可能观测到『无 owner record』」。实测：`ensureFreshRunDir` 的 `blockingPaths` **不含** `owner-record.json`，且 `checkRunLease` 对空租约（`leaseGate.ts:38-42`）与**已过期**租约（`:44-64`）**都只返回、不拒绝**——所以一个只含 owner record 的 run 目录会以**覆写**形式到达 `writeOwnerRecord`（已实测：inode 发生变化）。
      **代码大概率是对的**（`leaseGate.ts` 说该状态按设计不表态），**错的是注释**。本分支正确地未碰（属归属域，动它违反 Rule 3）。**整分支评审的附加条件是：这条必须从 ledger 提升到 handoff，否则下一层只会读到那条假注释、读不到对它的证伪。此条即为履行该条件。**
-     ✅ **已于 2026-07-31 修掉（注释改写，代码零改动）。** 两处断言由下一个接手者独立复核为假后才动手，不是采信本条。`blockingPaths` 实为 `loop-contract.json` / `loop-state.json` / `events.jsonl` 三项，外加非空的 `attempts/` 与 `worktrees/`。**注意本条自己的行号 `:864-866` 已失效**——同一次改动在该文件上方插入了行；用 `grep "ensureFreshRunDir" src/controller/runLoop.ts` 定位。「inode 发生变化」那句是上一轮的测量，**本轮未复测**，按原样保留为上一轮的记录。
+     ✅ **已于 2026-07-31 修掉（注释改写，代码零改动）。** 两处断言由下一个接手者独立复核为假后才动手，不是采信本条。`blockingPaths` 实为 `loop-contract.json` / `loop-state.json` / `events.jsonl` 三项，外加非空的 `attempts/` 与 `worktrees/`。**本条自己那个失效的行号 `:864-866` 已于修复波 2 换成上面的符号锚点**（旧行号是这一整类腐坏的又一例，不是特例）。「inode 发生变化」那句是上一轮的测量，**本轮未复测**，按原样保留为上一轮的记录。
 6. **一条随时可能被配置改动静默打破的依赖**：修复波新增的临时名接线测试依赖 vitest **文件内顺序执行**（`vitest.config.ts` 无 `sequence.concurrent`，该文件无 `it.concurrent`），否则模块级计数器会被竞争、临时名预测失效。**不是当前风险，但只隔着一个配置改动。** 若将来开启文件内并发，先看这条。
 7. **硬编码数量与硬编码行号是同一类腐坏，但更隐蔽。** 本分支两次被自己的编辑证伪：一条注释写 `owner-record.json`「在**两条**路径上」发布（实为三条）；一条注释写「本文件 **51** 条测试全绿」，而同一波修复给该文件加了 2 条（实为 53）。**行号错了一 `sed` 就露馅，数量错了只有等人重新枚举才会浮出来。** 仓库里还有若干带实测数字的注释（`441/443`、`48/48`、40 次压测），~~**当前全部为真，无人强制**~~ —— **`441/443` 已于 2026-07-31 被本轮新增的三条测试证伪**（分母现为 446），已在 `fileStore.test.ts` 就地标注为历史测量而非实时计数；`48/48` 与 40 次压测本轮**未复核**，不要当作已核实。仍然无人强制——L3 若要动，先看这条。
+8. **`9e554ce` 提交信息里的位移算术是错的，就地更正如下**（提交信息在历史里不可改写，不要 rebase / amend；这条是它的勘误）。原文写「+8 lines from the timeout branch, +19 from the lease-gate comment」。逐笔实测（`git diff -U0 <c>^ <c> -- src/controller/runLoop.ts | grep '^@@'`，三笔都早于 `9e554ce`）：
+
+   | commit | timeout 区（`runPhaseWithTimeout`） | lease-gate 区（`runLoop` 的 `checkRunLease` 之上） |
+   |---|---|---|
+   | `e33095b` | `@@ -421,0 +422,8 @@` → **+8** | — |
+   | `a017689` | — | `@@ -872,3 +872,14 @@` → **+11** |
+   | `ea271d6` | `@@ -427,3 +427,14 @@` → **+11** | `@@ -880,3 +891,11 @@` → **+8** |
+   | **合计** | **+19** | **+19** |
+
+   所以本分支相对 `07180a7` 对 `runLoop.ts` 的**净位移是三段**：老行 **≤421 → +0**，**422–866 → +19**，**>866 → +38**。原文的 `+8` 只算了 `e33095b`，漏掉实施者**自己后一笔** `ea271d6` 在同一区域加的 11 行，位移少算 11。**这条没有污染修复本身**（那十处都转成了符号锚点，没有数字传播），但它是「写下数字后没在后续编辑落地之后复核」这一失败类的又一次发作——与教训里那条同源。
 
 ## 本轮新增的教训（比缺陷本身更值钱）
 
