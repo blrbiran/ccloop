@@ -177,16 +177,40 @@ function buildAtomicTempPath(targetPath: string): string
 
 **本节是初稿的一个结构性缺陷，由 Task 2 的实施者发现、Task 2 的评审员实测确认后补入。**
 
-上面的判据默认目标文件已存在。五个替换点里有**两个是创建型写入**——`initializeRunFiles` 的
-`loop-state.json` 与 `writeOwnerRecord` 的 `owner-record.json`（首次创建）。对它们，目标不存在时
-`rename` 与 `writeFile` 的**终态完全相同**，没有 inode 可比。**这不是「夹具不好搭」，是判据本身
+上面的判据默认目标文件已存在。五个替换点里有**两个通常是创建型写入**——`initializeRunFiles` 的
+`loop-state.json` 与 `writeOwnerRecord` 的 `owner-record.json`。目标不存在时 `rename` 与
+`writeFile` 的**终态完全相同**，没有 inode 可比。**在那种情况下这不是「夹具不好搭」，是判据本身
 不适用——任何夹具都救不回来。** 初稿把它当成夹具问题，是错的。
 
-**替代判据（已在 Task 2 落地并经独立变异验证）**：在目标路径上放一个**悬挂符号链接**（指向一个
-不存在的路径）。
+⚠️ **但这两个写者的前提并不相同，本节初版把它们混为一谈，是第二个错误**（Task 3 的实施者与评审员
+各自实测后更正）：
 
-- `ensureFreshRunDir` 经 `pathExists` 用 `access()` 探测，`access` **跟随**链接、对悬挂链接报
-  ENOENT，所以新鲜度检查放行；
+- **`initializeRunFiles` 的目标不可能预先存在**：`ensureFreshRunDir` 的 `blockingPaths`
+  （`fileStore.ts:52-56`）里**列了** `loop-state.json`，预先存在会抛。它的夹具因此**依赖**
+  `pathExists` 用 `access()` 探测；改成 `lstat()` 会让该测试大声变红（已两次实测）。
+- **`writeOwnerRecord` 的目标只是「通常」不预先存在**，**并非保证**。同一份 `blockingPaths`
+  **不含** `owner-record.json`，且 `checkRunLease` 对 `leaseAffirmedAt: null`
+  （`leaseGate.ts:38-42`，文档化的转移后状态）与**已过期**租约（`:44-64`）**都只是返回、不拒绝**。
+  所以一个只含 owner record、租约为空或已过期的 run 目录**会以覆写形式到达这个写者**——已实测
+  （`initializeRunFiles` 未抛 → `checkRunLease` 返回 `no_lease` → inode 发生变化）。
+  **对它不要写「判据不适用」**：在那个可达角落里判据是适用的。它的夹具**不依赖任何新鲜度探测**，
+  前提严格少于前者。
+
+**本分支对 `writeOwnerRecord` 选择不补 inode 测试**，唯一成立的理由是：该写者是对
+`writeJsonFileAtomically` 的**无分支整体委托**，而覆写经 `rename` 这一性质已由 `writeRunState`
+处的 R1 inode 测试（含持有句柄那一步）钉住。**不得用「它只可能是创建」（假）或「怕 flake」
+（§7.1 的持有句柄已解决）当理由。**
+
+**已知残留，必须写明**：符号链接判据只钉住「创建」这一路的实现选择。一个**按目标是否已存在分流**
+的包装（存在则走裸写、否则走原子写）能从符号链接测试下存活（实测 48/48 全过），只有 inode 测试
+能杀它。**同时也不得声称补了 inode 测试就完全钉死了覆写角落**——`unlink` 后再 `writeFile` 同样
+会换 inode，两条测试都杀不掉它。
+
+**替代判据（已在 Task 2 与 Task 3 落地并经独立变异验证）**：在目标路径上放一个**悬挂符号链接**
+（指向一个不存在的路径）。
+
+- 若该写者前面有 `ensureFreshRunDir`（仅 `initializeRunFiles`）：它经 `pathExists` 用 `access()`
+  探测，`access` **跟随**链接、对悬挂链接报 ENOENT，所以新鲜度检查放行；
 - 之后 `writeFile` 会**穿过**链接写：链接存续，它指向的目标被创建；
 - 而 `rename` 会**替换**这个目录项：链接消失，它指向的目标从未被创建。
 

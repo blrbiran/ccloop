@@ -497,3 +497,191 @@ fails loudly rather than silently if that becomes `lstat` — measured, M9). Thi
 before it opens: `writeOwnerRecord`'s first write is the same shape.
 
 Task 2: complete (commits ee001ba..5cc5202, review clean, 0 Critical, 0 Important, no fix round)
+
+=== TASK 3 IMPLEMENTED (commit d60faee) — status DONE ===
+Report: `.superpowers/sdd/2026-07-29-atomic-write-paths/task-3-report.md`
+Claimed: 29 files / 438 tests (436 + 2 new), typecheck 0, build 0, new test 20/20 stable.
+
+CONTROLLER'S OWN VERIFICATION OF THE PRODUCTION DIFF (run, not read from the report):
+- `git diff 5fdcab1..d60faee -- src/` is EXACTLY 1 line, at `:448`, inside
+  `export async function writeOwnerRecord` — the correct symbol. `writeOwnerTransferRecord`
+  (`:451`) appears in the hunk only as trailing context, unmodified.
+- `git diff 5fdcab1..d60faee -- src/registry/` is EMPTY.
+- The re-anchoring worked: the implementer edited `:448`, not the stale `:379-381` that now
+  points into Task 1's helper block. The trap identified after Task 2 did not fire.
+
+CONFIRMED BY THE CONTROLLER, not taken from the report — implementer's concern 2 is REAL:
+`ensureFreshRunDir`'s `blockingPaths` (`fileStore.ts:52-56`) contains exactly three entries —
+`loop-contract.json`, `loop-state.json`, `events.jsonl`. **`owner-record.json` is NOT among
+them**, so a runDir holding only an owner record passes initialization, and `runLoop.ts:865`'s
+comment ("ensureFreshRunDir has already thrown on any pre-existing run file") is stronger than
+the code. Found by the implementer, correctly NOT fixed (it is "whether/when", not "how").
+Booked here; the reviewer was asked to rule on whether it touches this task's correctness.
+
+THREE ITEMS SENT TO THE REVIEWER FOR ADJUDICATION, none pre-judged by the controller:
+- The implementer DELIBERATELY OMITTED an inode test, arguing the criterion is constructible
+  here but would exercise the identical shared helper path, add no coverage, and reopen the
+  inode-reuse flake window. Reviewer asked to decide whether that is sound or a coverage gap
+  wearing a flake-avoidance costume, and specifically whether an inode test would kill any
+  mutation the symlink test does not.
+- The implementer claims its fixture has STRICTLY FEWER premises than Task 2's — that
+  `writeOwnerRecord` has no guard in front of it, so unlike Task 2 it does not depend on
+  `ensureFreshRunDir` probing with `access()`. Reviewer told to verify by execution, not agree.
+- Reported spec imprecision: §7.1a grounds the creating-write case in `ensureFreshRunDir`, which
+  holds for `initializeRunFiles` but not for `writeOwnerRecord`, where the real reason is that
+  the sole production caller runs after initialization. **Spec amendment deliberately DEFERRED
+  until after the review** — amending the spec while a reviewer is reading it would pull the
+  source of truth out from under the review.
+
+TASK 3 REVIEW DISPATCHED — independent, opus, mutation-driven, sandboxed. Package:
+`review-5fdcab1..d60faee.diff`. It was told about the `.git`-less-sandbox artifact that cost the
+previous reviewer time, explicitly so it does not skip verification, only that one rediscovery.
+
+=== TASK 3 CODE REVIEW (independent, opus, mutation-driven, sandboxed) ===
+Verdict: **Spec ✅ / quality approved, with ONE Important — and the defect is in a COMMENT, not
+in the code.** 0 Critical. Five mutations, all on production code, all re-derived by the reviewer.
+
+- M1 revert the one line → new R1 test dies. M2 helper body → bare `writeFile` → **exactly 3**
+  die suite-wide (Task 2's inode test, Task 2's symlink test, Task 3's symlink test), 435 pass.
+- M3 `, null, 2` → `, null, 4` → BOTH R4 byte tests die, so R4 is not a no-op.
+- Name-clause coverage checked by deleting each half of the R1 assertion pair in turn under M1 —
+  each half fails independently. Not vacuous.
+- 40 consecutive runs of the new block, 0 failures. `tests/` diff has **0 deleted lines**, so
+  Task 1's and Task 2's tests are provably not weakened; M2 confirms Task 2's two are still live.
+- Byte equivalence produced INDEPENDENTLY and landed on the same sha256 as the implementer
+  (`a3b91aaa…b28d1`, 266 bytes).
+- Suite 29 files / 438 tests, typecheck 0, build 0, no known flake in ~4 full runs.
+
+**IMPORTANT (dispatched as fix round 1/5): `fileStore.test.ts:1705-1709` asserts something the
+implementer had ALREADY PERSONALLY FALSIFIED.** The comment justifies the fixture with "the sole
+production caller runs after initializeRunFiles, SO IT IS A FIRST CREATE … no fixture recovers
+that; the criterion itself does not apply." The reviewer built the scenario and ran it: a runDir
+holding ONLY `owner-record.json` with `leaseAffirmedAt: null` passes `initializeRunFiles` without
+throwing, `checkRunLease` returns `no_lease` WITHOUT refusing, and `writeOwnerRecord` then
+overwrites with a changed inode (190894890 → 190894895). **The overwrite corner is reachable in
+production.** TWO independent gaps allow it, one more than the implementer reported: the blocking
+list omits `owner-record.json`, AND `checkRunLease` returns `no_lease`/`expired` rather than
+throwing.
+The mechanism is the branch's signature defect at its shortest: the implementer FOUND the
+blocking-list gap and booked it in its own report §8, then wrote the contradicting overstatement
+into its own comment as that comment's load-bearing premise. Not inherited from someone else —
+self-contradicted within one task.
+
+THREE ADJUDICATIONS, all settled by execution:
+1. **Omitting the inode test: SOUND — but the given argument was not.** "Adds no coverage" is
+   FALSE: the reviewer built a wrapper-local mutation (`writeOwnerRecord` uses `writeJsonFile`
+   when the target pre-exists, atomic otherwise) that **survives 48/48**; an inode test here
+   would kill it. And "reintroduces the flake window" is unsupported — §7.1's open-handle pin is
+   implemented at `fileStore.test.ts:1588-1594` and Task 2's inode test never went spuriously red.
+   RULING: do not require the test; DO require the justification to change to the only true one —
+   the overwrite path delegates to a helper whose overwrite behaviour is already pinned by R1 at
+   the `writeRunState` call site.
+2. **"Strictly fewer premises than Task 2's fixture": TRUE, and proved the hard way.** Mutating
+   `pathExists` from `access()` to `lstat()` — the exact regression §7.1a names as Task 2's known
+   cost — kills Task 2's `initializeRunFiles` symlink test while **Task 3's passes unaffected**.
+   A genuine strengthening, with no unnamed dependency substituted for the one it sheds.
+3. **The `ensureFreshRunDir` gap: out of scope for the CODE, in scope for the COMMENT.** It does
+   not touch this task's correctness (`rename` is right for both shapes) and the fixture never
+   reaches `ensureFreshRunDir` (proved by M4). It is decisive only as the fact that falsifies the
+   comment. The implementer was right to leave `runLoop.ts:865` and `ensureFreshRunDir` alone.
+
+DEFERRED MINORS: the report's "adds no coverage" and "flake risk" wordings (report-only, being
+corrected in the fix round); Task 3's guard assertion uses `readOwnerRecord`, which runs
+`recoverInterruptedOwnerTransfer` first — a no-op in this fixture, one more moving part than
+Task 2's `readRunState` guard, harmless.
+
+BOOKED FOR A LATER LAYER, NOT FIXED HERE (out of this branch's "only how it is written" scope):
+`runLoop.ts:864-866`'s comment claims the gate "can only ever observe 'no owner record'" — the
+reviewer measured `no_lease` on that path, so the invariant as written is false. `leaseGate.ts:38-42`
+says the gate takes no position on that state BY DESIGN (§5.0), so the CODE may well be intended;
+it is the comment that overstates. **This is L3/L5 territory (ownership), not debt 4.** Surface to
+the human at branch close.
+
+TASK 3 FIX ROUND 1/5 DISPATCHED to the original implementer (resumed, context intact): rewrite
+`:1705-1709` on the true justification, correct the report's two wordings, add NO inode test,
+re-run the covering file and paste its own output.
+
+=== TASK 3 FIX ROUND 1/5 — complete (commit a445486) ===
+Same implementer, resumed. Comment-only: controller verified `git diff d60faee..a445486 -- src/`
+is EMPTY; the change is 20 insertions / 5 deletions in `tests/persistence/fileStore.test.ts`.
+`tests/persistence/fileStore.test.ts` 48/48, typecheck 0.
+
+- **Important ADDRESSED, and addressed the right way.** The implementer did NOT take the
+  reviewer's numbers. It rebuilt the scenario from scratch in `runLoop.ts:862-868` order and got
+  DIFFERENT inode values (190911398 → 190911403 vs the reviewer's 190894890 → 190894895) with the
+  same conclusion — which is what an independent reproduction is supposed to look like. Both gaps
+  re-confirmed by its own run: the blocking list omits `owner-record.json`, and `checkRunLease`
+  returns `no_lease` for `leaseAffirmedAt: null` without refusing.
+  Comment rewritten to "usually does not pre-exist", overwrite corner named as reachable and
+  marked as measured, and exactly ONE reason kept for omitting the inode test (delegation to a
+  helper already pinned by R1 at `writeRunState`). "Only ever a create" (false) and "flake risk"
+  (unsupported) both removed as reasons. No inode test added, per the ruling.
+- **Minor ADDRESSED**: report's "adds no coverage" corrected, and §4 now records that its own
+  mutation matrix only ever injected at the call site and in the helper — the wrapper-level
+  branch mutation is named as a hole it did not cover. Booking your own blind spot is the
+  correct disclosure.
+
+IMPLEMENTER WENT ONE STEP BEYOND THE INSTRUCTION, DELIBERATELY AND DISCLOSED: the new comment
+also states the RESIDUAL — its symlink test pins the wrapper's helper choice for the CREATE case
+only, so a wrapper branching on target existence (the reviewer's surviving M5) is not pinned by
+it. Its argument: saying "no inode test here" without saying what that leaves unpinned would
+reproduce the same defect class more quietly. Sent to the re-review to rule on, NOT accepted by
+the controller — a comment asserting a coverage boundary is itself a claim that must be true and
+checkable, which is the exact shape of the finding being fixed.
+
+SCOPED RE-REVIEW DISPATCHED (`d60faee..a445486`), same reviewer resumed. Told to check every
+factual claim the NEW comment makes the same way it checked the old one — a rewrite is precisely
+where an unexecuted assertion recurs in quieter form — and to verify by reading whether the new
+text's claim about what the `writeRunState` R1 test pins is true or is another inherited premise.
+
+=== TASK 3 FIX ROUND 1/5 RE-REVIEW (`d60faee..a445486`) — verdict: BOTH ADDRESSED, loop closes ===
+Same reviewer, resumed. Sandbox refreshed to a445486 and byte-verified against it. It checked
+every factual claim in the NEW comment the same way it broke the old one — eight claims, each
+with its own check, all true, line references confirmed exact by printing the ranges.
+
+The one that mattered: the new comment says the overwrite case is "already pinned by the R1 inode
+test at the writeRunState call site, open-handle pin and all". The reviewer did NOT take that on
+trust — it read `fileStore.test.ts:1573-1598`, confirmed the `open()` pin at `:1587` held across
+the second write and closed in `finally`, then EXECUTED the helper→bare-`writeFile` mutation at
+a445486 and watched that test die. Not an inherited premise.
+
+It also built the inode test §7.1 prescribes as a throwaway: passes 49/49 on clean a445486 (so it
+IS constructible, as the implementer said), and under the wrapper-branch mutation exactly ONE test
+fails and it is that prototype. So "the only thing an inode test here would add" is now backed by
+the strongest evidence available, not by assertion.
+
+**RULING ON THE RESIDUAL DISCLOSURE: right, and checkable, and checked.** The reviewer's
+distinction is worth keeping: a comment asserting a coverage boundary is dangerous only when the
+boundary is unfalsifiable or untested. This one names a specific, constructible mutation class,
+the reviewer ran it (survives 48/48), and the prescribed inode test is the single thing that kills
+it. It also fails LOUDLY if it stops being true — add an inode test and the "stated rather than
+covered" sentence goes visibly stale beside it, whereas the old comment could sit wrong forever
+because nothing in the file contradicted it.
+
+New breakage in the fix diff: NONE. Suite at a445486: 29 files / 438 tests, 0 failed. typecheck 0.
+M1 and M2 still kill the same tests at the fix commit.
+
+NOTED, not a finding: the new comment is NARROWER than reality — it names only
+`leaseAffirmedAt: null`, but an EXPIRED lease (`leaseGate.ts:44-64`) also returns without
+refusing, so a second class of run directory reaches the same corner. Understating is safe.
+
+DEFERRED MINORS (for the whole-branch review):
+- `task-3-report.md` §10.1 cites the open-handle pin as `:1588-1594`; it is `:1587-1594`. Report
+  only, not in shipped code.
+- The inode criterion is not a complete "landed via rename" discriminator in the limit: `unlink`
+  then `writeFile` also yields a new inode. §7.1 already scopes it to rename-vs-truncate, so
+  nothing is wrong — but it caps what an inode test could ever buy here.
+- `runLoop.ts:864-866` still asserts two things measured false. Out of scope for debt 4, still
+  needs an owner (L3/L5).
+
+SPEC §7.1a AMENDED BY THE CONTROLLER after the verdict (deliberately not during the review):
+split the two creating writers, because the initial §7.1a grouped two call sites whose premises
+differ — `initializeRunFiles`'s target CANNOT pre-exist (`loop-state.json` IS in `blockingPaths`)
+and its fixture therefore depends on `access()`; `writeOwnerRecord`'s target only USUALLY does not
+(`owner-record.json` is NOT in the list, and `checkRunLease` returns rather than refuses for both
+a null AND an expired lease — the second entrance the reviewer found), and its fixture depends on
+no freshness probe at all. §7.1a now also records the residual (a wrapper branching on existence
+survives the symlink test; only an inode test kills it) AND the cap on that remedy (`unlink` +
+`writeFile` changes the inode too, so neither test pins that).
+
+Task 3: complete (commits 5fdcab1..a445486, 1 fix round, review clean, 0 Critical)
