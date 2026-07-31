@@ -419,17 +419,25 @@ async function runPhaseWithTimeout<T>(
     const elapsedMs = Math.max(Date.now() - startedAtMs, 0);
 
     if (outcome.kind === "timeout") {
+      // A phase that reached its timeout consumed at least the window it was granted, so that
+      // window — not the measured elapsed — is the floor on what it is charged. getPhaseTimeoutMs
+      // derives timeoutMs from min(perAttemptTimeoutMs, timeRemainingMs), so when the budget is
+      // the smaller operand this keeps hasBudgetExceeded's `timeRemainingMs === 0` a consequence
+      // of the timeout firing rather than of two clock reads happening to span the full window.
+      // When perAttemptTimeoutMs is the smaller operand the floor is below the remaining budget
+      // and nothing is forced to exhaust. timeoutMs > 0 here (the <= 0 case returned above), so
+      // this floor also subsumes the non-negative clamp it replaces.
       if (!options?.awaitAbortedResult) {
         void operationPromise.catch(() => undefined);
-        return { timedOut: true, elapsedMs };
+        return { timedOut: true, elapsedMs: Math.max(elapsedMs, timeoutMs) };
       }
 
       try {
         const result = await operationPromise;
-        const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, 0);
+        const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, timeoutMs);
         return { timedOut: true, elapsedMs: timedOutElapsedMs, result };
       } catch (error) {
-        const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, 0);
+        const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, timeoutMs);
         return { timedOut: true, elapsedMs: timedOutElapsedMs, abortedError: error };
       }
     }
