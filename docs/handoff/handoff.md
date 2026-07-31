@@ -1,20 +1,21 @@
-# ccloop Handoff — 债务归属已裁决；债 4（原子写）分支进行中，Task 1 已关闭
+# ccloop Handoff — 债 4（原子写）五个任务全部完成，整分支评审已过，**待人决定 push / merge**
 
-> 更新于 2026-07-30。接手前先用 Git / 文件系统核对每一条状态声明再动手。
+> 更新于 2026-07-31。接手前先用 Git / 文件系统核对每一条状态声明再动手。
 > 本文不硬钉 git HEAD：提交本文即会改变 HEAD。用下面「如何定位当前状态」自查。
 
 > ⚠️ **本文当前位于分支 `worktree-debt4-atomic-write-paths`，尚未合并回 `main`。** 若你在 `main` 上读到的是旧版本，以本分支的为准。
 
 ## 快速接手入口
 
-1. **L1 / L1b / L2 已 merge 进 `main`**（run lease + heartbeat / owner-transfer contention / run registry），`main` 上 **427 tests** 全绿。
+1. **L1 / L1b / L2 已 merge 进 `main`**（run lease + heartbeat / owner-transfer contention / run registry）。
 2. **四笔遗留债的归属已由人裁决完毕**，见 `docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md`。裁决同时回答了「下一层做什么」：**先做债 4，再做 L3，最后 L5**。
-3. **当前工作：债 4（消除 fileStore 非原子写路径）**，在 worktree `.claude/worktrees/debt4-atomic-write-paths`、分支 `worktree-debt4-atomic-write-paths` 上。**Task 1 已关闭，下一步是 Task 2。**
-4. **照着计划做，不要重新设计**：`docs/superpowers/plans/2026-07-29-atomic-write-paths.md`（5 个任务）。唯一真相源是 `docs/superpowers/specs/2026-07-29-atomic-write-paths-design.md`。
-5. **「为什么长这样」先读 ledger**：`.superpowers/sdd/2026-07-29-atomic-write-paths/progress.md`——它记了全部裁决、四条计划缺陷、两轮评审与两轮修复。**不要重新推理。**
+3. **债 4 已做完。** 五个任务全部关闭，每个任务一次独立评审，另加一次整分支评审 + 一轮修复波 + 一次 scoped 再评审。**整分支评审判定 ready to merge。** 当前 **443 tests** 全绿，typecheck / build 干净。
+   **下一步不是写代码，是人决定 push 与 merge。** 两件事都只在人明确下指令时执行。
+4. **债 4 之后是 L3，然后 L5。顺序不可打乱。** L3 开工要先 brainstorm 出 spec，不要照债 4 的计划改。
+5. **「为什么长这样」先读 ledger**：`.superpowers/sdd/2026-07-29-atomic-write-paths/progress.md`——全部裁决、四条计划缺陷、两条 spec 缺陷、每一轮评审与修复都在里面。**不要重新推理。** 它已用 `git add -f` 入库。
 6. **常驻禁令**：L1 spec §12 十九条中的第 2/5/7/15/17/19 条不得弱化或删除（已变异验证，人下过指令）。
 7. 运行约定：`ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run`；**真实 Claude 调用须事先获批（付费）**。
-8. **已知 flake 现为 7 个**（见遗留事项 2 的具名清单），刻意未修，别当新 bug 查。
+8. **已知 flake 仍为 7 个**（见遗留事项 2 的具名清单），本分支未新增、未修。别当新 bug 查。
 9. **验证跑绝不要 `| tail -N`**；**计划不要附完整可抄代码**；**评审必须对着代码撞、不接受实施者自证**。三条铁律，全部有案底。
 
 ## 如何定位当前状态（不要照抄 commit hash）
@@ -48,17 +49,20 @@ grep -c "^- \[x\]\|^- \[ \]" docs/superpowers/plans/2026-07-29-atomic-write-path
 
 **L5 的继承清单因此从 4 笔降到 1 笔**（只剩债 2）。
 
-## 当前分支（债 4）状态
+## 债 4 分支状态：**做完了，等人决定 push / merge**
 
-**范围**：五处裸 `writeFile` 改 temp+rename——`loop-state.json` 的**两个**写者（`initializeRunFiles:76`、`writeRunState:81`）、首次 `owner-record.json`、`boundary-analysis.json`、`reconciliation-record.json`。外加标记一个导出的非原子 transfer 写入口，以及更正 L2 的两处注释（**`atomic: false` 保留为纵深防御，`src/registry/` 零逻辑改动**）。
+**范围（全部落地）**：五处裸 `writeFile` 改 temp+rename——`loop-state.json` 的**两个**写者（`initializeRunFiles`、`writeRunState`）、首次 `owner-record.json`、`boundary-analysis.json`、`reconciliation-record.json`。外加标记一个导出的非原子 transfer 写入口（`writeOwnerTransferRecord`，**刻意保持非原子**），以及更正 L2 的三处注释（**`atomic: false` 保留为纵深防御，`src/registry/` 零逻辑改动，全分支 diff 在该目录内只有注释行**）。
 
-**Task 1 已关闭**：新增 `writeJsonFileAtomically`（模块私有）与 `buildAtomicTempPath`（导出仅为可测）。**零生产调用点替换、零行为变更。** 两轮评审 + 两轮修复，全程 0 Critical。当前 **431 tests** 全绿，typecheck / build 干净。
+**验收（整分支评审自己跑出来的，不是采信报告）**：443 tests / 29 files 全绿，typecheck 与 build 退出 0；转移事务路径四个符号 + 8 个常量对 `ee001ba` **逐字节相同**；`src/registry/` 零逻辑改动。
 
-**Task 2 起的两条硬要求（已写进计划）**：
-- `loop-state.json` 的**两个**写者都要改，**只改其一即未达标**；
-- R2（残留与错误传播）在 Task 1 里**不可达**（缺陷 D1），已移到 Task 2 的 **Step 4b**，且**必须自己重跑残留变异并贴自己的输出，不得引用 ledger 当证据**。
+⚠️ **行号已全面失效，别照 spec / 计划里的行号动手。** Task 1 在 `:379` 之前插入了约 67 行，spec 的 `:76` 现在指向 `loop-contract.json`（**本设计排除的文件**），`:379-381` 落进了新增的辅助块。**锚点一律用函数名 + 文件名字符串，动手前先 grep。** spec §2.1 已加警告横幅。
 
-**已发现并修正的四条计划缺陷（D1–D4）与两条 spec 缺陷**，全部记在 ledger，计划与 spec 均已就地更正并保留痕迹。其中最值得知道的一条：**spec 里那句「本仓库测试套件零处 `vi.mock`（已核实）」是假的**——`vi.mock(` 确实 0 处，但 `vi.doMock` 有 **24 处、跨 5 个文件，包括 `tests/persistence/fileStore.test.ts` 自己**。现已改为「优先真实 tmpdir，允许 `vi.doMock` 但必须写明为何真实手段不可行」。
+**两条最值钱的发现，都来自「任务级评审看不见」的层面：**
+
+1. **整分支评审发现本分支自己声明的核心风险裸奔上线。** spec §4.1 说进程唯一临时名是「本设计的核心风险」——共享固定临时名会**反过来制造**新的撕裂源（A 暂存 → B 覆盖 → A rename 发布了 B 的字节 → B 拿 ENOENT）。三条钉唯一性的测试全都**直接调用**导出的 `buildAtomicTempPath`，**没有一条观察生产路径实际用的临时名**。把 `:420` 换成固定名，**整套件全绿 441/441，两次**。生成器有覆盖，接线没有。已在修复波补上，并由发现它的同一个评审员用自己的变异复验杀掉（2 failed）。
+2. **本分支证伪了 L2 的设计 spec，然后让一条新注释指向了它。** `2026-07-28-run-registry-design.md` §8.1 的逐写者表格仍断言 `writeRunState` / `writeOwnerRecord` 是裸 `writeFile`、"Atomic? no"。已按该文档既有的 `*Amended (x)*` 约定注解，**31 行插入、0 行删除**——注解而非改写。**`(j)` 是该文档第一条起因于「后续分支改了代码」而非「文档本身有缺陷」的条目；L3 若再证伪什么，接着写 `(k)`，就地注解。**
+
+**spec 在执行过程中被实测改了三次**，全部保留痕迹：§7.1a 从无到有（创建型写入 inode 判据**不适用**，改用悬挂符号链接判据）→ 拆开两个前提不同的创建型写者 → 分类维度从「创建 vs 覆写」改成「**守卫是否拒绝预先存在的目标**」，并给出三档表。**两个判据互补不冗余，已实测：分流实现只在 inode 判据下死，只改创建路径的实现只在符号链接判据下死。**
 
 ## 遗留事项
 
@@ -76,7 +80,12 @@ grep -c "^- \[x\]\|^- \[ \]" docs/superpowers/plans/2026-07-29-atomic-write-path
    **但「像是已知 flake」不等于「是已知 flake」**：必须先捕获**完整测试名与失败块**再比对，**绝不允许 `| tail -N` 后凭印象归因**——L1b 正是这样丢过一次失败身份。**任何不在名单内的失败一律按新缺陷处理。**
 3. **L2 挂账 5 条 Minor**（可延后，见 L2 ledger）：`ObservedFileSpec.file` 未收窄成字面量联合；`scanRootFailureDetail` 落在 `renderRuns.ts` 名不副实；`DT_UNKNOWN` 回退无测试（**已如实记录而非写空壳测试充数**）；两条夹具注释瑕疵。
 4. **`.superpowers/sdd/` 是跨会话共用的扁平目录**，且是 gitignored——提交自己子目录的 ledger 要用 `git add -f`。**刻意跳过** `review-*.diff` 与 briefs（都可重建）。同级目录属于更早的会话，**不要整删**。
-5. **本分支范围外、但已查实、留给后续层的一笔**：`finalizePendingOwnerTransfer` 自己的 catch 有与 D2 同型的潜在错误掩盖——两个 `safeUnlink` 都可能替换正在传播的错误。它在 spec §2.2 的不动范围内，本分支正确地未碰。
+5. **本分支范围外、但已查实、留给后续层的两笔**（都属 L3 / L5 的归属域）：
+   - `finalizePendingOwnerTransfer` 自己的 catch 有与 D2 同型的潜在错误掩盖——两个 `safeUnlink` 都可能替换正在传播的错误。它在 spec §2.2 的不动范围内，本分支正确地未碰。**整分支评审复核后同意可以带着它合并**：修它需要动那个必须逐字节不变的保护区，而触发条件是「清理失败与转移失败同时发生」。
+   - **【本轮实测新增】** `runLoop.ts:864-866` 的注释断言了**两件已被实测证伪**的事：「`ensureFreshRunDir` 已经对任何既存 run 文件抛过了」和「此处只可能观测到『无 owner record』」。实测：`ensureFreshRunDir` 的 `blockingPaths` **不含** `owner-record.json`，且 `checkRunLease` 对空租约（`leaseGate.ts:38-42`）与**已过期**租约（`:44-64`）**都只返回、不拒绝**——所以一个只含 owner record 的 run 目录会以**覆写**形式到达 `writeOwnerRecord`（已实测：inode 发生变化）。
+     **代码大概率是对的**（`leaseGate.ts` 说该状态按设计不表态），**错的是注释**。本分支正确地未碰（属归属域，动它违反 Rule 3）。**整分支评审的附加条件是：这条必须从 ledger 提升到 handoff，否则下一层只会读到那条假注释、读不到对它的证伪。此条即为履行该条件。**
+6. **一条随时可能被配置改动静默打破的依赖**：修复波新增的临时名接线测试依赖 vitest **文件内顺序执行**（`vitest.config.ts` 无 `sequence.concurrent`，该文件无 `it.concurrent`），否则模块级计数器会被竞争、临时名预测失效。**不是当前风险，但只隔着一个配置改动。** 若将来开启文件内并发，先看这条。
+7. **硬编码数量与硬编码行号是同一类腐坏，但更隐蔽。** 本分支两次被自己的编辑证伪：一条注释写 `owner-record.json`「在**两条**路径上」发布（实为三条）；一条注释写「本文件 **51** 条测试全绿」，而同一波修复给该文件加了 2 条（实为 53）。**行号错了一 `sed` 就露馅，数量错了只有等人重新枚举才会浮出来。** 仓库里还有若干带实测数字的注释（`441/443`、`48/48`、40 次压测），**当前全部为真，无人强制**——L3 若要动，先看这条。
 
 ## 本轮新增的教训（比缺陷本身更值钱）
 
@@ -85,6 +94,17 @@ grep -c "^- \[x\]\|^- \[ \]" docs/superpowers/plans/2026-07-29-atomic-write-path
 - **修复波会自带缺陷**，本仓库已有案底。**修复之后必须再评审**，且再评审的重点是「这次修复引入了什么」，不是重做上一次评审。
 - **证明一个跨模块断言不是同义反复，要做反方向变异**：只改 A 侧失败、只改 B 侧也失败 → 是真钉定；同义反复只会在两侧同步变动时才失败。
 - **注释里的机制，写之前先跑一遍。**（实施者为自己立的规矩，值得推广）
+
+## 债 4 后半程新增的教训
+
+- **「引用前先核实」原本只覆盖了读，不覆盖写。** 本分支 6 处失效行号引用**全部是自己造成的**——实施者插入的行把它自己另外几条注释引用的行顶走了，两轮各中一次。**规则扩展：所有编辑落地之后，重新核一遍每一条行号引用。** 更进一步的建议（留给 L3 定）：本仓库的跨文件行号引用得不偿失，没有编译 / 测试 / lint 会检查它们，改用符号名与「文件头部」这类锚点不损失精度。
+- **判据要按调用点逐个选，「创建 vs 覆写」是错误的分类轴。** 正确的维度是「**该写者前面是否有守卫拒绝预先存在的目标**」。踩这个坑的代价是真金白银：spec §7.1a 因此改了三次。
+- **一条声明「覆盖边界」的注释本身就是一个必须为真、必须可查的主张。** 但它并不因此就是坏的——判据是：**这个边界是否可构造、是否有人跑过、以及它失效时会不会大声过期。** 本分支那条通过了全部三项（点名了一个可构造的变异类、评审员跑了、补上 inode 测试后那句话会明晃晃地显得陈旧）。
+- **纯测试的修复有时才是正确形状。** 整分支评审最重的那条 finding 是**覆盖缺口而非行为缺陷**，生产代码本来就在用生成器——改 `src/` 才是错的响应。但**要让评审员来判这一点，不要自己假设**。
+- **控制器也会是假主张的源头，而且已经两次。** 一次是 `vi.mock` 的假前提，一次是我让实施者写「它点名的每个文件现在都经 rename 写入」——那句对 `OBSERVED_FILES` 整体为假，`owner-transfer.json` 标着 `atomic: true` 且仍有非原子写者。**两次都是子代理抓住的。「不要接受、自己核」这条规矩对控制器下达的指令同样适用。**
+- **修复波要一次派完，不要一个 finding 派一个。** 每个修复者都要重建上下文、重跑套件，上一轮分支的最终修复波因此比它全部任务加起来还贵。
+- **提取器要能大声失败。** 两个评审员各自写函数体哈希比对时，朴素版本对 `acquireOwnerTransferLock` **静默地提取出 1 行函数体**——因为它的返回类型 `Promise<{ release: () => Promise<void> }>` 里带大括号。**带「函数体过短就报错」的防护栏两次把静默的假通过变成了被抓住的错误。**
+- **定罪前先验明正身。** 评审员发现两处测试文件里的行号引用在 HEAD 上是错的，**没有直接算在本分支头上**，而是回到 merge-base 去查，证实它们在分支开始前就已经错了（L2 时期的漂移）。
 
 ## 更早的教训（仍然有效）
 
@@ -115,11 +135,11 @@ grep -c "^- \[x\]\|^- \[ \]" docs/superpowers/plans/2026-07-29-atomic-write-path
 
 ## 建议接手时调用的 skills
 
-- `superpowers:subagent-driven-development` — **接着做 Task 2 的直接入口。** 计划已就绪，不需要重新 brainstorm。
-- `superpowers:requesting-code-review` — 每任务一次 + 整分支一次，缺一不可；修复轮之后还要再评审一次。
+- `superpowers:finishing-a-development-branch` — **债 4 的下一步入口。** 五个任务与整分支评审都已完成，剩下的是人决定 push / merge。`.claude/worktrees/` 下的 worktree 由 harness 管理，用 `ExitWorktree` 而非 `git worktree remove`。**worktree 与 `.superpowers/sdd/2026-07-29-atomic-write-paths/` 都尚未清理——未经人确认不要删。**
+- `superpowers:brainstorming` — **开 L3 的第一步**（债 4 已完成，不要拿它的计划改）。
+- `superpowers:subagent-driven-development` — L3 有了 spec 与计划之后。
+- `superpowers:requesting-code-review` — 每任务一次 + 整分支一次，缺一不可；修复轮之后还要再评审一次。**债 4 的两条最贵发现都来自整分支那一次。**
 - `superpowers:verification-before-completion` — 声称「通过/完成」前复跑 typecheck / build / 全套件并贴真实输出。
-- `superpowers:finishing-a-development-branch` — 债 4 五个任务做完后收尾。`.claude/worktrees/` 下的 worktree 由 harness 管理，用 `ExitWorktree` 而非 `git worktree remove`。
-- `superpowers:brainstorming` — **只在开 L3 时才用**（债 4 已有 spec 与计划，不要重开）。
 - `superpowers:writing-plans` — L3 brainstorming 出 spec 之后。注意计划风格教训。
 - `superpowers:systematic-debugging` — 若遇到不在 flake 名单内的失败。
 - OpenWolf 协议（`.wolf/OPENWOLF.md`）：改文件后更新 `.wolf/anatomy.md` / `memory.md`；修 bug 后写 `.wolf/buglog.json`。

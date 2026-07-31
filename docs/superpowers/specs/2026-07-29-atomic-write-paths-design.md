@@ -19,13 +19,19 @@
 
 五处裸 `writeFile`：
 
-| 位置 | 文件 | 说明 |
-|---|---|---|
-| `fileStore.ts:81` | `loop-state.json` | `writeRunState`，**每次状态转移都重写**，最热 |
-| `fileStore.ts:76` | `loop-state.json` | `initializeRunFiles` 内的**创建**写。见下方「为什么必须纳入」 |
-| `fileStore.ts:379-381` | `owner-record.json` | `writeOwnerRecord`，生产唯一调用者 `runLoop.ts:868`，即**首次创建** |
-| `fileStore.ts:308` | `boundary-analysis.json` | `writeBoundaryArtifacts` 内，无条件写 |
-| `fileStore.ts:316` | `reconciliation-record.json` | `writeBoundaryArtifacts` 内，条件写 |
+> ⚠️ **锚点是函数名 + 文件名，不是行号。** 下表的行号是**分支基线 `5e0b75a` 上的**，Task 1 在
+> `:379` 之前插入了原子写辅助（约 67 行）并加了一行 import，**这些行号在当前 head 上全部失效**。
+> 已实测的漂移：`:76` 现在指向 `loop-contract.json`（本设计**排除**的文件），`:379-381` 现在落在
+> Task 1 新增的辅助块里。**照行号动手会改错文件。** 每次动手前先 grep 文件名字符串确认。
+> （此警告由 Task 2 的实施者提出、控制器实测确认后写入。）
+
+| 位置（基线行号，已失效） | 锚点 | 文件 | 说明 |
+|---|---|---|---|
+| `fileStore.ts:81` | `writeRunState` 内写 `loop-state.json` 那一行 | `loop-state.json` | **每次状态转移都重写**，最热 |
+| `fileStore.ts:76` | `initializeRunFiles` 内写 `loop-state.json` 那一行 | `loop-state.json` | **创建**写。见下方「为什么必须纳入」 |
+| `fileStore.ts:379-381` | `export async function writeOwnerRecord`（**不是** `writeOwnerRecordAtomically`） | `owner-record.json` | 生产唯一调用者 `runLoop.ts:868`，即**首次创建** |
+| `fileStore.ts:308` | `writeBoundaryArtifacts` 内写 `boundary-analysis.json` 那一行 | `boundary-analysis.json` | 无条件写 |
+| `fileStore.ts:316` | `writeBoundaryArtifacts` 内写 `reconciliation-record.json` 那一行 | `reconciliation-record.json` | 条件写 |
 
 **为什么 `:76` 必须纳入（初稿把它排除了，那是本设计的一个结构性缺陷，已更正）**：`loop-state.json` 有**两个**写者，`:76` 创建、`:81` 每次转移重写。初稿只纳入 `:81`，排除理由是「创建期没有并发读者」——**该理由不成立**。`ccloop ls` 可在任意时刻扫描根目录，**包括某个 run 正在初始化的那一刻**，而 `loop-state.json` 既是 `RUN_MARKER_FILES` 之一、又是 L2 唯一逐字段观测的三个文件之一。`ensureFreshRunDir` 只阻止同一 run 被重复初始化，**不阻止外部扫描**。只改 `:81` 而不改 `:76`，本设计对它最想修的那个文件就是半截的。
 
@@ -154,7 +160,13 @@ function buildAtomicTempPath(targetPath: string): string
 - `rename(tmp, target)` 让 `target` **指向新的 inode**。
 - `writeFile(target)` 对已存在的文件是**截断并原地重写**，inode **不变**。
 
-所以对五个替换点各写一条测试：
+**判据按调用点逐个选，不是一刀切**（本句替换初稿的「对五个替换点各写一条 inode 测试」，见 §7.1a
+的三档表）：**看该写者前面是否有守卫拒绝预先存在的目标**。目标可预先存在 → 用 inode 判据，且**优先**
+用它，因为两者之中只有它能杀掉「按目标是否存在分流」的实现；目标不可能预先存在 → 用 §7.1a 的悬挂
+符号链接判据。**两个判据互补，不是冗余**——已实测：分流实现只在 inode 判据下死，只改创建路径的实现
+只在符号链接判据下死。
+
+对适用 inode 判据的替换点，测试形状是：
 
 1. 写一次，`stat(target).ino` 记为 `ino1`；
 2. **`open(target)` 持有一个文件句柄，直到断言结束才关闭**（见下方「必须做，否则测试会随机失败」）；
@@ -166,6 +178,72 @@ function buildAtomicTempPath(targetPath: string): string
 **不要省略这一步再把偶发失败当成 flake 记账。** 本项目已背着 5 个 flake 债，而 L1b 的最终评审专门为「明知形状易 flake 仍照抄」立过案（Final-3）。
 
 这不需要任何注入，且**变异验证天然成立**：把实现换回裸 `writeFile`，inode 不再变化，测试失败。
+
+#### 7.1a 判据的三档分类，与创建型写入的替代判据
+
+**分类维度是「守卫是否拒绝预先存在的目标」，不是「创建 vs 覆写」**（本分类由 Task 4 的实施者提出、
+Task 4 的评审员实测确认；此前本节按「创建 vs 覆写」分类，把前提不同的调用点归成了一类）：
+
+| 档 | 替换点 | 目标能否预先存在 | 判据 |
+|---|---|---|---|
+| 1 不可能 | `initializeRunFiles` 的 `loop-state.json` | 否——`blockingPaths` 列了它，预先存在会抛 | **只能**用符号链接判据 |
+| 2 罕见但可达 | `writeOwnerRecord` 的 `owner-record.json` | 可以——无守卫，但生产通常是创建 | inode 判据**适用**；本分支选择不补，理由见下 |
+| 3 无守卫且本为覆写而设计 | `writeBoundaryArtifacts` 的两处 | 可以，且是主线——该函数自己的 preserve 逻辑会把目标读回来 | inode 判据**适用且必需** |
+
+第 3 档为何是「必需」：只有 inode 判据能杀掉「按目标是否存在分流」的实现（已实测）。
+
+
+
+**本节是初稿的一个结构性缺陷，由 Task 2 的实施者发现、Task 2 的评审员实测确认后补入。**
+
+上面的判据默认目标文件已存在。五个替换点里有**两个通常是创建型写入**——`initializeRunFiles` 的
+`loop-state.json` 与 `writeOwnerRecord` 的 `owner-record.json`。目标不存在时 `rename` 与
+`writeFile` 的**终态完全相同**，没有 inode 可比。**在那种情况下这不是「夹具不好搭」，是判据本身
+不适用——任何夹具都救不回来。** 初稿把它当成夹具问题，是错的。
+
+⚠️ **但这两个写者的前提并不相同，本节初版把它们混为一谈，是第二个错误**（Task 3 的实施者与评审员
+各自实测后更正）：
+
+- **`initializeRunFiles` 的目标不可能预先存在**：`ensureFreshRunDir` 的 `blockingPaths`
+  （`fileStore.ts:52-56`）里**列了** `loop-state.json`，预先存在会抛。它的夹具因此**依赖**
+  `pathExists` 用 `access()` 探测；改成 `lstat()` 会让该测试大声变红（已两次实测）。
+- **`writeOwnerRecord` 的目标只是「通常」不预先存在**，**并非保证**。同一份 `blockingPaths`
+  **不含** `owner-record.json`，且 `checkRunLease` 对 `leaseAffirmedAt: null`
+  （`leaseGate.ts:38-42`，文档化的转移后状态）与**已过期**租约（`:44-64`）**都只是返回、不拒绝**。
+  所以一个只含 owner record、租约为空或已过期的 run 目录**会以覆写形式到达这个写者**——已实测
+  （`initializeRunFiles` 未抛 → `checkRunLease` 返回 `no_lease` → inode 发生变化）。
+  **对它不要写「判据不适用」**：在那个可达角落里判据是适用的。它的夹具**不依赖任何新鲜度探测**，
+  前提严格少于前者。
+
+**本分支对 `writeOwnerRecord` 选择不补 inode 测试**，唯一成立的理由是：该写者是对
+`writeJsonFileAtomically` 的**无分支整体委托**，而覆写经 `rename` 这一性质已由 `writeRunState`
+处的 R1 inode 测试（含持有句柄那一步）钉住。**不得用「它只可能是创建」（假）或「怕 flake」
+（§7.1 的持有句柄已解决）当理由。**
+
+**已知残留，必须写明**：符号链接判据只钉住「创建」这一路的实现选择。一个**按目标是否已存在分流**
+的包装（存在则走裸写、否则走原子写）能从符号链接测试下存活（实测 48/48 全过），只有 inode 测试
+能杀它。**同时也不得声称补了 inode 测试就完全钉死了覆写角落**——`unlink` 后再 `writeFile` 同样
+会换 inode，两条测试都杀不掉它。
+
+**替代判据（已在 Task 2 与 Task 3 落地并经独立变异验证）**：在目标路径上放一个**悬挂符号链接**
+（指向一个不存在的路径）。
+
+- 若该写者前面有 `ensureFreshRunDir`（仅 `initializeRunFiles`）：它经 `pathExists` 用 `access()`
+  探测，`access` **跟随**链接、对悬挂链接报 ENOENT，所以新鲜度检查放行；
+- 之后 `writeFile` 会**穿过**链接写：链接存续，它指向的目标被创建；
+- 而 `rename` 会**替换**这个目录项：链接消失，它指向的目标从未被创建。
+
+断言 `lstat(target).isSymbolicLink() === false` 且 `stat(链接指向的路径)` 以 ENOENT 拒绝。
+
+**为什么它比 inode 判据更稳**：没有 inode 被释放，所以**根本不存在 inode 号复用的偶发窗口**。
+Task 2 连跑 40 次零失败。
+
+**已知代价，必须在测试里写明**：它依赖 `ensureFreshRunDir` 用 `access()`（跟随链接）而非
+`lstat()`（不跟随）探测。若那里改成 `lstat`，本测试会**大声变红**（`runDir already contains
+prior run data`），不会静默失效——评审员实测确认了这一点。
+
+**同样不得越界声称**：本判据证明的是「落地经过了 `rename`」，与 inode 判据一样，**不证明**
+「不存在任何中间可见状态」。
 
 **已知限制，必须在测试里写明**：inode 判据证明的是「落地经过了 rename」，**不是**「不存在任何中间可见状态」。后者在真实文件系统上无法确定性证明。**不要在测试名或注释里声称证明了后者**——本项目上一轮最贵的缺陷正是「测试声称杀 A、实际杀不掉」。
 
@@ -188,7 +266,8 @@ function buildAtomicTempPath(targetPath: string): string
 ## 9. 验收标准
 
 - **五个**替换点全部只经 `rename` 落地，§7 的六条要求（R1–R6）全部满足且变异验证有据。
-- `loop-state.json` 的**两个**写者（`:76`、`:81`）都已原子化——只改其一即为未达标。
+- `loop-state.json` 的**两个**写者（`initializeRunFiles` 与 `writeRunState`，基线 `:76`、`:81`，
+  行号已失效见 §2.1）都已原子化——只改其一即为未达标。
 - `src/registry/` 内零逻辑改动（只有注释）。
 - `writeOwnerTransferRecord` 带有 §6 要求的警示注释，签名与调用点未变。
 - 转移事务路径（§2.2 列出的四个符号）**逐字节未改**。
@@ -200,3 +279,19 @@ function buildAtomicTempPath(targetPath: string): string
 1. **跨文件不一致仍在**：`boundary-analysis.json` 与 `reconciliation-record.json` 之间、`owner-transfer.json` 与 `owner-record.json` 之间。属于债 1，归 L3。
 2. **L2 的有界重读变成冗余**：故意保留为纵深防御，见 §5。
 3. **`writeOwnerTransferRecord` 仍可被误用**：只加了注释，没有机制强制。真正的防线是 L3 的评审。
+4. **崩溃残留的临时文件没有任何机制会清理**：`SIGKILL` 落在 `writeFile(temp)` 与 `rename` 之间时，
+   `.{basename}.{pid}.{startTime}.{seq}.tmp` 会**永久**留在 run 目录里。两条现存清理路径都够不着它，
+   已逐一核对代码：`ensureFreshRunDir` 只对三个具名文件（`loop-contract.json`、`loop-state.json`、
+   `events.jsonl`）加 `attempts/`、`worktrees/` 两个目录的条目做阻塞；
+   `recoverInterruptedOwnerTransfer` 经 `cleanupOwnerTransferStagingWithoutMarker` 只清
+   `getOwnerTransferPaths` 的**四个固定名**——而临时名按 §4.1 的要求本就必须不在那四个之内。
+
+   **定性要准确：这是无界垃圾，不是故障。** 未发现任何功能性破坏：临时名不在 `RUN_MARKER_FILES`
+   （`scanRuns.ts:30-36`，五个具名文件）里，所以它不会把一个目录误认成 run；L2 只读
+   `OBSERVED_FILES` 的三个文件，不会读到它；`ensureFreshRunDir` 也不会因它而拒绝初始化。
+   代价只是崩溃次数足够多之后 run 目录内文件数无上限增长。**不要把它上报成缺陷。** 清理归属未分配。
+5. **一处未在 §2 声明的行为变更：这五条路径不再「穿过」符号链接写**。`writeFile` 跟随符号链接、
+   写它指向的目标；`rename` 替换目录项，链接本身随之消失。这正是 §7.1a 拿来当判据的那个差异，
+   分支内有两条测试正面断言它。§2 的「只改怎么写」框架没有提到这一点，而对任何把这些路径做成
+   符号链接的部署来说，它是可观测的行为变更。**在此记录，不上调为风险**：仓库内没有任何生产代码
+   创建符号链接（已核实），也没有证据表明有任何东西给这五个文件做链接。

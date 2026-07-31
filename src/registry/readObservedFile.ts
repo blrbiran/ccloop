@@ -1,7 +1,9 @@
 // L2 run registry — the I/O layer beneath observeFields. Reads one observed file, decides
 // absent vs. parse-failure vs. permission-failure, and retries a bounded number of times for
-// files known to be written non-atomically. See
-// docs/superpowers/specs/2026-07-28-run-registry-design.md §8.1, §11.
+// files marked `atomic: false` in OBSERVED_FILES. That flag no longer means "written
+// non-atomically": every writer of those files now publishes by rename. It is kept false so
+// this retry survives as defence in depth — see the comments on the flags in observeFields.ts.
+// See docs/superpowers/specs/2026-07-28-run-registry-design.md §8.1, §11.
 
 import { readRunState, readOwnerRecordWithoutRecovery, readOwnerTransferRecord } from "../persistence/fileStore.js";
 import { LEASE_VERIFY_READ_ATTEMPTS, LEASE_VERIFY_RETRY_DELAY_MS } from "../ownership/lease.js";
@@ -96,8 +98,10 @@ export async function readObservedFile(
   deps: ObserveDeps,
 ): Promise<FileObservation> {
   const reader = pickReader(deps.readers, spec.file);
-  // Retry applies to parse failure on non-atomic files only; an atomic file (written by
-  // rename) is read once (spec §8.1).
+  // Keys off the `atomic` flag, not off how the file is in fact written: both files flagged
+  // false are rename-published too, and stay false only as defence in depth (see the file
+  // header). true → read once; false → read up to LEASE_VERIFY_READ_ATTEMPTS times on a parse
+  // failure, i.e. 2 retries (spec §8.1).
   const maxAttempts = spec.atomic ? 1 : LEASE_VERIFY_READ_ATTEMPTS;
 
   let lastParseError: unknown;

@@ -23,6 +23,12 @@ implementation defect. Index:
   for a reason other than parse failure (`EACCES`). Found while writing the
   implementation plan; the omission would have forced the implementer to
   misreport such a file as `absent` or as a parse failure.
+- **(j)** §8.1, §13 item 4 — **the two "Atomic? no" rows are no longer true, and
+  unlike (a)–(i) this is not a document defect.** They were accurate against the
+  code on 2026-07-28; the `2026-07-29-atomic-write-paths` branch (debt 4) then
+  changed the code underneath them. Amended 2026-07-30 by that branch. The
+  original rows are annotated in place, not rewritten: they record why §8.1's
+  ruling exists, and that ruling still stands.
 
 Layer position: L2 in the ownership-and-coordination stack. Parent design:
 `2026-07-22-ownership-and-reconciliation-boundaries-design.md` §17 item 2.
@@ -279,6 +285,23 @@ Verified writer by writer:
 state transition, with no temp file and no rename. A scan that reads it
 mid-write can observe truncated JSON.
 
+*Amended (j) — the table above and the paragraph above it describe the code as
+it stood on 2026-07-28 and no longer describe the code. The
+`2026-07-29-atomic-write-paths` branch (debt 4) routed both **no** writers —
+`writeOwnerRecord` and `writeRunState` — through a temp-file-plus-rename helper
+(`writeJsonFileAtomically` in `src/persistence/fileStore.ts`, staging under a
+process-unique temp name), so all four rows now publish by rename and
+`loop-state.json` is no longer rewritten in place. They are left standing rather
+than corrected because they are the recorded reason the ruling below exists.*
+
+*What that branch did **not** change, deliberately: this layer. Both files stay
+`atomic: false` in `OBSERVED_FILES`, and the bounded re-read below stays, as
+defence in depth should a non-atomic write point ever be added back — that
+branch's design (`2026-07-29-atomic-write-paths-design.md` §5) rules flipping
+them out of its scope. Nor does it reach §8.2: rename buys a concurrent reader
+visibility atomicity for one file, not cross-file consistency, and not crash
+durability — this repository has no `fsync` anywhere.*
+
 **Ruling: bounded re-read for the non-atomic files only.** On *parse failure* of
 `loop-state.json` or `owner-record.json`, re-read using the existing constants
 `LEASE_VERIFY_READ_ATTEMPTS = 3` and `LEASE_VERIFY_RETRY_DELAY_MS = 50`
@@ -481,6 +504,14 @@ Debt 4 is new, and is recorded by this layer rather than taken by it.
    *Owner:* unassigned. The workaround is sound for a reader, but any future
    consumer that needs a coherent `loop-state.json` read — including the queue
    layer — inherits the same problem and the same 100 ms cost.
+
+   *Amended (j) — this debt is discharged at the write side. The
+   `2026-07-29-atomic-write-paths` branch (debt 4) made both writers publish by
+   rename (§8.1 amendment), so the item's opening claim no longer holds and no
+   future consumer inherits a live torn-write source from these two files. The
+   workaround itself is kept on purpose, so the 100 ms bound is still what a
+   parse failure costs — it is now defence in depth rather than a live
+   dependency.*
 
 ## 14. Follow-On
 

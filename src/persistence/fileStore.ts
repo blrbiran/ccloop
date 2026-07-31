@@ -74,12 +74,12 @@ export async function initializeRunFiles(runDir: string, contract: LoopContract,
   await ensureFreshRunDir(runDir);
   await mkdir(join(runDir, "attempts"), { recursive: true });
   await writeFile(join(runDir, "loop-contract.json"), JSON.stringify(contract, null, 2));
-  await writeFile(join(runDir, "loop-state.json"), JSON.stringify(initialState, null, 2));
+  await writeJsonFileAtomically(join(runDir, "loop-state.json"), initialState);
   await writeFile(join(runDir, "events.jsonl"), "");
 }
 
 export async function writeRunState(runDir: string, state: RunState): Promise<void> {
-  await writeFile(join(runDir, "loop-state.json"), JSON.stringify(state, null, 2));
+  await writeJsonFileAtomically(join(runDir, "loop-state.json"), state);
 }
 
 export async function appendEvent(runDir: string, event: RunEvent): Promise<void> {
@@ -306,7 +306,7 @@ export async function writeBoundaryArtifacts(
     reconciliationRecord?: ReconciliationRecord;
   },
 ): Promise<void> {
-  await writeFile(join(runDir, "boundary-analysis.json"), JSON.stringify(artifacts.boundaryAnalysis, null, 2));
+  await writeJsonFileAtomically(join(runDir, "boundary-analysis.json"), artifacts.boundaryAnalysis);
 
   if (artifacts.reconciliationRecord !== undefined) {
     const reconciliationRecord = await preserveSuccessfulReconciliationIfNeeded(
@@ -314,9 +314,9 @@ export async function writeBoundaryArtifacts(
       artifacts.reconciliationRecord,
     );
 
-    await writeFile(
+    await writeJsonFileAtomically(
       join(runDir, "reconciliation-record.json"),
-      JSON.stringify(reconciliationRecord, null, 2),
+      reconciliationRecord,
     );
   }
 }
@@ -445,9 +445,22 @@ async function readOwnerTransferRecordRaw(runDir: string): Promise<OwnerTransfer
 }
 
 export async function writeOwnerRecord(runDir: string, ownerRecord: OwnerRecord): Promise<void> {
-  await writeJsonFile(join(runDir, OWNER_RECORD_FILE), ownerRecord);
+  await writeJsonFileAtomically(join(runDir, OWNER_RECORD_FILE), ownerRecord);
 }
 
+// NOT atomic: this goes through the bare writeJsonFile, so a concurrent reader can observe a
+// half-written owner-transfer.json. It exists only to build test fixtures — every call site is
+// under tests/ (fileStore, runLoop.integration, registry/zeroWrite); production has none.
+//
+// Production must publish owner-transfer.json only through finalizePendingOwnerTransfer.
+// Reaching for this instead silently defeats L2's single-read assumption for that file:
+// OBSERVED_FILES marks owner-transfer.json `atomic: true` (observeFields.ts:46), which
+// readObservedFile turns into maxAttempts = 1 (readObservedFile.ts:105), so a torn read is
+// reported unreadable(parse) with no retry behind it to absorb it.
+//
+// Do not "fix" this by making it atomic. Atomicity is not its defect — it bypasses the entire
+// transfer transaction and its crash recovery, and an atomic version would merely look safe
+// enough for production to start calling (spec §6).
 export async function writeOwnerTransferRecord(runDir: string, transferRecord: OwnerTransferRecord): Promise<void> {
   await writeJsonFile(join(runDir, OWNER_TRANSFER_FILE), transferRecord);
 }
