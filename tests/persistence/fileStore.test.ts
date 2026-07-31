@@ -23,8 +23,8 @@ import {
 import type { LoopContract } from "../../src/contract/schema.js";
 import { applyOwnerEpochTransfer } from "../../src/ownership/ownerController.js";
 import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
-import type { RunState } from "../../src/state/types.js";
-import type { OwnerRecord } from "../../src/runtime/types.js";
+import type { RunBoundaryAnalysis, RunState } from "../../src/state/types.js";
+import type { OwnerRecord, ReconciliationRecord } from "../../src/runtime/types.js";
 
 const contract: LoopContract = {
   objective: { taskId: "task-1", goal: "Fix test", successCondition: "tests pass", nonGoals: [] },
@@ -1762,6 +1762,145 @@ describe("owner-record.json is published by replacing the path, not by writing t
 
     expect(await readFile(join(runDir, "owner-record.json"), "utf8")).toBe(
       JSON.stringify(ownerRecord, null, 2),
+    );
+  });
+});
+
+// writeBoundaryArtifacts writes two separate files, and each is pinned separately below.
+//
+// What these tests do NOT show, stated first because it is the easiest thing to read into them:
+// the two files do not become atomic *with respect to each other*. After both writes go through
+// rename individually, a reader can still observe boundary-analysis.json already replaced while
+// reconciliation-record.json still holds its previous content — the gap between the two renames
+// is untouched by this branch, and closing it belongs to debt 1 / L3 (design §4.3, §10 item 1).
+//
+// Scope is otherwise the same as the two blocks above: these tests show that each target *path*
+// is replaced rather than written through. They do NOT show that no intermediate state is ever
+// observable within a single file — not deterministically provable on a real filesystem (§7.1) —
+// and they say nothing about crash durability, since this repository has no fsync anywhere
+// (§3.1 item 6).
+//
+// The inode discriminator of §7.1 is the one that applies to both writers here, rather than the
+// dangling-symlink discriminator of §7.1a, and the reason is that a pre-existing target is
+// reachable at both of them:
+//
+//   - writeBoundaryArtifacts has no ensureFreshRunDir or any other guard in front of either
+//     write, so nothing refuses a run directory that already holds these files.
+//   - reconciliation-record.json pre-existing is not a corner but the case the function is built
+//     around: preserveSuccessfulReconciliationIfNeeded reads the persisted record back before
+//     the second write, which is what the "preserves a successful reconciliation record when a
+//     loser later tries to downgrade it" test earlier in this file exercises — by calling
+//     writeBoundaryArtifacts twice against one run directory. boundary-analysis.json is written
+//     unconditionally on that same second call, so it is overwritten there too.
+//
+// Both fixtures below therefore write twice and compare inodes, which is the stronger of the two
+// discriminators: unlike the symlink one it also kills an implementation that branched on
+// whether the target already exists (§7.1a, "已知残留").
+describe("writeBoundaryArtifacts publishes each of its two files by replacing the path, not by writing through it", () => {
+  const boundaryAnalysis: RunBoundaryAnalysis = {
+    status: "stale_candidate",
+    strongProgressAt: "2026-07-21T10:00:00.000Z",
+    weakProgressAt: "2026-07-21T10:05:00.000Z",
+    suspectReason: "healthy window exceeded",
+    staleCandidateReason: "continuity evidence missing",
+  };
+
+  // eligibleForContinuation: true makes preserveSuccessfulReconciliationIfNeeded return this
+  // record unchanged on its first branch, so the fixtures below exercise the write itself and
+  // not the preservation decision in front of it. That decision is "whether / what to write",
+  // which this branch does not touch.
+  const reconciliationRecord: ReconciliationRecord = {
+    staleSuspicionBasis: ["continuity evidence missing"],
+    staleConfirmed: true,
+    ownershipVerdict: "OWNER_LOST",
+    lastTrustedBoundary: "execute",
+    conflictingEvidence: [],
+    takeoverPermission: { allowed: true, reason: "strict owner-loss conditions satisfied" },
+    priorOwnerEpoch: 1,
+    newOwnerEpoch: 2,
+    eligibleForContinuation: true,
+  };
+
+  // R1 (§7.1). rename makes the name point at a new inode; writeFile on an existing file
+  // truncates and rewrites the same one. That is the whole discriminator.
+  //
+  // No reconciliationRecord is passed, so this test can only be answered by the
+  // boundary-analysis.json write — the conditional second write never runs.
+  it("gives boundary-analysis.json a new inode when writeBoundaryArtifacts overwrites it", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-atomic-boundary-"));
+    const target = join(runDir, "boundary-analysis.json");
+
+    await writeBoundaryArtifacts(runDir, { boundaryAnalysis });
+    const inodeBefore = (await stat(target)).ino;
+
+    // Held open across the second write and not closed until after the assertion. rename frees
+    // the inode of the file it replaces, and the filesystem is free to hand that same inode
+    // number straight back to the next file created in this directory — which would make the
+    // two inodes compare equal intermittently. An open descriptor pins the old inode so it
+    // cannot be reused, which is what makes this comparison deterministic instead of flaky
+    // (§7.1).
+    const pinOldInode = await open(target, "r");
+    try {
+      await writeBoundaryArtifacts(runDir, {
+        boundaryAnalysis: { ...boundaryAnalysis, status: "stale_confirmed" },
+      });
+
+      expect((await stat(target)).ino).not.toBe(inodeBefore);
+    } finally {
+      await pinOldInode.close();
+    }
+
+    // Guard, not the point of the test: an inode change on a file that never received the new
+    // analysis would prove nothing worth having.
+    expect(JSON.parse(await readFile(target, "utf8")).status).toBe("stale_confirmed");
+  });
+
+  // R1 (§7.1) for the conditional write. reconciliationRecord has to be supplied on both calls:
+  // the first one is what makes the target pre-exist, and without it on the second the write
+  // under test is skipped entirely rather than performed non-atomically.
+  //
+  // Only reconciliation-record.json's inode is asserted, so reverting the boundary-analysis.json
+  // write to a plain writeFile cannot make this test pass or fail.
+  it("gives reconciliation-record.json a new inode when writeBoundaryArtifacts overwrites it", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-atomic-reconciliation-"));
+    const target = join(runDir, "reconciliation-record.json");
+
+    await writeBoundaryArtifacts(runDir, { boundaryAnalysis, reconciliationRecord });
+    const inodeBefore = (await stat(target)).ino;
+
+    // Same open-handle pin, and for the same reason as the test above (§7.1).
+    const pinOldInode = await open(target, "r");
+    try {
+      await writeBoundaryArtifacts(runDir, {
+        boundaryAnalysis,
+        reconciliationRecord: { ...reconciliationRecord, lastTrustedBoundary: "verify" },
+      });
+
+      expect((await stat(target)).ino).not.toBe(inodeBefore);
+    } finally {
+      await pinOldInode.close();
+    }
+
+    // Guard, not the point of the test, and it doubles as a check that the record written is the
+    // one passed in: preserveSuccessfulReconciliationIfNeeded returns early for
+    // eligibleForContinuation: true, so no preserved older record should appear here.
+    expect((await readReconciliationRecord(runDir)).lastTrustedBoundary).toBe("verify");
+  });
+
+  // R4 (§7.2, §3.1 item 4). This branch changes only *how* these two files are written, so the
+  // bytes must stay exactly what the plain writeFile calls produced at both sites. Pinned to the
+  // literal expression rather than to a parsed object, because a changed indent or key order
+  // would otherwise surface later as unrelated tests failing for no visible reason.
+  it("writes the same bytes for both files as the plain writeFile calls they replaced", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-atomic-boundary-bytes-"));
+
+    await writeBoundaryArtifacts(runDir, { boundaryAnalysis, reconciliationRecord });
+
+    expect(await readFile(join(runDir, "boundary-analysis.json"), "utf8")).toBe(
+      JSON.stringify(boundaryAnalysis, null, 2),
+    );
+    expect(await readFile(join(runDir, "reconciliation-record.json"), "utf8")).toBe(
+      JSON.stringify(reconciliationRecord, null, 2),
     );
   });
 });

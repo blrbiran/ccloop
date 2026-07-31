@@ -306,7 +306,7 @@ export async function writeBoundaryArtifacts(
     reconciliationRecord?: ReconciliationRecord;
   },
 ): Promise<void> {
-  await writeFile(join(runDir, "boundary-analysis.json"), JSON.stringify(artifacts.boundaryAnalysis, null, 2));
+  await writeJsonFileAtomically(join(runDir, "boundary-analysis.json"), artifacts.boundaryAnalysis);
 
   if (artifacts.reconciliationRecord !== undefined) {
     const reconciliationRecord = await preserveSuccessfulReconciliationIfNeeded(
@@ -314,9 +314,9 @@ export async function writeBoundaryArtifacts(
       artifacts.reconciliationRecord,
     );
 
-    await writeFile(
+    await writeJsonFileAtomically(
       join(runDir, "reconciliation-record.json"),
-      JSON.stringify(reconciliationRecord, null, 2),
+      reconciliationRecord,
     );
   }
 }
