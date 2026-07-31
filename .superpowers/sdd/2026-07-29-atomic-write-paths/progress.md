@@ -685,3 +685,112 @@ survives the symlink test; only an inode test kills it) AND the cap on that reme
 `writeFile` changes the inode too, so neither test pins that).
 
 Task 3: complete (commits 5fdcab1..a445486, 1 fix round, review clean, 0 Critical)
+
+=== TASK 4 IMPLEMENTED (commit aebe942) — status DONE ===
+Report: `.superpowers/sdd/2026-07-29-atomic-write-paths/task-4-report.md`
+Claimed: 29 files / 441 tests (438 + 3 new), typecheck 0, build 0, no flake fired.
+
+CONTROLLER'S OWN VERIFICATION OF THE PRODUCTION DIFF (run, not read from the report):
+- `git diff f0566fa..aebe942 -- src/` is 3 changed lines across two hunks: `boundary-analysis.json`
+  at `:309` and `reconciliation-record.json` at `:317`, both now `writeJsonFileAtomically`.
+- **The forbidden neighbours are visibly untouched in the hunks**: `if (artifacts.reconciliationRecord
+  !== undefined)` and the `preserveSuccessfulReconciliationIfNeeded(` call both appear as context
+  lines, unmodified. That is the "when/whether vs how" boundary holding.
+- `git diff f0566fa..aebe942 -- src/registry/` is EMPTY.
+
+TWO ITEMS SENT TO THE REVIEWER FOR ADJUDICATION, neither pre-judged:
+- **The implementer ruled the INODE criterion applies to BOTH sites** and deliberately did not use
+  §7.1a's symlink criterion — arguing `writeBoundaryArtifacts` has no freshness guard in front of
+  either write, and that for `reconciliation-record.json` a pre-existing target is the MAINLINE case
+  the function is built around (`preserveSuccessfulReconciliationIfNeeded` reads that exact path
+  back; an existing test already calls the function twice against one runDir). Reviewer told to
+  verify by execution per site, and specifically to ask whether the FIRST write into a fresh run
+  directory (a create) is covered at all, or is an uncovered shape hiding behind a correct-looking
+  choice.
+- **The implementer reports a spec wording tension and deliberately did not fix it**: §7.1 still
+  reads as an unconditional "one inode test per site" while §7.1a carves out exceptions, and it
+  argues the deciding factor is not "create vs overwrite" but **whether a guard refuses a
+  pre-existing target** — three tiers now in evidence (`initializeRunFiles` impossible /
+  `writeOwnerRecord` merely unusual / these two unguarded and designed for it). It followed the
+  newer measured §7.1a per Rule 7 and recorded the tier in the test comments rather than editing
+  the spec. Reviewer asked to rule on the tiering and say concretely what §7.1/§7.1a should say;
+  **the controller will amend only after the verdict**, as with Task 3.
+
+Implementer also notes §2.1's `:308`/`:316` are still stale (actual `:309`/`:317`) — already covered
+by the §2.1 warning banner, not a new defect, but the drift keeps widening for Task 5.
+
+TASK 4 REVIEW DISPATCHED — deliberately a FRESH reviewer, not the one who reviewed Tasks 2-3,
+because this task's implementer challenges the §7.1a tiering that reviewer helped establish. It was
+told it is not expected to agree with earlier conclusions. Package: `review-f0566fa..aebe942.diff`.
+
+=== TASK 4 CODE REVIEW (independent, FRESH reviewer, opus, mutation-driven, sandboxed) ===
+Verdict: **Spec ✅ / approved. 0 Critical, 0 Important.** Worktree untouched.
+Eight mutations, all built and run by the reviewer in its own copy, none accepted from the report.
+
+- A: revert ONLY the boundary site → exactly 1 failure, the boundary test; reconciliation survives.
+  B: revert ONLY the reconciliation site → exactly 1 failure, the other one. **Bidirectional
+  independence re-derived, so neither test is a tautology.**
+- C: helper → bare `writeFile` (full suite) → 5 dead / 436 alive = exactly the 5 R1 tests that now
+  exist. Tasks 1-3's tests provably not weakened.
+- **D and E are the pair that settles the criterion question.** D (helper branches: existing target
+  → bare, absent → atomic) kills the 3 inode tests and BOTH symlink tests survive. E (the reverse
+  branch) kills ONLY Tasks 2/3's symlink tests. **The two criteria are complementary, not
+  redundant — each survives one mutation and dies under the other.**
+- G: boundary write → no-op → 3 failures. H: second write publishes the PERSISTED record instead of
+  the passed one (inode still changes) → only the guard clause catches it, so the guard is not
+  vacuous.
+
+**THE PIN WAS NOT TAKEN ON FAITH.** The reviewer `fstat`ed the held descriptor after the second
+write: `before=191007398 pinnedFdIno=191007398 pathInoAfter=191007399 pinnedNlink=0`. **`nlink=0`
+is the proof** — the old inode is unlinked and kept alive solely by the open handle, so the pin
+genuinely blocks inode-number reuse. 60 consecutive runs of the new block, 0 failures.
+
+Byte equivalence re-derived across BOTH revisions, and the reviewer added a shape the implementer
+never ran: the **preserve-branch** shape. Six hashes, all identical.
+Suite 29 files / 441 tests, typecheck 0, build 0.
+§4.3 cross-file disclaimer checked against the spec for ACCURACY, not merely for presence —
+including that it names the right direction of the observable window (boundary is written first).
+
+RULINGS:
+1. **Inode for both sites: UPHELD, and by execution.** `writeBoundaryArtifacts` has no guard and
+   neither filename is in `blockingPaths`, so a pre-existing target needs NO bypass — contrast
+   Task 2, which needed a dangling symlink to get past `ensureFreshRunDir`. §7.1a's premise does
+   not hold here. `reconciliation-record.json` is genuinely mainline (the preserve logic reads that
+   exact path back; a create-only writer would not need it). `boundary-analysis.json` is weaker but
+   sound, and the reviewer independently confirmed the production reachability: ONE production call
+   site (`runLoop.ts:821`) reached at `:1066` (then `return`) and `:1098` (then `throw`), so at most
+   once per process — the overwrite comes from a SECOND process taking over the run directory,
+   which is exactly the winner/loser scenario the preserve logic exists for. Choosing inode here is
+   **strictly stronger**, not merely defensible.
+2. **The three-tier classification is CORRECT and "create vs overwrite" is the wrong axis.**
+
+SPEC AMENDED BY THE CONTROLLER AFTER THE VERDICT (again, never during a review): §7.1's
+unconditional "one inode test per replacement site" replaced by a per-call-site rule keyed on
+whether a guard refuses a pre-existing target, with the complementarity of the two criteria stated
+as measured; §7.1a now leads with the three-tier table and each site assigned, so no later task has
+to re-derive the classification.
+
+DEFERRED MINOR — **HANDED TO TASK 5 RATHER THAN TO THE FINAL REVIEW**, because Task 5 is a
+comment-only task and this is a one-sentence comment fix in the same file:
+`fileStore.test.ts:1884-1886` (and the related rationale at `:1808`) attributes the guard's outcome
+to a mechanism that is NOT what produces it. The comment says the guard doubles as a check that the
+record written is the one passed in "because `preserveSuccessfulReconciliationIfNeeded` returns
+early for `eligibleForContinuation: true`". **Mutation F: deleting that early return entirely
+leaves all 51 tests passing** — the fixture writes no `owner-record.json` or `owner-transfer.json`,
+so `readPersistedSuccessfulTransferArtifacts` returns `null` and the branch falls through to the
+same value either way. The guard itself is fine (mutation H kills it); the stated mechanism is not
+load-bearing. Same defect class as Task 3's Important, one severity down.
+
+MINOR, informational, NOT a defect: this task's tests do not assert rename-landing for the CREATE
+shape at either site (mutation E survives all three). Acceptable — the call sites are unconditional
+single-line delegations and creates-via-rename is pinned at the helper level by Tasks 2/3's symlink
+tests, where mutation E dies loudly. D and E together cover both branch directions. **No uncovered
+shape is hiding behind the choice** — the reviewer answered the question the controller asked.
+
+REVIEWER SURFACED A RULE 6 BREACH RATHER THAN HIDING IT: this review substantially exceeded the
+4,000-token per-task budget, and it stated that the prescribed method (re-derive every load-bearing
+claim by execution; eight mutations plus a 60-run stress) is not achievable within it. **Recorded
+as a standing conflict between CLAUDE.md Rule 6 and this branch's review standard — for the human,
+not for me to resolve.**
+
+Task 4: complete (commits f0566fa..aebe942, review clean, 0 Critical, 0 Important, no fix round)
