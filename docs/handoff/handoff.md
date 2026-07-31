@@ -1,17 +1,14 @@
-# ccloop Handoff — 债 4（原子写）五个任务全部完成，整分支评审已过，**待人决定 push / merge**
+# ccloop Handoff — 债 4 已合入 `main`，flake 清单已更正并修掉一族；**下一步是 L3**
 
 > 更新于 2026-07-31。接手前先用 Git / 文件系统核对每一条状态声明再动手。
-> 本文不硬钉 git HEAD：提交本文即会改变 HEAD。用下面「如何定位当前状态」自查。
-
-> ⚠️ **本文当前位于分支 `worktree-debt4-atomic-write-paths`，尚未合并回 `main`。** 若你在 `main` 上读到的是旧版本，以本分支的为准。
+> **本文不写死 commit hash 或提交笔数**：提交本文即会改变 HEAD、push 会改变待推笔数。用下面「如何定位当前状态」自查。
 
 ## 快速接手入口
 
-1. **L1 / L1b / L2 已 merge 进 `main`**（run lease + heartbeat / owner-transfer contention / run registry）。
-2. **四笔遗留债的归属已由人裁决完毕**，见 `docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md`。裁决同时回答了「下一层做什么」：**先做债 4，再做 L3，最后 L5**。
-3. **债 4 已做完。** 五个任务全部关闭，每个任务一次独立评审，另加一次整分支评审 + 一轮修复波 + 一次 scoped 再评审。**整分支评审判定 ready to merge。** 当前 **443 tests** 全绿，typecheck / build 干净。
-   **下一步不是写代码，是人决定 push 与 merge。** 两件事都只在人明确下指令时执行。
-4. **债 4 之后是 L3，然后 L5。顺序不可打乱。** L3 开工要先 brainstorm 出 spec，不要照债 4 的计划改。
+1. **L1 / L1b / L2 / 债 4 都已在 `main` 上**（run lease + heartbeat / owner-transfer contention / run registry / 消除 fileStore 非原子写）。**443 tests 全绿，typecheck 与 build 干净。**
+2. **四笔遗留债的归属已由人裁决完毕**，见 `docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md`。裁决同时回答了「下一层做什么」：**先做债 4（已完成），再做 L3，最后 L5**。
+3. **债 4 已关闭并合并。** 五个任务，每任务一次独立评审，另加整分支评审 + 一轮修复波 + 一次 scoped 再评审，全程 0 Critical。**不要重做，也不要以为它还在分支上——worktree 与分支都已清理。**
+4. **下一步是 L3，然后 L5。顺序不可打乱。** **L3 必须先 brainstorm 出 spec，不要拿债 4 的计划改**——两者问题域不同（债 4 只改「怎么写」，L3 要处理「何时写 / 写不写」与跨文件事务性）。
 5. **「为什么长这样」先读 ledger**：`.superpowers/sdd/2026-07-29-atomic-write-paths/progress.md`——全部裁决、四条计划缺陷、两条 spec 缺陷、每一轮评审与修复都在里面。**不要重新推理。** 它已用 `git add -f` 入库。
 6. **常驻禁令**：L1 spec §12 十九条中的第 2/5/7/15/17/19 条不得弱化或删除（已变异验证，人下过指令）。
 7. 运行约定：`ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run`；**真实 Claude 调用须事先获批（付费）**。
@@ -23,15 +20,15 @@
 
 ```bash
 cd /Users/biran/code/skills/loop/ccloop
-git worktree list                         # 期望能看到 debt4-atomic-write-paths
-git log --oneline --decorate -15
-git rev-list --count origin/main..main    # 待 push 笔数，以此为准
-git status --branch --short
-# 在 worktree 内：
-cd .claude/worktrees/debt4-atomic-write-paths
-git log --oneline -15
-grep -c "^- \[x\]\|^- \[ \]" docs/superpowers/plans/2026-07-29-atomic-write-paths.md
+git status --branch --short               # 期望：main，干净
+git log --oneline --decorate -12          # 最近应能看到三笔 merge：债 4、flake 清单更正、BUDGET 家族修复
+git rev-list --count origin/main..main    # 待 push 笔数，以此为准，不要照抄本文
+git worktree list                         # 期望只有主仓库；债 4 的 worktree 已移除
+git branch --list                         # 期望只有 main；债 4 与 flake 分支都已删
+ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run   # 期望 29 files / 443 tests
 ```
+
+**核对状态时不要相信本文的数字，相信命令的输出。** 本项目已有多次「文档里的数字被自己的编辑证伪」的案底，见下方教训。
 
 ## 债务归属裁决（已完成，不要重开）
 
@@ -50,7 +47,7 @@ grep -c "^- \[x\]\|^- \[ \]" docs/superpowers/plans/2026-07-29-atomic-write-path
 
 **L5 的继承清单因此从 4 笔降到 1 笔**（只剩债 2）。
 
-## 债 4 分支状态：**做完了，等人决定 push / merge**
+## 债 4：已完成并合入 `main`（保留下来是为了「为什么长这样」，不是待办）
 
 **范围（全部落地）**：五处裸 `writeFile` 改 temp+rename——`loop-state.json` 的**两个**写者（`initializeRunFiles`、`writeRunState`）、首次 `owner-record.json`、`boundary-analysis.json`、`reconciliation-record.json`。外加标记一个导出的非原子 transfer 写入口（`writeOwnerTransferRecord`，**刻意保持非原子**），以及更正 L2 的三处注释（**`atomic: false` 保留为纵深防御，`src/registry/` 零逻辑改动，全分支 diff 在该目录内只有注释行**）。
 
@@ -67,8 +64,9 @@ grep -c "^- \[x\]\|^- \[ \]" docs/superpowers/plans/2026-07-29-atomic-write-path
 
 ## 遗留事项
 
-1. **push** —— 用上面的命令看实际待 push 的是哪几笔，**不要假设数量**。push 由人决定。
+1. **push** —— 用上面的命令看实际待 push 的是哪几笔，**不要假设数量，也不要照抄本文**。push 由人执行、人决定。
    - 早前记录的「`origin/main` 无人 push 却自动前进」**已澄清：是人自己 push 的，不是环境异常**。原遗留事项 10 撤销。
+   - 本次会话结束时 `main` 上有若干笔未 push；人已手动 push 过一次，之后又新增了 flake 相关的合并。**以命令输出为准。**
 2. **已知 flake 债（刻意未修）——实为 5 条已观测 + 1 条仅理论。**
 
    > ⚠️ **本清单在 2026-07-31 被更正过一次，因为它自己犯了它要防的错。** 旧版声称「7 个」并附「具名清单」，实际是：**一条被数了两次**，**一条的分类是假的**，**一条从未具名**。更正依据全部来自读代码，不是推理。**下面每一条都能自己核。**
@@ -180,11 +178,13 @@ grep -c "^- \[x\]\|^- \[ \]" docs/superpowers/plans/2026-07-29-atomic-write-path
 
 ## 建议接手时调用的 skills
 
-- `superpowers:finishing-a-development-branch` — **债 4 的下一步入口。** 五个任务与整分支评审都已完成，剩下的是人决定 push / merge。`.claude/worktrees/` 下的 worktree 由 harness 管理，用 `ExitWorktree` 而非 `git worktree remove`。**worktree 与 `.superpowers/sdd/2026-07-29-atomic-write-paths/` 都尚未清理——未经人确认不要删。**
-- `superpowers:brainstorming` — **开 L3 的第一步**（债 4 已完成，不要拿它的计划改）。
+- `superpowers:brainstorming` — **开 L3 的第一步，也是接手后的第一个动作**（债 4 已完成合并，不要拿它的计划改）。
 - `superpowers:subagent-driven-development` — L3 有了 spec 与计划之后。
+- `superpowers:finishing-a-development-branch` — L3 做完时。**注意一条已被实测证伪的旧建议**：`.claude/worktrees/` 下的 worktree 若是**上一个会话**用 EnterWorktree 建的，本会话的 `ExitWorktree` 是 **no-op**（它只管本会话建的），实际可用的是 `git worktree remove` —— 而且它**不动分支**，正好符合「删分支要单独授权」。
+- **清理约定（债 4 已按此执行，可照做）**：`.superpowers/sdd/<plan>/` 里只有 `progress.md` 被 `git add -f` 入库，其余 brief / report / review diff 都可重建、不入库。**移除 worktree 会连带删掉那些未入库产物 —— 这正是清理方式；但主仓库那份 `progress.md` 是 tracked 文件，`rm -rf` 整个目录会误删它。**
 - `superpowers:requesting-code-review` — 每任务一次 + 整分支一次，缺一不可；修复轮之后还要再评审一次。**债 4 的两条最贵发现都来自整分支那一次。**
 - `superpowers:verification-before-completion` — 声称「通过/完成」前复跑 typecheck / build / 全套件并贴真实输出。
 - `superpowers:writing-plans` — L3 brainstorming 出 spec 之后。注意计划风格教训。
-- `superpowers:systematic-debugging` — 若遇到不在 flake 名单内的失败。
+- `superpowers:systematic-debugging` — 若遇到不在 flake 名单内的失败。**也建议用在遗留事项 2 的 (B)**（`evidence.test.ts` 那条，至今只有现象、没有 root cause）。
+- **L3 之外还有两笔独立的小活，都已具名、已测量**，看人的优先级：(1) 遗留事项 2 (E) 第 4 条的根治办法 —— `runPhaseWithTimeout` 用 `performance.now()` 取代 `Date.now()`，属生产改动、需单独分支与评审；(2) 遗留事项 5 第 2 条 —— `runLoop.ts:864-866` 那条被实测证伪的注释，属归属域，随 L3 一起处理最自然。
 - OpenWolf 协议（`.wolf/OPENWOLF.md`）：改文件后更新 `.wolf/anatomy.md` / `memory.md`；修 bug 后写 `.wolf/buglog.json`。
