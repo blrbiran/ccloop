@@ -95,7 +95,10 @@ ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run   # 期望 29 files / 443 test
    同一根因，且**它本来就处在上面那个空操作配方会产生的状态**（`perAttemptTimeoutMs: 1_000` + `totalRuntimeBudgetMs: 20`）。
    两次独立测量一致：200 次隔离跑 **0 失败**，但余量分布 `{0:1, 1:87, 2:87, 3:25}`——**约 0.5% 的跑距离变红只有 1ms**。从未观测到失败。
    **(A) 的修法对它不适用**：plan 阶段没有 `awaitAbortedResult`（`runLoop.ts:993`），abort 之后 adapter 做什么都不计入 `elapsedMs`，**没有测试侧的杠杆**。
-   **评审员给出的真正解法，属生产改动、需单独一支分支**：把 `runPhaseWithTimeout` 里的相位耗时从 `Date.now()` 换成 `performance.now()`。单调、亚毫秒的时钟不可能相对于已触发的 `setTimeout` 读短，**这会一次性拔掉整个家族的根因**——四条、第五条，以及下面 (D) 那三处——而不是一处处糊。
+   ⚠️ **本条此前推荐的解法（换 `performance.now()`）已被 2026-07-31 的测量降级为「有效但非根治」，并已被一个更彻底的修法取代（已落地，见下）。** 原文声称「单调、亚毫秒的时钟不可能相对于已触发的 `setTimeout` 读短，这会一次性拔掉整个家族的根因」——**前半句在真实路径上未被证伪、后半句是过度声称**：
+   - 真实路径成对测量（N=200，隔离、空闲机）：`Date.now()` 余量分布 `{0:2, 1:133, 2:65}`；同一批事件用 `performance.now()` 读则 min **+0.3886ms**、mean +1.3317、max +2.4735，**两者都从未读到低于超时值**。两条 `date_margin==0` 的原始记录真实耗时是 20.485ms 与 20.869ms——**截断把真实存在的 0.5–0.9ms 余量抹成了 0**，这是 `Date.now()` 确实有害的地方。
+   - 但换时钟后**最小余量仍只有 +0.39ms**，是更宽的余量而非结构性保证。另有合成探针（2×2000 次）显示：当 `:397` 的起始读数与定时器注册之间的间隙接近 0 时，定时器会**真的**提前触发，此时 `performance.now()` 读到低于超时值的频率**高于** `Date.now()`（113/2000、137/2000 对 28/2000、75/2000）。该模式在真实路径上 0/200 未出现，**但它换任何时钟都治不了**。
+   - **`performance.now()` 全量替换后 200 次隔离跑 0 失败，与基线 0/200 无可辨差异**——pass/fail 在此样本量下无区分力，以上结论全部来自余量测量，不是来自跑绿。
 
    **(B) `tests/validation/evidence.test.ts > run-scenario CLI > records env names only and tracks descendants rooted at the spawned pid`**——全套件并行负载下 5000ms 超时，隔离连过两次。发现于债 4 基线跑，**当时源码零改动**。
 
@@ -109,7 +112,10 @@ ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run   # 期望 29 files / 443 test
    1. `runLoop.integration.test.ts` 里那句「窗口设为 0 会让这些测试**重回刀尖**」**过度声称**。实测：窗口=0 时余量 +1..+4、160 次 **0 失败**；而真正的修复前状态是余量 −1..+4、**15/160 失败**（`delay(0)` 被 Node 钳到 1ms，仍买到一个定时器回合）。**警告本身该留**（约 9ms 的缓冲确实塌成约 1ms），但准确说法是「只剩约 1ms 余量，而非约 9ms」。
    2. 同一注释块有一处**折行错位**（`// contract that set the`），纯外观。
    3. 该注释承诺「区间都带样本数」，但**只有一台机器的带了**；且另一台标注的 `+10..+13` 在重测后扩为 `+10..+15`。
-   4. **根治办法仍未做**：把 `runPhaseWithTimeout` 的相位耗时从 `Date.now()` 换成 `performance.now()`。**它是唯一能真正消除 (A′) 与 (D) 的手段**，其余都只是管理症状。属生产改动，需单独分支与评审。
+   4. ~~**根治办法仍未做**：把 `runPhaseWithTimeout` 的相位耗时从 `Date.now()` 换成 `performance.now()`。**它是唯一能真正消除 (A′) 与 (D) 的手段**~~ —— **已作废并已由另一修法取代（2026-07-31 落地）。** 「唯一手段」这句是错的：换时钟只是把余量从 0 放宽到约 +0.39ms，时钟仍在判定里。
+      **实际落地的修法**：`runPhaseWithTimeout` 的超时分支按**已发放的配额**计账（`Math.max(elapsedMs, timeoutMs)`，三个返回点）。依据是 `getPhaseTimeoutMs` 本就是 `min(perAttemptTimeoutMs, timeRemainingMs)`——**当预算是较小的那个操作数，超时触发即意味着预算按定义已耗尽**，不该回头拿墙钟去重新推导。这样 `hasBudgetExceeded` 的 `timeRemainingMs === 0` 成为「超时触发」的后果，而不是「两次时钟读数恰好跨满整个窗口」的后果；当 `perAttemptTimeoutMs` 是较小操作数时下限低于剩余预算，**不会强制任何东西耗尽**。
+      守护测试：`runLoop.integration.test.ts > accounts a budget-capped phase timeout as exhaustion even when the clock reports no elapsed time`，用 `vi.useFakeTimers({ toFake: ["Date"] })` 冻结 Date、保留真实定时器，把这个依赖从亚毫秒赛跑变成确定性判定。**退回裸 `elapsedMs` 该测试即红**（已实测：`Received: "plan phase exceeded per-attempt timeout of 20ms"`）。
+      **仍未消除的部分，别当已解决**：上面那个「间隙≈0 时定时器真提前触发」的模式与本修法无关，本修法只覆盖**预算封顶**这一路径；`perAttemptTimeoutMs` 封顶的超时仍由时钟测量决定其计账值。
 
    **给实施者与评审员**：跑全套件时，**只有 (B)** 可以出现且不构成新缺陷。**(A) 的四条已修——它们若再失败，是回归，按新缺陷处理。** **(A′) 与 (C) 从未被观测到失败：任一失败都是首次观测，必须立刻上报，不得挥手放过。**
    **「像是已知 flake」不等于「是已知 flake」**：必须先捕获**完整测试名与失败块**再比对，**绝不允许 `| tail -N` 后凭印象归因**——L1b 正是这样丢过一次失败身份。**任何不在名单内的失败一律按新缺陷处理。**
@@ -120,6 +126,7 @@ ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run   # 期望 29 files / 443 test
    - `finalizePendingOwnerTransfer` 自己的 catch 有与 D2 同型的潜在错误掩盖——两个 `safeUnlink` 都可能替换正在传播的错误。它在 spec §2.2 的不动范围内，本分支正确地未碰。**整分支评审复核后同意可以带着它合并**：修它需要动那个必须逐字节不变的保护区，而触发条件是「清理失败与转移失败同时发生」。
    - **【本轮实测新增】** `runLoop.ts:864-866` 的注释断言了**两件已被实测证伪**的事：「`ensureFreshRunDir` 已经对任何既存 run 文件抛过了」和「此处只可能观测到『无 owner record』」。实测：`ensureFreshRunDir` 的 `blockingPaths` **不含** `owner-record.json`，且 `checkRunLease` 对空租约（`leaseGate.ts:38-42`）与**已过期**租约（`:44-64`）**都只返回、不拒绝**——所以一个只含 owner record 的 run 目录会以**覆写**形式到达 `writeOwnerRecord`（已实测：inode 发生变化）。
      **代码大概率是对的**（`leaseGate.ts` 说该状态按设计不表态），**错的是注释**。本分支正确地未碰（属归属域，动它违反 Rule 3）。**整分支评审的附加条件是：这条必须从 ledger 提升到 handoff，否则下一层只会读到那条假注释、读不到对它的证伪。此条即为履行该条件。**
+     ✅ **已于 2026-07-31 修掉（注释改写，代码零改动）。** 两处断言由下一个接手者独立复核为假后才动手，不是采信本条。`blockingPaths` 实为 `loop-contract.json` / `loop-state.json` / `events.jsonl` 三项，外加非空的 `attempts/` 与 `worktrees/`。**注意本条自己的行号 `:864-866` 已失效**——同一次改动在该文件上方插入了行；用 `grep "ensureFreshRunDir" src/controller/runLoop.ts` 定位。「inode 发生变化」那句是上一轮的测量，**本轮未复测**，按原样保留为上一轮的记录。
 6. **一条随时可能被配置改动静默打破的依赖**：修复波新增的临时名接线测试依赖 vitest **文件内顺序执行**（`vitest.config.ts` 无 `sequence.concurrent`，该文件无 `it.concurrent`），否则模块级计数器会被竞争、临时名预测失效。**不是当前风险，但只隔着一个配置改动。** 若将来开启文件内并发，先看这条。
 7. **硬编码数量与硬编码行号是同一类腐坏，但更隐蔽。** 本分支两次被自己的编辑证伪：一条注释写 `owner-record.json`「在**两条**路径上」发布（实为三条）；一条注释写「本文件 **51** 条测试全绿」，而同一波修复给该文件加了 2 条（实为 53）。**行号错了一 `sed` 就露馅，数量错了只有等人重新枚举才会浮出来。** 仓库里还有若干带实测数字的注释（`441/443`、`48/48`、40 次压测），**当前全部为真，无人强制**——L3 若要动，先看这条。
 
@@ -186,5 +193,5 @@ ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run   # 期望 29 files / 443 test
 - `superpowers:verification-before-completion` — 声称「通过/完成」前复跑 typecheck / build / 全套件并贴真实输出。
 - `superpowers:writing-plans` — L3 brainstorming 出 spec 之后。注意计划风格教训。
 - `superpowers:systematic-debugging` — 若遇到不在 flake 名单内的失败。**也建议用在遗留事项 2 的 (B)**（`evidence.test.ts` 那条，至今只有现象、没有 root cause）。
-- **L3 之外还有两笔独立的小活，都已具名、已测量**，看人的优先级：(1) 遗留事项 2 (E) 第 4 条的根治办法 —— `runPhaseWithTimeout` 用 `performance.now()` 取代 `Date.now()`，属生产改动、需单独分支与评审；(2) 遗留事项 5 第 2 条 —— `runLoop.ts:864-866` 那条被实测证伪的注释，属归属域，随 L3 一起处理最自然。
+- ~~**L3 之外还有两笔独立的小活**~~ —— **两笔均已于 2026-07-31 在 L3 之前完成**：(1) 相位计时的根治改为「超时按已发放配额计账」，**不是**原先记的换 `performance.now()`（原方案经测量为有效但非根治，见遗留事项 2 (E) 第 4 条的更正）；(2) 那条被证伪的注释已改写，代码零改动。
 - OpenWolf 协议（`.wolf/OPENWOLF.md`）：改文件后更新 `.wolf/anatomy.md` / `memory.md`；修 bug 后写 `.wolf/buglog.json`。

@@ -869,9 +869,20 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
   const ownerRecord = buildInitialOwnerRecord(contract, state);
   await initializeRunFiles(runDir, contract, state);
   // §7: as early as possible, but never before initializeRunFiles — the gate may append an
-  // event and events.jsonl does not exist yet. §7.0: ensureFreshRunDir has already thrown
-  // on any pre-existing run file, so this call can only ever observe "no owner record";
-  // every other branch is reachable through resumeLoop alone.
+  // event and events.jsonl does not exist yet.
+  //
+  // §7.0: this comment used to claim ensureFreshRunDir had already thrown on any pre-existing
+  // run file, so that "no owner record" was the ONLY observation reachable here. Both halves
+  // are false, by reading. ensureFreshRunDir (fileStore.ts, blockingPaths) blocks a
+  // pre-existing loop-contract.json, loop-state.json or events.jsonl, plus a non-empty
+  // attempts/ or worktrees/ — owner-record.json is not on that list. And checkRunLease returns
+  // rather than refuses for a record carrying no lease (leaseGate.ts §5.0) and for an expired
+  // one (§7); only a fresh lease naming another process refuses. So a stray owner-record.json
+  // reaches this gate, "no owner record" is the ordinary observation and not the only reachable
+  // one, and the writeOwnerRecord below is not guaranteed to be a creation.
+  //
+  // The code is unchanged: the gate taking no position on those two states is leaseGate's
+  // stated design, not an oversight. Only the claim about what can be observed was wrong.
   await checkRunLease(runDir, ownerRecord.currentProcessInstanceId, Date.now());
   await writeOwnerRecord(runDir, ownerRecord);
   await appendTransitionEvent(runDir, state, "loop_planning", "run initialized and ready to plan");
