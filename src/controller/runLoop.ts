@@ -428,8 +428,13 @@ async function runPhaseWithTimeout<T>(
       // remaining budget and nothing is forced to exhaust. When the two are EQUAL the floor
       // equals the remaining budget and exhaustion is forced — which is the right answer (a
       // phase granted exactly the rest of the budget, that then timed out, has spent it), but
-      // it is forced, so do not read the previous sentence as covering that case. Much of this
-      // file's integration suite is configured that way.
+      // it is forced, so do not read the previous sentence as covering that case. A minority of
+      // this file's integration suite is configured that way — ten of its 49 tests set
+      // perAttemptTimeoutMs equal to totalRuntimeBudgetMs, measured 2026-08-01. That ratio rots
+      // whenever a test is added; re-derive it rather than quoting it:
+      //   grep -c "perAttemptTimeoutMs: 20,$" tests/controller/runLoop.integration.test.ts
+      // counts 13, of which the three that leave totalRuntimeBudgetMs at its 5000ms default are
+      // NOT the equal case.
       //
       // One contract-visible consequence, on the execute phase only: getExecutionFailureBoundary
       // branches on timeRemainingMs === 0, so a budget-capped execute timeout that recovers no

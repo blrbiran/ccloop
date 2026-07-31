@@ -2209,8 +2209,16 @@ describe("runLoop", () => {
   // of them leaves the suite green: the change shipped three behaviour changes and guarded one.
   // These two tests guard the other two.
   //
-  // This one also pins a contract-visible consequence that no test pinned in either direction:
-  // getExecutionFailureBoundary branches on timeRemainingMs === 0, so the persisted
+  // This one also pins a contract-visible consequence that no test pinned AS A CONSEQUENCE OF
+  // THE QUOTA FLOOR. An earlier claim here — "no test pinned it in either direction" — was
+  // false: "persists execution-recovery.json when execute is entered but returns no result
+  // before exhaustion" above has asserted failureBoundary === "runtime_exhausted" since before
+  // this branch (it is in the 07180a7 version of this file too). What it does not pin is the
+  // floor: it sets perAttemptTimeoutMs === totalRuntimeBudgetMs === 20 and reaches
+  // runtime_exhausted through measured wall clock, so reverting both quota floors in
+  // runPhaseWithTimeout leaves it green — the whole-branch mutation that motivated these two
+  // tests measured exactly that. getExecutionFailureBoundary branches on timeRemainingMs === 0,
+  // so here, where perAttemptTimeoutMs (1000) is far above the budget (20), the persisted
   // failureBoundary is what proves the floor was applied and not merely that the run stopped.
   it("accounts an execute timeout that resolves after the abort as exhaustion, and records the boundary as runtime_exhausted", async () => {
     const repoPath = await createRepo();
