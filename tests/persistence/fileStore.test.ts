@@ -1771,7 +1771,8 @@ describe("owner-record.json is published by replacing the path, not by writing t
     leaseAffirmedAt: null,
   };
 
-  // R1 (§7.1a). The sole production caller, runLoop.ts:868, runs after initializeRunFiles, so
+  // R1 (§7.1a). The sole production caller — `await writeOwnerRecord(runDir, ownerRecord);` in
+  // runLoop.ts, just below the lease gate — runs after initializeRunFiles, so
   // the target *usually* does not pre-exist — and when it does not, rename and writeFile leave
   // identical end states, which is why the write-twice-and-compare-inode shape cannot be the
   // discriminator for the ordinary case (§7.1a).

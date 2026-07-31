@@ -92,7 +92,7 @@ Constraints on the implementation:
 3. `heartbeat.runExclusive(...)` over the read → ownership evaluation → transfer → `adopt` span;
 4. write boundary artifacts through the existing `guardedWriteArtifacts` wrapper.
 
-**Amended 2026-07-28 (b): there is no such wrapper in scope; the guard is inline.** This corrects a defect in *this document*, not in the implementation. `guardedWriteArtifacts` is a closure defined inside `runLoopFromState` (`runLoop.ts:910`); `persistBoundaryAnalysis` is a module-level function that receives only `heartbeat`, so the wrapper is unreachable from it. Step 4 reads, correctly: **write boundary artifacts behind an inline `await heartbeat.assertHeld()`**, matching how L1's other `assertHeld` sites are written. §5.4's "before the write" bullet names the same unreachable wrapper and is corrected by this same amendment.
+**Amended 2026-07-28 (b): there is no such wrapper in scope; the guard is inline.** This corrects a defect in *this document*, not in the implementation. `guardedWriteArtifacts` is a closure defined inside `runLoopFromState` (`export async function runLoopFromState(` in `runLoop.ts`); `persistBoundaryAnalysis` is a module-level function that receives only `heartbeat`, so the wrapper is unreachable from it. Step 4 reads, correctly: **write boundary artifacts behind an inline `await heartbeat.assertHeld()`**, matching how L1's other `assertHeld` sites are written. §5.4's "before the write" bullet names the same unreachable wrapper and is corrected by this same amendment.
 
 ### 5.2 Retry policy
 

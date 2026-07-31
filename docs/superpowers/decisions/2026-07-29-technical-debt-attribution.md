@@ -7,7 +7,7 @@
 
 本记录的每一条结论都对着 `src/` 的实际代码核实过。**其中两条推翻了 handoff 的描述**，见债 1 与债 4。
 
-**关于「核实」的口径（初稿曾在此处过度声称，已更正）**：初稿写「未接受 handoff 或 ledger 的转述」，但债 3 的关键前提——「`runLoop` 与 `resumeLoop` 都在 `finally` 里 await 完才 `stop()`」——当时确实是抄 L1b ledger 的。同轮评审补撞了代码：`runLoop.ts:882-886`、`resumeLoop.ts:181-185` 均为 `try { return await runLoopFromState(...) } finally { await heartbeat.stop() }`，**结论成立**。此处保留这段记录，因为「结论对但当时没验证」和「验证过」是两件事，后来者有权知道区别。
+**关于「核实」的口径（初稿曾在此处过度声称，已更正）**：初稿写「未接受 handoff 或 ledger 的转述」，但债 3 的关键前提——「`runLoop` 与 `resumeLoop` 都在 `finally` 里 await 完才 `stop()`」——当时确实是抄 L1b ledger 的。同轮评审补撞了代码：`runLoop.ts` 里 `runLoop` 末尾那个 `try { return await runLoopFromState(...) } finally { await heartbeat.stop() }`、`resumeLoop.ts:181-185` 均为此形，**结论成立**。此处保留这段记录，因为「结论对但当时没验证」和「验证过」是两件事，后来者有权知道区别。
 
 ---
 
@@ -43,15 +43,15 @@
 
 「合成责任无人认领」不成立。核实：
 
-- `persistOwnerTransfer` 在生产代码里**只有一个调用点**：`src/controller/runLoop.ts:749`，被 `:747` 的 `boundaryAnalysis.status === "stale_candidate" && ownership.verdict === "OWNER_LOST" && ownership.takeoverAllowed` 三重条件包住。
-- `writeBoundaryArtifacts` 也**只有一个调用点**：`src/controller/runLoop.ts:821`，在同一函数、几行之后。
-- reconciliation 记录的构造条件是 `boundaryAnalysis.status === "stale_candidate"`（`:823-824`）——**是转移条件的超集**。
+- `persistOwnerTransfer` 在生产代码里**只有一个调用点**：`src/controller/runLoop.ts` 的 `persistBoundaryAnalysis`，被紧邻其上的 `boundaryAnalysis.status === "stale_candidate" && ownership.verdict === "OWNER_LOST" && ownership.takeoverAllowed` 三重条件包住。
+- `writeBoundaryArtifacts` 也**只有一个调用点**：`src/controller/runLoop.ts` 的 `await writeBoundaryArtifacts(runDir, {`，在同一函数、几十行之后。
+- reconciliation 记录的构造条件是同一次调用里 `reconciliationRecord` 那一支的 `boundaryAnalysis.status === "stale_candidate"`——**是转移条件的超集**。
 
 所以转移的赢家本人就是生产者，二者相隔几行。责任从未真空。
 
 ### 真实缺陷
 
-`owner-transfer.json` 由 `finalizePendingOwnerTransfer`（`src/persistence/fileStore.ts:526-545`）发布；reconciliation 记录要到 `runLoop.ts:821` 才写。
+`owner-transfer.json` 由 `finalizePendingOwnerTransfer`（`src/persistence/fileStore.ts:526-545`）发布；reconciliation 记录要到 `runLoop.ts` 的 `await writeBoundaryArtifacts(runDir, {` 才写。
 
 **发布本身就不是一次原子动作**（初稿把这里写成「`:536-538` 原子 rename 发布」，措辞误导，已更正）：
 
@@ -78,7 +78,7 @@ await rename(ownerTempPath, ownerPath);          // owner-record.json 后落地
 
 第三个进程在这个窗口里 supersede 赢家，`:820` 就拒绝 `:821` 的写，**而 transfer 已经不可撤销地发布出去了**。
 
-磁盘上留下：`owner-transfer.json` 存在且 `eligibleForContinuation: true`（**类型级保证**：`persistOwnerTransfer` 的返回类型在 `runLoop.ts:623` 把该字段钉成字面量 `true`，`:656` 兑现），`reconciliation-record.json` 不存在。
+磁盘上留下：`owner-transfer.json` 存在且 `eligibleForContinuation: true`（**类型级保证**：`persistOwnerTransfer` 的返回类型 `Promise<{ ownerRecord: OwnerRecord; eligibleForContinuation: true }>` 把该字段钉成字面量 `true`，函数末尾的 `return { ownerRecord: ..., eligibleForContinuation: true }` 兑现），`reconciliation-record.json` 不存在。
 
 ### 症状链（已坐实，非推测）
 
@@ -97,18 +97,18 @@ L3 的「触发」定义就是让 eligible run 继续执行，而继续必须走
 
 ### 修法方向可行性（本轮已验证，只读）
 
-**否决的方向**：「先写 reconciliation，再发布 owner-transfer」做不到——reconciliation 的 `newOwnerEpoch` 要等 `persistOwnerTransfer` 返回才知道（`runLoop.ts:766`）。
+**否决的方向**：「先写 reconciliation，再发布 owner-transfer」做不到——reconciliation 的 `newOwnerEpoch` 要等 `persistOwnerTransfer` 返回才知道（`runLoop.ts` 的 `nextOwnerEpoch = transfer.ownerRecord.currentOwnerEpoch;`）。
 
 **可行的方向**：把 reconciliation 加入转移**已有的**事务。`fileStore.ts:327-330` 已定义 `.owner-record.pending.json` / `.owner-transfer.pending.json` / `.owner-transfer.transaction.json` 事务标记，配合 `:536-538` 的双 rename 与 `recoverInterruptedOwnerTransfer` 的崩溃修复。reconciliation 可作为第三个文件加入同一事务，**不需要新发明一套原子性**。
 
 **与 `preserveSuccessfulReconciliationIfNeeded` 无冲突**（本轮专门验证的一点）：它在 `fileStore.ts:282` 一进门就 `if (nextReconciliationRecord.eligibleForContinuation) return`。
 
-**论据已更正。** 初稿给的理由是「loser 的转移根本没进入事务」——**那条从未验证过**，而且与 staging/CAS 的先后有关，本记录无权断言。真正的理由不依赖事务，而且强得多：`persistOwnerTransfer` 的返回类型在 `runLoop.ts:623` 就把 `eligibleForContinuation` 钉成**字面量 `true`**，`:656` 兑现。所以赢家**必然**命中 `:282` 的早退，loser（`eligibleForContinuation` 保持 `runLoop.ts:745` 的初值 `false`）**必然**不命中。**这是类型级保证，与事务机制无关。** 两者不相交。
+**论据已更正。** 初稿给的理由是「loser 的转移根本没进入事务」——**那条从未验证过**，而且与 staging/CAS 的先后有关，本记录无权断言。真正的理由不依赖事务，而且强得多：`persistOwnerTransfer` 的返回类型 `Promise<{ ownerRecord: OwnerRecord; eligibleForContinuation: true }>` 就把 `eligibleForContinuation` 钉成**字面量 `true`**，函数末尾的 `return` 兑现。所以赢家**必然**命中 `fileStore.ts:282` 的早退，loser（`eligibleForContinuation` 保持 `runLoop.ts` 里 `let eligibleForContinuation = false;` 的初值）**必然**不命中。**这是类型级保证，与事务机制无关。** 两者不相交。
 
 **留给 L3 spec 回答、本轮不预设答案的两个问题：**
 
 1. `recoverInterruptedOwnerTransfer` 是否也要负责 finalize reconciliation。会扩大「读会写」的范围——而 L2 整层的设计正是围绕规避这一点建立的（禁用 `readOwnerRecord`）。
-2. reconciliation 的内容依赖 exclusive span **之外**算出的 `boundaryEvidence` / `ownership`（`runLoop.ts:698-731`、`:820-843`）。塞进事务要改 `persistOwnerTransfer` 的签名——**那是 L1b 刚刚变异验证稳定下来的函数**。
+2. reconciliation 的内容依赖 exclusive span **之外**算出的 `boundaryEvidence` / `ownership`（`runLoop.ts` 的 `const boundaryEvidence = buildBoundaryEvidence(...)` 到 `evaluateOwnershipFor` 定义结束，以及 span 之后的 `heartbeat.assertHeld()` / `writeBoundaryArtifacts` 那一段）。塞进事务要改 `persistOwnerTransfer` 的签名——**那是 L1b 刚刚变异验证稳定下来的函数**。
 
 **评审补充的判断（不改变归属，只调整预期）**：上面「真实缺陷」一节查实 `assertHeld` 本身就是写者（追加事件），这削弱了问题 1 里「不得扩大读会写」那条反对意见的分量——写路径早已不纯。但同时它也说明这条修法要动的东西比初稿设想的多。**「加入事务」这条路比裁决时判断的更窄，L3 不应假定它一定成立。**
 
@@ -128,14 +128,14 @@ L3 的「触发」定义就是让 eligible run 继续执行，而继续必须走
 
 ### 核实
 
-`src/controller/runLoop.ts:847-857`：
+`src/controller/runLoop.ts` 的 `async function persistTerminalState(`：
 
 ```
-appendTransitionEvent(runDir, terminalState, ...)   // :854 写
-writeRunState(runDir, terminalState)                // :855 写
+appendTransitionEvent(runDir, terminalState, ...)   // 写
+writeRunState(runDir, terminalState)                // 写
 ```
 
-两个裸写，**无任何 guard**。进入路径是 `isLeaseStopError` 分支——`:958-959` 与 `:1310-1317`——**恰好是本进程已经知道自己丢了租约的那条路**。
+两个裸写，**无任何 guard**。进入路径是 `if (isLeaseStopError(error))` 的两处分支——**恰好是本进程已经知道自己丢了租约的那条路**。同一性质、初稿漏记的还有 `if (leaseLoss.lost !== null)` 的两处；四者合计四个调用点，而 `persistTerminalState` 全文共十五个调用点（`grep -n 'persistTerminalState' src/controller/runLoop.ts` 现数，不要照抄）。
 
 L1b 最终评审的原话仍然成立：层的论点在下一帧被执行、在上一帧被违反。而 L1b 的守卫使这条路径变得**更频繁**。
 
@@ -204,7 +204,7 @@ L3 spec **必须显式对债 3 表态**，不得沉默继承。可接受的表�
 - `:325-326`、`:536-538` —— owner-transfer 发布的双 rename
 - `:632-636` —— `writeOwnerRecordAtomically`，owner-record 的**轮转**路径
 
-**同一个 `owner-record.json`，首次创建非原子、后续轮转原子。** 这个不一致本身就是缺陷源。核实：`writeOwnerRecord`（`:379-381`）走 `writeJsonFile`（`:367-369`，裸 `writeFile`），生产代码**唯一调用者**是 `runLoop.ts:868`——正是首次创建（`checkRunLease` 之后、心跳启动之前）。
+**同一个 `owner-record.json`，首次创建非原子、后续轮转原子。** 这个不一致本身就是缺陷源。核实：`writeOwnerRecord`（`:379-381`）走 `writeJsonFile`（`:367-369`，裸 `writeFile`），生产代码**唯一调用者**是 `runLoop.ts` 里 `await writeOwnerRecord(runDir, ownerRecord);`——正是首次创建（`checkRunLease` 之后、心跳启动之前）。
 
 ### 评审新查出的陷阱：一个导出的非原子 transfer 写函数（M-1）
 
