@@ -47,7 +47,7 @@
 - `writeBoundaryArtifacts` 也**只有一个调用点**：`src/controller/runLoop.ts` 的 `await writeBoundaryArtifacts(runDir, {`，在同一函数、几十行之后。
 - reconciliation 记录的构造条件是同一次调用里 `reconciliationRecord` 那一支的 `boundaryAnalysis.status === "stale_candidate"`——**是转移条件的超集**。
 
-所以转移的赢家本人就是生产者，二者相隔几行。责任从未真空。
+所以转移的赢家本人就是生产者，二者相隔几十行（同一函数内，实测 72 行；用上面两个符号锚点各 `grep -n` 一次重推，不要引用这个数）。责任从未真空。
 
 ### 真实缺陷
 
@@ -103,7 +103,7 @@ L3 的「触发」定义就是让 eligible run 继续执行，而继续必须走
 
 **与 `preserveSuccessfulReconciliationIfNeeded` 无冲突**（本轮专门验证的一点）：它在 `fileStore.ts:282` 一进门就 `if (nextReconciliationRecord.eligibleForContinuation) return`。
 
-**论据已更正。** 初稿给的理由是「loser 的转移根本没进入事务」——**那条从未验证过**，而且与 staging/CAS 的先后有关，本记录无权断言。真正的理由不依赖事务，而且强得多：`persistOwnerTransfer` 的返回类型 `Promise<{ ownerRecord: OwnerRecord; eligibleForContinuation: true }>` 就把 `eligibleForContinuation` 钉成**字面量 `true`**，函数末尾的 `return` 兑现。所以赢家**必然**命中 `fileStore.ts:282` 的早退，loser（`eligibleForContinuation` 保持 `runLoop.ts` 里 `let eligibleForContinuation = false;` 的初值）**必然**不命中。**这是类型级保证，与事务机制无关。** 两者不相交。
+**论据已更正。** 初稿给的理由是「loser 的转移根本没进入事务」——**那条从未验证过**，而且与 staging/CAS 的先后有关，本记录无权断言。真正的理由不依赖事务，而且强得多：`persistOwnerTransfer` 的返回类型 `Promise<{ ownerRecord: OwnerRecord; eligibleForContinuation: true }>` 就把 `eligibleForContinuation` 钉成**字面量 `true`**，函数末尾的 `return` 兑现。所以赢家**必然**命中 `preserveSuccessfulReconciliationIfNeeded` 的早退，loser（`eligibleForContinuation` 保持 `runLoop.ts` 里 `let eligibleForContinuation = false;` 的初值）**必然**不命中。**这是类型级保证，与事务机制无关。** 两者不相交。
 
 **留给 L3 spec 回答、本轮不预设答案的两个问题：**
 
@@ -135,7 +135,7 @@ appendTransitionEvent(runDir, terminalState, ...)   // 写
 writeRunState(runDir, terminalState)                // 写
 ```
 
-两个裸写，**无任何 guard**。进入路径是 `if (isLeaseStopError(error))` 的两处分支——**恰好是本进程已经知道自己丢了租约的那条路**。同一性质、初稿漏记的还有 `if (leaseLoss.lost !== null)` 的两处；四者合计四个调用点，而 `persistTerminalState` 全文共十五个调用点（`grep -n 'persistTerminalState' src/controller/runLoop.ts` 现数，不要照抄）。
+两个裸写，**无任何 guard**。进入路径是 `if (isLeaseStopError(error))` 的两处分支——**恰好是本进程已经知道自己丢了租约的那条路**。同一性质、初稿漏记的还有 `if (leaseLoss.lost !== null)` 的两处；四者合计四个调用点，而 `persistTerminalState` 全文共十五个调用点（`grep -c 'await persistTerminalState(' src/controller/runLoop.ts` 现数，不要照抄；**别用 `grep -n 'persistTerminalState'`——它返回 16，多出的那条是函数声明本身**）。
 
 L1b 最终评审的原话仍然成立：层的论点在下一帧被执行、在上一帧被违反。而 L1b 的守卫使这条路径变得**更频繁**。
 

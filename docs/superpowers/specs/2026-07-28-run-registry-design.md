@@ -486,7 +486,7 @@ Debt 4 is new, and is recorded by this layer rather than taken by it.
    `if (isLeaseStopError(error))`, two of each). "The three call sites" was
    wrong in both halves: the symbol has fifteen call sites in that file, and the
    subset this debt is about is four, not three. Re-derive both numbers with
-   `grep -n 'persistTerminalState' src/controller/runLoop.ts` and
+   `grep -c 'await persistTerminalState(' src/controller/runLoop.ts` and
    `grep -nE 'leaseLoss\.lost !== null|isLeaseStopError\(error\)' src/controller/runLoop.ts`
    rather than trusting either.
    *Effect here:* none. The registry adds no caller.
