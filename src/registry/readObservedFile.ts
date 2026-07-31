@@ -1,7 +1,9 @@
 // L2 run registry — the I/O layer beneath observeFields. Reads one observed file, decides
 // absent vs. parse-failure vs. permission-failure, and retries a bounded number of times for
-// files known to be written non-atomically. See
-// docs/superpowers/specs/2026-07-28-run-registry-design.md §8.1, §11.
+// files marked `atomic: false` in OBSERVED_FILES. That flag no longer means "written
+// non-atomically": every writer of those files now publishes by rename. It is kept false so
+// this retry survives as defence in depth — see the comments on the flags in observeFields.ts.
+// See docs/superpowers/specs/2026-07-28-run-registry-design.md §8.1, §11.
 
 import { readRunState, readOwnerRecordWithoutRecovery, readOwnerTransferRecord } from "../persistence/fileStore.js";
 import { LEASE_VERIFY_READ_ATTEMPTS, LEASE_VERIFY_RETRY_DELAY_MS } from "../ownership/lease.js";

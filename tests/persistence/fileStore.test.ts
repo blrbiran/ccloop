@@ -1805,10 +1805,14 @@ describe("writeBoundaryArtifacts publishes each of its two files by replacing th
     staleCandidateReason: "continuity evidence missing",
   };
 
-  // eligibleForContinuation: true makes preserveSuccessfulReconciliationIfNeeded return this
-  // record unchanged on its first branch, so the fixtures below exercise the write itself and
-  // not the preservation decision in front of it. That decision is "whether / what to write",
-  // which this branch does not touch.
+  // The fixtures below exercise the write itself, not the preservation decision in front of it —
+  // that decision is "whether / what to write", which this branch does not touch. What makes that
+  // true is the fixture directory rather than this flag: it contains no owner-record.json and no
+  // owner-transfer.json, so readPersistedSuccessfulTransferArtifacts returns null and
+  // preserveSuccessfulReconciliationIfNeeded hands back the record it was passed. The
+  // eligibleForContinuation: true early return short-circuits to that same value, so the two
+  // paths agree here and neither is load-bearing on its own: deleting that early return from
+  // preserveSuccessfulReconciliationIfNeeded leaves all 51 tests in this file green.
   const reconciliationRecord: ReconciliationRecord = {
     staleSuspicionBasis: ["continuity evidence missing"],
     staleConfirmed: true,
@@ -1881,9 +1885,11 @@ describe("writeBoundaryArtifacts publishes each of its two files by replacing th
       await pinOldInode.close();
     }
 
-    // Guard, not the point of the test, and it doubles as a check that the record written is the
-    // one passed in: preserveSuccessfulReconciliationIfNeeded returns early for
-    // eligibleForContinuation: true, so no preserved older record should appear here.
+    // Guard, not the point of the test, and not redundant with the inode assertion above: a new
+    // inode proves the path was replaced, but says nothing about what replaced it. This pins the
+    // content, so it kills an implementation that renames into place a temp built from the
+    // persisted record instead of the one passed in — that mutation still changes the inode, so
+    // it passes the assertion above and fails only here.
     expect((await readReconciliationRecord(runDir)).lastTrustedBoundary).toBe("verify");
   });
 

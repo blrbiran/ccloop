@@ -448,6 +448,19 @@ export async function writeOwnerRecord(runDir: string, ownerRecord: OwnerRecord)
   await writeJsonFileAtomically(join(runDir, OWNER_RECORD_FILE), ownerRecord);
 }
 
+// NOT atomic: this goes through the bare writeJsonFile, so a concurrent reader can observe a
+// half-written owner-transfer.json. It exists only to build test fixtures — every call site is
+// under tests/ (fileStore, runLoop.integration, registry/zeroWrite); production has none.
+//
+// Production must publish owner-transfer.json only through finalizePendingOwnerTransfer.
+// Reaching for this instead silently defeats L2's single-read assumption for that file:
+// observeFields.ts:30 marks owner-transfer.json atomic: true, which readObservedFile.ts:101
+// turns into maxAttempts = 1, so a torn read is reported unreadable(parse) with no retry
+// behind it to absorb it.
+//
+// Do not "fix" this by making it atomic. Atomicity is not its defect — it bypasses the entire
+// transfer transaction and its crash recovery, and an atomic version would merely look safe
+// enough for production to start calling (spec §6).
 export async function writeOwnerTransferRecord(runDir: string, transferRecord: OwnerTransferRecord): Promise<void> {
   await writeJsonFile(join(runDir, OWNER_TRANSFER_FILE), transferRecord);
 }
