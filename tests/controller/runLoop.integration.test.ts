@@ -105,6 +105,32 @@ async function waitForAbort(signal?: AbortSignal): Promise<void> {
   });
 }
 
+// For the tests that assert the BUDGET_EXHAUSTED side of an execute timeout.
+//
+// getPhaseTimeoutMs clamps the phase timeout to min(perAttemptTimeoutMs, timeRemainingMs), so
+// once totalRuntimeBudgetMs is 20 the execute timeout IS the remaining budget — raising
+// perAttemptTimeoutMs cannot separate them. The controller then charges the measured elapsed
+// time back against that same budget, so the two land on the same millisecond and the stop
+// reason is decided by which of two clocks wins: Node schedules setTimeout on libuv's
+// monotonic clock but elapsed is measured with Date.now(), which can still read one
+// millisecond short. That leaves 1ms of budget and yields the per-attempt-timeout stop reason
+// instead of BUDGET_EXHAUSTED_REASON. Measured margin (elapsed - remaining budget) without
+// this helper: -1..+3ms, i.e. the assertion was decided by a coin flip.
+//
+// Because the execute phase is awaited with awaitAbortedResult, whatever the adapter does
+// after the abort is included in the elapsed time. So the adapter spends the flush window the
+// controller's own prompt promises it after an abort (partialOutcomeRecoveryWindowMs, which
+// these tests set to 10) before unwinding. That is in-contract adapter behaviour, and it puts
+// elapsed a full order of magnitude past the one-millisecond clock skew rather than on top of
+// it. It does not weaken the assertion: the budget must still reach exactly 0 for these tests
+// to pass, and mutating the budget path still turns every one of them red.
+const POST_ABORT_FLUSH_MS = 10;
+
+async function waitForAbortThenFlush(signal?: AbortSignal): Promise<void> {
+  await waitForAbort(signal);
+  await delay(POST_ABORT_FLUSH_MS);
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -1019,7 +1045,7 @@ describe("runLoop", () => {
       },
       async execute(context) {
         await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 3;\n");
-        await waitForAbort(context.abortSignal);
+        await waitForAbortThenFlush(context.abortSignal);
         throw new DOMException("The operation was aborted", "AbortError");
       },
       async verify() {
@@ -1284,7 +1310,7 @@ describe("runLoop", () => {
           ownerStatus: "lost",
           supersededByEpoch: null,
         }, null, 2));
-        await waitForAbort(context.abortSignal);
+        await waitForAbortThenFlush(context.abortSignal);
         return null;
       },
       async verify() {
@@ -1688,7 +1714,7 @@ describe("runLoop", () => {
         },
         async execute(context) {
           await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 4;\n");
-          await waitForAbort(context.abortSignal);
+          await waitForAbortThenFlush(context.abortSignal);
           return null;
         },
         async verify() {
@@ -1797,7 +1823,7 @@ describe("runLoop", () => {
       },
       async execute(context) {
         await writeFile(join(context.worktreePath, "secret.txt"), "partial output\n");
-        await waitForAbort(context.abortSignal);
+        await waitForAbortThenFlush(context.abortSignal);
         return null;
       },
       async verify() {
