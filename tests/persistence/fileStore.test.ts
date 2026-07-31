@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, open, readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, open, readdir, readFile, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
@@ -1554,6 +1554,73 @@ describe("buildAtomicTempPath", () => {
         expect(ownerTransferPaths).not.toContain(buildAtomicTempPath(target));
       }
     }
+  });
+});
+
+// The four tests above call buildAtomicTempPath directly, so they cover the generator and
+// nothing else. Nothing in them observes the path the production write actually stages at, and
+// a helper that ignored the generator entirely would keep them all green: replacing the
+// tempPath line in writeJsonFileAtomically with a fixed per-target
+// `.${basename(path)}.publish.tmp` was measured to leave every other test in the repository
+// passing — 441 of 443, the two failures being the two below. That fixed
+// name is the specific failure §4.1 names as this design's core risk — writeRunState takes no
+// lock, so two processes sharing one staging name would let one publish the other's bytes.
+//
+// These two tests observe the staging path through the production entry point instead, with no
+// mock: §7 prefers real means, and real means reach here. buildAtomicTempPath hands out a
+// monotonic sequence, so the path its *next* call returns is derivable from the one it just
+// returned. A directory planted there is only reachable if production stages at exactly that
+// path.
+describe("writeJsonFileAtomically's staging file, observed through the production write path", () => {
+  // Advances the sequence segment of a temp path by one. The rule is checked against a real
+  // subsequent call in plantDirectoryAtNextStagingPath below rather than trusted, so a change
+  // to the temp-name shape fails loudly there instead of quietly planting the directory on a
+  // path production never touches.
+  const predictNextTempPath = (tempPath: string): string => {
+    const segments = tempPath.split(".");
+    segments[segments.length - 2] = String(Number(segments[segments.length - 2]) + 1);
+    return segments.join(".");
+  };
+
+  async function plantDirectoryAtNextStagingPath(runDir: string): Promise<string> {
+    const scratch = join(runDir, "scratch.json");
+
+    // The prediction rule, executed rather than assumed: the derived successor of one call has
+    // to equal what the very next call returns.
+    expect(predictNextTempPath(buildAtomicTempPath(scratch))).toBe(buildAtomicTempPath(scratch));
+
+    const stagingPath = predictNextTempPath(buildAtomicTempPath(join(runDir, "loop-state.json")));
+    await mkdir(stagingPath);
+    return stagingPath;
+  }
+
+  it("is created at the path buildAtomicTempPath hands out, not at a name of the write helper's own", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-atomic-wiring-"));
+    await plantDirectoryAtNextStagingPath(runDir);
+
+    // EISDIR here comes from the staging writeFile, not from rename: loop-state.json does not
+    // exist yet, so there is nothing at the target for rename to collide with. A helper that
+    // staged under any other name would have written and published it instead, which is what
+    // the second assertion pins.
+    await expect(writeRunState(runDir, state)).rejects.toMatchObject({ code: "EISDIR" });
+    await expect(stat(join(runDir, "loop-state.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  // §3.1 item 3. The catch in writeJsonFileAtomically cleans up with a bare try/unlink/catch and
+  // deliberately not with safeUnlink, because safeUnlink rethrows anything that is not ENOENT
+  // and would then replace the error the caller has to see. Only a scenario where the cleanup
+  // itself fails separates the two, and the planted directory is one: writeFile fails EISDIR and
+  // unlink fails EPERM. Both errnos are asserted below rather than asserted-by-comment.
+  it("has its cleanup failure swallowed, so the staging write's error reaches the caller unreplaced", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-atomic-cleanup-"));
+    const stagingPath = await plantDirectoryAtNextStagingPath(runDir);
+
+    await expect(writeRunState(runDir, state)).rejects.toMatchObject({ code: "EISDIR" });
+
+    // The cleanup could not have succeeded: its target is still there. Substituting safeUnlink
+    // for the bare catch propagates this unlink's errno instead of the EISDIR asserted above.
+    expect((await lstat(stagingPath)).isDirectory()).toBe(true);
+    await expect(unlink(stagingPath)).rejects.toMatchObject({ code: "EPERM" });
   });
 });
 
