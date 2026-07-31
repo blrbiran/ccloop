@@ -105,7 +105,7 @@ different times by different code and a run can die between any two of them:
   `loop-contract.json`, then `loop-state.json`, then `events.jsonl`, plus an
   `attempts/` directory. A crash between those three lines leaves a partial set.
 - `owner-record.json` is **not** written by init. It first appears at
-  `runLoop.ts:868`, after the lease gate — so a directory can hold a complete init
+  `runLoop.ts`, the `writeOwnerRecord` call just below the lease gate, after the lease gate — so a directory can hold a complete init
   set and no owner record at all.
 - `owner-transfer.json` is renamed into place (`fileStore.ts:536`) *before* the
   owner record (`:538`) during transfer recovery, so the two can be observed out
@@ -472,7 +472,7 @@ Debt 4 is new, and is recorded by this layer rather than taken by it.
 
 1. **Reconciliation synthesis is unowned.** Consequence of the L1b ruling that
    the `writeBoundaryArtifacts` call is guarded unconditionally
-   (`src/controller/runLoop.ts:820-821`). A completed `owner-transfer.json` may
+   (`src/controller/runLoop.ts`, the `heartbeat.assertHeld()` / `writeBoundaryArtifacts` pair). A completed `owner-transfer.json` may
    now exist with neither `boundary-analysis.json` nor
    `reconciliation-record.json`.
    *Effect here:* none. §6 does not observe either file, so the registry neither
@@ -481,16 +481,16 @@ Debt 4 is new, and is recorded by this layer rather than taken by it.
    disk; that is the debt showing through, not a registry defect.
 
 2. **`persistTerminalState` writes into a run it no longer owns**
-   (`src/controller/runLoop.ts:959`, also `:939`, `:1282`).
+   (`src/controller/runLoop.ts`, the three `persistTerminalState` call sites).
    *Effect here:* none. The registry adds no caller.
 
 3. **`heartbeat.stop()` release window** — a `runExclusive` begun after the queue
    snapshot (`src/controller/leaseHeartbeat.ts:223`) is not awaited by `stop()`,
    which proceeds to `releaseOwnerLease` (`:231`). Reviewed as unreachable today
    because the only production `runExclusive` caller is `persistBoundaryAnalysis`
-   (declared `runLoop.ts:680`, its `runExclusive` call at `:739`), invoked at
-   `:1066` and `:1098`, both inside `runLoopFromState`, while both `stop()` sites
-   sit in a `finally` after `await runLoopFromState` (`runLoop.ts:886`,
+   (see `persistBoundaryAnalysis` in `runLoop.ts` and its `runExclusive` call), invoked from
+   its two call sites inside `runLoopFromState`, while both `stop()` sites
+   sit in a `finally` after `await runLoopFromState` (`runLoop.ts`, the `await heartbeat.stop()` in the `finally`,
    `resumeLoop.ts:185`). Re-verified as still holding on 2026-07-28.
    *Effect here:* none — the registry never starts a heartbeat. **This debt must be
    re-evaluated by whichever layer adds a triggering caller**, which is the

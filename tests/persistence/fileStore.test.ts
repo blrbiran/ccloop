@@ -1562,7 +1562,9 @@ describe("buildAtomicTempPath", () => {
 // a helper that ignored the generator entirely would keep them all green: replacing the
 // tempPath line in writeJsonFileAtomically with a fixed per-target
 // `.${basename(path)}.publish.tmp` was measured to leave every other test in the repository
-// passing — 441 of 443, the two failures being the two below. That fixed
+// passing — 441 of 443 AS MEASURED WHEN THE SUITE HAD 443 TESTS, the two failures being
+  // the two below. The denominator is a historical record, not a live count: the suite has
+  // grown since. Re-run the mutation rather than trusting either number. That fixed
 // name is the specific failure §4.1 names as this design's core risk — writeRunState takes no
 // lock, so two processes sharing one staging name would let one publish the other's bytes.
 //
