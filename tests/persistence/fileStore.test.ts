@@ -1702,11 +1702,26 @@ describe("owner-record.json is published by replacing the path, not by writing t
     leaseAffirmedAt: null,
   };
 
-  // R1 (§7.1a). The write-twice-and-compare-inode shape does not discriminate here: the only
-  // production caller, runLoop.ts:868, runs after initializeRunFiles, so it is a first create,
-  // and when the target does not pre-exist rename and writeFile leave identical end states —
-  // there is no old inode to replace. No fixture recovers that; the criterion itself does not
-  // apply (§7.1a).
+  // R1 (§7.1a). The sole production caller, runLoop.ts:868, runs after initializeRunFiles, so
+  // the target *usually* does not pre-exist — and when it does not, rename and writeFile leave
+  // identical end states, which is why the write-twice-and-compare-inode shape cannot be the
+  // discriminator for the ordinary case (§7.1a).
+  //
+  // "Usually", not "always": the overwrite corner is reachable in production, and this was
+  // measured rather than reasoned about. A run directory holding only owner-record.json gets
+  // through both guards — ensureFreshRunDir's blocking list (fileStore.ts:52-56) does not
+  // include owner-record.json, and checkRunLease answers no_lease for leaseAffirmedAt: null
+  // (leaseGate.ts:38-42, the documented post-transfer state) without refusing. That run then
+  // reaches this call with the file already there.
+  //
+  // No inode test is added for that corner anyway, and the reason is narrow: the overwrite
+  // path here is delegated wholesale to writeJsonFileAtomically, and that helper's overwrite
+  // behaviour is already pinned by the R1 inode test at the writeRunState call site above,
+  // open-handle pin and all (§7.1). What is left unpinned by that argument is only this
+  // wrapper's own choice of helper *in the overwrite corner specifically*: the test below pins
+  // that choice for the create case only, so a wrapper that branched on whether the target
+  // already exists would survive it. That residual is stated rather than covered — deliberately,
+  // and it is the only thing an inode test here would add.
   //
   // The discriminator used instead is a *dangling* symlink at the target path:
   //
