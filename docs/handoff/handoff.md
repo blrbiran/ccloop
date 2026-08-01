@@ -1,17 +1,42 @@
-# ccloop Handoff — 相位计时分支**已合并进 `main` 并已推送**；**下一步是 L3**
+# ccloop Handoff — **L3 spec 已定稿（经三轮独立评审重写）；下一步是对修复波再评审一轮，然后写实施计划**
 
 > 更新于 2026-08-01。接手前先用 Git / 文件系统核对每一条状态声明再动手。
 > **本文不写死 commit hash、提交笔数或 HEAD**：提交本文即会改变 HEAD、push 会改变待推笔数。历史 commit hash（如 `07180a7`、各修复波与那笔 merge 的 hash）是**已固定的过去锚点**，可以引用；**当前状态一律用命令自查**，见「如何定位当前状态」。
 
-## Executive Summary（下一位 agent 从这 7 行开始）
+## Executive Summary（下一位 agent 从这 8 行开始）
 
-1. **树是干净的，可以直接开 L3。** 相位计时分支已合并进 `main` 并已推送；它的 worktree 与分支都已删除，不要再去找。
-2. **L3 的第一步是 `superpowers:brainstorming` 出 spec**，**不要拿债 4 的计划改**——问题域不同（债 4 只管「怎么写」，L3 要管「何时写 / 写不写」与跨文件事务性）。顺序 L3 → L5，不可打乱。
-3. **动手前先跑「如何定位当前状态」那一节的命令，以输出为准，不要相信本文任何数字。**
-4. **L3 要吃下的两笔债已裁决完毕**：债 1（跨文件事务性）与债 3（`heartbeat.stop()` 释放窗口），见「债务归属裁决」。债 2 留给 L5。
-5. **跑全套件时只有 flake (B) 与 (F) 允许出现**；其余任何失败按新缺陷处理，必须先捕获完整测试名与失败块再比对，**不许凭印象归因**。
-6. **三条铁律**：验证跑绝不过滤输出（`tail` / `grep` 同罪）；计划不附完整可抄代码；评审必须对着代码撞、不接受实施者自证。**上一轮五波修复五波带缺陷，没有一波是实施者自己发现的。**
-7. **写下的每一个数字旁边，必须就地附一条能重推它的命令。** 这是上一轮唯一有结构性作用的对策——唯一没出错的数字就是唯一附了重推命令的那个。
+1. **L3 的 brainstorming 已完成，spec 已定稿并本地提交，代码一行未动。** spec 路径：`docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md`。**不要重新 brainstorm，也不要重写 spec。**
+2. **下一个动作是「对修复波再评审一轮」，不是写计划。** 初稿被三个独立评审员撞出 16 条 Critical 级缺陷，已一次性修完；但本仓库六轮 100% 命中「修复波自带缺陷」，所以修复波必须再评审。评审范围是**两笔 spec 提交之间的 diff**（用下面的命令定位），重点是「这次修复引入了什么」，**不是重做上一次评审**。
+3. **再评审通过后才进 `superpowers:writing-plans`**，然后按 `superpowers:using-git-worktrees` 开隔离 worktree 再动代码。
+4. **人已裁定的五个设计决策，不要重开**：sweep 是一次性、顺序、非常驻；sweep 只续已发布的 transfer、永不发起；债 3 真修（收紧 `runExclusive`）；债 1 走三文件事务；退出码只报 sweep 自身成败。详见 spec §2/§4/§5/§7。
+5. **spec 里有两条是对既有裁决记录的推翻**，评审时要重点撞：§4.1「`newOwnerEpoch` 事务前已知」推翻了裁决记录的否决理由；§5.3 推翻了 `runExclusive` 注释里「refusal 只有一个 home」的在先裁定。两条都在 spec 里附了重推命令。
+6. **动手前先跑「如何定位当前状态」那一节的命令，以输出为准，不要相信本文任何数字。**
+7. **跑全套件时只有 flake (B) 与 (F) 允许出现**；其余任何失败按新缺陷处理，必须先捕获完整测试名与失败块再比对，**不许凭印象归因**。
+8. **三条铁律 + 一条**：验证跑绝不过滤输出（`tail` / `grep` 同罪）；计划不附完整可抄代码；评审必须对着代码撞、不接受实施者自证；**每个数字旁边就地附一条能重推它的命令**。最后一条在本轮又自证一次——spec 初稿 13 处无命令的数字里有 2 处是错的，而每一处附了命令的都是对的。
+
+## 本轮（2026-08-01 L3 spec 轮）发生了什么
+
+**产出**：L3 spec 两笔提交——初稿，以及经三轮独立评审后的重写。定位：
+
+```bash
+git log --oneline -- docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md
+# 两笔：初稿在前，重写在后。再评审的 diff 就是这两笔之间
+```
+
+**三个评审员的分工是刻意错开的**（事实核查 / 设计缺陷 / 一致性与可测性），三份报告不在仓库里（会话产物），但**结论已全部吸收进 spec 的 §16 修订索引**——那张表是「初稿缺陷 ↔ 修订处」的对照，再评审时应该拿它当清单逐条验证「修好了没有、修的时候有没有引入新的」。
+
+**两条是决策反转，不是措辞修补，评审时优先撞这两条：**
+
+- **§4.4 finalize 机制从「pending 存在性驱动」改判为「marker 驱动」。** 原因：前者无法区分「v1 事务」与「v2 事务但 reconciliation pending 没落盘」，崩在 marker 与该 pending 之间会发布 transfer、删掉 marker、留下**永不可恢复**的债 1 状态——而初稿的测试 4 恰好把这个状态断言为正确。
+- **§5.4 停机信号从「写终态 cancelled」改判为「不写终态」。** 原因：`legalTransitions.cancelled = []` 且 `RESUMABLE_STATUSES` 不含它，写终态等于一次 Ctrl-C 永久杀死飞行中的 run。初稿照抄了 `leaseLoss` 的先例却没注意到不类比——那里有新 owner 接手，`stop_requested` 下没有。
+
+**本轮最值钱的三条教训（比缺陷本身值钱）：**
+
+- **三个评审员各自都错了至少一处，每一处的错法完全相同：接受了一条没有把命令放宽去跑的主张。** 一个只 grep `src/` 就宣布「无人读 `boundary-analysis.json`」（`validation/v1/lib/evidence.ts` 读它并做 Zod 校验）；一个把「`grep` 不加 `-F` 会 exit 2」标成「确实会报错」而没跑（实测 exit 0，只有 `-E` 才 2）。**「评审员说的」和「实施者说的」一样需要自己跑。**
+- **引用在先的裁定时必须引全句。** spec 初稿引了 `runExclusive` 注释的前半句，而被略掉的后半句（"Refusal is Task 5's job; duplicating it here would just be a second, weaker copy…"）正好禁止它要做的改动。Rule 7 要求冲突时挑一个并说明为什么，不是引一半。
+- **一个「最小 diff」的选择，如果它避开的失败模式是响亮的、接受的失败模式是静默的，那它就选反了。** §4.4 的改判就是这一条。
+
+**遗留的两笔已在 spec §13 具名、刻意留给 L5**：锁可被偷（零长度锁文件不可解析 → 活着的持有者被夺锁，本层之后会让 epoch 三元组失去区分力）；execute 相位 abort 后无第二重超时上界（adapter 只发 SIGTERM、无 SIGKILL 升级）。
 
 ## 相位计时分支：已合并，本节留档不是待办
 
@@ -59,7 +84,8 @@
 1. **L1 / L1b / L2 / 债 4 / 相位计时都已在 `main` 上**（run lease + heartbeat / owner-transfer contention / run registry / 消除 fileStore 非原子写 / 超时按已发放配额计账）。合并当时实测 **29 files / 446 tests 全绿，typecheck 与 build 退出 0** —— **以命令输出为准，不要照抄这个数**。
 2. **四笔遗留债的归属已由人裁决完毕**，见 `docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md`。裁决同时回答了「下一层做什么」：**先做债 4（已完成），再做 L3，最后 L5**。
 3. **债 4 已关闭并合并。** 五个任务，每任务一次独立评审，另加整分支评审 + 一轮修复波 + 一次 scoped 再评审，全程 0 Critical。**不要重做，也不要以为它还在分支上——worktree 与分支都已清理。**
-4. **下一步是 L3，然后 L5。顺序不可打乱。** **L3 必须先 brainstorm 出 spec，不要拿债 4 的计划改**——两者问题域不同（债 4 只改「怎么写」，L3 要处理「何时写 / 写不写」与跨文件事务性）。
+4. **L3 的 spec 已经写完了（2026-08-01），不要重新 brainstorm。** 路径 `docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md`。下一个动作是**对修复波再评审一轮**，通过后才写实施计划。顺序仍是 L3 → L5，不可打乱。
+   **spec §11 有一条实施顺序的硬约束**：债 1（§4）的任务组必须完成并通过独立评审之后，触发逻辑（§6）的任务组才可开始——这是裁决记录「先于触发逻辑」的原话，初稿曾把「先于」两字漏掉。
 5. **「为什么长这样」先读 ledger——但要读对那一份。**
    **本分支（相位计时）的是 `.superpowers/sdd/2026-07-31-phase-timing-quota/progress.md`**（2026-08-01 补建）。此前有人把接手者指向下面那份债 4 的 ledger 说「本分支的来龙去脉在里面」，**那是假的**：那份通篇是债 4 的，grep 不到本分支任何内容。
    **债 4 的**是 `.superpowers/sdd/2026-07-29-atomic-write-paths/progress.md`——全部裁决、四条计划缺陷、两条 spec 缺陷、每一轮评审与修复都在里面。**不要重新推理。** 它已用 `git add -f` 入库。
@@ -80,11 +106,19 @@ git status --branch --short               # 应为 main，干净
 git worktree list                         # 应只有主仓库；相位计时的 worktree 已移除
 git branch --list                         # 应只有 main + backup/evidence-first-v1-…（备份分支，禁删）
 git rev-list --count origin/main..main    # 待 push 笔数，以此为准，不要照抄本文
-git log --oneline --decorate -6           # 近处应能看到那笔 "Merge the phase-timing branch: …"
+git log --oneline --decorate -8           # 近处应能看到两笔 L3 spec 提交
 
-ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run     # 期望 29 files / 446 tests
+# L3 spec 的两笔提交与再评审范围（不要照抄 hash，就地重推）
+git log --oneline -- docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md
+# 输出的第二行是初稿、第一行是重写；再评审的 diff 就是 <初稿>..<重写>
+
+ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run     # 本轮实测 29 files / 446 tests，exit 0
 npm run typecheck && npm run build                     # 均应退出 0
 ```
+
+**本轮全套件实测 29 files / 446 tests 全绿、typecheck 与 build 退出 0，且 (B) 与 (F) 都未出现。** 后者只说明「本次没跑出来」，**不构成任何 flake 已消失的证据**——(A′) 与 (C) 至今从未被观测到失败，任一失败都是首次观测。
+
+**本轮 spec 轮代码零改动**，所以这三个数字反映的是 `main` 的既有状态，不是 L3 的成果。
 
 **446 这个数字会随任何一次加测试而腐坏**——它是合并当时的实测值，不是承诺。以命令输出为准。
 
@@ -286,7 +320,8 @@ npm run typecheck && npm run build                     # 均应退出 0
 
 - **相位计时（已合并进 `main`）**：`.superpowers/sdd/2026-07-31-phase-timing-quota/progress.md` ——**它没有 spec / plan**，这支分支起于 flake 修复轮的一条评审建议，不是走 SDD 流程立项的。ledger 里记了配额计账的依据、位移表与重推命令、引用清扫的归属判据、flake (F) 的定性方法。
 - **债 4（已合并）**：`docs/superpowers/specs/2026-07-29-atomic-write-paths-design.md`、`docs/superpowers/plans/2026-07-29-atomic-write-paths.md`、`.superpowers/sdd/2026-07-29-atomic-write-paths/progress.md`
-- **债务裁决**：`docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md`
+- **L3（当前，spec 已定稿、代码未动）**：`docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md` ——**先读它的 §16 修订索引**，那是「初稿 16 条 Critical ↔ 修订处」的对照表，再评审时拿它当清单。**它没有 ledger 目录**：本轮只有 brainstorming 与评审，没有走 SDD 实施流程。
+- **债务裁决**：`docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md` ——注意 L3 spec §4.0 / §4.1 **推翻了它的一条否决理由**，并**正面回答了它留给 L3 的问题 1**（初稿曾漏掉）。两处都在 spec 里附了重推命令。
 - **L2 / L1b / L1**：`docs/superpowers/specs/2026-07-2{8,7,6}-*-design.md` + 同名 plan + `.superpowers/sdd/2026-07-2{8,7,6}-*/`
 - 父设计：`docs/superpowers/specs/2026-07-22-ownership-and-reconciliation-boundaries-design.md`（§17 后续 spec 清单——**item 2 的触发那一半与 item 3 的 L5 cleanup 都还没写**）
 - 兄弟设计：`docs/superpowers/specs/2026-07-25-resume-adopt-continuation-design.md`
@@ -295,7 +330,8 @@ npm run typecheck && npm run build                     # 均应退出 0
 
 ## 建议接手时调用的 skills
 
-- `superpowers:brainstorming` — **接手后的第一个动作**，也是开 L3 的第一步（债 4 与相位计时都已合并，不要拿它们的计划改）。
+- ~~`superpowers:brainstorming`~~ — **L3 的 brainstorming 已于 2026-08-01 完成并产出 spec，不要重跑。** 只有在 spec 被判定需要推翻重来时才回到它。
+- `superpowers:requesting-code-review` — **接手后的第一个动作**：对 L3 spec 的修复波再评审一轮。**派多个视角错开的独立评审员，并在提示词里明写「不接受作者自证、findings 必须带可构造的具体场景、锚点用符号名不用行号」**——本轮三个评审员正是这么派的，撞出 16 条 Critical。**并且要提醒评审员：评审员自己也会犯「没把命令放宽就下结论」的错，本轮三个全中。**
 - `superpowers:subagent-driven-development` — L3 有了 spec 与计划之后。
 - `superpowers:finishing-a-development-branch` — L3 做完时。**已按它走过一遍（2026-08-01 的相位计时分支），三条实测补充**：(1) `.claude/worktrees/` 下若是**上一个会话**建的 worktree，本会话的 `ExitWorktree` 是 **no-op**，实际可用的是 `git worktree remove`；(2) 该 skill 的 Option 1 把「删分支 + 移除 worktree」当作合并的一部分，**但本仓库规定删分支要单独授权**——两者冲突时以本仓库为准，先合并再单独问；(3) `git merge -F -` **不读 stdin**（与 `git commit -F -` 不同），带描述的 merge message 要先写进临时文件。
 - **清理约定（债 4 已按此执行，可照做）**：`.superpowers/sdd/<plan>/` 里只有 `progress.md` 被 `git add -f` 入库，其余 brief / report / review diff 都可重建、不入库。**移除 worktree 会连带删掉那些未入库产物 —— 这正是清理方式；但主仓库那份 `progress.md` 是 tracked 文件，`rm -rf` 整个目录会误删它。**
