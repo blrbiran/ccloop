@@ -1,39 +1,29 @@
-# ccloop Handoff — 相位计时分支**已做完、未合并**；合并后才是 L3
+# ccloop Handoff — 相位计时分支**已合并进 `main` 并已推送**；**下一步是 L3**
 
 > 更新于 2026-08-01。接手前先用 Git / 文件系统核对每一条状态声明再动手。
-> **本文不写死 commit hash、提交笔数或 HEAD**：提交本文即会改变 HEAD、push 会改变待推笔数。历史 commit hash（如 `07180a7`、各修复波的 hash）是**已固定的过去锚点**，可以引用；**当前状态一律用命令自查**，见「如何定位当前状态」。
+> **本文不写死 commit hash、提交笔数或 HEAD**：提交本文即会改变 HEAD、push 会改变待推笔数。历史 commit hash（如 `07180a7`、各修复波与那笔 merge 的 hash）是**已固定的过去锚点**，可以引用；**当前状态一律用命令自查**，见「如何定位当前状态」。
 
-## Executive Summary（下一位 agent 从这 8 行开始）
+## Executive Summary（下一位 agent 从这 7 行开始）
 
-1. **不要直接开 L3。** 分支 `probe/perf-now-phase-timing`（worktree `.claude/worktrees/perfnow-probe`）**已做完、全绿，但未 push、未合并**——只等人拍板。
-2. **它做了什么**：`runPhaseWithTimeout` 的超时按**已发放配额**计账，把「预算是否耗尽」从墙钟测量变成超时触发的后果。
-3. **接手第一步**：`cd` 进那个 worktree，跑「如何定位当前状态」里的命令，以输出为准，**不要相信本文任何数字**。
-4. **唯一剩余动作是人的**：push / merge。合并之后，下一步才是 L3（**必须先 brainstorm 出 spec**），再 L5。
-5. ⚠️ **`main` 上的这份 handoff 是旧版**，指向 L3、没有本分支。从 `main` 起步的人看不见这支分支——**合并即解决**。
-6. **「为什么长这样」读 `.superpowers/sdd/2026-07-31-phase-timing-quota/progress.md`**（本分支自己的 ledger）。**别读债 4 那份**，它不含本分支任何内容。
-7. **跑全套件时只有 flake (B) 与 (F) 允许出现**；其余任何失败按新缺陷处理，必须捕获完整测试名与失败块再比对。
-8. **三条铁律**：验证跑绝不过滤输出（`tail` / `grep` 同罪）；计划不附完整可抄代码；评审必须对着代码撞、不接受实施者自证。**本轮五波修复五波带缺陷，没有一波是实施者自己发现的。**
+1. **树是干净的，可以直接开 L3。** 相位计时分支已合并进 `main` 并已推送；它的 worktree 与分支都已删除，不要再去找。
+2. **L3 的第一步是 `superpowers:brainstorming` 出 spec**，**不要拿债 4 的计划改**——问题域不同（债 4 只管「怎么写」，L3 要管「何时写 / 写不写」与跨文件事务性）。顺序 L3 → L5，不可打乱。
+3. **动手前先跑「如何定位当前状态」那一节的命令，以输出为准，不要相信本文任何数字。**
+4. **L3 要吃下的两笔债已裁决完毕**：债 1（跨文件事务性）与债 3（`heartbeat.stop()` 释放窗口），见「债务归属裁决」。债 2 留给 L5。
+5. **跑全套件时只有 flake (B) 与 (F) 允许出现**；其余任何失败按新缺陷处理，必须先捕获完整测试名与失败块再比对，**不许凭印象归因**。
+6. **三条铁律**：验证跑绝不过滤输出（`tail` / `grep` 同罪）；计划不附完整可抄代码；评审必须对着代码撞、不接受实施者自证。**上一轮五波修复五波带缺陷，没有一波是实施者自己发现的。**
+7. **写下的每一个数字旁边，必须就地附一条能重推它的命令。** 这是上一轮唯一有结构性作用的对策——唯一没出错的数字就是唯一附了重推命令的那个。
 
-## ⚠️ 先读这一节：分支已完成但未合并，不要直接开 L3
+## 相位计时分支：已合并，本节留档不是待办
 
-分支 `probe/perf-now-phase-timing`（worktree 在 `.claude/worktrees/perfnow-probe`，有自己的真实 `node_modules`，**不是软链**——软链曾是一次无法解释的失败的领先嫌疑）。**未 push、未合并。**
+分支 `probe/perf-now-phase-timing` 已用 `--no-ff` 合并进 `main`（沿用本仓库带描述的 merge commit 惯例），并**已由人推送**；worktree `.claude/worktrees/perfnow-probe` 已 `git worktree remove`，分支已 `git branch -d`（完全并入，未用 `-D`）。**不要再去找它们，也不要重做。**
 
-**状态：交接清单上的四件已全部做完（2026-08-01），套件 / typecheck / build 全绿。剩下的唯一动作是人决定 push / merge。**
+合并前在分支尖端、合并后在 `main` 上各验证一次：**29 files / 446 tests，exit 0**；typecheck 与 build 退出 0。合并结果与分支尖端**逐字节相同**（fast-forward 之外无冲突解析）。
 
-**定位它，不要照抄任何 hash：**
-
-```bash
-git branch --list                                   # 应能看到 probe/perf-now-phase-timing
-git worktree list                                   # 应能看到 perfnow-probe
-git log --oneline main..probe/perf-now-phase-timing # 分支上的提交，以输出为准
-cd .claude/worktrees/perfnow-probe && ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run   # 期望 29 files / 446 tests
-```
-
-**已完成且已被独立评审复现的**（不是采信实施者）：
+**它落地了什么**（已被独立评审复现，不是采信实施者）：
 
 `runPhaseWithTimeout` 的三个超时返回点按**已发放配额**计账（`Math.max(elapsedMs, timeoutMs)`），把「预算是否耗尽」从墙钟测量变成超时触发的后果。三条守护测试，**逐条变异证明各钉各的返回点**：两条都退回 → `2 failed`；只退回 resolve → `1 failed`；只退回 reject → `1 failed`；文件还原后 sha256 逐字节一致。446 tests / typecheck / build 全绿。详见遗留事项 2 (E) 第 4 条。
 
-**未完成——必须先做完这四件，再开 L3：**
+**这四件曾是「开 L3 之前必须做完」的清单，2026-08-01 已全部做完。留在这里是为了「为什么长这样」，不是待办：**
 
 1. ✅ **修复波 2 已于 2026-08-01 做完**（六条，第三轮评审五条 + 复核时撞出的第六条，全部是实施者自己带进去的）。留档：
    - 「the three `persistTerminalState` call sites」是**指错的符号锚点**——该符号在 `runLoop.ts` 有 **15** 个调用点，按原意（丢租约后仍写终态）收窄是 **4** 个，`three` 两头都不对。已改成 `if (leaseLoss.lost !== null)` / `if (isLeaseStopError(error))` 两个可 grep 的分支锚点，spec 与同名 plan 各一处。**错的符号锚点比陈旧行号更糟，因为它看起来是永久的。**
@@ -59,14 +49,14 @@ cd .claude/worktrees/perfnow-probe && ECC_GATEGUARD=off DISABLE_OMC=1 npm test -
    结论：**不是本分支引入的回归**——`main` 上全套件 1/100 复现，本分支 0/100，双臂隔离跑各 0/200。
    **两个不能顺手下的结论都写在 (F) 里**：不能说本分支修好了它（0/100 vs 1/100 分辨不出）；不能把它归进 (A) 的刀尖家族（它用默认 5000ms 预算，且负载方向相反）。
    **过程本身有个教训**：交接文件当初给的配方是「双臂各 50–100 次**隔离**跑」，照做（各 200 次）之后**双臂全 0**——隔离把并行负载拿掉了，而这条失败只在负载下出现。**那个配方对这条失败是错的条件，是它自己证伪了自己。** 真正定性靠的是全套件重复跑。
-4. push 与 merge 都只在人明确下指令时执行。**本分支至今未 push、未合并。**
-   ⚠️ **未合并带来一个真实的误导面**：`main` 上的 `docs/handoff/handoff.md` 仍是**指向 L3 的旧版**，没有本节。任何从 `main` 起步的接手者会读到「下一步是 L3」，读不到本分支存在。**合并即解决；在那之前，别假设别人看得见这一节。**
+4. ✅ **push 与 merge 均已由人明确下令后执行**（2026-08-01）。合并用 `--no-ff` 带描述的 merge commit，worktree 与分支在人单独授权后才清理。
+   **当时记下的那个误导面已消失**：`main` 上的 handoff 曾是指向 L3 的旧版、看不见那支分支；合并把它替换掉了。**这条留档是想说明一件通用的事：分支上的 handoff 只对分支上的人可见，未合并期间 `main` 的接手者读到的是旧版。下次开分支写 handoff 时记住这一点。**
 
-**所以现在真正剩下的只有一件**：由人决定是否 push / merge。**四件已全部做完，L3 在那之后。**
+**清理时的一个观察，值得下一位知道**：`git worktree remove` 会连带删掉该目录下所有**未入库**产物（brief / report / review diff / 它自己的 `node_modules` / `dist/` / `.DS_Store`）。本轮清理前逐条枚举过，确认 ledger 的 `progress.md` 已 tracked 并随合并进了主仓库才动手。**照做：先枚举会被销毁的东西，再销毁。**
 
 ## 快速接手入口
 
-1. **L1 / L1b / L2 / 债 4 都已在 `main` 上**（run lease + heartbeat / owner-transfer contention / run registry / 消除 fileStore 非原子写）。**443 tests 全绿，typecheck 与 build 干净**（这是 `main` 上的数；相位计时分支未合并前为 446 —— 以命令输出为准）。
+1. **L1 / L1b / L2 / 债 4 / 相位计时都已在 `main` 上**（run lease + heartbeat / owner-transfer contention / run registry / 消除 fileStore 非原子写 / 超时按已发放配额计账）。合并当时实测 **29 files / 446 tests 全绿，typecheck 与 build 退出 0** —— **以命令输出为准，不要照抄这个数**。
 2. **四笔遗留债的归属已由人裁决完毕**，见 `docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md`。裁决同时回答了「下一层做什么」：**先做债 4（已完成），再做 L3，最后 L5**。
 3. **债 4 已关闭并合并。** 五个任务，每任务一次独立评审，另加整分支评审 + 一轮修复波 + 一次 scoped 再评审，全程 0 Critical。**不要重做，也不要以为它还在分支上——worktree 与分支都已清理。**
 4. **下一步是 L3，然后 L5。顺序不可打乱。** **L3 必须先 brainstorm 出 spec，不要拿债 4 的计划改**——两者问题域不同（债 4 只改「怎么写」，L3 要处理「何时写 / 写不写」与跨文件事务性）。
@@ -86,19 +76,17 @@ cd .claude/worktrees/perfnow-probe && ECC_GATEGUARD=off DISABLE_OMC=1 npm test -
 
 ```bash
 cd /Users/biran/code/skills/loop/ccloop
-git status --branch --short               # 主仓库应为 main，干净
-git worktree list                         # 应看到主仓库 + .claude/worktrees/perfnow-probe
-git branch --list                         # 应看到 main + probe/perf-now-phase-timing（+ backup/… 备份分支）
-git log --oneline main..probe/perf-now-phase-timing   # 分支上的提交，以输出为准，不要照抄任何笔数
-git rev-list --count origin/main..main    # main 待 push 笔数，以此为准
+git status --branch --short               # 应为 main，干净
+git worktree list                         # 应只有主仓库；相位计时的 worktree 已移除
+git branch --list                         # 应只有 main + backup/evidence-first-v1-…（备份分支，禁删）
+git rev-list --count origin/main..main    # 待 push 笔数，以此为准，不要照抄本文
+git log --oneline --decorate -6           # 近处应能看到那笔 "Merge the phase-timing branch: …"
 
-# 分支的验证跑必须在它自己的 worktree 里（它有自己的真实 node_modules）
-cd .claude/worktrees/perfnow-probe
-ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run     # 分支上期望 29 files / 446 tests
+ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run     # 期望 29 files / 446 tests
 npm run typecheck && npm run build                     # 均应退出 0
 ```
 
-`main` 上期望 29 files / **443 tests**（分支的三条守护测试尚未并入）。
+**446 这个数字会随任何一次加测试而腐坏**——它是合并当时的实测值，不是承诺。以命令输出为准。
 
 **核对状态时不要相信本文的数字，相信命令的输出。** 本项目已有多次「文档里的数字被自己的编辑证伪」的案底，见下方教训——**其中一次就是这个代码块自己**：它一度写着「期望只有主仓库 / 只有 main」，而当时 worktree 与分支都还在。
 
@@ -138,7 +126,7 @@ npm run typecheck && npm run build                     # 均应退出 0
 
 1. **push** —— 用上面的命令看实际待 push 的是哪几笔，**不要假设数量，也不要照抄本文**。push 由人执行、人决定。
    - 早前记录的「`origin/main` 无人 push 却自动前进」**已澄清：是人自己 push 的，不是环境异常**。原遗留事项 10 撤销。
-   - 本次会话结束时 `main` 上有若干笔未 push；人已手动 push 过一次，之后又新增了 flake 相关的合并。**以命令输出为准。**
+   - **2026-08-01 又发生了一次同型的困惑，记下来免得下一位再吓一跳**：agent 合并完成后再看 `git log`，发现 HEAD 不是自己那笔 merge，而是一笔陌生的 `update .gitignore`，且 `origin/main..main` 计数变成 0。**不是异常**——是人在同一时段自己提交并 push 了。**教训：这个仓库里 `main` 会被人并发推进，agent 不能假设自己是唯一写者；发现 HEAD 与预期不符时先查 `git log --format='%h parents=%p %ad %an %s'` 与 `git merge-base --is-ancestor`，确认自己的提交是否仍可达，再下结论。**
 2. **已知 flake 债（刻意未修）。** 当前名单是 (A) / (A′) / (B) / (C) / (D) / (F) 六个条目，**各自的状态与允许出现与否逐条写在下面，不要只看这一行的汇总**——本清单被自己的汇总数字骗过一次了。跑全套件时**只有 (B) 与 (F) 允许出现**。
 
    > ⚠️ **本清单在 2026-07-31 被更正过一次，因为它自己犯了它要防的错。** 旧版声称「7 个」并附「具名清单」，实际是：**一条被数了两次**，**一条的分类是假的**，**一条从未具名**。更正依据全部来自读代码，不是推理。**下面每一条都能自己核。**
@@ -296,7 +284,7 @@ npm run typecheck && npm run build                     # 均应退出 0
 
 ## 参考（按路径读，勿在此复制内容）
 
-- **当前分支（相位计时，未合并）**：`.superpowers/sdd/2026-07-31-phase-timing-quota/progress.md` ——**它没有 spec / plan**，这支分支起于 flake 修复轮的一条评审建议，不是走 SDD 流程立项的。ledger 里记了配额计账的依据、位移表与重推命令、引用清扫的归属判据、flake (F) 的定性方法。
+- **相位计时（已合并进 `main`）**：`.superpowers/sdd/2026-07-31-phase-timing-quota/progress.md` ——**它没有 spec / plan**，这支分支起于 flake 修复轮的一条评审建议，不是走 SDD 流程立项的。ledger 里记了配额计账的依据、位移表与重推命令、引用清扫的归属判据、flake (F) 的定性方法。
 - **债 4（已合并）**：`docs/superpowers/specs/2026-07-29-atomic-write-paths-design.md`、`docs/superpowers/plans/2026-07-29-atomic-write-paths.md`、`.superpowers/sdd/2026-07-29-atomic-write-paths/progress.md`
 - **债务裁决**：`docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md`
 - **L2 / L1b / L1**：`docs/superpowers/specs/2026-07-2{8,7,6}-*-design.md` + 同名 plan + `.superpowers/sdd/2026-07-2{8,7,6}-*/`
@@ -307,10 +295,9 @@ npm run typecheck && npm run build                     # 均应退出 0
 
 ## 建议接手时调用的 skills
 
-- `superpowers:finishing-a-development-branch` — **接手后的第一个动作**：相位计时分支已完成待整合，用它来走「怎么并」这一步。**但 push / merge 本身只在人明确下指令时执行**，不要自作主张。
-- `superpowers:brainstorming` — **开 L3 的第一步**，在分支整合之后（债 4 已完成合并，不要拿它的计划改）。
+- `superpowers:brainstorming` — **接手后的第一个动作**，也是开 L3 的第一步（债 4 与相位计时都已合并，不要拿它们的计划改）。
 - `superpowers:subagent-driven-development` — L3 有了 spec 与计划之后。
-- `superpowers:finishing-a-development-branch` — L3 做完时。**注意一条已被实测证伪的旧建议**：`.claude/worktrees/` 下的 worktree 若是**上一个会话**用 EnterWorktree 建的，本会话的 `ExitWorktree` 是 **no-op**（它只管本会话建的），实际可用的是 `git worktree remove` —— 而且它**不动分支**，正好符合「删分支要单独授权」。
+- `superpowers:finishing-a-development-branch` — L3 做完时。**已按它走过一遍（2026-08-01 的相位计时分支），三条实测补充**：(1) `.claude/worktrees/` 下若是**上一个会话**建的 worktree，本会话的 `ExitWorktree` 是 **no-op**，实际可用的是 `git worktree remove`；(2) 该 skill 的 Option 1 把「删分支 + 移除 worktree」当作合并的一部分，**但本仓库规定删分支要单独授权**——两者冲突时以本仓库为准，先合并再单独问；(3) `git merge -F -` **不读 stdin**（与 `git commit -F -` 不同），带描述的 merge message 要先写进临时文件。
 - **清理约定（债 4 已按此执行，可照做）**：`.superpowers/sdd/<plan>/` 里只有 `progress.md` 被 `git add -f` 入库，其余 brief / report / review diff 都可重建、不入库。**移除 worktree 会连带删掉那些未入库产物 —— 这正是清理方式；但主仓库那份 `progress.md` 是 tracked 文件，`rm -rf` 整个目录会误删它。**
 - `superpowers:requesting-code-review` — 每任务一次 + 整分支一次，缺一不可；修复轮之后还要再评审一次。**债 4 的两条最贵发现都来自整分支那一次。**
 - `superpowers:verification-before-completion` — 声称「通过/完成」前复跑 typecheck / build / 全套件并贴真实输出。
