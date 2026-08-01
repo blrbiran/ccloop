@@ -1,20 +1,70 @@
-# ccloop Handoff — **L3 spec 已定稿（经三轮独立评审重写）；下一步是对修复波再评审一轮，然后写实施计划**
+# ccloop Handoff — **L3 spec 已过两波修复 + 六个独立评审员；第三波修复的清单已就绪、待做，之后才写实施计划**
 
 > 更新于 2026-08-01。接手前先用 Git / 文件系统核对每一条状态声明再动手。
 > **本文不写死 commit hash、提交笔数或 HEAD**：提交本文即会改变 HEAD、push 会改变待推笔数。历史 commit hash（如 `07180a7`、各修复波与那笔 merge 的 hash）是**已固定的过去锚点**，可以引用；**当前状态一律用命令自查**，见「如何定位当前状态」。
 
-## Executive Summary（下一位 agent 从这 8 行开始）
+## Executive Summary（下一位 agent 从这 9 行开始）
 
-1. **L3 的 brainstorming 已完成，spec 已定稿并本地提交，代码一行未动。** spec 路径：`docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md`。**不要重新 brainstorm，也不要重写 spec。**
-2. **下一个动作是「对修复波再评审一轮」，不是写计划。** 初稿被三个独立评审员撞出 16 条 Critical 级缺陷，已一次性修完；但本仓库六轮 100% 命中「修复波自带缺陷」，所以修复波必须再评审。评审范围是**两笔 spec 提交之间的 diff**（用下面的命令定位），重点是「这次修复引入了什么」，**不是重做上一次评审**。
-3. **再评审通过后才进 `superpowers:writing-plans`**，然后按 `superpowers:using-git-worktrees` 开隔离 worktree 再动代码。
+1. **L3 的 brainstorming 已完成，spec 已两次修复并本地提交，代码一行未动。** spec 路径：`docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md`。**不要重新 brainstorm，也不要重写 spec。**
+2. **下一个动作是「第三波修复」，清单已经在下面那一节里逐条列好了，不需要再派评审去重找。** 迄今：初稿 → 三个独立评审员撞出 16 条 → 第一波修复 → 三个新的独立评审员撞出 47 条 → 第二波修复（`08bf685`，+807/−93）→ **三个再评审员又撞出 12 条 Critical/Important**。**本仓库现在是七轮 100% 命中「修复波自带缺陷」。**
+2b. **第三波修完之后仍然必须再评审一轮。** 没有例外，七轮没有一次是实施者自己发现的。
+3. **第三波通过后才进 `superpowers:writing-plans`**，然后按 `superpowers:using-git-worktrees` 开隔离 worktree 再动代码。
 4. **人已裁定的五个设计决策，不要重开**：sweep 是一次性、顺序、非常驻；sweep 只续已发布的 transfer、永不发起；债 3 真修（收紧 `runExclusive`）；债 1 走三文件事务；退出码只报 sweep 自身成败。详见 spec §2/§4/§5/§7。
-5. **spec 里有两条是对既有裁决记录的推翻**，评审时要重点撞：§4.1「`newOwnerEpoch` 事务前已知」推翻了裁决记录的否决理由；§5.3 推翻了 `runExclusive` 注释里「refusal 只有一个 home」的在先裁定。两条都在 spec 里附了重推命令。
+5. **spec 里有两条是对既有裁决记录的推翻**，评审时要重点撞：§4.1「`newOwnerEpoch` 事务前已知」推翻了裁决记录的否决理由；§5.3 推翻了 `runExclusive` 注释里「refusal 只有一个 home」的在先裁定。两条都在 spec 里附了重推命令。**第二波已把 §4.0 那处伪造的「两条依据」结构改掉了**（裁决记录对「更窄」只给了一条依据），但 §5.3 的推翻仍待第三波确认（见下）。
+5b. **`grep` 的退出码取决于解析到哪个 `grep`，本仓库里两个答案都出现过，别再当成一个绝对事实。** 交互 shell 里 `grep` 是 `~/.claude/shell-snapshots/` 里的 zsh 函数（ugrep 系）：末尾带 `(` 的锚点不加 `-F` 会 `unclosed group` **exit 2**；而 `rtk proxy "…"` 起的子 shell 不加载该函数、解析到 `/usr/bin/grep`，同一条 **exit 0**。**六个评审员里有四个报 exit 0、一个报 exit 2，控制器自己也跟着确认过错的那个**——因为大家跑的壳不同。**规矩：写「实测」必须连同「在哪个壳里实测」一起写；锚点一律保留 `-F`。**
 6. **动手前先跑「如何定位当前状态」那一节的命令，以输出为准，不要相信本文任何数字。**
 7. **跑全套件时只有 flake (B) 与 (F) 允许出现**；其余任何失败按新缺陷处理，必须先捕获完整测试名与失败块再比对，**不许凭印象归因**。
 8. **三条铁律 + 一条**：验证跑绝不过滤输出（`tail` / `grep` 同罪）；计划不附完整可抄代码；评审必须对着代码撞、不接受实施者自证；**每个数字旁边就地附一条能重推它的命令**。最后一条在本轮又自证一次——spec 初稿 13 处无命令的数字里有 2 处是错的，而每一处附了命令的都是对的。
 
-## 本轮（2026-08-01 L3 spec 轮）发生了什么
+## 第三波修复要修什么（2026-08-01 第三轮评审的产物，这就是待办清单）
+
+**范围**：只改 `docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md`，代码仍然一行不动。
+**评审的 diff 范围**：`git diff eba21f6 08bf685`。三个再评审员的分工是「三处开放设计选择 / 范围蔓延 / 数字与可测性全量回扫」。
+**一次性派完，不要一个 finding 派一个人**（本仓库明确的教训：分散派会让每个人重建上下文、比全部任务加起来还贵）。
+
+**Critical（阻塞）：**
+
+1. **§4.3 的排序改判没有关闭它要修的那条缺陷，只是把窗口缩小了。**（两个视角独立撞到）
+   输家的「读 → 改 → 写」既不原子也不持锁：`readPersistedSuccessfulTransferArtifacts` 的读可以早于赢家发布任何东西（首发转移时 `readOwnerTransferRecordRaw` ENOENT → **裸 `catch { return null }`** → 保护整个退化为无保护直写），它的写可以晚于赢家的 reconciliation rename。**`finalizeOrder` 排哪个方向都拦不住。**
+   最小解（比本波否决掉的「加锁」小得多、且符合本层「只增加拒绝」的边界）：**把那个裸 catch 收窄成 fail-closed——读失败就放弃写**。
+   ```bash
+   grep -nF -A22 'async function readPersistedSuccessfulTransferArtifacts(' src/persistence/fileStore.ts
+   grep -nF -A10 'function transferRepresentsPublishedWinner(' src/persistence/fileStore.ts
+   ```
+2. **为这处改判新加的两条「必须红」的护栏变异，实测都不会红。**（两个视角独立走完同一条五步链，结论一致）
+   变异二（删掉 fixture 里的锁文件）：无锁 → `recoverInterruptedOwnerTransfer` 的 `!lockHeld && pathExists(lock) && !tryRecover…` 短路 → 输家**替赢家**把三文件 finalize 了 → `transferRepresentsPublishedWinner` 反而成立 → 保护生效 → spec 规定的两条断言**全部通过**。变异一是「改 fixture 并同步改中断点」，那不是变异、是另写一条测试，违反 §10 通用条。
+   **所以本波最承重的改判目前零有效护栏。** 修法：加一条**窗口内**断言（输家的 `writeBoundaryArtifacts` 返回那一刻 `reconciliation-record.json` 仍不存在 / marker 仍在），或 spy `rename` 断言输家那次调用期间零 rename。
+3. **§8 新增的「按 `Error.cause` 路由」方向是反的，且编译不过。**
+   §4.4 自己判定规则 2/3 在生产中不可达；唯一**可达**的永久钉死是 torn pending，它抛的是 `JSON.parse` 的 `SyntaxError`，**不匹配**那一行的「具名拒绝错误」条件 → 照样落 stdout / exit 0。**本层为不可达分支买单，把可达的静默留着——正是 §4.4 整段立论要防的东西。**
+   而且 `new ResumeNotEligibleError(msg, { cause })` 在当前签名下 `TS2554`（评审员真跑了 `tsc`），§9 把一个**导出类**的公开签名变更写成了「catch 里改一行」（`tests/controller/resumeLoop.gate.test.ts` 直接 `new` 它）。
+   **好消息，可以撤销一条担心**：`Error.cause` 的 Node 版本风险**不存在**——`tsconfig.json` 是 `"target": "ES2022"`，`@types/node` `^22.x`，本机 v22。
+   最小解：**放弃这笔生产改动**，sweep 在报告层按 `cannot read run artifacts:` 前缀（该字面量全仓唯一）判为 `error` → stderr。
+4. **§15 验收 7 在今天的仓库上无条件通过。**
+   判据指向 `docs/superpowers/reviews/`，而 `docs/superpowers/` 下只有 `decisions/ plans/ specs/`；`git log` 对不存在的路径**空输出退出 0**。另一条 `git log --reverse -- src/sweep/ src/cli.ts` 的首条永远是 2026-07-15 的引导提交（`src/cli.ts` 早有历史）。**这条验收是为「实施顺序要有验收面」新加的，结果是一条恒真的命令 + 一个仓库从未有过的目录约定。**
+5. **§4.6 与 F47 的「就地勘误」方向反了。** 见 Executive Summary 第 5b 条。改成按解析到的 `grep` 限定，把裁决记录那条从「假」降级为「未限定 grep 实现」。
+6. **§10 测试 2 的完整区间少一格。**（两个视角撞到）§4.4 规则 1/3 使 finalize 新增一次 marker 的 `readFile` + `JSON.parse`（今天只 `pathExists`），所以 try 之前是 **4 次**（marker 1 + pending 3），不是 spec 写的 3 次。按字面写出来的测试**恰好跳过 marker 解析那个间隙**——而那正是规则 3 与测试 4c 唯一的落点。（顺带：「改动后 13 步」两个评审员各自独立重推，**都同意是 13**，不用改，但要限定为 v2 专属。）
+
+**Important：**
+
+7. **§10 测试 8b(ii) 按字面不可表达**：它要 mock 的 `updateOwnerRecordWithPrecondition` **从未导出**（`fileStore.ts` 内 `async function`，无 `export`；全仓 grep 只有同文件内部调用与注释）。这是第一波「测试 1 按字面不可表达」的同型复发。替代：mock 已导出的 `releaseOwnerLease`，或从测试侧改写 `owner-record.json` 让 CAS 真实失配（更贴生产语义）。
+8. **§10 测试 14 的 fixture 少第三条前提**：拒绝必须由 `evaluateResumeEligibility` 给出。走 CAS 门那条会建/删 `.owner-transfer.lock` 并跑一次 `lockHeld: true` 的回收，「其余字节不变」在全树快照下必假。
+9. **§6/§12 的配额论证依赖一条假的绝对断言**（两个视角撞到）：`runLoopFromState` 的 `while (true)` 以 `writeRunState` / `affirmNow` 开头，**它们在任何 try 之外**。第 k+1 轮顶端 ENOSPC → 抛出 → sweep 记 `error`、**配额不计**，而前 k 次付费调用已经发生。修法：配额在**门通过、`resume_adopted` 追加之时**计入。
+10. **§13 的归类错了**：裁决记录对债 3 要的是「**显式表态**」，本层已按可接受方式表了态，**按裁定它是关闭的**；而 §5.2 的 span 外那段（`writeBoundaryArtifacts` + 它前面的 `assertHeld` 从来就没进过任何 span）是**本轮新发现**，不该写成「债 3 部分关闭」。另：第 4 笔（pending 非原子）在 §17 索引里**没有对应的 F 行**——它是实施者自查加的，要么补一行标注「本轮自查新增，非评审要求」，要么就是无来源的扩张。
+11. **§4.0.3 的「S-3 不触发」结论盖过了它的证据范围**——原子 marker 只消掉 marker 那条路由；torn pending 通向**同一个**永久钉死形态（marker 在盘 + `readOwnerRecord` 永久抛 + 本层无恢复入口），而本层把它从两份扩到三份。spec 在 §4.4 / §13 / §15 三处诚实披露了，但 §4.0.3 全节一次没提。**这条建议回交给人再裁一次**：pending 原子化与已裁定的 marker 修法**逐字同形**。
+12. **§5.3 方案 (a) 的三处未声明副作用**：新分支插在外层 catch 最前，会抢掉兜底的「转 `failed` 并落盘」（这是意图）**和 `cleanupAttemptWorkspaceBestEffort`（未声明）**；返回的 `state` 与磁盘不一致（`applyPhaseUsage` 之后没有 `writeRunState`），所以「与 §5.4 同构」为假。**另外必须加一条硬约束**：`RunHeartbeatStoppedError` 与现有两个**并列、不得继承**——(a) 的全部安全性建立在 `isLeaseStopError` 的 `instanceof` 不匹配它上。本仓库对这件事已有判例（`OwnerTransferLockBusyError` 上方那段 "deliberately NOT a subclass"）。
+13. **§11 新加的重点名单里，L1 §12 第 4/6 两条引文都被省略号截断，而被省掉的正是与本层冲突的那半句**（第 4 条的「The one write `stop()` is permitted — **and required** — to make is the release of requirement 17」，而 §15 验收 4 把这次 release 降级为尽力而为）。按 Rule 7 必须挑一个并说明。
+14. **§5.4 的停机检查点单数 vs 代码两处**（两个视角撞到）：`grep -c 'leaseLoss.lost !== null' src/controller/runLoop.ts` → **2**。「停机不消耗 `attemptsUsed`」只对循环顶部那一处成立。明写只装一处，或把结论限定。
+15. **§15 验收 5 的哈希守卫在 §10 没有对应测试条目**（孤儿验收）。**并且两个评审员在这里意见相反**：一个实测「阈值 20 vs 函数体 28 行合理、防护栏针对的失败模式正确」，另一个认为它违反 Rule 2、更小的解是「八条判据各配一条会红的变异测试」（变异点天然落在生产代码上，且 §10 已有这条纪律）。**按 Rule 7 挑一个并说明为什么，别两边都留。** 本文倾向后者（Rule 2 是项目规约）。
+16. **§10 测试 9 没有自有的可失败断言**（`isLeaseStopError` 模块私有），杀伤全借给测试 7b。要么裁定导出，要么并进 7b，别留空壳。
+
+**记账类（不阻塞，但要一起改掉）：** §4 节首「命中 **4** 行」实测 **3**（**这是本波唯一一个错的数字，而它偏偏是附了命令的**——见下方教训）；§3「resumeLoop 5 个追加点」实测 6 个 `appendEvent` 调用点；§17 的 F6 行只记新增、漏记它把 §15 验收 1 弱化成了「**持久的**」；§8 汇总行新增的 `errored` 追不到任何 F；`transferRepresentsPublishedWinner` 实为三条判定而 §4.3 两处只列两条；`hasStagedArtifacts` 看不见第三份 pending（属 L5，但要在 §13 第 1 笔具名）；§9 未说明 `registerStopHandlers` 是否导出（测试 13b 要够得着）；观测 `resumeLoop` 调用次数的缝在 §9 未定义（测试 10/11/12b/13 都要数）；新常量命名 `.reconciliation.pending.json` 与既有 `<产物名>.pending.json` 约定不完全对齐。
+
+**本轮最值钱的两条教训：**
+
+- **失效模式迁移了。** 前几轮是「数字错」，本轮数字层几乎全对（一个评审员跑了 **92 次调用 / 81 条唯一命令，全部 exit 0**，锚点无一失效）。**新的失效模式是「论证链里某一步把非原子的东西当原子用」**：把 `Promise.all` 当快照（spec 自己在 §4.0a 白纸黑字写着「它本来就不是快照」）、把并发读写当顺序、把「改 fixture」当变异。**下一轮请从每一句「所以 X 读到 Y」开始查，问一句：这两个动作之间隔着几个 `await`，中间有谁能写。**
+- **「附了命令的数字全对」这条规律，本轮被破了一次**——唯一错的那个数字恰恰附了命令（§4 节首）。**说明贴命令的人没有真跑它。** 规矩要升级为：**附命令 + 把该命令的输出行数/值一并写下**，否则命令只是装饰。
+
+## 上一轮（2026-08-01 L3 spec 初稿轮）发生了什么
 
 **产出**：L3 spec 两笔提交——初稿，以及经三轮独立评审后的重写。定位：
 
