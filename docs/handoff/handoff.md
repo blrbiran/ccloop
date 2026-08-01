@@ -3,23 +3,29 @@
 > 更新于 2026-08-01。接手前先用 Git / 文件系统核对每一条状态声明再动手。
 > **本文不写死 commit hash、提交笔数或 HEAD**：提交本文即会改变 HEAD、push 会改变待推笔数。历史 commit hash（如 `07180a7`、各修复波与那笔 merge 的 hash）是**已固定的过去锚点**，可以引用；**当前状态一律用命令自查**，见「如何定位当前状态」。
 
-## Executive Summary（下一位 agent 从这 9 行开始）
+## Executive Summary（下一位 agent 只读这 8 行就能开工）
 
-1. **L3 的 brainstorming 已完成，spec 已两次修复并本地提交，代码一行未动。** spec 路径：`docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md`。**不要重新 brainstorm，也不要重写 spec。**
-2. **下一个动作是「第三波修复」，清单已经在下面那一节里逐条列好了，不需要再派评审去重找。** 迄今：初稿 → 三个独立评审员撞出 16 条 → 第一波修复 → 三个新的独立评审员撞出 47 条 → 第二波修复（`08bf685`，+807/−93）→ **三个再评审员又撞出 12 条 Critical/Important**。**本仓库现在是七轮 100% 命中「修复波自带缺陷」。**
-2b. **第三波修完之后仍然必须再评审一轮。** 没有例外，七轮没有一次是实施者自己发现的。
-3. **第三波通过后才进 `superpowers:writing-plans`**，然后按 `superpowers:using-git-worktrees` 开隔离 worktree 再动代码。
-4. **人已裁定的五个设计决策，不要重开**：sweep 是一次性、顺序、非常驻；sweep 只续已发布的 transfer、永不发起；债 3 真修（收紧 `runExclusive`）；债 1 走三文件事务；退出码只报 sweep 自身成败。详见 spec §2/§4/§5/§7。
-5. **spec 里有两条是对既有裁决记录的推翻**，评审时要重点撞：§4.1「`newOwnerEpoch` 事务前已知」推翻了裁决记录的否决理由；§5.3 推翻了 `runExclusive` 注释里「refusal 只有一个 home」的在先裁定。两条都在 spec 里附了重推命令。**第二波已把 §4.0 那处伪造的「两条依据」结构改掉了**（裁决记录对「更窄」只给了一条依据），但 §5.3 的推翻仍待第三波确认（见下）。
-5b. **`grep` 的退出码取决于解析到哪个 `grep`，本仓库里两个答案都出现过，别再当成一个绝对事实。** 交互 shell 里 `grep` 是 `~/.claude/shell-snapshots/` 里的 zsh 函数（ugrep 系）：末尾带 `(` 的锚点不加 `-F` 会 `unclosed group` **exit 2**；而 `rtk proxy "…"` 起的子 shell 不加载该函数、解析到 `/usr/bin/grep`，同一条 **exit 0**。**六个评审员里有四个报 exit 0、一个报 exit 2，控制器自己也跟着确认过错的那个**——因为大家跑的壳不同。**规矩：写「实测」必须连同「在哪个壳里实测」一起写；锚点一律保留 `-F`。**
-6. **动手前先跑「如何定位当前状态」那一节的命令，以输出为准，不要相信本文任何数字。**
-7. **跑全套件时只有 flake (B) 与 (F) 允许出现**；其余任何失败按新缺陷处理，必须先捕获完整测试名与失败块再比对，**不许凭印象归因**。
-8. **三条铁律 + 一条**：验证跑绝不过滤输出（`tail` / `grep` 同罪）；计划不附完整可抄代码；评审必须对着代码撞、不接受实施者自证；**每个数字旁边就地附一条能重推它的命令**。最后一条在本轮又自证一次——spec 初稿 13 处无命令的数字里有 2 处是错的，而每一处附了命令的都是对的。
+1. **L3 spec 已过两波修复、六个独立评审员，代码一行未动。** 路径 `docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md`。**不要重新 brainstorm，不要重写 spec。**
+2. **下一个动作是第三波修复**，清单在下一节逐条列好（12 条阻塞 + 一批记账类），**不需要再派评审去重找**。**一次性派完，不要一个 finding 派一个人。**
+3. **第三波修完必须再评审一轮。** 本仓库七轮 100% 命中「修复波自带缺陷」，没有一次是实施者自己发现的。
+4. **有一条要人裁，不要自己发明**：pending 文件是否也原子化（清单第 11 条）。它与人已裁定的 marker 修法逐字同形。
+5. **通过后才进 `superpowers:writing-plans`**，再按 `superpowers:using-git-worktrees` 开隔离 worktree 动代码。顺序 L3 → L5 不可打乱；spec §11 另有硬约束：债 1（§4）通过独立评审后 §6 触发逻辑才可开始。
+6. **人已裁定、不要重开的设计决策**见 spec §2/§4/§5/§7；债务归属见 `docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md`。
+7. **动手前先跑「如何定位当前状态」那一节，以命令输出为准**——不要相信本文任何数字，也不要假设 HEAD 是哪一笔（`main` 会被人并发推进）。
+8. **铁律**：验证跑绝不过滤输出（`tail` / `grep` 同罪）；计划不附完整可抄代码；评审不接受实施者自证；每个数字旁附一条能重推它的命令**并写下该命令当时的输出值**；跑全套件时只有 flake (B) 与 (F) 允许出现，名单外一律按新缺陷处理。
 
 ## 第三波修复要修什么（2026-08-01 第三轮评审的产物，这就是待办清单）
 
 **范围**：只改 `docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md`，代码仍然一行不动。
-**评审的 diff 范围**：`git diff eba21f6 08bf685`。三个再评审员的分工是「三处开放设计选择 / 范围蔓延 / 数字与可测性全量回扫」。
+**第三轮评审看的 diff 范围（就地重推，不要照抄 hash）**：
+
+```bash
+git log --oneline -- docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md
+# 三笔，从新到旧：第二波修复 / 第一波修复（重写）/ 初稿。
+# 第三轮评审看的是「第一波..第二波」；第二轮评审看的是「初稿..第一波」。
+```
+
+三个再评审员的分工是「三处开放设计选择 / 范围蔓延 / 数字与可测性全量回扫」。
 **一次性派完，不要一个 finding 派一个人**（本仓库明确的教训：分散派会让每个人重建上下文、比全部任务加起来还贵）。
 
 **Critical（阻塞）：**
@@ -59,7 +65,9 @@
 
 **记账类（不阻塞，但要一起改掉）：** §4 节首「命中 **4** 行」实测 **3**（**这是本波唯一一个错的数字，而它偏偏是附了命令的**——见下方教训）；§3「resumeLoop 5 个追加点」实测 6 个 `appendEvent` 调用点；§17 的 F6 行只记新增、漏记它把 §15 验收 1 弱化成了「**持久的**」；§8 汇总行新增的 `errored` 追不到任何 F；`transferRepresentsPublishedWinner` 实为三条判定而 §4.3 两处只列两条；`hasStagedArtifacts` 看不见第三份 pending（属 L5，但要在 §13 第 1 笔具名）；§9 未说明 `registerStopHandlers` 是否导出（测试 13b 要够得着）；观测 `resumeLoop` 调用次数的缝在 §9 未定义（测试 10/11/12b/13 都要数）；新常量命名 `.reconciliation.pending.json` 与既有 `<产物名>.pending.json` 约定不完全对齐。
 
-**本轮最值钱的两条教训：**
+**本轮最值钱的三条教训：**
+
+- **`grep` 的退出码取决于解析到哪个 `grep`，本仓库里两个答案都出现过，别再把任何一个当成绝对事实。** 交互 shell 里 `grep` 是 `~/.claude/shell-snapshots/` 里的 zsh 函数（ugrep 系）：末尾带 `(` 的锚点不加 `-F` 会 `unclosed group` **exit 2**；而 `rtk proxy "…"` 起的子 shell 不加载该函数、解析到 `/usr/bin/grep`，同一条 **exit 0**。**六个评审员里四个报 exit 0、一个报 exit 2，控制器自己也一度跟着确认了错的那个**——因为大家跑的壳不同。**规矩：写「实测」必须连同「在哪个壳里实测」一起写；锚点一律保留 `-F`。** 用 `type grep` 先看清自己在哪个壳里。
 
 - **失效模式迁移了。** 前几轮是「数字错」，本轮数字层几乎全对（一个评审员跑了 **92 次调用 / 81 条唯一命令，全部 exit 0**，锚点无一失效）。**新的失效模式是「论证链里某一步把非原子的东西当原子用」**：把 `Promise.all` 当快照（spec 自己在 §4.0a 白纸黑字写着「它本来就不是快照」）、把并发读写当顺序、把「改 fixture」当变异。**下一轮请从每一句「所以 X 读到 Y」开始查，问一句：这两个动作之间隔着几个 `await`，中间有谁能写。**
 - **「附了命令的数字全对」这条规律，本轮被破了一次**——唯一错的那个数字恰恰附了命令（§4 节首）。**说明贴命令的人没有真跑它。** 规矩要升级为：**附命令 + 把该命令的输出行数/值一并写下**，否则命令只是装饰。
@@ -156,11 +164,18 @@ git status --branch --short               # 应为 main，干净
 git worktree list                         # 应只有主仓库；相位计时的 worktree 已移除
 git branch --list                         # 应只有 main + backup/evidence-first-v1-…（备份分支，禁删）
 git rev-list --count origin/main..main    # 待 push 笔数，以此为准，不要照抄本文
-git log --oneline --decorate -8           # 近处应能看到两笔 L3 spec 提交
+git log --oneline --decorate -8           # 只用来看形势，不要假设 HEAD 是哪一笔
 
-# L3 spec 的两笔提交与再评审范围（不要照抄 hash，就地重推）
+# L3 spec 的三笔提交与各轮评审范围（不要照抄 hash，就地重推）
 git log --oneline -- docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md
-# 输出的第二行是初稿、第一行是重写；再评审的 diff 就是 <初稿>..<重写>
+# 从新到旧：第二波修复 / 第一波修复（重写）/ 初稿。第三轮评审看的是「第一波..第二波」。
+# 若这里出现第四笔，说明第三波修复已经做了，先读它的 diff 再决定还要不要做。
+
+# 本文自己的提交会改变 HEAD，push 会改变待推笔数——两者都不要写死，也不要照抄任何数字。
+# 注意：`main` 会被人并发推进（已发生两次）。发现 HEAD 与预期不符时先跑
+#   git log --format='%h parents=%p %ad %an %s' -5
+#   git merge-base --is-ancestor <你关心的那笔> HEAD
+# 确认自己的提交是否仍可达，再下结论——不要当成环境异常。
 
 ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run     # 本轮实测 29 files / 446 tests，exit 0
 npm run typecheck && npm run build                     # 均应退出 0
@@ -381,7 +396,9 @@ npm run typecheck && npm run build                     # 均应退出 0
 ## 建议接手时调用的 skills
 
 - ~~`superpowers:brainstorming`~~ — **L3 的 brainstorming 已于 2026-08-01 完成并产出 spec，不要重跑。** 只有在 spec 被判定需要推翻重来时才回到它。
-- `superpowers:requesting-code-review` — **接手后的第一个动作**：对 L3 spec 的修复波再评审一轮。**派多个视角错开的独立评审员，并在提示词里明写「不接受作者自证、findings 必须带可构造的具体场景、锚点用符号名不用行号」**——本轮三个评审员正是这么派的，撞出 16 条 Critical。**并且要提醒评审员：评审员自己也会犯「没把命令放宽就下结论」的错，本轮三个全中。**
+- **接手后的第一个动作不是评审，是「第三波修复」**——清单已在上面那一节列好，直接派一个实施者一次性改完（只改 spec，代码不动）。派单时把这几条写进提示词：不接受任何「已核实」（含本文和控制器给的）；每条 finding 判定不成立必须单列一节写依据、不许悄悄跳过；改完做一次**全文数字回扫**；每个数字附命令**并写下输出值**。
+- `superpowers:requesting-code-review` — **第三波修完之后立刻用它，不可省**。**派多个视角错开的独立评审员**，提示词里明写「不接受实施者自证、findings 必须带可构造的具体场景、锚点用符号名不用行号」。另外必须提醒评审员两件事：(1) **评审员自己也会犯「没把搜索命令放宽就下结论」的错**（第二轮三个全中）；(2) **反方向也发生过**——第三轮有一个评审员的前提被实施者反驳，而实施者是对的。两边都要自己跑。
+  **第四轮的重点已经知道了**：本轮失效模式已从「数字错」迁移到「论证链里某一步把非原子的东西当原子用」。让评审员从每一句「所以 X 读到 Y」查起，问「这两个动作之间隔着几个 `await`，中间有谁能写」。
 - `superpowers:subagent-driven-development` — L3 有了 spec 与计划之后。
 - `superpowers:finishing-a-development-branch` — L3 做完时。**已按它走过一遍（2026-08-01 的相位计时分支），三条实测补充**：(1) `.claude/worktrees/` 下若是**上一个会话**建的 worktree，本会话的 `ExitWorktree` 是 **no-op**，实际可用的是 `git worktree remove`；(2) 该 skill 的 Option 1 把「删分支 + 移除 worktree」当作合并的一部分，**但本仓库规定删分支要单独授权**——两者冲突时以本仓库为准，先合并再单独问；(3) `git merge -F -` **不读 stdin**（与 `git commit -F -` 不同），带描述的 merge message 要先写进临时文件。
 - **清理约定（债 4 已按此执行，可照做）**：`.superpowers/sdd/<plan>/` 里只有 `progress.md` 被 `git add -f` 入库，其余 brief / report / review diff 都可重建、不入库。**移除 worktree 会连带删掉那些未入库产物 —— 这正是清理方式；但主仓库那份 `progress.md` 是 tracked 文件，`rm -rf` 整个目录会误删它。**
