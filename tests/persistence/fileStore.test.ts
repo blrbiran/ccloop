@@ -1562,7 +1562,9 @@ describe("buildAtomicTempPath", () => {
 // a helper that ignored the generator entirely would keep them all green: replacing the
 // tempPath line in writeJsonFileAtomically with a fixed per-target
 // `.${basename(path)}.publish.tmp` was measured to leave every other test in the repository
-// passing — 441 of 443, the two failures being the two below. That fixed
+// passing — 441 of 443 AS MEASURED WHEN THE SUITE HAD 443 TESTS, the two failures being
+  // the two below. The denominator is a historical record, not a live count: the suite has
+  // grown since. Re-run the mutation rather than trusting either number. That fixed
 // name is the specific failure §4.1 names as this design's core risk — writeRunState takes no
 // lock, so two processes sharing one staging name would let one publish the other's bytes.
 //
@@ -1769,7 +1771,8 @@ describe("owner-record.json is published by replacing the path, not by writing t
     leaseAffirmedAt: null,
   };
 
-  // R1 (§7.1a). The sole production caller, runLoop.ts:868, runs after initializeRunFiles, so
+  // R1 (§7.1a). The sole production caller — `await writeOwnerRecord(runDir, ownerRecord);` in
+  // runLoop.ts, just below the lease gate — runs after initializeRunFiles, so
   // the target *usually* does not pre-exist — and when it does not, rename and writeFile leave
   // identical end states, which is why the write-twice-and-compare-inode shape cannot be the
   // discriminator for the ordinary case (§7.1a).

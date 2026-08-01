@@ -29,7 +29,7 @@
 |---|---|---|---|
 | `fileStore.ts:81` | `writeRunState` 内写 `loop-state.json` 那一行 | `loop-state.json` | **每次状态转移都重写**，最热 |
 | `fileStore.ts:76` | `initializeRunFiles` 内写 `loop-state.json` 那一行 | `loop-state.json` | **创建**写。见下方「为什么必须纳入」 |
-| `fileStore.ts:379-381` | `export async function writeOwnerRecord`（**不是** `writeOwnerRecordAtomically`） | `owner-record.json` | 生产唯一调用者 `runLoop.ts:868`，即**首次创建** |
+| `fileStore.ts:379-381` | `export async function writeOwnerRecord`（**不是** `writeOwnerRecordAtomically`） | `owner-record.json` | 生产唯一调用者是 `runLoop.ts` 里 `await writeOwnerRecord(runDir, ownerRecord);` 那一行，即**首次创建** |
 | `fileStore.ts:308` | `writeBoundaryArtifacts` 内写 `boundary-analysis.json` 那一行 | `boundary-analysis.json` | 无条件写 |
 | `fileStore.ts:316` | `writeBoundaryArtifacts` 内写 `reconciliation-record.json` 那一行 | `reconciliation-record.json` | 条件写 |
 

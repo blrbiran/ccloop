@@ -288,7 +288,7 @@ export function scanRuns(root: string, deps: ScanDeps): Promise<ScanRow[]>;
 
 **Test requirements:**
 
-1. **Permissive recognition (spec §12.6).** Three separate directories, each containing only `events.jsonl`, only `owner-record.json`, and only `owner-transfer.json` respectively — each is recognized and reported, with the remaining files' fields `absent`. *Kills:* recognizing only by `loop-contract.json`. Note `initializeRunFiles` (`fileStore.ts:72-78`) never writes `owner-record.json`; it first appears at `runLoop.ts:868`, so an owner-record-only directory is a real state.
+1. **Permissive recognition (spec §12.6).** Three separate directories, each containing only `events.jsonl`, only `owner-record.json`, and only `owner-transfer.json` respectively — each is recognized and reported, with the remaining files' fields `absent`. *Kills:* recognizing only by `loop-contract.json`. Note `initializeRunFiles` (`fileStore.ts:72-78`) never writes `owner-record.json`; it first appears at `runLoop.ts`, the `writeOwnerRecord` call just below the lease gate, so an owner-record-only directory is a real state.
 2. **No descent into a recognized run (spec §12.3).** Place a complete valid run at `<run>/worktrees/attempt-1/` and assert exactly one row is returned, for `<run>`. *Kills:* naive recursion. The path shape is from `src/workspace/worktreeManager.ts:18`.
 3. Symbolic links are not followed. A symlink pointing at a directory containing a run must not produce a row.
 4. **Depth truncation (spec §12.7).** A tree nested deeper than `MAX_SCAN_DEPTH` below the root yields a `depth_truncated` row — not silence, not a thrown error.
@@ -421,6 +421,6 @@ export function renderScanTable(result: ScanResult): string;
 Carried forward from spec §13, listed so no one "helpfully" fixes them here:
 
 1. Reconciliation synthesis is unowned — L5.
-2. `persistTerminalState` writes into a run it no longer owns (`runLoop.ts:959`) — L5.
+2. `persistTerminalState` writes into a run it no longer owns (`runLoop.ts`, the `persistTerminalState` calls reached from the lease-loss branches `if (leaseLoss.lost !== null)` and `if (isLeaseStopError(error))` — four of the symbol's fifteen call sites, **not** all of them; see spec §13.2) — L5.
 3. `heartbeat.stop()`'s release window (`leaseHeartbeat.ts:223`, `:231`) — currently unreachable; must be re-evaluated by whichever layer adds a triggering caller. **This layer adds none.**
 4. `writeRunState` (`fileStore.ts:80-82`) and the initial `writeOwnerRecord` (`fileStore.ts:379-381` → `:367-369`) are non-atomic bare `writeFile` calls. This layer works around it with a bounded re-read (Task 2) rather than fixing it, because Global Constraint 4 forbids a discovery layer from rewriting another layer's write path.

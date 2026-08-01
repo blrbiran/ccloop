@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseChangedPathsFromGitStatus, runLoop } from "../../src/controller/runLoop.js";
 import { SubprocessClaudeAdapter } from "../../src/runtime/claude/subprocessClaudeAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
@@ -2136,6 +2136,174 @@ describe("runLoop", () => {
     expect(verifyCalled).toBe(false);
     expect(stdout).not.toContain(attemptWorktreePath);
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "loop_exhausted"]);
+  });
+
+  // getPhaseTimeoutMs is min(perAttemptTimeoutMs, timeRemainingMs), so when the budget is the
+  // smaller operand a fired timeout means the budget is spent BY DEFINITION. The exhaustion
+  // predicate must not re-derive that fact from a wall-clock reading: hasBudgetExceeded wants
+  // timeRemainingMs === 0, which needs the charged elapsed to reach the timeout, and the two
+  // clock reads bracketing the timer are only accurate to the clock's resolution.
+  //
+  // Freezing Date while leaving the timers real (the toFake: ["Date"] pattern
+  // leaseLifecycle.integration.test.ts already uses) drives the measured elapsed to 0. That is
+  // the same dependence the sibling test above rides on a sub-millisecond margin, made
+  // deterministic instead of probabilistic — this test does not measure timing, it asserts the
+  // decision does not consult the clock at all.
+  //
+  // Charging the raw elapsedMs in the timeout branches of runPhaseWithTimeout instead of
+  // Math.max(elapsedMs, timeoutMs) makes this test fail: the run stops with the per-attempt
+  // timeout reason and an untouched timeRemainingMs rather than exhausting.
+  it("accounts a budget-capped phase timeout as exhaustion even when the clock reports no elapsed time", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 1_000,
+        totalRuntimeBudgetMs: 20,
+      },
+    };
+    let executeCalled = false;
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        await delay(60);
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        executeCalled = true;
+        throw new Error("execute should not run");
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let finalState;
+    try {
+      finalState = await runLoop(contract, runDir, adapter);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(finalState.status).toBe("exhausted");
+    expect(finalState.stopReason).toBe("runtime or token budget exhausted");
+    expect(finalState.budgetSnapshot.timeRemainingMs).toBe(0);
+    expect(executeCalled).toBe(false);
+  });
+
+  // The three tests above and below freeze Date. Their own try/finally cannot restore it if the
+  // test itself times out while runLoop is pending, and a frozen Date would then leak into every
+  // later test in this file. Cheap to close, so closed.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // The plan-phase test above only reaches the non-awaited timeout return. The execute phase is
+  // the one that passes awaitAbortedResult, and it has TWO further returns — one for an
+  // operation that resolves after the abort, one for an operation that rejects after it. Both
+  // carry their own quota floor, and a whole-branch review proved by running that reverting both
+  // of them leaves the suite green: the change shipped three behaviour changes and guarded one.
+  // These two tests guard the other two.
+  //
+  // This one also pins a contract-visible consequence that no test pinned AS A CONSEQUENCE OF
+  // THE QUOTA FLOOR. An earlier claim here — "no test pinned it in either direction" — was
+  // false: "persists execution-recovery.json when execute is entered but returns no result
+  // before exhaustion" above has asserted failureBoundary === "runtime_exhausted" since before
+  // this branch (it is in the 07180a7 version of this file too). What it does not pin is the
+  // floor: it sets perAttemptTimeoutMs === totalRuntimeBudgetMs === 20 and reaches
+  // runtime_exhausted through measured wall clock, so reverting both quota floors in
+  // runPhaseWithTimeout leaves it green — the whole-branch mutation that motivated these two
+  // tests measured exactly that. getExecutionFailureBoundary branches on timeRemainingMs === 0,
+  // so here, where perAttemptTimeoutMs (1000) is far above the budget (20), the persisted
+  // failureBoundary is what proves the floor was applied and not merely that the run stopped.
+  it("accounts an execute timeout that resolves after the abort as exhaustion, and records the boundary as runtime_exhausted", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 1_000,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await waitForAbortThenFlush(context);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let finalState;
+    try {
+      finalState = await runLoop(contract, runDir, adapter);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const recovery = JSON.parse(
+      await readFile(join(runDir, "attempts", "1", "execution-recovery.json"), "utf8"),
+    ) as { failureBoundary: string };
+
+    expect(finalState.stopReason).toBe("runtime or token budget exhausted");
+    expect(finalState.budgetSnapshot.timeRemainingMs).toBe(0);
+    expect(recovery.failureBoundary).toBe("runtime_exhausted");
+  });
+
+  // The sibling of the above: the operation REJECTS after the abort, which is a different return
+  // statement carrying its own floor. Asserting the same exhaustion from a rejection is what
+  // separates the two — revert only this one's floor and only this test goes red.
+  it("accounts an execute timeout that rejects after the abort as exhaustion", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 1_000,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await waitForAbortThenFlush(context);
+        throw new Error("adapter failed after the abort");
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let finalState;
+    try {
+      finalState = await runLoop(contract, runDir, adapter);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(finalState.stopReason).toBe("runtime or token budget exhausted");
+    expect(finalState.budgetSnapshot.timeRemainingMs).toBe(0);
   });
 
   it("persists phase usage evidence from the subprocess adapter without recomputing controller totals", async () => {

@@ -419,17 +419,41 @@ async function runPhaseWithTimeout<T>(
     const elapsedMs = Math.max(Date.now() - startedAtMs, 0);
 
     if (outcome.kind === "timeout") {
+      // A phase that reached its timeout consumed at least the window it was granted, so that
+      // window — not the measured elapsed — is the floor on what it is charged. getPhaseTimeoutMs
+      // derives timeoutMs from min(perAttemptTimeoutMs, timeRemainingMs), so when the budget is
+      // the smaller operand this keeps hasBudgetExceeded's `timeRemainingMs === 0` a consequence
+      // of the timeout firing rather than of two clock reads happening to span the full window.
+      // When perAttemptTimeoutMs is STRICTLY the smaller operand the floor sits below the
+      // remaining budget and nothing is forced to exhaust. When the two are EQUAL the floor
+      // equals the remaining budget and exhaustion is forced — which is the right answer (a
+      // phase granted exactly the rest of the budget, that then timed out, has spent it), but
+      // it is forced, so do not read the previous sentence as covering that case. A minority of
+      // this file's integration suite is configured that way — ten of its 49 tests set
+      // perAttemptTimeoutMs equal to totalRuntimeBudgetMs, measured 2026-08-01. That ratio rots
+      // whenever a test is added; re-derive it rather than quoting it:
+      //   grep -c "perAttemptTimeoutMs: 20,$" tests/controller/runLoop.integration.test.ts
+      // counts 13, of which the three that leave totalRuntimeBudgetMs at its 5000ms default are
+      // NOT the equal case.
+      //
+      // One contract-visible consequence, on the execute phase only: getExecutionFailureBoundary
+      // branches on timeRemainingMs === 0, so a budget-capped execute timeout that recovers no
+      // result now persists failureBoundary "runtime_exhausted" where a clock read that fell
+      // short would have persisted "timeout". The new value is the accurate one.
+      //
+      // timeoutMs > 0 here (the <= 0 case returned above), so this floor also subsumes the
+      // non-negative clamp it replaces.
       if (!options?.awaitAbortedResult) {
         void operationPromise.catch(() => undefined);
-        return { timedOut: true, elapsedMs };
+        return { timedOut: true, elapsedMs: Math.max(elapsedMs, timeoutMs) };
       }
 
       try {
         const result = await operationPromise;
-        const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, 0);
+        const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, timeoutMs);
         return { timedOut: true, elapsedMs: timedOutElapsedMs, result };
       } catch (error) {
-        const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, 0);
+        const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, timeoutMs);
         return { timedOut: true, elapsedMs: timedOutElapsedMs, abortedError: error };
       }
     }
@@ -861,9 +885,28 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
   const ownerRecord = buildInitialOwnerRecord(contract, state);
   await initializeRunFiles(runDir, contract, state);
   // §7: as early as possible, but never before initializeRunFiles — the gate may append an
-  // event and events.jsonl does not exist yet. §7.0: ensureFreshRunDir has already thrown
-  // on any pre-existing run file, so this call can only ever observe "no owner record";
-  // every other branch is reachable through resumeLoop alone.
+  // event and events.jsonl does not exist yet.
+  //
+  // §7.0: this comment used to claim ensureFreshRunDir had already thrown on any pre-existing
+  // run file, so that "no owner record" was the ONLY observation reachable here. Both halves
+  // are false, by reading. ensureFreshRunDir (fileStore.ts, blockingPaths) blocks a
+  // pre-existing loop-contract.json, loop-state.json or events.jsonl, plus a non-empty
+  // attempts/ or worktrees/ — owner-record.json is not on that list. And checkRunLease returns
+  // rather than refuses for a record carrying no lease (leaseGate.ts §5.0) and for an expired
+  // one (§7). It still REFUSES on three paths, so do not read the above as "anything passes
+  // through": a non-ENOENT read failure rethrows, a structurally invalid record throws out of
+  // parseOwnerRecordForLease (ownership/lease.ts), and a fresh lease naming another process
+  // throws RunLeaseHeldError. leaseGate.ts and lease.ts both say so at their own call sites.
+  //
+  // So "no owner record" is the ordinary observation here and not the only reachable one, and
+  // the writeOwnerRecord below is not guaranteed to be a creation. Reaching that overwrite does
+  // require out-of-band tampering rather than any path this codebase takes: initializeRunFiles
+  // writes loop-contract.json and never owner-record.json, and owner-record.json is first
+  // written below this gate, so a directory this code produced always trips ensureFreshRunDir
+  // first. It is constructible by deleting the blocking files while keeping owner-record.json.
+  //
+  // The code is unchanged: the gate taking no position on those two states is leaseGate's
+  // stated design, not an oversight. Only the claim about what can be observed was wrong.
   await checkRunLease(runDir, ownerRecord.currentProcessInstanceId, Date.now());
   await writeOwnerRecord(runDir, ownerRecord);
   await appendTransitionEvent(runDir, state, "loop_planning", "run initialized and ready to plan");
