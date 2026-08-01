@@ -1,6 +1,6 @@
 # L3 — Sweep（触发层）与转移事务的跨文件原子性
 
-Status: drafted 2026-08-01。**经四轮独立评审对着代码撞过之后四次大幅修订**：第一轮三个独立评审员撞出 16 条 Critical（索引见 §16），**第二轮另派三个错开视角的评审员对着第一轮的修复波撞出 47 条**（索引见 §17，其中 4 条推翻或更正了第一轮修复本身），**第三轮再派三个对着第二轮的修复波撞出 16 条阻塞（6 Critical ＋ 10 Important）＋ 一批记账类**（索引见 §18，其中 G1/G2 证明第二轮那处最承重的改判既没关闭它要修的缺陷、也没有任何有效护栏），**第四轮再派三个对着第三轮的修复波撞出 6 条 Critical ＋ 10 条 Important ＋ 9 条 Minor ＋ 一条 `grep` 用法规矩**（索引见 §19，其中 C1–C4 证明第三轮为 §4.3 排序改判新写的论证与新写的变异**仍然**不成立——连续三轮零有效护栏）。**第三轮有两次人裁**（marker 原子写的连带范围 G11 → 三份 pending 一并原子化；两处 Rule 7 冲突的取舍 G13 / G15）；**第四轮有一次人裁**（§4.3 处置一「放弃这次 reconciliation 写」的可观测面 = 跳过 ＋ 追加一条具名事件，见 §4.3）。本文是父设计 `2026-07-22-ownership-and-reconciliation-boundaries-design.md` §17 item 2 的**后半**（触发），前半（发现）由 L2 `2026-07-28-run-registry-design.md` 完成。
+Status: drafted 2026-08-01。**经四轮独立评审对着代码撞过之后四次大幅修订，外加一次人裁触发的定向修复波（第五波，见本行末与 §20）**：第一轮三个独立评审员撞出 16 条 Critical（索引见 §16），**第二轮另派三个错开视角的评审员对着第一轮的修复波撞出 47 条**（索引见 §17，其中 4 条推翻或更正了第一轮修复本身），**第三轮再派三个对着第二轮的修复波撞出 16 条阻塞（6 Critical ＋ 10 Important）＋ 一批记账类**（索引见 §18，其中 G1/G2 证明第二轮那处最承重的改判既没关闭它要修的缺陷、也没有任何有效护栏），**第四轮再派三个对着第三轮的修复波撞出 6 条 Critical ＋ 10 条 Important ＋ 9 条 Minor ＋ 一条 `grep` 用法规矩**（索引见 §19，其中 C1–C4 证明第三轮为 §4.3 排序改判新写的论证与新写的变异**仍然**不成立——连续三轮零有效护栏）。**第三轮有两次人裁**（marker 原子写的连带范围 G11 → 三份 pending 一并原子化；两处 Rule 7 冲突的取舍 G13 / G15）；**第四轮有一次人裁**（§4.3 处置一「放弃这次 reconciliation 写」的可观测面 = 跳过 ＋ 追加一条具名事件，见 §4.3）。**第五波不是评审轮，是一次人裁触发的定向修复波**：人**推翻了第四轮对同一件事的后半段判断**——那条放弃**必须路由到 sweep 的 stderr**，不接受「落盘但不路由」（索引见 §20；改动限于 §4.3 / §8 / §9 / §10 测试 12d / §15 验收 1b 与验收 9 / §13 第 4 笔 / 本行）。本文是父设计 `2026-07-22-ownership-and-reconciliation-boundaries-design.md` §17 item 2 的**后半**（触发），前半（发现）由 L2 `2026-07-28-run-registry-design.md` 完成。
 
 > **「第三轮 16 条阻塞」在第三轮的 spec 里被写成 12，两处（本行与 §18 背景段），且*两处都没有重推命令*——恰好违反 §17 末尾第三轮自己升级的那条规矩。** 第四轮就地改对并附命令：
 >
@@ -591,20 +591,103 @@ ENOENT 的来源：(a) `readOwnerTransferRecordRaw`（**要豁免的那一个**�
 - **detail** 携带 `String(error)`（与 `workspace_retry` / `workspace_create_failed` 的既有写法同形）。
 - **`boundary-analysis.json` 那次写照常发生**（它在 `:309`，在保护之前），所以「这个 run 走过 stale_candidate 分支」这件事仍然留痕。
 
-**它在 §8 里落在哪一格 —— 正面回答：一格都不落，而这是本层必须承认的一个观测缺口。**
+**它在 §8 里落在哪一格 —— 见下面第五波的人裁。第四轮给的答案（「一格都不落」）已被推翻。**
 
-- §8 那张表是 **sweep 报告层**的分类表，它的输入只有 `resumeLoop` 的返回值与抛出。而 `reconciliation_write_abandoned` 产生在 `writeBoundaryArtifacts` 里、在 `runLoopFromState` **内部**，既不改变 run 的终态、也不抛出，**因此 sweep 那一行的 outcome 与 detail 与没发生过时逐字节相同**。
-- **§8 现有那条 `cannot read run artifacts:` 前缀接不住它**，不要假装能：
+##### ⚠️ 人已裁定（第五波，推翻第四轮）：这条放弃必须路由到 sweep 的 stderr
+
+**第四轮的处置是「落盘但不路由」**：事件只进 `events.jsonl`，§8 表加一行显式的「不路由」，并把「cron 的『有 stderr 即告警』不会为它响」写成一条具名代价交接给 L5。**人已裁定：不接受。** 理由是本层自己的结构性矛盾——这是一条**保护性放弃**，本层为它写了整节论证、为它配了三条子用例（测试 6f），却让操作者在**当场**看不见它发生过。**一条值得写整节论证的拒绝，就值得让当班的人看见；只留事后审计等于把它降级成一条没有消费者的日志。**
+
+**第一步先核「能不能不新建通道」（人的要求：不许直接假设必须改签名）—— 结论是不能，两条独立理由，各附本轮实测：**
+
+**理由一：sweep 报告层今天的输入里没有任何东西携带它。** sweep 的两路输入是 (1) `scanRuns` 返回的 `ScanRow`，(2) `resumeLoop` 的返回值与抛出。逐路核过：
+
+```bash
+grep -nF 'export type ScanRow' src/registry/scanRuns.ts
+# 实测输出 1 行：:17 `export type ScanRow = RunObservation | ScanIssue;`
+grep -nF 'OBSERVED_FILES' src/registry/observeFields.ts src/registry/observeRun.ts
+# 实测输出 4 行：observeFields.ts:5 定义、observeRun.ts:4 import、:16 注释、
+#   :23 `OBSERVED_FILES.map((spec) => readObservedFile(runDir, spec, deps)),`
+#   —— 即 RunObservation.files 逐项来自 OBSERVED_FILES，没有第二个来源
+grep -nF 'file:' src/registry/observeFields.ts
+# 实测输出 4 行：
+#   :7   file: "loop-state.json",
+#   :29  file: "owner-record.json",
+#   :45  file: "owner-transfer.json",
+#   :111 return { file: spec.file, fields };     ← 返回构造，不是观测文件
+#   结论：观测文件 3 个，**无 events.jsonl**
+grep -nF 'export async function resumeLoop(' src/controller/resumeLoop.ts
+# 实测输出 1 行：:87 `export async function resumeLoop(runDir: string, adapter: RuntimeAdapter): Promise<RunState>`
+#   —— 返回 RunState，而 §4.3 的人裁本身规定这条放弃**不改变 run 的终态**
+```
+
+**理由二：就算 registry 改成观测 `events.jsonl`，也派生不出来 —— 时序不对。** §6 的流水线是「先 `scanRuns` 一次、再顺序续跑」，扫描**早于**每个 run 的执行；而这条事件产生在续跑**期间**。要靠扫描看见它，必须在续跑之后**再扫一次**，那既违反 §3 第 1 条（sweep 自身不读 run 目录下的文件），也不是「就地派生」。
+
+**⚠️ 顺带撤回第四轮那条类比。** 第四轮写「这与 §5.4 对『人按过 Ctrl-C』的处置是同一个已知缺口，理由也相同」——**不同**：§5.4 那条缺口是**跨进程**的（本次 sweep 其实看得见停机，§8 有 `interrupted` 行；看不见的是**下一次** sweep），跨进程只能靠磁盘契约。而本条是**同一次 sweep、同一个进程内**的可见性，进程内的通道就够。**「理由也相同」这半句是把两个不同的缺口按表面症状归了一类，正是它把第四轮引向了错误结论。**
+
+**第二步：既然必须新建跨层通道，两种形状，本层选后者。**
+
+- **(a) 上行 —— 让 `writeBoundaryArtifacts` 把信息随返回值带上去。** 它今天是 `Promise<void>`：
+
+  ```bash
+  grep -nF -A7 'export async function writeBoundaryArtifacts(' src/persistence/fileStore.ts
+  # 实测输出 8 行：:302 签名、:303 runDir、:304-:307 artifacts 对象、
+  #   :308 `): Promise<void> {`、:309 写 boundary-analysis.json
+  ```
+
+  要上行到 sweep，`writeBoundaryArtifacts` → `persistBoundaryAnalysis`（今天 `Promise<void>`）→ `runLoopFromState`（今天 `Promise<RunState>`）→ `resumeLoop`（今天 `Promise<RunState>`）**四层返回类型全部要改**。
+- **(b) 下行 —— 把一个可选回调从 sweep 传到 `writeBoundaryArtifacts`。** 四层各加一个**可选**入参，返回类型一个字节不动。
+
+**否决 (a) 的三条理由，第三条是决定性的：**
+
+1. **爆炸半径**：`runLoopFromState` 与 `resumeLoop` 的返回值是被广泛依赖的公开面（`src/cli.ts:131`/`:135` 的 `finalState.status ? 0 : 2`，以及全部 14 个 `resumeLoop` 调用点），改返回类型要动的是**读端**，每一处都要重新解构。(b) 改的全是**可选入参**，既有调用点一个不断。
+
+   ```bash
+   grep -rnF 'resumeLoop(' src/ tests/ | grep -vF 'export async function' | grep -cF 'resumeLoop('
+   # 实测输出 14
+   grep -rcF 'resumeLoop(runDir' tests/controller/resumeLoop.integration.test.ts tests/controller/leaseLifecycle.integration.test.ts
+   # 实测输出 2 行：resumeLoop.integration.test.ts:12、leaseLifecycle.integration.test.ts:1
+   #   14 = 12 + 1 + src/cli.ts:130 那一处
+   ```
+2. **语义错位**：`RunState` 是 run 的**状态**，而这条事件按人裁**不改变 run 的终态**。把它塞进 `RunState` 就是在状态对象里挂一条与状态无关的通知，下一位读者会误以为它是终态的一部分。
+3. **（决定性）(a) 在最需要它的那条路径上会把消息丢掉。** §6 已实测：`runLoopFromState` 的 `while (true)` 顶端两个 `await`（`:974` `writeRunState`、`:977` `affirmNow`）**不在任何 try 内**，可以在若干次 attempt 之后直接抛出、逃出 `resumeLoop`。**一旦抛出，返回值不存在，(a) 携带的那条信息随之蒸发**——而那正是「这个 run 出了事」最需要 stderr 的时刻。(b) 的回调在事件发生的**当场**就把记录写进了 sweep 自己的数组里，后续无论 run 正常返回还是抛出，记录都已在 sweep 手上。
+
+**第三步：通道逐层定死（四层，每一层都只是「新增一个可选项」，零破坏性改动）。**
+
+| 层 | 今天 | 改成 | 该层的失败语义 |
+|---|---|---|---|
+| `fileStore.writeBoundaryArtifacts` | `(runDir, artifacts): Promise<void>`（`:302`–`:308`） | 加**第三个可选参数** `options?: { onReconciliationWriteAbandoned?: (detail: string) => void }`。**返回类型不变。** 在决定跳过 `:317` 那次写的**同一个同步块**里调用它，**且排在 `appendEvent` 之前** | 回调缺省 → 行为与第四轮定的一致（只落 `events.jsonl`，不路由）。**回调排在 `appendEvent` 之前是刻意的**：`appendEvent` 是裸 `appendFile`、可以 reject（`leaseHeartbeat.ts:51` 的注释就是这么写的），排在后面会让一次 I/O 失败连带吞掉 stderr 那条 |
+| `runLoop.persistBoundaryAnalysis` | `(runDir, state, heartbeat, executionRecovery?)`（`:704`） | 加**第五个可选参数**，原样透传。**两个调用点都要改**：`:1109` 追加第 5 实参；`:1141` 今天只传 3 个，要写成 `(runDir, state, heartbeat, undefined, cb)` | 纯透传，不新增任何 catch |
+| `runLoop.runLoopFromState` | `(contract, runDir, adapter, initialLoopState, heartbeat?, leaseLoss?)`（`:953`–`:960`） | **不新增位置参数**：搭 §5.4 已经要加的那个可选参数对象（`stopRequested` 走的同一个），加一个键 `onReconciliationWriteAbandoned?` | 纯透传 |
+| `controller.resumeLoop` | `(runDir, adapter)`（`:87`） | **不新增位置参数**：§9 已定的可选参数对象从 `{ stopRequested?, onAdopted? }` 扩为 `{ stopRequested?, onAdopted?, onReconciliationWriteAbandoned? }` | 纯透传。既有 14 处调用点全部传 2 个实参，零改动 |
+| `sweep.sweepRuns` | — | 为**当前这个 run** 传一个闭包，把 `{ path, detail }` push 进本次 sweep 的备注数组 | 见下面的「回调不得抛出」 |
+
+**`writeBoundaryArtifacts` 的既有调用点全部安全**（可选参数，两参调用照旧合法）：
+
+```bash
+grep -rnF 'writeBoundaryArtifacts(' src/
+# 实测输出 2 行：src/controller/runLoop.ts:845 唯一生产调用点、src/persistence/fileStore.ts:302 定义
+grep -cF 'writeBoundaryArtifacts(runDir, {' tests/persistence/fileStore.test.ts
+# 实测输出 11 —— 全是两参调用，加第三个可选参数一条都不断
+```
+
+**回调不得抛出，且本层刻意不给它包 try/catch。** 它若抛出，会从 `writeBoundaryArtifacts` 一路逃到 `runLoopFromState`，把一次保护性放弃升级成 attempt 失败——**正是人裁明令禁止的那件事**。包一层 `try{}catch{}` 会静默吞掉它，违反 Rule 12。**本层的处置是把「不得抛出」定成回调的契约，并把 sweep 侧的实现定死为一次数组 push（不做 I/O、不格式化）**，使违约成为一个显眼的编程错误而不是一条被吞的异常。
+
+**第四步：它落在 sweep 报告的哪一格 —— 写死。**
+
+- **不是 `error`，也不新增 outcome 取值。** `outcome` 那一列是该 run 的**终局**分类，一行一个值；而这条事件与终局**正交**——一个最终 `succeeded` 的 run 照样能产生它。写进 `error` 会把真实终局覆盖掉，等于用一条局部事件谎报整个 run 的结果。
+- **落点是一条独立的 stderr 备注行**，格式 **`note  <path>  reconciliation_write_abandoned  <detail>`**，**紧跟该 run 的报告行之后打印**（sweep 是顺序 for-await，§6，所以行序确定，测试 11/13 的确定性依赖不受影响）。一次调用产生一行，不去重、不聚合。
+- **不复用 `cannot read run artifacts:` 那一行**，且不要假装它能接住：
 
   ```bash
   grep -rnF 'cannot read run artifacts' src/ tests/
-  # 实测 exit 0，命中 3 行：src/controller/resumeLoop.ts:119、:120、tests/cli/cli.test.ts:73
+  # 实测输出 3 行：src/controller/resumeLoop.ts:119、:120、tests/cli/cli.test.ts:73
   # —— src/ 内唯一的产生点是 resumeLoop 的**读侧** Promise.all catch。
   # 本事件产生在 fileStore 的**写侧**，根本不经过那个 catch。
   ```
 
-- **§8 因此新增一行，内容是「明确不路由」**，见 §8 表。**写下「不路由」比留白强**：留白会让下一位读者以为它被某条兜底行接住了。
-- **代价，明写**：cron 的「有 stderr 即告警」**不会**为这条事件响。要看见它只能读 `events.jsonl`，而 §3 第 1 条禁止 sweep 读 run 目录下的文件、registry 也不观测 `events.jsonl`（`grep -nF 'file:' src/registry/observeFields.ts` 实测 4 行，见 §5.4）。**这与 §5.4 对「人按过 Ctrl-C」的处置是同一个已知缺口**，理由也相同：让它可见需要新增一个被 registry 观测的字段，那是新的磁盘契约，属 L2/L5。**具名并入 §13 第 4 笔的交接说明。**
+- **退出码不受影响**（§7 表一个字节不改）。理由：退出码钉的是「sweep 有没有干成它的活」，而这条事件既不阻止 sweep 完成扫描、也不改变任何 run 的合法终局。**可见性由 stderr 独家兑现 —— 而 cron 的「有 stderr 即告警」现在会为它响，这正是人裁要的东西。**
+- **§8 末尾的汇总行格式不改**（不加计数格）。理由两条：人裁只要求「看得见」，加计数是超出的第二件事（Rule 2）；且该格式已被 §18 附 G24 与 §19 引用，改它会作废那两处而没有对应收益。
+- **`ccloop run` / `ccloop resume` 两条 CLI 路径不传回调**，行为与第四轮一致（只进 `events.jsonl`）。**这不是遗漏**：那两条路径是前台命令，操作者本来就在看着它；stderr 路由要解决的是无人值守的 sweep。
 
 - **为什么这不是行为退化**：`writeBoundaryArtifacts` 的调用方 `persistBoundaryAnalysis` 在 `runExclusive` 内已经成功 `readOwnerRecord` 过一次，所以健康路径上 `owner-record.json` 必然存在且可读；`readPersistedReconciliationRecord` 自带 `catch { return undefined }`、从不抛。
 
@@ -1350,9 +1433,13 @@ grep -nF 'export function scanRootFailureDetail(' src/registry/renderRuns.ts
 | run 跑到任一终态 | 记录终态 + `stopReason` | stdout |
 | run 因 `stop_requested` 或 `RunHeartbeatStoppedError` 返回非终态 | 记录为 `interrupted`，**明确标注该 run 仍可续跑** | stdout |
 | 意料之外的抛错 | 记录**完整 message**，继续下一个 | **stderr** |
-| **`reconciliation_write_abandoned`（§4.3 处置一的人裁）** | **不路由 —— sweep 看不见它。** 它产生在 `writeBoundaryArtifacts`（`fileStore.ts`）里、在 `runLoopFromState` **内部**，既不抛出也不改变 run 的终态，**所以该 run 的报告行与没发生过时逐字节相同** | **只进 `events.jsonl`**；**不进 stdout 也不进 stderr** |
+| **`reconciliation_write_abandoned`（§4.3 处置一的人裁；第五波人裁改为路由）** | **一条独立的备注行**，格式 `note  <path>  reconciliation_write_abandoned  <detail>`，紧跟该 run 的报告行之后。**该 run 自己的 `outcome` 一个字节不变**（这条事件与终局正交），**退出码不变**，**汇总行不变** | **`events.jsonl` ＋ stderr** |
 
-**⚠️ 上面这一行是刻意写下的「不路由」，不是留白**（第四轮）。留白会让下一位读者以为它被某条兜底行接住了。**特别是：它接不住在 `cannot read run artifacts:` 那一行上** —— 那个前缀只在 `resumeLoop` 的**读侧** `Promise.all` catch 里产生（`src/controller/resumeLoop.ts:119`/`:120`，`grep -rnF 'cannot read run artifacts' src/ tests/` 实测 3 行，`src/` 内唯一产生点就是那两行），而本事件产生在 `fileStore` 的**写侧**，根本不经过那个 catch。**代价（cron 的「有 stderr 即告警」不会为它响）与理由见 §4.3 的人裁一节，具名并入 §13 第 4 笔。**
+**⚠️ 上面这一行在第四轮写的是「不路由 —— sweep 看不见它」，第五波的人裁把它推翻了**（完整论证、被否决的上行方案、以及逐层通道见 §4.3 的「⚠️ 人已裁定（第五波，推翻第四轮）」）。要点三条：
+
+- **它不落进 `outcome` 那一列的任何一格**——不是 `error`，也不新增取值。`outcome` 是该 run 的终局分类，一行一个值，而一个最终 `succeeded` 的 run 照样能产生这条事件；塞进 `error` 会用一条局部事件谎报整个 run 的结果。**落点是一条另起的备注行，不是那三列里的一格。**
+- **它接不住在 `cannot read run artifacts:` 那一行上**，不要复用：那个前缀只在 `resumeLoop` 的**读侧** `Promise.all` catch 里产生（`src/controller/resumeLoop.ts:119`/`:120`，`grep -rnF 'cannot read run artifacts' src/ tests/` 实测输出 3 行，`src/` 内唯一产生点就是那两行），而本事件产生在 `fileStore` 的**写侧**，根本不经过那个 catch。
+- **通道是进程内的可选回调，不是新的磁盘契约**（§4.3 的四层表）。sweep 因此仍然不读 run 目录下的任何文件，§3 第 1 条原样成立。**cron 的「有 stderr 即告警」现在会为这条事件响** —— 第四轮把「不会响」写成一条具名代价交接给 L5，那条代价已撤回（§13 第 4 笔）。
 
 **读侧失败为什么单开一行**（第二轮评审 Critical；**判据在第三轮从 `cause` 改为 message 前缀，见 §4.4**）：§4.4 的整条立论是「不可解析的 marker / 缺失的 pending 是**响亮**的失败」。但该错误从 `readOwnerRecord` 逃出后被 `resumeLoop` 的 `Promise.all` catch 统一改写成 `ResumeNotEligibleError`，若让它落进上一行的「正常结果 → stdout → exit 0」，**「响亮」在实际调用图上就不成立**，cron 的「有 stderr 即告警」永远不响。**§4.4 的立论靠这一行兑现，不靠错误类型本身。**
 
@@ -1382,12 +1469,12 @@ grep -nF 'export function scanRootFailureDetail(' src/registry/renderRuns.ts
 
 | 模块 | 职责 |
 |---|---|
-| `src/sweep/sweepRuns.ts` | 扫描 → `scanRootFailureDetail` 判据 → 过滤 → 排序 → **按 `--max-runs` 截断遍历（计数由 `onAdopted` 驱动，§6）** → 顺序续跑 → **按 `cannot read run artifacts:` 前缀把读侧失败路由到 `error`/stderr（§8）** → 汇报。**纯函数，接收信号槽与配额 N，自身无 writer、不装信号处理器** |
+| `src/sweep/sweepRuns.ts` | 扫描 → `scanRootFailureDetail` 判据 → 过滤 → 排序 → **按 `--max-runs` 截断遍历（计数由 `onAdopted` 驱动，§6）** → 顺序续跑 → **按 `cannot read run artifacts:` 前缀把读侧失败路由到 `error`/stderr（§8）** → **为每个 run 传 `onReconciliationWriteAbandoned` 回调、把回调收到的记录按 `note` 行打到 stderr（§4.3 第五波人裁、§8）** → 汇报。**纯函数，接收信号槽与配额 N，自身无 writer、不装信号处理器。回调的实现定死为一次数组 push，不做 I/O、不得抛出** |
 | `src/cli.ts` | `sweep` 分支、参数解析（**含 `--max-runs`**）、**可注入的信号处理器注册 `registerStopHandlers(signal, { exit = process.exit })`**、退出码映射 |
-| `src/controller/resumeLoop.ts` | 追加**一个可选参数对象** `{ stopRequested?, onAdopted? }`（有默认值；现有调用点全部传 2 个实参，零改动），信号向 `runLoopFromState` 透传，`onAdopted` 在 `resume_adopted` 追加之后触发。**`ResumeNotEligibleError` 的签名与 `Promise.all` 的 catch 一个字节不改**（§4.4 已否决 `cause` 方案） |
-| `src/controller/runLoop.ts` | 信号槽检查点；`ReconciliationDraft` 的组装（**不含 `newOwnerEpoch`**）；`persistOwnerTransfer` 内用 `applyOwnerEpochTransfer` 的输出补齐 `newOwnerEpoch` 并透传；赢家路径 `writeBoundaryArtifacts` 改传 `undefined`；**新增 `RunHeartbeatStoppedError` 分支（不写终态，返回非终态 `state`）**；`runExclusive` 注释那一条的连带更新 |
+| `src/controller/resumeLoop.ts` | 追加**一个可选参数对象** `{ stopRequested?, onAdopted?, onReconciliationWriteAbandoned? }`（有默认值；现有 **14** 个调用点全部传 2 个实参，零改动），信号与 `onReconciliationWriteAbandoned` 一并向 `runLoopFromState` 透传，`onAdopted` 在 `resume_adopted` 追加之后触发。**`ResumeNotEligibleError` 的签名与 `Promise.all` 的 catch 一个字节不改**（§4.4 已否决 `cause` 方案） |
+| `src/controller/runLoop.ts` | 信号槽检查点；`ReconciliationDraft` 的组装（**不含 `newOwnerEpoch`**）；`persistOwnerTransfer` 内用 `applyOwnerEpochTransfer` 的输出补齐 `newOwnerEpoch` 并透传；赢家路径 `writeBoundaryArtifacts` 改传 `undefined`；**新增 `RunHeartbeatStoppedError` 分支（不写终态，返回非终态 `state`）**；`runExclusive` 注释那一条的连带更新；**`onReconciliationWriteAbandoned` 的透传两层：`runLoopFromState` 搭 `stopRequested` 的同一个可选参数对象（不新增位置参数），`persistBoundaryAnalysis`（`:704`）加第五个可选参数——其两个调用点 `:1109` / `:1141` 都要改，`:1141` 今天只传 3 个实参，须写成 `(runDir, state, heartbeat, undefined, cb)`**（§4.3 第五波人裁） |
 | `src/controller/leaseHeartbeat.ts` | `runExclusive` 拒绝 + 其上方注释 |
-| `src/persistence/fileStore.ts` | 三文件事务、**marker 原子写（temp + rename）**、**三份 pending 原子写（temp + rename，§4.0.3a 人已裁定）**、marker 驱动 finalize、`cleanupOwnerTransferStagingWithoutMarker` 从 4 扩到 **10** 个 `safeUnlink`、finalize try 首与 catch 尾各从 2 扩到 3 个对称 unlink、**`readPersistedSuccessfulTransferArtifacts` 的裸 catch 收窄为「非 ENOENT-of-`owner-transfer.json` 一律 fail-closed」＋ ENOENT 归因（二选一：按 `error.path`，或把那次读移出 `Promise.all` 单独 try）**（§4.3 处置一）、**`writeBoundaryArtifacts` 在放弃 reconciliation 写时追加一条 `reconciliation_write_abandoned` 事件（同模块内调 `appendEvent`，`RunEvent.type` 是裸 `string`，不改任何类型定义）**（§4.3 人裁） |
+| `src/persistence/fileStore.ts` | 三文件事务、**marker 原子写（temp + rename）**、**三份 pending 原子写（temp + rename，§4.0.3a 人已裁定）**、marker 驱动 finalize、`cleanupOwnerTransferStagingWithoutMarker` 从 4 扩到 **10** 个 `safeUnlink`、finalize try 首与 catch 尾各从 2 扩到 3 个对称 unlink、**`readPersistedSuccessfulTransferArtifacts` 的裸 catch 收窄为「非 ENOENT-of-`owner-transfer.json` 一律 fail-closed」＋ ENOENT 归因（二选一：按 `error.path`，或把那次读移出 `Promise.all` 单独 try）**（§4.3 处置一）、**`writeBoundaryArtifacts` 在放弃 reconciliation 写时追加一条 `reconciliation_write_abandoned` 事件（同模块内调 `appendEvent`，`RunEvent.type` 是裸 `string`，不改任何类型定义）**（§4.3 第四轮人裁）、**`writeBoundaryArtifacts` 加第三个可选参数 `options?: { onReconciliationWriteAbandoned?: (detail: string) => void }`，返回类型仍是 `Promise<void>`，回调在放弃那次写的同一个同步块内调用且*排在 `appendEvent` 之前*（`appendEvent` 是裸 `appendFile`、可以 reject）**（§4.3 第五波人裁） |
 | `src/ownership/lease.ts` | `RunHeartbeatStoppedError`（**并列、不继承既有两个**，见 §5.3 的硬约束） |
 
 **`isLeaseStopError` 的谓词与签名不改**（§5.3 选了方案 (a)）；只改 `runExclusive` 上方那条注释。
@@ -1409,6 +1496,15 @@ grep -rnF 'registerStopHandlers' src/ tests/
 `src/registry/` **零改动**。
 
 ⚠️ **签名改动的爆炸半径**：`writeOwnerTransferArtifacts` 若加**必需**参数，会打断 `tests/persistence/fileStore.test.ts` 的直接调用与 `tests/controller/leaseLifecycle.integration.test.ts` 的若干 `Parameters<typeof ...>` 包装。计划必须显式安排这批测试的更新，或把参数设为可选并说明。
+
+**⚠️ 第五波新增的那条通道刻意不落进这个爆炸半径**：四层加的**全是可选参数**（`writeBoundaryArtifacts` 的第三参、`persistBoundaryAnalysis` 的第五参、`runLoopFromState` 与 `resumeLoop` 搭已有的可选参数对象），**没有一处新增必需参数、没有一处改返回类型**，因此既有调用点一个都不断。
+
+```bash
+grep -cF 'writeBoundaryArtifacts(runDir, {' tests/persistence/fileStore.test.ts
+# 实测输出 11 —— 全是两参调用，加第三个可选参数一条都不需要改
+grep -rnF 'writeBoundaryArtifacts(' src/
+# 实测输出 2 行：src/controller/runLoop.ts:845 唯一生产调用点、src/persistence/fileStore.ts:302 定义
+```
 
 ```bash
 grep -cF 'writeOwnerTransferArtifacts(' tests/persistence/fileStore.test.ts   # 实测 17 —— 直接调用
@@ -1713,6 +1809,8 @@ grep -rnF 'writeOwnerTransferArtifacts' tests/                                # 
 
    **驱动入口**：直接调导出的 `writeBoundaryArtifacts`（`grep -nF 'export async function writeBoundaryArtifacts(' src/persistence/fileStore.ts` 实测 `:302`，**有 `export`**），不需要经 `runLoop`——本条钉的是 `fileStore` 内部的判据，不是控制器的调用形态。
 
+   **⚠️ 本条只钉「放弃」这个判定，不钉它的可见性。** 第五波人裁之后，那次放弃还必须被路由到 sweep 的 stderr（§4.3、§8）——**那一半由测试 12d 承重**，本条一个断言都碰不到它。**子用例 (ii)/(iii) 里那句「`events.jsonl` 多了一条 `reconciliation_write_abandoned`」是产物断言，不是路由断言**：一个「事件写了、回调没调」的实现会让本条全绿。
+
 **债 3**
 
 7. `runExclusive` 在 `stopped` 后拒绝；退回不拒绝 → 必须红。
@@ -1759,6 +1857,26 @@ grep -rnF 'writeOwnerTransferArtifacts' tests/                                # 
 
    **第三子用例（第三轮新增，钉 §6 的「计入时点改判」）**：一个替身 `resumeLoop` **先触发 `onAdopted`、再抛出**（模拟「门全过、k 次付费调用已发生、第 k+1 轮循环顶端 `writeRunState` 撞 ENOSPC」）。`--max-runs 1`，fixture 含 3 个这样的 eligible 目录。**断言 `resumeLoop` 恰好被调用 1 次**——配额已被那次 `onAdopted` 吃掉，遍历必须停。**变异：把计数点退回「`resumeLoop` 正常返回时 +1」→ 本条必须红**（退回之后三个目录会被全部调用，因为三次都抛出、三次都不计数）。
 12c. **`cannot read run artifacts:` 前缀是被依赖的契约（第三轮新增，§4.4 的路由改判靠它）**：驱动一个读侧必失败的 eligible 目录（例如 `owner-transfer.json` 存在且 eligible、`reconciliation-record.json` 缺失），断言该行 outcome 为 **`error`**、写到 **stderr**、detail 含完整 message。**变异：把 `resumeLoop.ts` 那两处（`:119` 事件 detail、`:120` 抛出）的前缀字面量改掉而不同步改 sweep 的判据 → 本测试必须红。** 这条把「前缀是契约」从注释变成断言。
+12d. **`reconciliation_write_abandoned` 路由到 stderr 的双端承重（第五波新增，钉 §4.3 的第五波人裁与 §8 那一行的改写）**
+
+   **为什么必须补**：第四轮把这条事件定成「不路由」，因此 §10 里没有任何东西钉它的可见性；第五波人裁把它改成「必须路由到 sweep 的 stderr」，**而路由是一条穿过四个模块的新通道**——不配测试，它会以「回调传了但没人调」或「调了但打进了错的一列」两种形态静默失败。
+
+   **四条子用例，缺一不可。**（i)(ii) 钉 sweep 侧的报告形状，(iii) 钉 `fileStore` 侧的产生，(iv) 钉中间三层的透传。**四条覆盖的是通道的三段，不是同一件事的三种说法。**
+
+   - **(i) 路由发生，且不污染 `outcome`**（`sweepRuns` 层，用 §9 已定的注入式 `resumeLoop` 替身）：替身**先触发它收到的 `onReconciliationWriteAbandoned('<detail>')`、再正常返回一个 `succeeded` 的 `RunState`**。断言（全部对 `sweepRuns` **返回之后**的最终输出取，不对过程取）：**(1)** stderr 里有一行 `note  <path>  reconciliation_write_abandoned  <detail>`；**(2)** 该 run 自己的报告行 outcome 仍是 **`succeeded`**、且在 **stdout**；**(3)** 汇总行的 `errored` 计数为 **0**；**(4)** 退出码 **0**。
+     **变异一：把它路由进 `error` 那一格（复用 `cannot read run artifacts:` 那条支路）→ (2) 与 (3) 必须红。**
+     **变异二：退回第四轮的「不路由」（回调传了但 sweep 不打印）→ (1) 必须红。**
+   - **(ii) 一次后续抛出不得吞掉这条备注**（这一条是**否决上行方案的那条理由的护栏**，§4.3）：替身**先触发 `onAdopted`、再触发 `onReconciliationWriteAbandoned`、再抛出**（即 §6 已实测的那条「k 次付费调用已发生、第 k+1 轮循环顶端 `writeRunState` 撞 ENOSPC」时序）。断言：stderr **同时**有那条 `note` 行**和**该 run 的 `error` 行。
+     **变异：把备注的落盘时机从「回调当场记入 sweep 的数组」改成「`resumeLoop` 正常返回后才记」→ 本条必须红**（抛出路径上永远走不到那一步）。**这个变异正是上行方案 (a) 的失效形状**，用一行生产改动表达出来。
+   - **(iii) 产生侧确实调了回调**（`fileStore` 层，直接调导出的 `writeBoundaryArtifacts`，驱动入口同测试 6f）：复用 **6f 子用例 (ii) 的 fixture**（目录有 `owner-transfer.json`、**没有** `owner-record.json`，以 `eligibleForContinuation: false` 的 reconciliation 调用），第三参传一个记录用的回调。断言：**回调恰好被调用 1 次**、参数含那次读失败的 `String(error)`，**且 `writeBoundaryArtifacts` 正常 resolve（不抛）**。
+     **变异：只 `appendEvent`、不调回调 → 本条必须红。**
+     **⚠️ 顺带钉住调用次序**：再加一条断言——**mock `appendEvent` 抛出时，回调仍然已被调用过**。这钉的是 §4.3 定死的「回调排在 `appendEvent` 之前」，否则一次 `events.jsonl` 的 I/O 失败会连带吞掉 stderr 那条。**变异：把两者顺序对调 → 这条断言必须红。**
+   - **(iv) 中间三层的透传**（经 `runLoopFromState` 驱动，与测试 1 / 5 / 6e 同一个入口——`persistBoundaryAnalysis` **未导出**，且 §10 通用条禁止为测试导出它）：在测试 5 / 6e 已经构造的那种「输家走到保护判定」的磁盘状态上驱动一次 `runLoopFromState`，参数对象里传一个记录用的 `onReconciliationWriteAbandoned`，断言它被调用。
+     **变异：把 `runLoopFromState` → `persistBoundaryAnalysis` 或 `persistBoundaryAnalysis` → `writeBoundaryArtifacts` 任一段的透传删掉 → 本条必须红。**
+     **⚠️ 这一条不许省。** (i)(ii) 用替身 `resumeLoop`、(iii) 直接调 `fileStore`，**三条都绕开了中间三层**；少了 (iv)，一次「参数加了但忘记往下传」的实现会让前三条**全绿**。**这正是本仓库「两侧各自绿、中间断掉」那类案底的形状。**
+
+   **⚠️ 本条的断言全部钉终态，不钉过程**（§19 下一轮优先核查项第 4 类）：判据是 `sweepRuns` 返回之后 stderr / stdout 的**最终文本**与 `outcome` 列的**最终取值**，不是「回调在第几个 `await` 之后被调用」。**把 harness 强加的替身执行顺序换掉——例如让替身先抛出再触发回调——(i) 与 (ii) 的断言仍然各自成立或各自失败，不会因为顺序换了就变成另一条测试。**
+
 13. 信号槽置位后不再开下一个 run（`sweepRuns` 层，纯函数，可自动化）。
 13b. **第二次信号 → 130**：`registerStopHandlers(signal, { exit })` 注入一个假 `exit`，断言第二次信号（**SIGINT 与 SIGTERM 混合计数**，§5.4）调用了 `exit(130)`。
 
@@ -1815,7 +1933,7 @@ grep -rnF 'writeOwnerTransferArtifacts' tests/                                # 
 - 变异注入点必须在**生产代码 / 生产类型**上。
 - 反方向变异：只改 A 侧失败、只改 B 侧也失败。
 - 写区间必须带样本数。
-- 测试 1 / 5 / 6e 需经 `runLoop` / `runLoopFromState` 驱动（`persistBoundaryAnalysis` **未导出**）；**不要为此导出它**。测试 5 / 6e 里手工构造磁盘状态的那部分可直接调 `fileStore` 的导出面。
+- 测试 1 / 5 / 6e / **12d(iv)** 需经 `runLoop` / `runLoopFromState` 驱动（`persistBoundaryAnalysis` **未导出**，`grep -nF 'persistBoundaryAnalysis' src/controller/runLoop.ts` 实测输出 3 行：`:704` 定义**无 export**、`:1109`、`:1141`）；**不要为此导出它**。测试 5 / 6e / **12d(iii)** 里手工构造磁盘状态、直接驱动 `writeBoundaryArtifacts` 的那部分可直接调 `fileStore` 的导出面。
 - **凡是断言「恰好 N 行事件」的测试，都必须在同一条里写明 fixture 的前置条件**（`leaseAffirmedAt`、staging 残留），否则那个 N 是环境依赖的。
 
 ## 11. 执行约束
@@ -2074,10 +2192,14 @@ catch 那个「两个 `safeUnlink` 都可能替换正在传播的错误」的错
 
    两条都以「输家的降级版本永久覆盖赢家的真品」收尾。**`finalizeOrder` 排哪个方向都拦不住**——§4.3 的排序改判只是收窄，**没有关闭它**，而**收窄幅度本 spec 不再量化**（前两次量化各被下一轮证伪，理由见 §4.3）。**这是先于本层的缺陷**（今天赢家也在事务后经 `writeBoundaryArtifacts` 写 reconciliation，可被同样覆盖）。修法需要给输家那次写加锁（§4.3 已否决的方案 (c)）或引入文件系统级 CAS / 写后复核重试，两者都超出本层最小解。**完整论证与已采用的部分处置见 §4.3。**
 
-   **本笔附带交接的两件事（第四轮，都不单开一笔——它们是本笔的前提条件，不是独立缺陷）：**
+   **本笔附带交接的一件事（第四轮两件，第五波撤回其中一件，见下；不单开一笔——它是本笔的前提条件，不是独立缺陷）：**
 
    - **`readPersistedReconciliationRecord` 的 `catch { return undefined }`**：本层的处置一把「它自带 catch、从不抛」当成承重前提（「健康路径上唯一的 null 来源是 owner-transfer ENOENT」）。**本层不收窄它**，依据三条见 §4.3（L1 §12 第 7 条的范围不含该文件 / 该文件由 temp+rename 发布故截断态不可达 / 即便可达 `undefined` 会命中 `shouldSynthesizeSuccessfulReconciliation` 合成赢家视图）。**第三轮给的「先于本层 ⇒ 不在范围」那条理由已撤回**——同一波的人裁刚好推翻了这条判据（三份 pending 也先于本层，照样被收回自修）。
-   - **`reconciliation_write_abandoned` 事件对 sweep 不可见**：它只进 `events.jsonl`，而 registry 不观测该文件、§3 第 1 条又禁止 sweep 读 run 目录下的文件。**与 §5.4 对「人按过 Ctrl-C」的处置是同一个已知缺口**，让它可见需要新增一个被 registry 观测的字段，属 L2/L5。
+
+   **⚠️ 第五波撤回第四轮在这里交接的第二件事：「`reconciliation_write_abandoned` 事件对 sweep 不可见」。** 第四轮把「cron 的『有 stderr 即告警』不会为它响」写成一条具名代价传给 L5；**人已裁定必须路由到 sweep 的 stderr，本层就地实现，这条代价不再成立，整条从交接清单里删除**（通道与四层签名见 §4.3 的「⚠️ 人已裁定（第五波，推翻第四轮）」，落点见 §8，承重测试 12d，验收 9 第 5 条）。**它当时被并进本笔而不是单开一笔，所以撤回它不改变清单条数：**
+
+   - **§13 清单仍是 5 笔、L5 输入合计仍是 6 项**（本节开头、本节末尾括注、§14 第 1 条**三处数字均不变**）。
+   - **第四轮那句「与 §5.4 对『人按过 Ctrl-C』的处置是同一个已知缺口，理由也相同」一并撤回**：两者不同类。§5.4 那条是**跨进程**可见性（本次 sweep 其实看得见停机，看不见的是下一次 sweep），只能靠磁盘契约；本条是**同一次 sweep、同一个进程内**的可见性，进程内回调就够。**是这句错误的归类把第四轮引向了「只能等 L2/L5」的结论。** §5.4 第 2 条本身不受影响，原样保留。
 5. **被拒 run 的无退避重捡。** registry 不观测 `reconciliation-record.json`，所以「transfer eligible 但 reconciliation 不合格」的 run 会被**每一次** sweep 重新捡起、每次追加 2～3 行事件，无退避、无上限、无标记。见 §6 与 §12。
 
 （**清单是 5 条**；加上债 2，L5 的输入合计 **6 项**，与本节开头及 §14 第 1 条一致。**改清单必须同时改这三处数字。** 第三轮做的是「一出一进」——第 4 笔换了内容，条数与合计都没动，对照表见本节开头。）
@@ -2105,7 +2227,9 @@ catch 那个「两个 `safeUnlink` 都可能替换正在传播的错误」的错
    2. **残余时序之二（第四轮新增，第三轮的验收面只点了上面那一条）**——输家的**两次读跨在赢家的 rename#1 与 rename#2 之间**：读到 transfer(N+1) ＋ owner-record(仍是 N) → `transferRepresentsPublishedWinner` 的**判据 B 不成立** → 保护同样退化。**这一条不需要 ENOENT，也不需要「三次 rename 落进一个间隙」**，完整推导见 §4.3 的 U0–U3 表。**第三轮的 §4.3 声称这条不可达（「P2 的读一旦晚于 P1 的第一次 rename …保护生效」），那句话已被撤回。**
 
    **两条残余都由排序改判「收窄、未关闭」，一并具名传 L5（§13 第 4 笔）。**
-1b. **读侧失败不得退化为无保护直写**（第三轮新增，**第四轮补上落点与归因要求**，钉 §4.3 的处置一）：`readPersistedSuccessfulTransferArtifacts` 在**除「`owner-transfer.json` 的 ENOENT」以外**的任何读失败上都必须让调用方放弃 reconciliation 写，而不是原样放行输家那份；放弃时**追加一条 `reconciliation_write_abandoned` 事件**（§4.3 的人裁），**不抛出**。
+1b. **读侧失败不得退化为无保护直写**（第三轮新增，**第四轮补上落点与归因要求**，**第五波补上路由要求**，钉 §4.3 的处置一）：`readPersistedSuccessfulTransferArtifacts` 在**除「`owner-transfer.json` 的 ENOENT」以外**的任何读失败上都必须让调用方放弃 reconciliation 写，而不是原样放行输家那份；放弃时**追加一条 `reconciliation_write_abandoned` 事件**（§4.3 第四轮人裁）、**并通过 `onReconciliationWriteAbandoned` 回调路由到 sweep 的 stderr**（§4.3 第五波人裁），**不抛出**。
+
+   **⚠️ 「事件已落盘」不等于本条达标**（第五波）：可见性那一半由**验收 9 第 5 条 ＋ 测试 12d** 承重，测试 6f 一个断言都碰不到它。**只跑 6f 的实现可以「事件写了、回调没调」而全绿。**
 
    **⚠️ 本条在第三轮是孤儿验收——§10 区间内一次都没有对应条目**（重推命令与实测行号见 §10 测试 6f 开头）。**已补：§10 测试 6f。**
 
@@ -2286,7 +2410,7 @@ catch 那个「两个 `safeUnlink` 都可能替换正在传播的错误」的错
 
    一个**合规**的 §6 分支若在合入前 rebase 过，它的 `%ad` 可能早于 §4 的合并 → **误红**。**处置：把 (1) 与 (3) 的日期比较全部改用 `%cd`（提交日期），或干脆再来一次 `--is-ancestor` 取代日期比较**（后者更强，因为它比的是祖先关系而不是时钟）。**本层推荐后者**：日期比较在任何重写历史的操作下都不可靠，而祖先关系不受 rebase 影响。
 8. **`.owner-transfer.transaction.json` 与三份 pending 全部经 temp + rename 发布**（第三轮新增，钉 §4.0.3 与 §4.0.3a 的两次人裁）：四条 rename 路径各由 §10 测试 4d / 4e 承重；任一条退回 `writeJsonFile` 直写，对应子用例必红。**并且 `cleanupOwnerTransferStagingWithoutMarker` 覆盖全部 10 个 staging 路径**（测试 6c），少列一个即在该路径泄漏时变绿。
-9. **sweep 的配额、退出码、报告路由与逃生口有验收面**（第四轮新增，补 §10 六条无验收面的测试）。
+9. **sweep 的配额、退出码、报告路由与逃生口有验收面**（第四轮新增，补 §10 六条无验收面的测试；**第五波追加第 5 条，承接人裁的路由要求**）。
 
    **⚠️ 为什么必须新增**：G15 刚用「孤儿验收」裁掉哈希守卫，并立下「§15 的每一条都应当由 §10 的某一条承重」这条配对纪律。**但配对纪律只被单向执行了**——第三轮检查了「验收有没有测试」，没检查「测试有没有验收」。逐条对过之后，**§10 有六条测试完全没有 §15 面**：
 
@@ -2301,12 +2425,15 @@ catch 那个「两个 `safeUnlink` 都可能替换正在传播的错误」的错
 
    **其中 12b 与 12c 承重**：12b 是 §12「有界批准」这条治理表态的唯一钉子，12c 是「前缀字面量是被依赖的契约」这条从注释升级为断言的唯一钉子。**两者失守都不会让任何别的测试红。**
 
-   **本条的内容（四条，各自点名承重测试）：**
+   **本条的内容（第四轮四条 ＋ 第五波第 5 条 = 五条，各自点名承重测试）：**
 
    1. **配额是按「四道门全过、`resume_adopted` 已追加」计入的**，不是按 `resumeLoop` 返回计入。**测试 12b 的第三子用例承重**（替身先触发 `onAdopted` 再抛出，`--max-runs 1`，三个目录，断言恰好调用 1 次）。**变异：把计数点退回「正常返回时 +1」→ 该子用例必红。**
    2. **拒绝不消耗配额**（因此不会确定性饿死）。**测试 12b 的第二子用例承重。变异：改成「每次调用都计数」→ 必红。**
    3. **`cannot read run artifacts:` 前缀是被依赖的契约**：`resumeLoop.ts:119`/`:120` 与 sweep 的判据必须同笔改动。**测试 12c 承重。变异：改掉那两处前缀字面量而不同步改 sweep 判据 → 必红。**
    4. **逃生口可达且可注入**：第二次停机信号（SIGINT 与 SIGTERM **合并计数**）调用 `exit(130)`。**测试 13b 承重**（`registerStopHandlers(signal, { exit })` 注入假 `exit`）。**变异：改成按信号种类分别计数 → 「先 Ctrl-C 再 kill」这条子用例必红。**
+   5. **（第五波新增，钉人裁）`reconciliation_write_abandoned` 必须当场进 sweep 的 stderr，且不得篡改该 run 的 `outcome`。** 达标要求四条同时成立：**(a)** stderr 出现 `note  <path>  reconciliation_write_abandoned  <detail>`；**(b)** 该 run 的 `outcome` 与汇总行的 `errored` 计数**与没发生过时相同**；**(c)** 退出码不变；**(d)** 该 run 随后抛出时备注**仍在** stderr 上。**测试 12d 的四条子用例逐条承重**（(i) 对应 (a)(b)(c)、(ii) 对应 (d)、(iii) 钉 `fileStore` 侧确实调了回调且排在 `appendEvent` 之前、(iv) 钉中间三层的透传）。**变异：退回第四轮的「不路由」→ 12d(i) 必红；把它路由进 `error` 那一格 → 12d(i) 的 (2)(3) 必红；把记录时机改到「`resumeLoop` 正常返回后」→ 12d(ii) 必红；删掉任一段透传 → 12d(iv) 必红。**
+
+      **⚠️ 本条与验收 1b 不重复，分工写死**：1b 钉的是**「该不该放弃这次写」**（判据本身，测试 6f 承重），本条钉的是**「放弃之后有没有人看得见」**（可见性，测试 12d 承重）。**两者可以各自独立地失守**——一个「判据对、回调没接」的实现让 1b 绿而本条红，一个「回调接了、判据写成一律放行 ENOENT」的实现让本条绿而 1b 红。
 
    **测试 5 / 6a / 13 三条不单列验收，理由写明**：5 与 6a 是验收 8（四条 rename 路径 ＋ 暂存顺序）的组成部分，13 是验收 4（停机不永久终结）的前半；**三条各自已有上位验收，不是孤儿。** 只有 12b / 12c / 13b 是真正悬空的，本条补的就是它们。
 10. 全套件、typecheck、build 三者退出 0，且输出**未经任何过滤**地贴出。
@@ -2472,7 +2599,9 @@ grep -nF 'outcome` 取值域' "$F"
 
 **本轮的失效模式**：§18 判定「新的失效模式是『论证链里某一步把非原子的东西当原子用』」——**本轮证明第三轮*自己*在修那条缺陷时又犯了同一个错**（C1：把 `Promise.all` 当快照，而 §4.0a 就在同一份文档里白纸黑字写着它不是）。另一条同样复发：§10 测试 6e 刚立下「不许用终态钉过程」的纪律，**它自己的变异一收尾就用终态钉了过程**（C2）。
 
-**本轮的人裁一次**：§4.3 处置一「放弃这次 reconciliation 写」的可观测面 = **跳过 ＋ 追加一条 `reconciliation_write_abandoned` 事件**（不抛出、也不静默），并要求写清它在 §8 落在哪一格 —— 答案是「一格都不落」，已在 §8 表里写成一条显式的「不路由」行。
+**本轮的人裁一次**：§4.3 处置一「放弃这次 reconciliation 写」的可观测面 = **跳过 ＋ 追加一条 `reconciliation_write_abandoned` 事件**（不抛出、也不静默），并要求写清它在 §8 落在哪一格 —— ~~答案是「一格都不落」，已在 §8 表里写成一条显式的「不路由」行。~~
+
+> **⚠️ 第五波回扫作废上面这半句。** 前半（跳过 ＋ 追加具名事件、不抛出、不静默）**维持**；后半（「一格都不落」/「不路由」）**已被人裁推翻**——那条放弃必须路由到 sweep 的 stderr。**落点是一条独立的 `note` 行，不占 `outcome` 那一列的任何一格**（写死见 §8，通道见 §4.3 的第五波人裁一节）。下面 C6 行的「修订处」栏已就地补记。
 
 | # | 级别 | 缺陷摘要 | 修订处 |
 |---|---|---|---|
@@ -2481,11 +2610,11 @@ grep -nF 'outcome` 取值域' "$F"
 | C3 | **Critical** | 测试 6e 变异二的「rename 0 次」断言**在未变异时就为红**：`writeBoundaryArtifacts` 自己就调 `writeJsonFileAtomically` 两次（`:309` boundary-analysis、`:317` reconciliation），而后者在 `:424` 做 `rename`。所以输家期间**至少 2 次** rename，spec 写 0；变异后也不是它写的 3 次。**两侧数字都错** | §10 测试 6e 新增「窗口内断言的具体形状」一节：断言改为**「没有任何 rename 以事务的三个发布 temp 为源」**（与计数无关）。依据 `buildAtomicTempPath`（`:403`–`:409`）生成的是带进程戳 ＋ 序号的一次性 temp，与三个固定名的事务发布 temp 不可能撞名。**并给出等价替代**（spy `finalizePendingOwnerTransfer` 是否被进入，但它 `:608` 未导出，只能间接观测） |
 | C4 | **Critical** | 测试 6e 的变异二是**结构性等价变异**：删掉 `recoverInterruptedOwnerTransfer` `:640` 的 `await pathExists(paths.lockPath)` 合取项，在**四种锁状态下逐格与基线相同**。机制：`tryRecoverStaleOwnerTransferLock` 在 `readFile(lockPath)` ENOENT 时 `:527`–`:528` `return true`，锁可解析且 pid 活时 `:538`–`:540` `return false` —— 那个 `pathExists` 是**纯短路优化** | §10 测试 6e 新增「变异二 —— 第三轮选的那条注入点是结构性等价变异」一节（含四格对照表）。**替代注入点：删掉 `tryRecoverStaleOwnerTransferLock` `:538`–`:540` 的 `if (pid !== null && isProcessActive(pid)) { return false; }`** ——第四轮回代码逐格复核过，`lock=live` 那一格由 `false` 翻成 `true`，而 fixture 就钉在那一格。**并更正它的名字**：它模拟的是「活进程检查被移除」，不是第三轮写的「锁的持有范围被收窄」 |
 | C5 | **Critical** | §15 验收 1b 是**孤儿验收**：`grep -nF 'readPersistedSuccessfulTransferArtifacts' <spec>` 命中 12 处，**§10 区间内一次都没有**，而 §9 模块表已把「裸 catch 收窄」列为要落地的生产改动。**这正是 G15 刚用四条理由裁掉哈希守卫的那个失效模式，在同一波以新条目复发，且比验收 5 更糟——验收 5 至少没有配套的生产改动** | §10 **新增测试 6f**（三条子用例：ENOENT-of-`owner-transfer.json` 放行 / ENOENT-of-其它文件不放行 / 非 ENOENT 不放行，各配一条会红的变异）、§15 验收 1b 重写（补落点、补归因要求、达标判据拆成三条） |
-| C6 | **Critical**（人裁） | §4.3 处置一「放弃这次 reconciliation 写」的可观测面在第三轮完全未定义 | **人已裁定：跳过 ＋ 追加一条具名事件，不抛出、也不静默。** §4.3 新增「人已裁定（第四轮）」一节（事件类型名 `reconciliation_write_abandoned`、追加位置、detail 形状、`RunEvent.type` 是裸 `string` 故不改类型定义）、§8 表**新增一行显式写「不路由」**（并写明 `cannot read run artifacts:` 前缀只在 `resumeLoop` 的读侧产生，接不住 fileStore 的写侧）、§9 模块表、§13 第 4 笔（具名交接这个观测缺口） |
+| C6 | **Critical**（人裁） | §4.3 处置一「放弃这次 reconciliation 写」的可观测面在第三轮完全未定义 | **人已裁定：跳过 ＋ 追加一条具名事件，不抛出、也不静默。** §4.3 新增「人已裁定（第四轮）」一节（事件类型名 `reconciliation_write_abandoned`、追加位置、detail 形状、`RunEvent.type` 是裸 `string` 故不改类型定义）、~~§8 表**新增一行显式写「不路由」**~~（并写明 `cannot read run artifacts:` 前缀只在 `resumeLoop` 的读侧产生，接不住 fileStore 的写侧 —— **这半句仍然成立**）、§9 模块表、~~§13 第 4 笔（具名交接这个观测缺口）~~。**⚠️ 第五波补记：划掉的两处已被人裁作废** —— §8 那一行改写为一条独立 `note` 行路由到 stderr，§13 第 4 笔那条「cron 不会响」的具名代价整条撤回。**未被作废的部分**：事件类型名、追加位置、detail 形状、`RunEvent.type` 是裸 `string` 故不改类型定义、以及「前缀接不住写侧」那条判定。**新增落点见 §20** |
 | I1 | Important | 处置一的 ENOENT 豁免**没有给归因机制**：那个 catch 包住的是三读的 `Promise.all`，ENOENT 可来自 `readOwnerTransferRecordRaw` / `readOwnerRecordRaw` / `finalizePendingOwnerTransfer` 的 `:610`/`:611`。**最自然的实现 `if (e.code === "ENOENT") return null` 会把这些一并放行**，恰好在本改动要关闭的路径上原样保留 fail-open；**§15 验收 1b 复制了同样的措辞，两条断言都会绿** | §4.3 新增「⚠️ ENOENT 豁免必须给归因机制」一节（二选一：按 `error.path` / 把那次读移出 `Promise.all` 单独 try，**本层推荐后者**）、§15 验收 1b 拆成三条独立用例、§9 模块表补上归因要求 |
 | I2 | Important | §4.4「规则 2 在生产中不可达」为假：论证只覆盖「谁**写坏** pending」，没覆盖「谁**删** pending」。可达路径：P1 持锁写完 staging 后 SIGKILL → P2 判 pid 死、`:552` `safeUnlink(lockPath)` → P2 进 finalize；**锁已被删**，P3 的 `:640` 合取短路为 false → P3 也进 finalize → P2 先跑完并删掉 marker 与 pending → P3 停在 `:610`/`:611` 读 pending → ENOENT。**一次完全成功的转移会打一次 stderr 告警** | §4.4 新增「⚠️ 规则 2 **可达**」一节（逐环附实测行号 ＋ 两条后果 ＋ 级别定 Important 的理由：一次性、非永久钉死）、§15 验收 2 例外第 3 条（从「三者全部不可达」改为逐条区分）、§18 G11 行的修订处补记。**连带撤回**：§4.4 用「规则 2/3 不可达」作为否决 `Error.cause` 路由的**第 1 条**理由 —— **该理由的前提为假，已撤回**；否决结论由理由 2（`TS2554`）与理由 3（导出类公开签名）独立承重 |
 | I3 | Important | §15 验收 5 的八条变异里**至少三条杀不掉**：第 1 条（`!== true` → `=== false`）是等价变异除非 fixture 用非布尔——**而源码那个 `as boolean` cast 正说明它防的就是非布尔，spec 未要求这种 fixture**；第 2 条类型是 `boolean`，任何合法 fixture 下都等价；第 6 条（`!==` → `<`）**被 §10 测试 6b 强制的两组 fixture 都杀不掉** | §15 验收 5 的变异表重写（判据栏改为逐字照抄源码含 cast，新增「第四轮实测判定」列）＋ 新增「⚠️ 八条里有三条的建议变异杀不掉」一节（第 1、2 条改为「整条删掉」＋ 第 1 条另加一条非布尔 fixture 断言；第 6 条给出第三组 fixture 及其五条不许被抢先挡住的约束）、§10 测试 6b 就地更正「判据 B：任何单转移场景都能杀」、**§4.2 表补上抄漏的 `as boolean` cast** |
-| I4 | Important | §10 有**六条测试没有 §15 验收面**（5、6a、12b、12c、13、13b）。其中 **12b 是 G9 计入时点改判的唯一落点，§12 整节的「有界批准」靠它**；**12c 是 G3 前缀契约改判的唯一落点**。**G15 立的「验收↔测试配对」纪律只被单向执行了** | §15 **新增验收 9**（四条：配额计入时点 / 拒绝不消耗配额 / 前缀契约 / 逃生口可注入，各点名承重测试与变异），原验收 9 顺延为 10。**并写明 5 / 6a / 13 三条不单列的理由**（各自已有上位验收 8 / 8 / 4） |
+| I4 | Important | §10 有**六条测试没有 §15 验收面**（5、6a、12b、12c、13、13b）。其中 **12b 是 G9 计入时点改判的唯一落点，§12 整节的「有界批准」靠它**；**12c 是 G3 前缀契约改判的唯一落点**。**G15 立的「验收↔测试配对」纪律只被单向执行了** | §15 **新增验收 9**（四条：配额计入时点 / 拒绝不消耗配额 / 前缀契约 / 逃生口可注入，各点名承重测试与变异），原验收 9 顺延为 10。**并写明 5 / 6a / 13 三条不单列的理由**（各自已有上位验收 8 / 8 / 4）。**⚠️ 第五波补记：「四条」已变为五条**（新增第 5 条「`reconciliation_write_abandoned` 的路由」，承重测试 12d），本行的括注数字就地更正 |
 | I5 | Important | §10 测试 14 机制二末句仍写「四个 temp 全部不存在」——pending 原子化后是 **7 个 temp**、合计 **11 个路径**。**并且 §13 那张「改一处必须改四处」的联动清单本身不全**：没列测试 14 机制二，也没列本波新增的 §15 验收 8 | §10 测试 14 机制二（11 个路径逐个具名，分五类列出，并写明 11 = 1 marker ＋ cleanup 的那 10 个）、§13 的联动清单**从四处补到六处**。**「立了清单又漏了清单外那处」是「分类维度立好了、换个范围要原样带过去」那条教训的复发** |
 | I6 | Important | §17 索引里 **F12 / F38 / F46 三行已被第三轮作废、无一补记**：F12 的「§9（`cause` 透传）」被 G3 整条否决；F38 的「附 `git log` 判据」正是 G4 证明恒真并重写掉的；F46 的「配额只计实际执行」正是 G9 改判掉的。**规律：只有当某条 G 行的「修订处」点名了 §17 时才去动 §17**（G19/G11/G15 点了，G3/G4/G9 没点）。**加重情节：G24 的裁定理由明确引用了 F12** | §17 的 F12 / F38 / F46 / F47 四行就地补记 ＋ 表末新增「第四轮对本表的整体补记」，**并立下新规矩：每一轮修复波结束前必须对上一轮索引表做一次「修订处栏是否仍然成立」的回扫，不依赖本轮的 G/C 行有没有点名它** |
 | I7 | Important | §11 的 Rule 7 裁决一漏披露一条**本层扩大**的路径：`stop()` → `releaseOwnerLease`（`:769`）→ `updateOwnerRecordWithPrecondition`（`:720`）**内部在 `:729` 跑一次持锁恢复，且不在任何 catch 内**；本层给这次恢复加了第三个参与文件、一次 marker 的 `readFile` ＋ `JSON.parse`、以及规则 2/3 两条新的具名抛出。任一抛出 → release 失败 → `stop()` 吞掉 → **L1 §12 第 17 条的 "immediately" 退化成 "TTL 之后"**。§4.0.3a 对同类扩大记了账，这处没记，**而它落在常驻禁令第 17 条上**（且 I2 刚推翻了规则 2 的不可达） | §11 裁决一新增「⚠️ 但『本层一个字节不改 `stop()`』不等于『本层不扩大这条路径的失败面』」一节（逐环附实测行号）、§13 第 3 笔的「附带一笔同类的残余」**从两类扩为三类**，第三类明标「不是先于本层，是本层扩大的」 |
@@ -2503,7 +2632,7 @@ grep -nF 'outcome` 取值域' "$F"
 | M9 | Minor | 第三轮用「先于本层 ⇒ 不在范围」驳回 `readPersistedReconciliationRecord` 的 `catch { return undefined }`。**结论成立但理由不成立**——同一波的人裁刚好推翻了这条判据（三份 pending 也先于本层，照样被收回自修） | §4.3 处置一就地换成三条能承重的依据：(a) L1 §12 第 7 条的原文范围是 owner record ＋ 租约门，不含该文件；(b) 该文件由 `writeJsonFileAtomically`（`:418`，temp+rename）发布，截断态不可达；(c) 即便可达，`undefined` 会命中 `shouldSynthesizeSuccessfulReconciliation`（`:150`–`:159`）合成赢家视图。**并对「本层新建了对这次吞咽的依赖，是否该具名进 §13」这条自行判定：采纳，但不单开一笔**，理由写明——它是第 4 笔那条 TOCTOU 的**前提条件**而非独立缺陷，单开会让 §13 的条数与三处联动数字再动一次，收益不抵成本。**已作为第 4 笔的「附带交接」写下** |
 | M-grep | Minor（规矩） | 本仓库的 `grep` 是 Claude Code 二进制伪装成 ugrep（`declare -f grep` 可见 `ARGV0=ugrep "$_cc_bin" -G …`）。**四轮出现了四种互不相容的机制解释**，而第四轮在**同一个壳、同一次会话**里对同一条命令测到 exit 2，**与第三轮 §4.6a 就地记录的 exit 0 直接矛盾** | §4.6a **整节重写**（贴 `type grep` / `declare -f grep` / 三条证伪实测的原始退出码）＋ §4.6 的勘误性质改写（**既不判裁决记录那条真、也不判假，而是判定「它依赖的观测不可复现，不予采信」**）＋ §11 新增五条 `grep` 规矩。**G5 的结论（那条 finding 不成立）维持，但它的论证重写**——改用「裸符号名不唯一」这条与退出码完全无关的理由。**全文非 `-F` 的重推命令已批量改为 `-F`；确实需要正则的 6 条改为 `-E` 并逐条标注「只看输出行，退出码不作为论据」** |
 
-**本轮新增或改判的承重测试**：**6f（读侧收窄的双向承重，三条子用例）**。**改判的**：6b（「判据 B 任何单转移场景都能杀」就地更正）、6d（补基线快照点 ＋ 写下成立结论）、6e（**变异一改断言对象、变异二换注入点、窗口断言换形状**）、14（机制二从 8 个路径改为 11 个）、15 ／ §15 验收 5（三条等价变异各给补法）。**新增的验收**：§15 验收 9（sweep 的配额/退出码/路由/逃生口）。**撤回的论证**（结论未变，理由换掉）：§4.4 否决 `Error.cause` 的理由 1、§15 验收 5 的理由 2 与理由 4、§4.6/§4.6a 的全部退出码理由、§4.3 处置一对 `readPersistedReconciliationRecord` 的驳回理由。
+**本轮新增或改判的承重测试**：**6f（读侧收窄的双向承重，三条子用例）**。**改判的**：6b（「判据 B 任何单转移场景都能杀」就地更正）、6d（补基线快照点 ＋ 写下成立结论）、6e（**变异一改断言对象、变异二换注入点、窗口断言换形状**）、14（机制二从 8 个路径改为 11 个）、15 ／ §15 验收 5（三条等价变异各给补法）。**新增的验收**：§15 验收 9（sweep 的配额/退出码/路由/逃生口，**第四轮四条；第五波追加第 5 条，见 §20**）。**撤回的论证**（结论未变，理由换掉）：§4.4 否决 `Error.cause` 的理由 1、§15 验收 5 的理由 2 与理由 4、§4.6/§4.6a 的全部退出码理由、§4.3 处置一对 `readPersistedReconciliationRecord` 的驳回理由。
 
 **本轮的数字回扫（逐个重推，命令与输出值就地附在数字旁；下面每一个都在本轮真跑过一次）：**
 
@@ -2531,3 +2660,52 @@ grep -nF 'outcome` 取值域' "$F"
 2. 说「所以 X 读到 Y」而两个动作之间隔着 `await` 的（C1 的形状 —— **它在第三轮修完之后又复发了一次，说明这一类不会因为被点名一次就消失**）。
 3. 说「变异 M 会让测试红」而没有逐格走过控制流的（C4 的形状 —— **等价变异不会因为换 fixture 而暴露，必须逐格对照基线**）。
 4. **一条断言钉的是过程还是终态**（C2 的形状 —— §10 测试 6e 在同一节里立了纪律又破了它）。**判据：如果把 harness 强加的执行顺序换掉，这条断言还成立吗？不成立就是终态断言冒充过程断言。**
+
+## 20. 第五波修订索引（2026-08-01，一次人裁，非评审轮）
+
+**背景**：**本波不是第五波评审，没有评审员，只有一条人裁。** 人**推翻了第四轮对同一件事的后半段判断**：§4.3 处置一放弃 reconciliation 写时追加的 `reconciliation_write_abandoned` 事件，第四轮实现成「落盘但不路由」（理由是路由需要新的跨层接口、按 Rule 2 超出最小解），并把「cron 的『有 stderr 即告警』不会为它响」写成一条具名代价交接给 L5。**人裁：不接受，必须路由到 sweep 的 stderr。**
+
+**本波的范围硬边界**：只做路由这一件事及其连带面。**代码一行未动**（本波只改这一份 spec）。
+
+| # | 条目 | 处置 | 落点 |
+|---|---|---|---|
+| H1 | **人裁**：`reconciliation_write_abandoned` 必须路由到 sweep 的 stderr | 推翻第四轮的「不路由」 | §4.3 新增「⚠️ 人已裁定（第五波，推翻第四轮）」整节（四步：先核能不能不新建通道 → 两种通道形状 → 逐层签名表 → 落点写死）；Status 行 |
+| H2 | **先核「能不能就地派生」**（人的硬要求：不许直接假设必须改签名） | **不能**，两条独立理由各附实测：(1) sweep 报告层今天的两路输入（`ScanRow` / `resumeLoop` 的返回值与抛出）都不携带它 —— `OBSERVED_FILES` 只有 3 个观测文件、无 `events.jsonl`，`resumeLoop` 返回 `RunState` 而人裁本身规定这条不改终态；(2) **时序不对** —— §6 的流水线是「先扫一次、再顺序续跑」，扫描早于执行，靠扫描看见它必须在续跑后**再扫一次**，既违反 §3 第 1 条也不是「就地派生」 | §4.3 的「第一步」 |
+| H3 | **通道形状二选一**：上行（改返回值）vs 下行（可选回调） | **选下行回调**。否决上行的三条理由，第三条决定性：`runLoopFromState` 的 `while (true)` 顶端两个 `await`（`:974` / `:977`）不在任何 try 内，**一旦抛出返回值不存在，上行方案携带的信息随之蒸发** —— 而那正是最需要 stderr 的时刻 | §4.3 的「第二步」；§10 测试 12d 子用例 (ii) 把这条理由做成了护栏变异 |
+| H4 | **跨层通道逐层写死**（四层，全部是新增可选项，返回类型一个字节不改） | `writeBoundaryArtifacts` 加第三个可选参数（`Promise<void>` 不变，回调排在 `appendEvent` **之前**）→ `persistBoundaryAnalysis` 加第五个可选参数（`:1141` 须补 `undefined`）→ `runLoopFromState` 搭 `stopRequested` 的同一个可选参数对象 → `resumeLoop` 的可选参数对象从 2 键扩为 3 键 → `sweepRuns` 传闭包。**回调不得抛出，且刻意不包 try/catch**（包了就是静默吞，违反 Rule 12） | §4.3 的四层表；§9 模块表四行（`sweepRuns` / `resumeLoop` / `runLoop` / `fileStore`）＋ 签名爆炸半径 ⚠️ 下方新增一段 |
+| H5 | **落在 sweep 报告的哪一格 —— 写死** | **不是 `error`，也不新增 `outcome` 取值**（`outcome` 是 per-run 终局，与这条事件正交；一个 `succeeded` 的 run 照样能产生它）。落点是**一条独立的 stderr 备注行** `note  <path>  reconciliation_write_abandoned  <detail>`，紧跟该 run 的报告行之后。**退出码不变、汇总行格式不变** | §8 表那一行整条改写 ＋ 其下 ⚠️ 段整条改写（三个要点） |
+| H6 | **不复用 `cannot read run artifacts:` 前缀** | 维持第四轮的判定（该前缀只在 `resumeLoop` 读侧的 `Promise.all` catch 产生，接不住 `fileStore` 的写侧），**但不再以它作为「所以不路由」的论据** | §8 第二个要点；§4.3 第四步 |
+| H7 | **§13 第 4 笔的具名代价撤回** | 「cron 不会因这件事响」已不成立，整条从交接清单删除。**它当时被并进第 4 笔而非单开一笔，所以撤回不改变条数**：§13 清单仍 5 笔、L5 输入仍 6 项，三处联动数字均不变 | §13 第 4 笔的「附带交接」从**两件**改为**一件** ＋ 新增撤回说明 |
+| H8 | **连带撤回第四轮的一条类比** | 第四轮写「与 §5.4 对『人按过 Ctrl-C』的处置是同一个已知缺口，理由也相同」——**不同**：§5.4 那条是**跨进程**可见性（本次 sweep 其实看得见停机，看不见的是下一次），只能靠磁盘契约；本条是**同一次 sweep、同一进程内**的可见性，进程内回调就够。**是这句错误归类把第四轮引向了「只能等 L2/L5」的结论。** §5.4 第 2 条本身不受影响，原样保留 | §4.3 第一步末尾的 ⚠️；§13 第 4 笔的撤回说明 |
+| H9 | **新增承重测试 12d**（四条子用例） | (i) 路由发生且不污染 `outcome`／(ii) 一次后续抛出不得吞掉备注（**这条是否决上行方案那条理由的护栏**）／(iii) `fileStore` 侧确实调了回调、且排在 `appendEvent` 之前／(iv) **中间三层的透传**。**(iv) 不许省**：(i)(ii) 用替身 `resumeLoop`、(iii) 直接调 `fileStore`，三条都绕开中间三层，少了 (iv) 一次「参数加了但忘记往下传」会让前三条全绿 | §10 sweep 组新增 12d |
+| H10 | **新增验收面** | §15 验收 9 从四条变**五条**（第 5 条四项达标要求 ＋ 四条变异，逐条点名 12d 的子用例）；§15 验收 1b 补上路由要求 ＋ 一条「事件已落盘 ≠ 达标」的 ⚠️ | §15 验收 1b、验收 9 |
+| H11 | **验收 9 第 5 条与验收 1b 的分工写死**（防重复／防冲突） | 1b 钉**「该不该放弃这次写」**（判据，测试 6f）；验收 9 第 5 条钉**「放弃之后有没有人看得见」**（可见性，测试 12d）。**两者可以各自独立失守**：「判据对、回调没接」让 1b 绿而第 5 条红；「回调接了、判据写成一律放行 ENOENT」反之 | §15 验收 9 第 5 条的 ⚠️；§10 测试 6f 末尾新增的 ⚠️ |
+| H12 | **§19 回扫**（按 §19 I6 立的规矩：每一轮修复波结束前回扫上一轮索引表的「修订处」栏） | **三行被本波部分作废，已就地补记**：§19 的「本轮的人裁一次」段（后半句「一格都不落 / 不路由」划掉）、**C6 行**（「§8 表新增一行显式写『不路由』」与「§13 第 4 笔具名交接观测缺口」两处划掉，其余维持）、**I4 行**（「验收 9 四条」→ 五条）。**另一处非作废的更新**：§19 末尾「本轮新增或改判的承重测试」段对验收 9 的括注 | §19 |
+
+**本波未作废、明确维持的第四轮结论**（逐条点名，防止下一位读者以为整条 C6 被推翻）：事件类型名 `reconciliation_write_abandoned`、追加位置（`writeBoundaryArtifacts` 内、在放弃 `:317` 那次写之前）、`detail` 携带 `String(error)`、`RunEvent.type` 是裸 `string` 故不改任何类型定义、**不抛出**、`boundary-analysis.json` 那次写照常发生、以及「`cannot read run artifacts:` 前缀接不住写侧」这条判定。
+
+**本波的数字回扫**（每一个都在本波真跑过一次，命令与输出值就地附在数字旁）：
+
+| 数字 | 命令 | 本波实测输出 | 与第四轮相比 |
+|---|---|---|---|
+| `OBSERVED_FILES` 观测文件 3 个 | `grep -nF 'file:' src/registry/observeFields.ts` | 4 行：`:7` `:29` `:45` `:111`（`:111` 是返回构造） | 不变 |
+| `writeBoundaryArtifacts` 返回 `Promise<void>` | `grep -nF -A7 'export async function writeBoundaryArtifacts(' src/persistence/fileStore.ts` | `:302` 签名、`:303` runDir、`:304`–`:307` artifacts、**`:308` `): Promise<void> {`** | **本波新增** |
+| `writeBoundaryArtifacts` 生产调用点 1 个 | `grep -rnF 'writeBoundaryArtifacts(' src/` | 2 行：`runLoop.ts:845` 调用、`fileStore.ts:302` 定义 | **本波新增** |
+| `writeBoundaryArtifacts` 测试里的两参调用 11 处 | `grep -cF 'writeBoundaryArtifacts(runDir, {' tests/persistence/fileStore.test.ts` | 11 | **本波新增**（与 §4.3「爆炸半径」一节列的 11 行一致） |
+| `persistBoundaryAnalysis` 3 行 | `grep -nF 'persistBoundaryAnalysis' src/controller/runLoop.ts` | `:704` 定义、`:1109`（传 4 实参）、`:1141`（传 3 实参） | 不变 |
+| `runLoopFromState` 6 参 | `grep -nF -A8 'export async function runLoopFromState(' src/controller/runLoop.ts` | `:953`–`:959` 六个形参（`:958` `:959` 已有默认值）、`:960` `): Promise<RunState> {` | **本波新增** |
+| `resumeLoop` 2 参 | `grep -nF 'export async function resumeLoop(' src/controller/resumeLoop.ts` | 1 行：`:87 export async function resumeLoop(runDir: string, adapter: RuntimeAdapter): Promise<RunState> {` | **本波新增** |
+| `resumeLoop` 调用点 14 个 | `grep -rnF 'resumeLoop(' src/ tests/ \| grep -vF 'export async function' \| grep -cF 'resumeLoop('` | 14 | **本波新增**（12 `resumeLoop.integration.test.ts` ＋ 1 `leaseLifecycle.integration.test.ts` ＋ 1 `src/cli.ts:130`） |
+| `ScanRow` 的构成 | `grep -nF 'export type ScanRow' src/registry/scanRuns.ts` | `:17 export type ScanRow = RunObservation \| ScanIssue;` | **本波新增** |
+| `cannot read run artifacts` 3 行 | `grep -rnF 'cannot read run artifacts' src/ tests/` | `resumeLoop.ts:119`、`:120`、`tests/cli/cli.test.ts:73` | 不变 |
+| **cleanup 的 10 个 staging 路径 / 六处联动** | 见 §13 的联动清单 | **本波一处都没动**（六处逐个复核过仍写 10，见下） | 不变 |
+| **§13 清单 5 笔 / L5 输入 6 项** | — | **不变**（H7 撤回的是第 4 笔内部的一条「附带交接」，不是一笔） | 不变 |
+
+**⚠️ 本波明确*没有*重推、因此不得当作已核实的数字**：§19 那一格列的全部（finalize try 前 4 次 / try 内 9→13 步 / cleanup 4→10 / `transferRepresentsPublishedWinner` 的 `:144`–`:146` / `writeOwnerTransferArtifacts` 在 tests 里的 17 与 34 / 函数体 28 行），**外加本波未触及的**：`return { ok: false` 的 8、`appendEvent(` 的 6、`isLeaseStopError` 的 3 行、L1 §12 的 21 行、`-E` 重推命令 6 条。**下一轮请从 §19 那一格开始，本波没有替它做。**
+
+**关于 `grep` 退出码**：本波按 §11 的规矩，**没有写任何依赖退出码的新论证**，全部锚点用 `-F`。本波开工时实测 `type grep` 的输出是 **`grep is a shell function from /Users/biran/.claude/shell-snapshots/snapshot-zsh-1785583056984-suirbu.sh`**，与 §4.6a 第四轮记录的一致；**§4.6a 那一节本波一个字节未改，也不再对该机制补任何解释。**
+
+**下一波请优先核这五类**（前四类沿用 §19，第五类是本波新增）：
+
+1.–4. 同 §19 末尾四条，原样沿用。
+5. **一条「最小解」的判定是不是把「接口不存在」当成了「接口不该存在」。** 第四轮否决路由的理由是「需要新的跨层接口 ⇒ 超出 Rule 2 的最小解」，**而实际的最小解是四个可选参数、零破坏性改动、零新增磁盘契约** —— 同一份文档里 `onAdopted` 早就走过一模一样的形状（§6：「回调把这件事留在进程内」）。**Rule 2 是「不许上更大的解」，不是「不许上任何解」；把它用成后者，代价是把一条本层能兑现的保证写成了交接给 L5 的债。**
