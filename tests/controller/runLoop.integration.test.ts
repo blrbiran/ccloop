@@ -1670,14 +1670,19 @@ describe("runLoop", () => {
 
       await observedRunLoop(contract, runDir, adapter);
 
-      // Guards, not the point of the test: exactly one writeBoundaryArtifacts call happened
-      // (this scenario runs a single attempt), and it did not carry a reconciliationRecord key at
-      // all — both are load-bearing preconditions for the inode assertion below to mean anything.
-      expect(writeBoundaryArtifactsCalls).toBe(1);
-      expect(capturedArtifactKeys).toEqual(["boundaryAnalysis"]);
-
+      // The test's own claim, first so that it is the assertion that fires: the file the winner's
+      // transaction published is still the same inode after writeBoundaryArtifacts returned.
       expect(inodes.before).not.toBeNull();
       expect(inodes.after).toBe(inodes.before);
+
+      // Corroborating context, not the point of the test: exactly one writeBoundaryArtifacts call
+      // happened (this scenario runs a single attempt), and it did not carry a reconciliationRecord
+      // key at all — together they establish WHY an unchanged inode means what the name says,
+      // rather than meaning the write simply never happened. Kept below the inode assertions on
+      // purpose: placed above, a mutation that adds the reconciliationRecord key back reds here and
+      // the clause the test is named for never gets an assertion of its own to fail.
+      expect(writeBoundaryArtifactsCalls).toBe(1);
+      expect(capturedArtifactKeys).toEqual(["boundaryAnalysis"]);
 
       const reconciliation = JSON.parse(await readFile(target, "utf8")) as { newOwnerEpoch: number | null };
       expect(reconciliation.newOwnerEpoch).toBe(2);
