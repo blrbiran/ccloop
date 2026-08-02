@@ -45,6 +45,30 @@
 
 1. **先具名**：写下要变红的那条测试的**完整测试名**（`describe > it` 全串），不许只写编号。
 2. **单跑**：`ECC_GATEGUARD=off DISABLE_OMC=1 npx vitest run <测试文件路径> -t '<完整测试名>'`。**只有这一条红才算达标。**
+
+   **Amended 2026-08-02 (b)：字面把第 1 步的 `describe > it` 全串原样代入这里的 `-t`，在 vitest 2.1.9 下匹配不到任何测试。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。第 1 步不改——具名时仍然写完整的 `describe > it` 串，不许只写编号或裸标题；但**代入 `-t` 的必须换成一个真的能匹配的形式**。实测（vitest 2.1.9，`tests/controller/resumeLoop.gate.test.ts`，describe `evaluateResumeEligibility`，it `refuses when owner-transfer is not eligible`）：
+
+   ```
+   $ export ECC_GATEGUARD=off DISABLE_OMC=1 && rtk proxy "npx vitest run tests/controller/resumeLoop.gate.test.ts -t 'evaluateResumeEligibility > refuses when owner-transfer is not eligible'"
+    Test Files  1 skipped (1)
+         Tests  27 skipped (27)
+   EXIT=0
+
+   $ export ECC_GATEGUARD=off DISABLE_OMC=1 && rtk proxy "npx vitest run tests/controller/resumeLoop.gate.test.ts -t 'evaluateResumeEligibility refuses when owner-transfer is not eligible'"
+    Test Files  1 passed (1)
+         Tests  1 passed | 26 skipped (27)
+   EXIT=0
+
+   $ export ECC_GATEGUARD=off DISABLE_OMC=1 && rtk proxy "npx vitest run tests/controller/resumeLoop.gate.test.ts -t 'refuses when owner-transfer is not eligible'"
+    Test Files  1 passed (1)
+         Tests  1 passed | 26 skipped (27)
+   EXIT=0
+   ```
+
+   带 `>` 的箭头形式零匹配，退出码却是 0；空格拼接的全名与裸 `it` 名两种都能匹配。**新增一条硬性判据，这才是真正堵住这个洞的部分：** 单跑达标与否不能只看退出码或「绿/红」两个字——`Tests N skipped (N)` **不是绿**，它只说明这条 `-t` 过滤器谁都没选中；唯一算数的绿是**具名那条本身**出现 `Tests 1 passed | N skipped`，唯一算数的红是 `1 failed | N skipped`。凡是贴出的单跑输出整行读作「全部 skipped」，一律按过滤器零匹配处理，不算达标，即便退出码是 0。这条同时堵住了测试名手误——名字拼错时同样会零匹配、同样全 skipped，只换 `-t` 的形式堵不住这一种。（本条测量于 **vitest 2.1.9**；行为随版本变化，换 vitest 大版本时需重测。）
+
+   已核对：A1–A5 的报告里 `-t` 全部用的是裸 `it` 名，过滤器确实命中，落地的变异证据不受影响；A6 用的是空格拼接全名，并在报告里自己披露了这处偏离。
+
 3. **贴两次原始输出**：注入前该条单跑必须**绿**、注入后必须**红**。只贴注入后那一次不算。
 
 **额外要求：变异实验必须跑在一个基线全绿的工作副本上。** 第六波实测过一次教训：评审员在 scratchpad 副本里跑变异，副本不是 git 仓库，`parseArgs > returns 0 for the scripted example run` 因此失败，被误记成击杀。**基线绿之前不许下任何击杀结论。** 若在副本里做，先 `git init` + 一次首提交。
@@ -590,6 +614,8 @@ git commit -m "feat(runLoop): assemble the reconciliation draft outside the epoc
   - **⚠️ try 之前那 4 个间隙里，marker 解析那一格是唯一承重的那个**——规则 3 与测试 4c 的落点就在那里。少数一格 = 那条纵深防御分支零覆盖。
 - **测试 6b — 两条 epoch 相等判定承重**：变异掉 `evaluateResumeEligibility` 的任一条 epoch 相等判定 → **测试 2 必须红**。
   - **判据 A**（`reconciliation.newOwnerEpoch !== ownerTransfer.newOwnerEpoch`）：**只有双转移 fixture 杀得掉**。单转移时，reconciliation 已发布而 transfer 未发布的那些间隙里 `owner-transfer.json` 尚不存在，读它直接抛、`resumeLoop` 在进门前就拒绝，**判据 A 根本没被求值，变异存活**。双转移下盘上是「reconciliation.newOwnerEpoch = N+1、ownerTransfer.newOwnerEpoch = N+2、ownerRecord.currentOwnerEpoch = N+2」，判据 B 通过、**只有判据 A 拒绝**——这才是唯一杀得掉它的形状。
+
+    **Amended 2026-08-02 (c)：本句只在它自己限定的子集里为真，不能读成「判据 A 在单转移下不可达」——那比事实更强，会给「把它删掉」提供借口。** 这纠正的是*本文档*的缺陷，不是实现的缺陷，实现一直是对的。本句限定的范围是「reconciliation 已发布而 transfer 未发布的那些间隙」，在这个子集里「判据 A 根本没被求值」确实成立。但首发转移 fixture 的间隙 14–17（本节四格矩阵记的正是 `resume=accepted`）不属于这个子集：`src/controller/resumeLoop.ts` 的 `evaluateResumeEligibility` 是八条判据全部跑完才返回 `{ ok: true }`，判据 A 是其中第 4 条，在这些间隙里它**被跑到、被求值、且通过**——这与下方判据 B 那条 Amended 注记是同一处结构性修订，理由同源：`Promise.all` 里对 `owner-transfer.json` / `reconciliation-record.json` 的读是未经恢复的裸读，只有在两者都已发布的间隙里，八条判据才会全部被求值。删掉判据 A 会在间隙 14–17 里造成真实的行为改变（判据 A 不再阻止本该被阻止的 resume），这正是本条注记要挡住的删除理由。
   - **判据 B**（`ownerRecord.currentOwnerEpoch !== ownerTransfer.newOwnerEpoch`）：**「整条删掉」这个变异**任何单转移场景都能杀。**⚠️ 但 `!==` → `<` 这个变异两组 fixture 都杀不掉**（首发是 `N < N+1`，变异体照样拒绝；双转移是 `N+2 === N+2`，该判据本来就不拒绝）——那一条属 A6 的第三组 fixture。
 
     **Amended 2026-08-02 (a)：「任何单转移场景都能杀」这个前提是假的，A5 实测证伪。** 这纠正的是*本文档*的缺陷，不是实现的缺陷——实现是对的，一直是对的。实测：判据 B 在首发转移 fixture 的 17 个崩溃间隙里**从来不成立、因而从来不决定结果**，「整条删掉」这个变异在首发 fixture 下**存活**（原始输出见 `task-A5-report.md` 的第 3 次变异实验）。**这里的措辞要精确，不能读成「判据 B 在单转移下不可达」——那比事实更强，会给「把它删掉」提供借口。** 分两段：间隙 1–13 处闸门**没进**（`Promise.all` 里某条裸读先抛，`resumeLoop` 在 `evaluateResumeEligibility` 之前就拒绝），判据 B 未被求值；间隙 14–17 处闸门**进了**，`evaluateResumeEligibility` 只有八条判据全部跑完才返回 `{ ok: true }`、判据 B 是其中第六条，所以它**确实被求值了，只是通过**（这四格矩阵记的正是 `resume=accepted`）。两段合起来才是「删掉它对首发 fixture 的 17 行矩阵零影响」的完整理由。结构原因与本节给判据 A 的论证是同一条：`src/controller/resumeLoop.ts` 的 `Promise.all` 里 `readOwnerRecord` 是**经恢复**的读，`readOwnerTransferRecord` / `readReconciliationRecord` 是**未经恢复**的裸读。首发转移下 `owner-transfer.json` 要么尚不存在（读它直接抛，`resumeLoop` 在进闸门前就拒绝），要么已经等于恢复后的 owner epoch，所以 `ownerRecord.currentOwnerEpoch !== ownerTransfer.newOwnerEpoch` 永远不成立。唯一本可能咬到的形状——间隙 8–10，`owner-transfer.json` 已发布而 `owner-record.json` 尚未发布——被 `reconciliation-record.json` 仍然缺失遮住了：`readReconciliationRecord` 先抛，闸门根本没进。**结论：在磁盘层面，判据 B 与判据 A 一样，只由双转移 fixture 承重**（双转移的间隙 5–7：判据 A 通过、只有判据 B 拒绝）。首发 fixture 承重的是另一件事——证明首发转移下闸门到不了，这正是判据 A 变异存活的原因。本条后半句关于 `!==` → `<` 的判断不受影响，仍然成立。
