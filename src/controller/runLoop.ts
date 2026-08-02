@@ -1201,6 +1201,16 @@ export async function runLoopFromState(
       }
 
       if (execution === null) {
+        // A8 fix wave 1: forwarded because §9 names both call sites, but recorded honestly — the
+        // callback is PROVABLY unreachable through here today, so no fixture can cover this
+        // argument. This site passes executionRecovery `undefined`, so buildBoundaryEvidence(null)
+        // returns its input-independent empty evidence, evaluateRunBoundary therefore yields
+        // `no_progress` rather than `stale_candidate`, and a non-stale_candidate boundary passes
+        // `reconciliationRecord: undefined` down — which makes writeBoundaryArtifacts skip the
+        // entire abandon block. Measured, not merely reasoned: a probe driving this exact branch
+        // with a corrupt owner-transfer.json on disk observed status `no_progress`, zero callback
+        // invocations, and no reconciliation write. If a future edit ever gives this branch real
+        // execution recovery, the path goes live and needs its own covering test.
         await persistBoundaryAnalysis(runDir, state, heartbeat, undefined, options?.onReconciliationWriteAbandoned);
         throw new Error("execute phase completed without a result");
       }

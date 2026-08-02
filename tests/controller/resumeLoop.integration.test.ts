@@ -160,6 +160,22 @@ describe("resumeLoop", () => {
       onReconciliationWriteAbandoned: (detail) => abandonments.push(detail),
     });
 
+    // Fixture preconditions for the "1" above, matching the rigor of the sibling 12d(iv) test:
+    // without these, a single call could be coincidental rather than the abandonment.
+    // (a) the boundary really was a stale_candidate, i.e. a reconciliation record was passed
+    // down at all — otherwise writeBoundaryArtifacts skips the whole block.
+    const analysis = JSON.parse(
+      await readFile(join(runDir, "boundary-analysis.json"), "utf8"),
+    ) as { status: string };
+    expect(analysis.status).toBe("stale_candidate");
+    // (b) the abandonment was real: the seeded winner's reconciliation record is still the one on
+    // disk, not overwritten by this loser's eligibleForContinuation:false view.
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as { newOwnerEpoch: number | null; eligibleForContinuation: boolean };
+    expect(reconciliation.newOwnerEpoch).toBe(2);
+    expect(reconciliation.eligibleForContinuation).toBe(true);
+
     expect(abandonments).toHaveLength(1);
     expect(abandonments[0]).toContain("JSON");
   });
