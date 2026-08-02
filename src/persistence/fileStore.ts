@@ -323,34 +323,45 @@ export async function writeBoundaryArtifacts(
 
 const OWNER_RECORD_FILE = "owner-record.json";
 const OWNER_TRANSFER_FILE = "owner-transfer.json";
+const RECONCILIATION_RECORD_FILE = "reconciliation-record.json";
 const OWNER_RECORD_TEMP_FILE = ".owner-record.publish.tmp";
 const OWNER_TRANSFER_TEMP_FILE = ".owner-transfer.publish.tmp";
+const RECONCILIATION_RECORD_TEMP_FILE = ".reconciliation-record.publish.tmp";
 const OWNER_RECORD_PENDING_FILE = ".owner-record.pending.json";
 const OWNER_TRANSFER_PENDING_FILE = ".owner-transfer.pending.json";
+const RECONCILIATION_RECORD_PENDING_FILE = ".reconciliation-record.pending.json";
 const OWNER_TRANSFER_MARKER_FILE = ".owner-transfer.transaction.json";
 const OWNER_TRANSFER_LOCK_FILE = ".owner-transfer.lock";
 const OWNER_TRANSFER_MARKER_TEMP_FILE = ".owner-transfer.transaction.tmp";
 const OWNER_RECORD_PENDING_TEMP_FILE = ".owner-record.pending.tmp";
 const OWNER_TRANSFER_PENDING_TEMP_FILE = ".owner-transfer.pending.tmp";
+const RECONCILIATION_RECORD_PENDING_TEMP_FILE = ".reconciliation-record.pending.tmp";
 
-type OwnerTransferTransactionMarker = {
-  version: 1;
-  stagedAt: string;
-  finalizeOrder: [typeof OWNER_TRANSFER_FILE, typeof OWNER_RECORD_FILE];
-};
+type TransactionFileName =
+  | typeof OWNER_TRANSFER_FILE
+  | typeof OWNER_RECORD_FILE
+  | typeof RECONCILIATION_RECORD_FILE;
+
+type OwnerTransferTransactionMarker =
+  | { version: 1; stagedAt: string; finalizeOrder: readonly [typeof OWNER_TRANSFER_FILE, typeof OWNER_RECORD_FILE] }
+  | { version: 2; stagedAt: string; finalizeOrder: readonly TransactionFileName[] };
 
 type OwnerTransferPaths = {
   ownerPath: string;
   transferPath: string;
+  reconciliationPath: string;
   ownerTempPath: string;
   transferTempPath: string;
+  reconciliationTempPath: string;
   ownerPendingPath: string;
   transferPendingPath: string;
+  reconciliationPendingPath: string;
   transactionMarkerPath: string;
   lockPath: string;
   transactionMarkerTempPath: string;
   ownerPendingTempPath: string;
   transferPendingTempPath: string;
+  reconciliationPendingTempPath: string;
 };
 
 type OwnerTransferLockRecord = {
@@ -362,15 +373,19 @@ function getOwnerTransferPaths(runDir: string): OwnerTransferPaths {
   return {
     ownerPath: join(runDir, OWNER_RECORD_FILE),
     transferPath: join(runDir, OWNER_TRANSFER_FILE),
+    reconciliationPath: join(runDir, RECONCILIATION_RECORD_FILE),
     ownerTempPath: join(runDir, OWNER_RECORD_TEMP_FILE),
     transferTempPath: join(runDir, OWNER_TRANSFER_TEMP_FILE),
+    reconciliationTempPath: join(runDir, RECONCILIATION_RECORD_TEMP_FILE),
     ownerPendingPath: join(runDir, OWNER_RECORD_PENDING_FILE),
     transferPendingPath: join(runDir, OWNER_TRANSFER_PENDING_FILE),
+    reconciliationPendingPath: join(runDir, RECONCILIATION_RECORD_PENDING_FILE),
     transactionMarkerPath: join(runDir, OWNER_TRANSFER_MARKER_FILE),
     lockPath: join(runDir, OWNER_TRANSFER_LOCK_FILE),
     transactionMarkerTempPath: join(runDir, OWNER_TRANSFER_MARKER_TEMP_FILE),
     ownerPendingTempPath: join(runDir, OWNER_RECORD_PENDING_TEMP_FILE),
     transferPendingTempPath: join(runDir, OWNER_TRANSFER_PENDING_TEMP_FILE),
+    reconciliationPendingTempPath: join(runDir, RECONCILIATION_RECORD_PENDING_TEMP_FILE),
   };
 }
 
@@ -610,39 +625,62 @@ async function cleanupOwnerTransferStagingWithoutMarker(runDir: string): Promise
   const {
     ownerPendingPath,
     transferPendingPath,
+    reconciliationPendingPath,
     ownerTempPath,
     transferTempPath,
+    reconciliationTempPath,
     ownerPendingTempPath,
     transferPendingTempPath,
+    reconciliationPendingTempPath,
     transactionMarkerTempPath,
   } = getOwnerTransferPaths(runDir);
   await safeUnlink(ownerPendingPath);
   await safeUnlink(transferPendingPath);
+  await safeUnlink(reconciliationPendingPath);
   await safeUnlink(ownerTempPath);
   await safeUnlink(transferTempPath);
+  await safeUnlink(reconciliationTempPath);
   await safeUnlink(ownerPendingTempPath);
   await safeUnlink(transferPendingTempPath);
+  await safeUnlink(reconciliationPendingTempPath);
   await safeUnlink(transactionMarkerTempPath);
 }
 
 async function finalizePendingOwnerTransfer(runDir: string): Promise<void> {
   const paths = getOwnerTransferPaths(runDir);
+  const marker = JSON.parse(await readFile(paths.transactionMarkerPath, "utf8")) as OwnerTransferTransactionMarker;
   const ownerRecord = JSON.parse(await readFile(paths.ownerPendingPath, "utf8")) as OwnerRecord;
   const transferRecord = JSON.parse(await readFile(paths.transferPendingPath, "utf8")) as OwnerTransferRecord;
+  const reconciliationRecord =
+    marker.version === 2
+      ? (JSON.parse(await readFile(paths.reconciliationPendingPath, "utf8")) as ReconciliationRecord)
+      : undefined;
 
   try {
     await safeUnlink(paths.transferTempPath);
     await safeUnlink(paths.ownerTempPath);
+    await safeUnlink(paths.reconciliationTempPath);
     await writeJsonFile(paths.transferTempPath, transferRecord);
     await rename(paths.transferTempPath, paths.transferPath);
     await writeJsonFile(paths.ownerTempPath, ownerRecord);
     await rename(paths.ownerTempPath, paths.ownerPath);
+
+    if (reconciliationRecord !== undefined) {
+      await writeJsonFile(paths.reconciliationTempPath, reconciliationRecord);
+      await rename(paths.reconciliationTempPath, paths.reconciliationPath);
+    }
+
     await safeUnlink(paths.transactionMarkerPath);
     await safeUnlink(paths.transferPendingPath);
     await safeUnlink(paths.ownerPendingPath);
+
+    if (reconciliationRecord !== undefined) {
+      await safeUnlink(paths.reconciliationPendingPath);
+    }
   } catch (error) {
     await safeUnlink(paths.transferTempPath);
     await safeUnlink(paths.ownerTempPath);
+    await safeUnlink(paths.reconciliationTempPath);
     throw error;
   }
 }
@@ -674,6 +712,7 @@ export async function writeOwnerTransferArtifacts(
   expectedOwnerRecord: OwnerRecord,
   ownerRecord: OwnerRecord,
   transferRecord: OwnerTransferRecord,
+  reconciliationRecord?: ReconciliationRecord,
 ): Promise<void> {
   const lock = await acquireOwnerTransferLock(runDir);
 
@@ -686,14 +725,26 @@ export async function writeOwnerTransferArtifacts(
     }
 
     const paths = getOwnerTransferPaths(runDir);
-    const marker: OwnerTransferTransactionMarker = {
-      version: 1,
-      stagedAt: transferRecord.transferredAt,
-      finalizeOrder: [OWNER_TRANSFER_FILE, OWNER_RECORD_FILE],
-    };
+    const marker: OwnerTransferTransactionMarker =
+      reconciliationRecord === undefined
+        ? {
+            version: 1,
+            stagedAt: transferRecord.transferredAt,
+            finalizeOrder: [OWNER_TRANSFER_FILE, OWNER_RECORD_FILE],
+          }
+        : {
+            version: 2,
+            stagedAt: transferRecord.transferredAt,
+            finalizeOrder: [OWNER_TRANSFER_FILE, OWNER_RECORD_FILE, RECONCILIATION_RECORD_FILE],
+          };
 
     await writeJsonFileViaFixedTemp(paths.transferPendingTempPath, paths.transferPendingPath, transferRecord);
     await writeJsonFileViaFixedTemp(paths.ownerPendingTempPath, paths.ownerPendingPath, ownerRecord);
+
+    if (reconciliationRecord !== undefined) {
+      await writeJsonFileViaFixedTemp(paths.reconciliationPendingTempPath, paths.reconciliationPendingPath, reconciliationRecord);
+    }
+
     await writeJsonFileViaFixedTemp(paths.transactionMarkerTempPath, paths.transactionMarkerPath, marker);
     await finalizePendingOwnerTransfer(runDir);
   } finally {
