@@ -44,7 +44,8 @@ npm run typecheck && npm run build                 # 均 exit 0
 ### 下一个动作
 
 **任务 A5**（`docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md` 里的 `### Task A5`），然后 A6 → A7 → A8 → A9 → GATE-A。
-**A5–A9 的任务简报已经预先抽好**，在 `.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-A5-brief.md` … `task-A9-brief.md`，每份 = 计划的 Global Constraints 逐字 + 该任务全文逐字。直接拿去派单，不要让实施者读整个计划文件。
+**A5–A9 的任务简报本会话已预抽好，但按本仓库惯例 brief 不入库**（`.superpowers/sdd/` 下只有 `progress.md` 与 `task-*-report.md` 是 tracked 的；brief 与 `review-*.diff` 都可重建、不入库）。**它们只存在于 worktree 里，`git worktree remove` 会连带删掉。** 重建方法（**不要用行号，会腐坏**）：每份 = 计划的 `## Global Constraints` 整节逐字 + 从 `### Task A<n>` 到下一个 `###` 标题之前的整段逐字。
+> 附注：本文旧版曾写「`.superpowers/sdd/<plan>/` 里**只有** `progress.md` 被 `git add -f` 入库」——**实测为假**，`git ls-files .superpowers/` 显示每个 `task-N-report.md` 也都 tracked。已按实测更正。
 
 **执行方式**：`superpowers:subagent-driven-development`，每任务「一个实施者 → 一个独立评审员 → 有 Critical/Important 则进修复环（最多 5 轮，1–3 轮 resume 原实施者）→ scoped 再评审 → ledger 记 complete」。**ledger 在 `.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/progress.md`，它是压缩后唯一可信的进度来源，先读它再决定从哪继续。**
 
