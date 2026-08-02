@@ -14,6 +14,27 @@ db60164 test(runLoop): assert test 6d's inode clause before the shape guards so 
 
 None of the four carries a review verdict; the gate commit remains a separate later commit.
 
+**Corrected in round 2 (this preamble audited four commits when more existed).** The list above stops
+at `5bbb224` because it was written before its own landing commit existed. The full census, re-derived:
+
+```
+$ rtk proxy "git log --format='%h %s' b126137..HEAD --reverse"
+db60164 test(runLoop): assert test 6d's inode clause before the shape guards so the clause it is named for can fail
+2592177 docs(comments): name the second route that re-activates the dead abandon argument, and both paths that satisfy test 6e's assertion (a)
+1b54190 docs(plan): retire Task A5 Step 3's pre-rename test name and correct the -t audit sentence inside the anti-fake-green amendment
+5bbb224 docs(sdd): scope Task A7's race-deletion claim to the ENOENT arm and correct Task A2's truncated-block count to thirteen
+30a62f5 docs(sdd): land the GATE-A fix wave's report with the re-run mutation evidence for test 6d
+9a0395e docs(sdd): record session 3's state re-verification and discharge A9's owed scoped re-review
+```
+
+That is **six** commits on top of `b126137`, not four — and not five either: the fix wave proper is the
+five `db60164`..`30a62f5`, and `9a0395e` is session-3 ledger work pushed alongside them. Restating the
+verdict audit over all six rather than four: **none carries a GATE-A verdict.** One qualification the
+original sentence would have hidden — `9a0395e`'s body does carry a review verdict, but for Task A9's
+scoped re-review ("all five items addressed, zero Critical, zero Important, two minors deferred to
+GATE-A triage"), and its own last line says so outright: "Carries no GATE-A verdict: the gate is
+located by the commit that does." The gate commit remains a separate later commit.
+
 One thing left deliberately uncommitted: `progress.md`'s trailing `=== SESSION 3 RESUMED HERE ===`
 block was already an uncommitted working-tree change when this wave started (it is the controller's
 own session notes, not this wave's work). It is still uncommitted, byte-identical to how it was
@@ -38,9 +59,14 @@ stay below. Neither guard was deleted, and no assertion's text changed.
 
 ### The experiment: A4's mutation 2, re-run against the reordered test
 
-Mutation reproduced verbatim from `task-A4-report.md` § "Mutation 2 — winner path reverts to
+Mutation reproduced from `task-A4-report.md` § "Mutation 2 — winner path reverts to
 unconditionally passing `reconciliationRecord`", `src/controller/runLoop.ts`,
-`persistBoundaryAnalysis`'s tail:
+`persistBoundaryAnalysis`'s tail. **The `-`/`+` lines are verbatim; the trailing context line is
+not** (round-2 correction to the word "verbatim", which used to cover the whole hunk): A8 has since
+added a second argument to that call, so where A4's report shows
+`await writeBoundaryArtifacts(runDir, { boundaryAnalysis });`, the current tree — and therefore the
+hunk below — shows `…, { onReconciliationWriteAbandoned });`. The mutation itself is unaffected: it
+is the `if` condition that is replaced, and that line is reproduced character for character.
 
 ```diff
 -  if (nextOwnerEpoch !== null) {
@@ -353,9 +379,34 @@ TRUNCATED block at line 419: startAt=false duration=false exit=false
 COUNT=13
 ```
 
-(13 lines printed; the listing above elides none — the 13th is line 431, shown in the raw run.) The
-number matches the reviewer's 13, not the ledger's twelve. The finding itself was never in doubt;
-only the count was wrong.
+**Corrected in round 2: the block above was an excerpt, and the sentence that used to sit here
+admitted and denied that in the same breath** ("13 lines printed; the listing above elides none — the
+13th is line 431, shown in the raw run"). Twelve rows were pasted under a `COUNT=13`; the line-431 row
+was dropped. That is precisely the form violation ITEM 8 is about, inside ITEM 8's own evidence. The
+script (`count.mjs`, still in this session's scratchpad) re-run and pasted WHOLE, nothing filtered:
+
+```
+$ rtk proxy "node /private/tmp/claude-501/-Users-biran-code-skills-loop-ccloop/0548b752-4398-4050-8de2-2a264e399923/scratchpad/count.mjs .superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-A2-report.md"; echo "EXIT=$?"
+TRUNCATED block at line 103: startAt=false duration=false exit=false
+TRUNCATED block at line 139: startAt=false duration=false exit=false
+TRUNCATED block at line 152: startAt=false duration=false exit=false
+TRUNCATED block at line 182: startAt=false duration=false exit=false
+TRUNCATED block at line 195: startAt=false duration=false exit=false
+TRUNCATED block at line 230: startAt=false duration=false exit=false
+TRUNCATED block at line 243: startAt=false duration=false exit=false
+TRUNCATED block at line 280: startAt=false duration=false exit=false
+TRUNCATED block at line 315: startAt=false duration=false exit=false
+TRUNCATED block at line 371: startAt=false duration=false exit=false
+TRUNCATED block at line 383: startAt=false duration=false exit=false
+TRUNCATED block at line 419: startAt=false duration=false exit=false
+TRUNCATED block at line 431: startAt=false duration=false exit=false
+COUNT=13
+EXIT=0
+```
+
+Thirteen rows, `COUNT=13`, exit 0 — consistent, and now shown rather than asserted. The number matches
+the reviewer's 13, not the ledger's twelve. The finding itself was never in doubt; only the count was
+wrong.
 
 ---
 
