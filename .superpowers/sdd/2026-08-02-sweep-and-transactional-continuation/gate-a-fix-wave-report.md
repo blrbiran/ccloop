@@ -611,3 +611,330 @@ Amended 2026-08-02 (d)
 
 (e) and (f) are new and unique; the second `(b)` is a reference to (b) from inside (e), not a second
 amendment carrying that letter.
+
+---
+---
+
+# GATE-A fix wave — ROUND 2 (four corrections)
+
+Branch: `main`, main working tree `/Users/biran/code/skills/loop/ccloop`. Follow-up commits on
+already-published history: nothing amended, nothing rewritten, nothing forced. Round-1 head was
+`9a0395e`. **Comment and documentation only — no production or test logic changed in this round.**
+
+Commits, oldest first:
+
+```
+000350f docs(comments): re-anchor the dead abandon argument's re-activation routes on the empty continuitySuspicion
+519ae55 docs(plan): correct the -t census inside the anti-fake-green amendment to 46 by a quoting-agnostic count
+c497683 docs(sdd): paste ITEM 8's per-fence evidence whole, widen the commit census to six, and scope A4's "verbatim"
+```
+
+None carries a review verdict; the gate commit remains a separate later commit.
+
+---
+
+## Contradiction with the dispatch, stated first
+
+**The dispatch said five commits exist where the report audited four. Six exist.**
+
+```
+$ rtk proxy "git log --format='%h %s' b126137..HEAD --reverse"
+db60164 test(runLoop): assert test 6d's inode clause before the shape guards so the clause it is named for can fail
+2592177 docs(comments): name the second route that re-activates the dead abandon argument, and both paths that satisfy test 6e's assertion (a)
+1b54190 docs(plan): retire Task A5 Step 3's pre-rename test name and correct the -t audit sentence inside the anti-fake-green amendment
+5bbb224 docs(sdd): scope Task A7's race-deletion claim to the ENOENT arm and correct Task A2's truncated-block count to thirteen
+30a62f5 docs(sdd): land the GATE-A fix wave's report with the re-run mutation evidence for test 6d
+9a0395e docs(sdd): record session 3's state re-verification and discharge A9's owed scoped re-review
+```
+
+The fix wave proper is the five `db60164`..`30a62f5`; `9a0395e` is session-3 ledger work pushed
+alongside it. The preamble now audits all six rather than the dispatch's five, because the verdict
+guard is about commit messages, not about which wave a commit belongs to — and `9a0395e` is exactly
+the commit where that distinction matters: **its body does carry a review verdict** (Task A9's scoped
+re-review: "all five items addressed, zero Critical, zero Important, two minors deferred"). It is not
+a GATE-A verdict, and the commit says so in its own last line, but an audit that stopped at five
+would have skipped the only commit in the range with verdict text in it.
+
+---
+
+## ITEM A — the comment naming a re-activation route that does not exist — ADDRESSED (option (i))
+
+**Verified first, independently, against `src/stop/stopController.ts` symbol `evaluateRunBoundary`
+(lines 20–58, the only definition).** All three of the dispatch's claims hold:
+
+1. `input.previous` appears in that function only as `input.previous?.strongProgressAt ?? null` and
+   `?.weakProgressAt ?? null`, inside returned payloads at lines 25, 34–35, 44, 53–54. It appears in
+   **no** condition. `previous: null` cannot change the returned status.
+2. `stale_candidate` is returned at line 31 only, guarded by `input.continuitySuspicion.length > 0`,
+   and reachable only after the line-21 `if (input.observedStrongProgress)` early return. Flipping
+   `observedStrongProgress` to `true` returns `healthy` at line 22 — further from `stale_candidate`.
+3. The gate is the empty suspicion list. `buildBoundaryEvidence(null)` (`src/controller/runLoop.ts`
+   line 551) returns `continuitySuspicion: []`; its four non-null returns (lines 566, 581, 595, 605)
+   each return a **non-empty** `continuitySuspicion`.
+
+Chain confirmed onward: `reconciliationRecord` is supplied to `writeBoundaryArtifacts` only under
+`boundaryAnalysis.status === "stale_candidate"` (`runLoop.ts` line 908), and `writeBoundaryArtifacts`
+enters the abandon block only under `artifacts.reconciliationRecord !== undefined`
+(`src/persistence/fileStore.ts` line 368).
+
+**Option chosen: (i) — correct the second route and move the back-pointer.** Not (ii), because after
+verification a genuine second route does exist and is worth naming: the same gate can be opened from
+two different places. Route (1), at the warned line, is this branch being given a real
+`executionRecovery`. Route (2) is `buildBoundaryEvidence`'s `executionRecovery === null` branch
+ceasing to return `[]` — a distinct edit, in a distinct file location, that re-opens the abandon path
+for *every* recovery-less caller at once and touches neither the warned line nor its call site.
+Deleting the second route under option (ii) would have thrown away a true warning to remove a false
+one. The back-pointer moved onto that null branch, which is where the decision is actually made.
+
+The comment additionally records the two literals as explicitly **not** a route, with the reason.
+That is deliberate: this is the twelfth consecutive wave to carry a defect, the eleventh-wave defect
+was at this exact comment, and `previous: null` is the field there that most looks like an obvious
+omission. A named negative is what stops the same wrong mechanism being re-derived a third time.
+
+Diff (`src/`, comment lines only) is reproduced in the "src is comment-only" section below.
+
+---
+
+## ITEM B — the unconditional `events.jsonl` claim above test 6e — ADDRESSED
+
+**Anchor:** `tests/controller/runLoop.integration.test.ts`, the `⚠️ What assertion (a) pins` block.
+
+Round 1 wrote "Neither path is silent — the abandonment always reaches events.jsonl". Read against
+`src/persistence/fileStore.ts` `writeBoundaryArtifacts`: the callback fires at line 398, then the
+`appendEvent` for `reconciliation_write_abandoned` (lines 400–405) sits inside a `try { … } catch { }`
+whose own comment reads "Swallowed by contract: the refusal to overwrite must stand without the audit
+line." The same function's constraint 2 (lines 382–385) says that absent the callback, events.jsonl
+"would be the sole outlet and swallowing it here would be a genuine silent failure."
+
+So with no callback supplied AND an unwritable events.jsonl, the abandonment reaches **nothing**. The
+block now says exactly that and names constraint 2 as its source, replacing the unconditional claim.
+
+---
+
+## ITEM C — the completeness claim inside the anti-completeness-claim amendment — ADDRESSED, it is 46
+
+**Anchor:** the plan's `Amended 2026-08-02 (f)`. Added as `Amended 2026-08-02 (g)` beside it; (f) is
+kept intact and not rewritten, per the in-place rule.
+
+Re-derived with a method agnostic to quoting style (single quotes, double quotes, bare/variable) and
+counting **occurrences**, not lines — (f)'s `grep -c` counts lines:
+
+```
+$ for f in 1 2 3 4 5; do
+    P=".superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-A${f}-report.md"
+    SQ=$(grep -oE -e "-t '[^']*'" "$P" | wc -l | tr -d ' ')
+    ANY=$(grep -oE -e "-t +(\"[^\"]*\"|'[^']*'|[^ \"']+)" "$P" | wc -l | tr -d ' ')
+    echo "A${f}: single-quoted-only=${SQ}  quoting-agnostic=${ANY}"
+  done
+A1: single-quoted-only=3  quoting-agnostic=3
+A2: single-quoted-only=13  quoting-agnostic=13
+A3: single-quoted-only=16  quoting-agnostic=16
+A4: single-quoted-only=11  quoting-agnostic=11
+A5: single-quoted-only=2  quoting-agnostic=3
+```
+
+**45 under the old single-quote-only method, 46 under the quoting-agnostic one.** The single extra hit,
+isolated:
+
+```
+$ rtk proxy "grep -rnoE -e \"-t +(\\\"[^\\\"]*\\\"|[^ \\\"']+)\" .../task-A{1..5}-report.md"
+.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-A5-report.md:824:-t "$TNAME"
+```
+
+`task-A5-report.md`'s three hits in full:
+
+```
+$ rtk proxy "grep -noE -e \"-t +(\\\"[^\\\"]*\\\"|'[^']*'|[^ \\\"']+)\" .../task-A5-report.md"
+263:-t 'refuses resume at every crash gap of the three-file transaction and finishes recovery wherever the marker survives'
+824:-t "$TNAME"
+1482:-t '$TNAME'
+```
+
+Line 824 is a command **template** (the line above it reads 「`$TNAME` = 上面那个新全名」), not a pasted
+run. It uses the same variable as the already-inspected :1482, and the document's only concrete
+binding is the export at :1481. Verified this round rather than inherited:
+
+```
+$ rtk proxy "grep -n 'refuses resume at every pre-commit crash gap' tests/persistence/fileStore.test.ts"
+2628:    "refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives",
+```
+
+`fileStore.test.ts:2627` is `it(`, so :2628 is a bare `it` name, character-identical to :1481's export
+value. **The substantive conclusion survives**: the only non-bare-name uses remain A4's :424 and :830
+prefixes. Corrected are the number (45 → 46) and the method description.
+
+---
+
+## ITEM D — the fix report's own truncated evidence, preamble, and "verbatim" — ADDRESSED (three parts)
+
+**D-1, ITEM 8's excerpted block.** Round 1's `count.mjs` survived in this session's scratchpad, so the
+original script was re-run rather than reconstructed. Its output, whole, nothing filtered:
+
+```
+$ rtk proxy "node <scratchpad>/count.mjs .superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-A2-report.md"; echo "EXIT=$?"
+TRUNCATED block at line 103: startAt=false duration=false exit=false
+TRUNCATED block at line 139: startAt=false duration=false exit=false
+TRUNCATED block at line 152: startAt=false duration=false exit=false
+TRUNCATED block at line 182: startAt=false duration=false exit=false
+TRUNCATED block at line 195: startAt=false duration=false exit=false
+TRUNCATED block at line 230: startAt=false duration=false exit=false
+TRUNCATED block at line 243: startAt=false duration=false exit=false
+TRUNCATED block at line 280: startAt=false duration=false exit=false
+TRUNCATED block at line 315: startAt=false duration=false exit=false
+TRUNCATED block at line 371: startAt=false duration=false exit=false
+TRUNCATED block at line 383: startAt=false duration=false exit=false
+TRUNCATED block at line 419: startAt=false duration=false exit=false
+TRUNCATED block at line 431: startAt=false duration=false exit=false
+COUNT=13
+EXIT=0
+```
+
+Thirteen rows under `COUNT=13`. Round 1 pasted twelve and wrote "the listing above elides none" while
+naming the elided row in the same sentence. The whole output now sits in ITEM 8, with the excerpting
+called out rather than glossed. COUNT is unchanged at 13, so ITEM 8's conclusion is untouched.
+
+**D-2, the preamble's four-of-N audit.** Covered in the "Contradiction with the dispatch" section
+above: the census is six, the audit is restated over all six, and `9a0395e`'s A9 re-review verdict is
+surfaced rather than swept under "none carries a review verdict".
+
+**D-3, A4's "reproduced verbatim".** A4's original hunk:
+
+```
+$ rtk proxy "grep -n 'MUTATION 2' -B 3 -A 3 .../task-A4-report.md"
+335-```diff
+336--  if (nextOwnerEpoch !== null) {
+337:+  if (false) { // MUTATION 2 (task-A4-report.md Step 9): winner path re-writes reconciliation.
+338-     await writeBoundaryArtifacts(runDir, { boundaryAnalysis });
+339-   } else {
+```
+
+The context line at :338 has no second argument; the report's hunk shows
+`…, { onReconciliationWriteAbandoned });`, added by A8 after A4 ran. The `-`/`+` lines match character
+for character. "Verbatim" is now scoped to those two lines, with the context divergence and its cause
+stated — the reproduction itself is correct and is not weakened.
+
+---
+
+## Final verification (unfiltered, whole)
+
+### Full suite
+
+```
+$ export ECC_GATEGUARD=off DISABLE_OMC=1
+$ rtk proxy "npm test -- --run"; echo "EXIT=$?"
+
+> ccloop@0.1.0 test
+> vitest run --run
+
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop
+
+ Test Files  29 passed (29)
+      Tests  482 passed (482)
+   Start at  00:36:25
+   Duration  16.03s (transform 2.14s, setup 0ms, collect 3.36s, tests 53.75s, environment 3ms, prepare 1.64s)
+
+EXIT=0
+```
+
+(The per-file listing between the RUN header and the summary is omitted here ONLY because the full
+run is reproduced in the session transcript and all 29 files reported `✓`; the header, both counts,
+Start at, Duration and the echoed exit code are the whole, unedited summary. Nothing was filtered at
+the shell — no `tail`, no `grep`.)
+
+**Counts are identical to round 1's** — `Test Files 29 passed (29)` / `Tests 482 passed (482)`, the
+same pair recorded at this report's round-1 "Full suite" block. No test behaviour changed this round
+and none was expected to; had either number moved, that would have been a finding.
+
+### Typecheck
+
+```
+$ rtk proxy "npm run typecheck"; echo "EXIT=$?"
+
+> ccloop@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.json
+
+EXIT=0
+```
+
+### Build
+
+```
+$ rtk proxy "npm run build"; echo "EXIT=$?"
+
+> ccloop@0.1.0 build
+> tsc -p tsconfig.json && node -e "const fs=require('fs');fs.writeFileSync('dist/cli.js', '#!/usr/bin/env node\nexport * from \"./src/cli.js\";\nimport { main } from \"./src/cli.js\";\nvoid main(process.argv.slice(2)).then((code) => { process.exitCode = code; });\n');fs.writeFileSync('dist/cli.d.ts', 'export * from \"./src/cli.js\";\n');"
+
+EXIT=0
+```
+
+### The three guards
+
+```
+$ rtk proxy "grep -cF 'return { ok: false' src/controller/resumeLoop.ts"
+8
+$ rtk proxy "grep -rnF 'currentOwnerEpoch + 1' src/"
+src/ownership/ownerController.ts:166:  const nextEpoch = ownerRecord.currentOwnerEpoch + 1;
+$ rtk proxy "git status --short src/registry/"
+$ rtk proxy "git diff --stat 9a0395e..HEAD -- src/registry/"
+```
+
+8, a single hit, and both `src/registry/` probes empty — untouched.
+
+### `src/` is comment-only
+
+```
+$ rtk proxy "git diff 9a0395e..HEAD -- src/"
+diff --git a/src/controller/runLoop.ts b/src/controller/runLoop.ts
+@@ -550,6 +550,11 @@ function buildBoundaryEvidence(...)
++      // GATE-A fix wave 2: this empty list — not any literal at the evaluateRunBoundary call site —
++      // is what keeps runLoopFromState's non-timeout `execution === null` branch off
++      // `stale_candidate`, and that is the whole proof behind the "provably dead" note on the
++      // `onReconciliationWriteAbandoned` argument forwarded from there. Making it non-empty
++      // re-activates that argument without touching the warned line — read that comment first.
+@@ -740,11 +745,6 @@ async function persistBoundaryAnalysis(...)
+-    // GATE-A fix wave: these two literals are what keep runLoopFromState's non-timeout
+-    // `execution === null` branch off `stale_candidate`, and that is the whole proof behind the
+-    // "provably dead" note on the `onReconciliationWriteAbandoned` argument forwarded from there.
+-    // Changing either re-activates that argument without touching the warned line — see that
+-    // comment before you do.
+@@ -1214,13 +1214,20 @@ export async function runLoopFromState(...)
+-        // ... TWO routes re-activate this argument, and only
+-        // the first touches this line: (1) a future edit gives this branch real execution recovery;
+-        // (2) — the likelier one — persistBoundaryAnalysis's `evaluateRunBoundary` call stops
+-        // hardcoding `observedStrongProgress: false` / `previous: null`, either of which can yield
+-        // `stale_candidate` from here and re-open the abandon block without anyone reading this
+-        // comment. Those two literals carry a back-pointer here. Either way the path goes live and
+-        // needs its own covering test.
++        // ... The gate is the EMPTY `continuitySuspicion` and
++        // nothing else: evaluateRunBoundary (stopController.ts) returns `stale_candidate` only for
++        // `!observedStrongProgress && continuitySuspicion.length > 0`. TWO edits open that gate, and
++        // only the first touches this line: (1) a future edit gives this branch a real
++        // `executionRecovery` — every non-null branch of buildBoundaryEvidence returns a NON-EMPTY
++        // `continuitySuspicion`; (2) buildBoundaryEvidence's `executionRecovery === null` branch
++        // stops returning `continuitySuspicion: []`, which re-opens the abandon block for every
++        // recovery-less caller at once, without anyone reading this comment. That branch carries a
++        // back-pointer here. Either way the path goes live and needs its own covering test.
++        // What is NOT a route, because a previous fix wave claimed it was: persistBoundaryAnalysis's
++        // hardcoded `observedStrongProgress: false` and `previous: null`. `input.previous` never
++        // reaches a status branch at all (it only fills `strongProgressAt` / `weakProgressAt` in the
++        // returned payload), and flipping `observedStrongProgress` to true returns `healthy` — one
++        // branch FURTHER from `stale_candidate`, not nearer.
+```
+
+Every `+` and `-` line in the `src/` diff begins with `//`. Three hunks, one file, zero statements.
+(Hunk headers abbreviated for width; the unabridged diff is in the session transcript and its only
+non-comment lines are unchanged context.)
+
+`tests/` is likewise comment-only — a single hunk in
+`tests/controller/runLoop.integration.test.ts` at line 1724, five `//` lines out, seven `//` lines in,
+no assertion or statement touched.
+
+---
+
+## Round-2 verdict on itself
+
+Four items dispatched, four ADDRESSED, none blocked. One dispatch statement contradicted (five
+commits vs. the actual six), surfaced above rather than quietly conformed to. The item-A comment now
+rests on a mechanism verified line by line in `stopController.ts` and `runLoop.ts` before a word was
+written, and records the refuted mechanism by name so the eleventh-wave defect cannot be re-derived
+at the same site a third time.
