@@ -1576,12 +1576,24 @@ describe("lease heartbeat lifecycle", () => {
     await expect(access(join(runDir, "owner-transfer.json"))).rejects.toThrow(); // never finalized either
   });
 
-  // Task 5 / spec §12 requirement 7: once persistBoundaryAnalysis's entry guard has passed, a
-  // process superseded WHILE the function runs — specifically, after it completes its own
-  // owner-transfer CAS and adopts the result, but before it writes boundary/reconciliation
-  // artifacts — must write neither artifact. The transfer itself is real and already committed
-  // to disk (§4/Task 4: it happens inside the heartbeat's exclusive span and is not undone);
-  // what this guards is only the write that follows the span.
+  // Task 5 / spec §12 requirement 7, AMENDED by task A4 (L3 debt 1 / §4.3): once
+  // persistBoundaryAnalysis's entry guard has passed, a process superseded WHILE the function
+  // runs — specifically, after it completes its own owner-transfer CAS and adopts the result,
+  // but before it reaches the LATER assertHeld that guards writeBoundaryArtifacts — must still
+  // write no boundary-analysis.json. The transfer itself is real and already committed to disk
+  // (§4/Task 4: it happens inside the heartbeat's exclusive span and is not undone); what this
+  // guards is only the write that follows the span.
+  //
+  // reconciliation-record.json is DIFFERENT after task A4, and deliberately so: task A2 made it
+  // the transaction's third file (staged and finalized atomically alongside owner-transfer.json
+  // and owner-record.json, by the SAME CAS), and task A4 is what starts actually passing it
+  // through on the winner path. So a committed transfer now ALWAYS carries its reconciliation
+  // record with it — that is the whole point of the L3 "sweep and transactional continuation"
+  // work this test's own commit belongs to, closing exactly the crash window the pre-A4 spec
+  // amendment below described as intentional. `docs/superpowers/specs/2026-07-27-owner-transfer-
+  // contention-design.md` §5.3's amendment (e) — "a completed owner-transfer.json no longer
+  // implies a reconciliation-record.json" — described the OLD (pre-transactionalization) gap;
+  // it is superseded by this plan, not violated by it.
   //
   // Modelled on the "owner_transfer_contended" test's OWNER_LOST + takeoverAllowed fixture
   // (same execute-timeout shape, same "lost" owner record), reaching the SAME call site
@@ -1590,7 +1602,7 @@ describe("lease heartbeat lifecycle", () => {
   // immediately rotate owner-record.json to a THIRD, unrelated rival — simulating a takeover
   // that lands in the instant between this process's own adopted transfer and its artifact
   // write.
-  it("writes no boundary or reconciliation artifacts when superseded after its own transfer completes (spec requirement 7)", async () => {
+  it("writes no boundary artifact — but its own already-committed transfer's reconciliation record stands — when superseded after its own transfer completes (spec requirement 7, amended by task A4)", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -1662,12 +1674,25 @@ describe("lease heartbeat lifecycle", () => {
       const finalState = await observedRunLoop(contract, runDir, adapter as never);
 
       expect(finalState.stopReason).toBe("lease_lost");
-      // The decisive assertion: the transfer committed (owner-transfer.json exists, and named
-      // this process before the rival's rotation overwrote owner-record.json), but NEITHER
-      // boundary artifact was written.
+      // The decisive assertions: the transfer committed (owner-transfer.json exists, and named
+      // this process before the rival's rotation overwrote owner-record.json), and so — after
+      // task A4 — did the reconciliation record that transfer's own transaction publishes
+      // alongside it. Only boundary-analysis.json, gated by the LATER assertHeld this rival
+      // supersession lands before, was withheld.
       await expect(access(join(runDir, "owner-transfer.json"))).resolves.toBeUndefined();
       await expect(access(join(runDir, "boundary-analysis.json"))).rejects.toThrow();
-      await expect(access(join(runDir, "reconciliation-record.json"))).rejects.toThrow();
+      await expect(access(join(runDir, "reconciliation-record.json"))).resolves.toBeUndefined();
+
+      const reconciliation = JSON.parse(await readFile(join(runDir, "reconciliation-record.json"), "utf8")) as {
+        ownershipVerdict: string;
+        priorOwnerEpoch: number | null;
+        newOwnerEpoch: number | null;
+        eligibleForContinuation: boolean;
+      };
+      expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
+      expect(reconciliation.priorOwnerEpoch).toBe(1);
+      expect(reconciliation.newOwnerEpoch).toBe(2);
+      expect(reconciliation.eligibleForContinuation).toBe(true);
 
       const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
       expect(owner.currentOwnerEpoch).toBe(77); // the rival's record stands, untouched by this process

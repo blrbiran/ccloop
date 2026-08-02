@@ -115,6 +115,11 @@ export type ReconciliationRecord = {
   eligibleForContinuation: boolean;
 };
 
+// Task A4 / §4.3: what `persistBoundaryAnalysis` can assemble BEFORE the epoch rule runs.
+// `newOwnerEpoch` is the one field only `applyOwnerEpochTransfer` (ownerController.ts) can
+// produce — `persistOwnerTransfer` fills it in after that call, never before.
+export type ReconciliationDraft = Omit<ReconciliationRecord, "newOwnerEpoch">;
+
 export function isPartialExecutionResult(result: ExecutionResult): result is PartialExecutionResult {
   return "completionStatus" in result && result.completionStatus === "partial";
 }

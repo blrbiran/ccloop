@@ -27,6 +27,8 @@ import type {
   ExecutionRecovery,
   ExecutionResult,
   OwnerRecord,
+  ReconciliationDraft,
+  ReconciliationRecord,
   RuntimeAdapter,
   VerificationResult,
 } from "../runtime/types.js";
@@ -644,8 +646,15 @@ async function persistOwnerTransfer(
   nextProcessInstanceId: string,
   at: string,
   reason: string,
+  reconciliationDraft: ReconciliationDraft,
 ): Promise<{ ownerRecord: OwnerRecord; eligibleForContinuation: true }> {
   const transfer = applyOwnerEpochTransfer(expectedOwnerRecord, nextProcessInstanceId, at, reason);
+  // §4.3: the ONLY place the draft's missing field gets filled in, and only from
+  // applyOwnerEpochTransfer's own output above — never a second, independently-computed `+ 1`.
+  const reconciliationRecord: ReconciliationRecord = {
+    ...reconciliationDraft,
+    newOwnerEpoch: transfer.transferRecord.newOwnerEpoch,
+  };
 
   // Bounded retry, lock-busy only. A CAS mismatch (OwnerTransferPreconditionError) is rethrown
   // immediately on the first attempt: retrying it would re-run the CAS against evidence this
@@ -657,7 +666,13 @@ async function persistOwnerTransfer(
     }
 
     try {
-      await writeOwnerTransferArtifacts(runDir, expectedOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord);
+      await writeOwnerTransferArtifacts(
+        runDir,
+        expectedOwnerRecord,
+        transfer.nextOwnerRecord,
+        transfer.transferRecord,
+        reconciliationRecord,
+      );
       break;
     } catch (error) {
       const isLastAttempt = attempt === OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS - 1;
@@ -770,12 +785,36 @@ async function persistBoundaryAnalysis(
 
       if (boundaryAnalysis.status === "stale_candidate" && ownership.verdict === "OWNER_LOST" && ownership.takeoverAllowed) {
         try {
+          // §4.3: the eight fields the draft CAN supply, assembled before the CAS so
+          // persistOwnerTransfer can publish reconciliation-record.json inside the same
+          // transaction as the transfer itself — see its own `+ newOwnerEpoch` fill-in.
+          // `eligibleForContinuation: true` is not a placeholder: persistOwnerTransfer only
+          // ever returns normally (never partially) and always with `eligibleForContinuation:
+          // true` baked into its own return type, so a draft reaching persistOwnerTransfer is
+          // published if and only if this value would already have been true.
+          const reconciliationDraft: ReconciliationDraft = {
+            staleSuspicionBasis:
+              boundaryEvidence.continuitySuspicion.length > 0
+                ? boundaryEvidence.continuitySuspicion
+                : [boundaryAnalysis.staleCandidateReason ?? "unknown stale suspicion"],
+            staleConfirmed: true,
+            ownershipVerdict: ownership.verdict,
+            lastTrustedBoundary: ownership.lastTrustedBoundary,
+            conflictingEvidence: boundaryEvidence.conflictingEvidence,
+            takeoverPermission: {
+              allowed: ownership.takeoverAllowed,
+              reason: buildTakeoverReason(ownership.takeoverAllowed),
+            },
+            priorOwnerEpoch: ownerRecord.currentOwnerEpoch,
+            eligibleForContinuation: true,
+          };
           const transfer = await persistOwnerTransfer(
             runDir,
             ownerRecord,
             buildProcessInstanceId(),
             new Date().toISOString(),
             "owner lost after reconciliation",
+            reconciliationDraft,
           );
           // §6.1: this process just rotated the epoch TO ITSELF, so the record the heartbeat is
           // comparing against is stale exactly as it is after an affirm — and a stale expectation
@@ -842,30 +881,40 @@ async function persistBoundaryAnalysis(
   // winner reconciliation view" tests, re-expressed for this task to assert the refusal
   // instead).
   await heartbeat.assertHeld();
-  await writeBoundaryArtifacts(runDir, {
-    boundaryAnalysis,
-    reconciliationRecord:
-      boundaryAnalysis.status === "stale_candidate"
-        ? {
-            staleSuspicionBasis:
-              boundaryEvidence.continuitySuspicion.length > 0
-                ? boundaryEvidence.continuitySuspicion
-                : [boundaryAnalysis.staleCandidateReason ?? "unknown stale suspicion"],
-            staleConfirmed: true,
-            ownershipVerdict: ownership.verdict,
-            lastTrustedBoundary: ownership.lastTrustedBoundary,
-            conflictingEvidence: boundaryEvidence.conflictingEvidence,
-            takeoverPermission: {
-              allowed: ownership.takeoverAllowed,
-              reason: buildTakeoverReason(ownership.takeoverAllowed),
-            },
-            priorOwnerEpoch: ownerRecord.currentOwnerEpoch,
-            newOwnerEpoch: nextOwnerEpoch,
-            eligibleForContinuation,
-          }
-        : undefined,
-  });
 
+  // nextOwnerEpoch is non-null if and only if the transfer branch above ran persistOwnerTransfer
+  // to completion (the try block's success path, never the catch): that call already published
+  // reconciliation-record.json transactionally, with `newOwnerEpoch` filled in from
+  // applyOwnerEpochTransfer's own output — a second write of the same record here would be
+  // exactly the "winner writes it twice" this task removes. The loser / no-transfer-attempted
+  // cases (nextOwnerEpoch still null) are unchanged: this call site remains their only writer.
+  if (nextOwnerEpoch !== null) {
+    await writeBoundaryArtifacts(runDir, { boundaryAnalysis });
+  } else {
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis,
+      reconciliationRecord:
+        boundaryAnalysis.status === "stale_candidate"
+          ? {
+              staleSuspicionBasis:
+                boundaryEvidence.continuitySuspicion.length > 0
+                  ? boundaryEvidence.continuitySuspicion
+                  : [boundaryAnalysis.staleCandidateReason ?? "unknown stale suspicion"],
+              staleConfirmed: true,
+              ownershipVerdict: ownership.verdict,
+              lastTrustedBoundary: ownership.lastTrustedBoundary,
+              conflictingEvidence: boundaryEvidence.conflictingEvidence,
+              takeoverPermission: {
+                allowed: ownership.takeoverAllowed,
+                reason: buildTakeoverReason(ownership.takeoverAllowed),
+              },
+              priorOwnerEpoch: ownerRecord.currentOwnerEpoch,
+              newOwnerEpoch: nextOwnerEpoch,
+              eligibleForContinuation,
+            }
+          : undefined,
+    });
+  }
 }
 
 async function persistTerminalState(

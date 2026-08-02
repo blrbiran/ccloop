@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
-import { access, chmod, mkdtemp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseChangedPathsFromGitStatus, runLoop } from "../../src/controller/runLoop.js";
+import { resumeLoop } from "../../src/controller/resumeLoop.js";
 import { SubprocessClaudeAdapter } from "../../src/runtime/claude/subprocessClaudeAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
@@ -1289,6 +1290,267 @@ describe("runLoop", () => {
     // And the side effect that spurious refusal blocked happens: the attempt worktree is
     // removed rather than leaked as a registered git worktree in the user's repo.
     await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual([]);
+  });
+
+  // Task A4 / §4.3: the decisive proof that reconciliation-record.json is now published INSIDE
+  // persistOwnerTransfer's own transaction, not by the writeBoundaryArtifacts call that used to
+  // follow it. Driven through runLoopFromState (via runLoop, which calls it) for a REAL transfer
+  // — the same winner scenario as the test above — with heartbeat.assertHeld() wrapped so its
+  // very next call after the transaction publishes reconciliation-record.json throws instead of
+  // delegating. If the file only existed because of the later writeBoundaryArtifacts call (the
+  // pre-A4 shape), this injected failure — which fires before that call is ever reached — would
+  // leave the file missing. It does not: the file is already on disk, and a resume afterwards is
+  // still eligible.
+  //
+  // ⚠️ Do not rewrite this as "prove refusal before the fix, success after": a single committed
+  // test can only run one tree. The pre-fix (red) side is provided separately by the reverse
+  // mutation on this same test (see task-A4-report.md).
+  it("publishes reconciliation-record.json inside the transfer transaction even when assertHeld throws afterwards", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const injectedFailureMessage = "injected: assertHeld failure right after the reconciliation transaction";
+
+    vi.resetModules();
+    vi.doMock("../../src/controller/leaseHeartbeat.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/controller/leaseHeartbeat.js")>(
+        "../../src/controller/leaseHeartbeat.js",
+      );
+
+      return {
+        ...actual,
+        startLeaseHeartbeat: (options: Parameters<typeof actual.startLeaseHeartbeat>[0]) => {
+          const real = actual.startLeaseHeartbeat(options);
+          let injected = false;
+
+          return {
+            ...real,
+            // Delegates to the real assertHeld on every call EXCEPT the first one observed after
+            // reconciliation-record.json exists on disk — which, in this scenario, can only be
+            // the call at the tail of persistBoundaryAnalysis, immediately before the
+            // writeBoundaryArtifacts call this task removed reconciliation from. Every assertHeld
+            // call before the transfer succeeds still runs for real, so nothing about the
+            // transfer's own CAS or the entry guard is short-circuited.
+            assertHeld: async () => {
+              if (!injected && (await pathExists(join(runDir, "reconciliation-record.json")))) {
+                injected = true;
+                throw new Error(injectedFailureMessage);
+              }
+
+              await real.assertHeld();
+            },
+          };
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+            runId: "task-1",
+            logicalSessionId: "task-1:lost-assertheld",
+            currentOwnerEpoch: 1,
+            currentProcessInstanceId: buildProcessInstanceId(),
+            lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+            ownerStatus: "lost",
+            supersededByEpoch: null,
+          }, null, 2));
+          await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 3;\n");
+          await execFileAsync("git", ["checkout", "--", "src/index.ts"], { cwd: context.worktreePath });
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      // The decisive premise: persistBoundaryAnalysis itself threw the injected error, rather
+      // than completing and returning normally. runLoop.ts's own generic attempt-failure catch
+      // (unrelated to this task, and unchanged by it) then catches ANY non-lease error escaping
+      // the attempt body and decisively writes status "failed" rather than leaving loop-state.json
+      // ambiguous — so the call resolves rather than rejects, with the injected message carried
+      // as stopReason. A genuine OS-level process crash at the same instant (what this injection
+      // stands in for) has no such catch to run at all, and would leave loop-state.json exactly
+      // where its last real write left it: "executing", from before persistBoundaryAnalysis was
+      // ever called.
+      const finalState = await observedRunLoop(contract, runDir, adapter);
+      expect(finalState.status).toBe("failed");
+      expect(finalState.stopReason).toContain(injectedFailureMessage);
+
+      // (a) reconciliation-record.json is already on disk despite the crash.
+      expect(await pathExists(join(runDir, "reconciliation-record.json"))).toBe(true);
+      const reconciliation = JSON.parse(
+        await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+      ) as {
+        ownershipVerdict: string;
+        priorOwnerEpoch: number | null;
+        newOwnerEpoch: number | null;
+        eligibleForContinuation: boolean;
+      };
+      expect(reconciliation.ownershipVerdict).toBe("OWNER_LOST");
+      expect(reconciliation.priorOwnerEpoch).toBe(1);
+      expect(reconciliation.newOwnerEpoch).toBe(2);
+      expect(reconciliation.eligibleForContinuation).toBe(true);
+
+      // (b) resumeLoop permits continuation. Reconstructs exactly what a genuine crash would have
+      // left on loop-state.json — status "executing", nothing else — in place of the "failed"
+      // status runLoop's own (unrelated, unchanged-by-this-task) catch wrote once it caught the
+      // injected error in this JS process; see the comment above. Every OTHER artifact resumeLoop
+      // reads (owner-record.json, owner-transfer.json, reconciliation-record.json) is untouched by
+      // that catch and already reflects the real, transactionally-published transfer.
+      const crashedLoopState = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8")) as {
+        status: string;
+      };
+      expect(crashedLoopState.status).toBe("failed"); // sanity: confirms the stand-in below is needed
+      await writeFile(
+        join(runDir, "loop-state.json"),
+        JSON.stringify({ ...crashedLoopState, status: "executing", stopReason: null }, null, 2),
+      );
+
+      const resumedAdapter = new ScriptedAdapter([
+        {
+          plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+          execution: { changedFiles: [], diffPatch: "", commandOutputs: [], stdoutStderrLog: "" },
+          verification: {
+            approved: true,
+            rejectCategory: "",
+            primaryTargetPaths: ["src/index.ts"],
+            failingCommand: null,
+            safeToRetry: false,
+            evidence: ["ok"],
+            pauseSignals: [],
+            stopSignals: [],
+          },
+        },
+      ]);
+      await resumeLoop(runDir, resumedAdapter);
+
+      const events = await readEventTypes(runDir);
+      expect(events).toContain("resume_adopted");
+      expect(events).not.toContain("resume_denied");
+    } finally {
+      vi.doUnmock("../../src/controller/leaseHeartbeat.js");
+      vi.resetModules();
+    }
+  });
+
+  // Task A4 / §4.3: the winner path no longer passes `reconciliationRecord` to
+  // writeBoundaryArtifacts — persistOwnerTransfer already published it transactionally, so a
+  // second write here would be the very "winner writes it twice" this task removes. Driven
+  // through the same real winner-transfer scenario as the two tests above (via runLoop, which
+  // calls persistBoundaryAnalysis internally — persistBoundaryAnalysis itself is not exported).
+  //
+  // fileStore.js's writeBoundaryArtifacts is wrapped, not replaced: the wrapper takes its "before"
+  // stat immediately before delegating to the real call and its "after" stat immediately once the
+  // real call returns, with nothing else touching the target in between.
+  //
+  // ⚠️ Snapshot placement is load-bearing. Taking the baseline any earlier — e.g. before
+  // persistBoundaryAnalysis even starts — would straddle the transaction's OWN publish rename of
+  // reconciliation-record.json (persistOwnerTransfer, reached earlier inside
+  // persistBoundaryAnalysis), which always changes the inode once, for a reason unrelated to what
+  // this test pins. Taken there, this test would fail unconditionally, and the failure would say
+  // nothing about whether the winner writes the file a second time.
+  it("leaves the reconciliation-record.json inode untouched when the winner writes boundary artifacts", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const target = join(runDir, "reconciliation-record.json");
+    const inodes: { before: number | null; after: number | null } = { before: null, after: null };
+    let capturedArtifactKeys: string[] | null = null;
+    let writeBoundaryArtifactsCalls = 0;
+
+    vi.resetModules();
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+
+      return {
+        ...actual,
+        writeBoundaryArtifacts: async (...args: Parameters<typeof actual.writeBoundaryArtifacts>) => {
+          writeBoundaryArtifactsCalls += 1;
+          capturedArtifactKeys = Object.keys(args[1]);
+          // Immediately before delegating: by the winner scenario's own construction, the
+          // transaction has already published this file, so it exists here.
+          inodes.before = (await stat(target)).ino;
+          await actual.writeBoundaryArtifacts(...args);
+          // Immediately after the real call returns.
+          inodes.after = (await stat(target)).ino;
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+            runId: "task-1",
+            logicalSessionId: "task-1:lost-6d",
+            currentOwnerEpoch: 1,
+            currentProcessInstanceId: buildProcessInstanceId(),
+            lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+            ownerStatus: "lost",
+            supersededByEpoch: null,
+          }, null, 2));
+          await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 3;\n");
+          await execFileAsync("git", ["checkout", "--", "src/index.ts"], { cwd: context.worktreePath });
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      await observedRunLoop(contract, runDir, adapter);
+
+      // Guards, not the point of the test: exactly one writeBoundaryArtifacts call happened
+      // (this scenario runs a single attempt), and it did not carry a reconciliationRecord key at
+      // all — both are load-bearing preconditions for the inode assertion below to mean anything.
+      expect(writeBoundaryArtifactsCalls).toBe(1);
+      expect(capturedArtifactKeys).toEqual(["boundaryAnalysis"]);
+
+      expect(inodes.before).not.toBeNull();
+      expect(inodes.after).toBe(inodes.before);
+
+      const reconciliation = JSON.parse(await readFile(target, "utf8")) as { newOwnerEpoch: number | null };
+      expect(reconciliation.newOwnerEpoch).toBe(2);
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
   });
 
   it("persists owner transfer artifacts and continuation eligibility after a controller-owned OWNER_LOST takeover-allowed verdict without resuming execution", async () => {
