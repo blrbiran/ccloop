@@ -84,7 +84,18 @@ async function cleanupResidualWorktrees(repoPath: string, runDir: string): Promi
   }
 }
 
-export async function resumeLoop(runDir: string, adapter: RuntimeAdapter): Promise<RunState> {
+// A8 §4.3: same shape as RunLoopFromStateOptions — an optional parameter OBJECT, so the 14
+// existing two-argument call sites stay untouched and later layers add keys rather than
+// positions.
+export type ResumeLoopOptions = {
+  onReconciliationWriteAbandoned?: (detail: string) => void;
+};
+
+export async function resumeLoop(
+  runDir: string,
+  adapter: RuntimeAdapter,
+  options?: ResumeLoopOptions,
+): Promise<RunState> {
   await appendEvent(runDir, { type: "resume_requested", at: new Date().toISOString(), detail: runDir });
 
   // §7: the lease check runs BEFORE the eligibility gate and before the owner-record
@@ -179,7 +190,9 @@ export async function resumeLoop(runDir: string, adapter: RuntimeAdapter): Promi
         ? runState
         : { ...runState, status: "planning", waitingOnHuman: false, lastTransitionAt: new Date().toISOString() };
 
-    return await runLoopFromState(contract, runDir, adapter, resumedState, heartbeat, leaseLoss);
+    return await runLoopFromState(contract, runDir, adapter, resumedState, heartbeat, leaseLoss, {
+      onReconciliationWriteAbandoned: options?.onReconciliationWriteAbandoned,
+    });
   } finally {
     // §6.0: every exit path — normal completion, stop-boundary exit, and any throw.
     await heartbeat.stop();

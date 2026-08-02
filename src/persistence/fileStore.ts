@@ -357,6 +357,11 @@ export async function writeBoundaryArtifacts(
     boundaryAnalysis: RunBoundaryAnalysis;
     reconciliationRecord?: ReconciliationRecord;
   },
+  // A8 §4.3: the operator channel for a protective abandonment. Optional at every one of the
+  // four layers, so all existing call sites keep working unchanged; absent, the abandonment is
+  // recorded in events.jsonl only and is routed nowhere. The callback's contract is "must not
+  // throw" — see the note at its call site below.
+  options?: { onReconciliationWriteAbandoned?: (detail: string) => void },
 ): Promise<void> {
   await writeJsonFileAtomically(join(runDir, "boundary-analysis.json"), artifacts.boundaryAnalysis);
 
@@ -384,6 +389,14 @@ export async function writeBoundaryArtifacts(
       // control (a single array push, no I/O), so a throw from it is a programming error and must
       // be loud. appendFile's I/O is nobody's to fix — a throw from it is an environment fact, and
       // converting it into a failed attempt only hides a small error behind a larger one.
+      // Ordered BEFORE appendEvent on purpose — and stated honestly: with the swallow below in
+      // place, that ordering has NO killing mutation, because swapping the two lines is an
+      // equivalent mutation (a swallowed appendEvent cannot stop the callback that follows it
+      // either). It is defence in depth against a future edit that removes the swallow and
+      // leaves the order alone, at which point an unwritable events.jsonl would take the
+      // operator's line down with it.
+      options?.onReconciliationWriteAbandoned?.(String(decision.error));
+
       try {
         await appendEvent(runDir, {
           type: "reconciliation_write_abandoned",

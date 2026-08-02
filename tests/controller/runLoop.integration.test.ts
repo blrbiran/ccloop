@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseChangedPathsFromGitStatus, runLoop } from "../../src/controller/runLoop.js";
+import { parseChangedPathsFromGitStatus, runLoop, runLoopFromState } from "../../src/controller/runLoop.js";
+import { initializeRunFiles, writeOwnerRecord } from "../../src/persistence/fileStore.js";
 import { resumeLoop } from "../../src/controller/resumeLoop.js";
 import { SubprocessClaudeAdapter } from "../../src/runtime/claude/subprocessClaudeAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
@@ -1209,6 +1210,103 @@ describe("runLoop", () => {
     expect(reconciliation.newOwnerEpoch).toBeNull();
     expect(reconciliation.eligibleForContinuation).toBe(false);
     expect(reconciliation.takeoverPermission.allowed).toBe(false);
+  });
+
+  // 12d(iv): the ONLY coverage of A8's three middle layers. The other 12d cases either call
+  // fileStore directly or stand in for resumeLoop, so all of them would stay green against an
+  // implementation that added the parameter at every layer and forgot to pass it down.
+  //
+  // The fixture has to satisfy four constraints at once, and each one rules out an easier shape:
+  //   1. owner-record.json is valid and there is no transfer marker, so readOwnerRecord — which
+  //      persistBoundaryAnalysis calls OUTSIDE any try, before writeBoundaryArtifacts — succeeds
+  //      and recoverInterruptedOwnerTransfer early-returns instead of rewriting the transfer.
+  //   2. owner-transfer.json exists but does not parse, which is what makes the persisted-artifact
+  //      read fail closed and abandon.
+  //   3. ownerStatus "lost" with changed paths yields OWNER_UNDECIDABLE / takeover denied, so the
+  //      transfer branch does not run and does not overwrite the corrupt file with a valid one.
+  //   4. the boundary is a stale_candidate carrying eligibleForContinuation: false, so a
+  //      reconciliation record is actually passed down and the preserve check does not early-return.
+  it("forwards onReconciliationWriteAbandoned from runLoopFromState down to writeBoundaryArtifacts", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const state: RunState = {
+      status: "planning",
+      currentAttempt: 0,
+      attemptsUsed: 0,
+      lastTransitionAt: "2026-07-23T00:00:00.000Z",
+      waitingOnHuman: false,
+      stopReason: null,
+      budgetSnapshot: {
+        attemptsRemaining: contract.executionPolicy.maxAttempts,
+        timeRemainingMs: contract.executionPolicy.totalRuntimeBudgetMs,
+        tokenBudgetRemaining: contract.executionPolicy.tokenBudget,
+      },
+      recentFailures: [],
+    };
+
+    await initializeRunFiles(runDir, contract, state);
+    // Constraint 1.
+    await writeOwnerRecord(runDir, {
+      runId: "task-1",
+      logicalSessionId: "task-1:abandon-routing",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: buildProcessInstanceId(),
+      lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+      ownerStatus: "lost",
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    });
+    // Constraint 2.
+    await writeFile(join(runDir, "owner-transfer.json"), "{ not json");
+    expect(await pathExists(join(runDir, ".owner-transfer.transaction.json"))).toBe(false);
+
+    const abandonments: string[] = [];
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        // Changed paths keep the verdict at OWNER_UNDECIDABLE (constraint 3), the same lever the
+        // OWNER_UNDECIDABLE test above pulls.
+        await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 2;\n");
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    await runLoopFromState(contract, runDir, adapter, state, undefined, undefined, {
+      onReconciliationWriteAbandoned: (detail) => abandonments.push(detail),
+    });
+
+    // Fixture precondition for the assertions below: the boundary really was a stale_candidate,
+    // i.e. a reconciliation record was passed down at all (constraint 4).
+    const analysis = JSON.parse(
+      await readFile(join(runDir, "boundary-analysis.json"), "utf8"),
+    ) as { status: string };
+    expect(analysis.status).toBe("stale_candidate");
+
+    expect(abandonments).toHaveLength(1);
+    // The detail reaching the operator is the read failure itself, unchanged by the three layers
+    // it travelled through.
+    expect(abandonments[0]).toContain("JSON");
+    // And the abandonment was real: the corrupt transfer stopped the write rather than being
+    // written through.
+    expect(await pathExists(join(runDir, "reconciliation-record.json"))).toBe(false);
   });
 
   it("writes an OWNER_LOST reconciliation record with transferred ownership when persisted owner truth no longer supports ownership and continuity evidence does not rescue it", async () => {

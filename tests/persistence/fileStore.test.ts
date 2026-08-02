@@ -2411,6 +2411,134 @@ describe("fileStore", () => {
     expect(events[0]?.detail).toContain("JSON");
   });
 
+  // 12d(iii): the producing side of A8's operator channel. The two tests below reuse the
+  // "owner-record.json is missing" fixture above (transfer published, owner record absent),
+  // which is the cheapest shape that reaches the abandon branch, and add the third argument.
+  it("calls onReconciliationWriteAbandoned exactly once with the read failure and still resolves", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    await writeOwnerTransferRecord(runDir, {
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      priorProcessInstanceId: "pid:12345",
+      newProcessInstanceId: "pid:winner",
+      transferredAt: "2026-07-23T00:00:01.000Z",
+      reason: "owner lost after reconciliation",
+      eligibleForContinuation: true,
+    });
+    // Fixture precondition for "exactly once": owner-record.json is unreadable, so exactly one
+    // read fails, so exactly one abandonment can be reported.
+    await expect(readFile(join(runDir, "owner-record.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const abandonments: string[] = [];
+
+    await expect(
+      writeBoundaryArtifacts(
+        runDir,
+        {
+          boundaryAnalysis: {
+            status: "stale_candidate",
+            strongProgressAt: "2026-07-21T10:00:00.000Z",
+            weakProgressAt: "2026-07-21T10:05:00.000Z",
+            suspectReason: "healthy window exceeded",
+            staleCandidateReason: "continuity evidence missing",
+          },
+          reconciliationRecord: {
+            staleSuspicionBasis: ["continuity evidence missing"],
+            staleConfirmed: true,
+            ownershipVerdict: "OWNER_UNDECIDABLE",
+            lastTrustedBoundary: "execute",
+            conflictingEvidence: [],
+            takeoverPermission: {
+              allowed: false,
+              reason: "deny-by-default until strict owner-loss and transfer conditions are fully met",
+            },
+            priorOwnerEpoch: 2,
+            newOwnerEpoch: null,
+            eligibleForContinuation: false,
+          },
+        },
+        { onReconciliationWriteAbandoned: (detail) => abandonments.push(detail) },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(abandonments).toHaveLength(1);
+    // Same content the events.jsonl line carries: String(error) of the read that failed. Naming
+    // the file is what makes an operator-visible line actionable.
+    expect(abandonments[0]).toContain("owner-record.json");
+  });
+
+  it("still resolves and still calls the callback when appendEvent rejects", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    await writeOwnerTransferRecord(runDir, {
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      priorProcessInstanceId: "pid:12345",
+      newProcessInstanceId: "pid:winner",
+      transferredAt: "2026-07-23T00:00:01.000Z",
+      reason: "owner lost after reconciliation",
+      eligibleForContinuation: true,
+    });
+    await expect(readFile(join(runDir, "owner-record.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    // Makes the real appendEvent reject: appendFile onto a directory raises EISDIR. Preferred
+    // over mocking appendEvent because writeBoundaryArtifacts calls it as a module-local
+    // function, which no module mock can intercept — and an environment fault is what the
+    // swallow exists for in the first place.
+    await mkdir(join(runDir, "events.jsonl"));
+    await expect(
+      appendEvent(runDir, { type: "resume_requested", at: "2026-07-23T00:00:02.000Z", detail: "probe" }),
+    ).rejects.toMatchObject({ code: "EISDIR" });
+
+    const abandonments: string[] = [];
+
+    // (a) the protective abandonment stands even without its audit line: an unwritable
+    // events.jsonl must not be upgraded into a failed attempt.
+    await expect(
+      writeBoundaryArtifacts(
+        runDir,
+        {
+          boundaryAnalysis: {
+            status: "stale_candidate",
+            strongProgressAt: "2026-07-21T10:00:00.000Z",
+            weakProgressAt: "2026-07-21T10:05:00.000Z",
+            suspectReason: "healthy window exceeded",
+            staleCandidateReason: "continuity evidence missing",
+          },
+          reconciliationRecord: {
+            staleSuspicionBasis: ["continuity evidence missing"],
+            staleConfirmed: true,
+            ownershipVerdict: "OWNER_UNDECIDABLE",
+            lastTrustedBoundary: "execute",
+            conflictingEvidence: [],
+            takeoverPermission: {
+              allowed: false,
+              reason: "deny-by-default until strict owner-loss and transfer conditions are fully met",
+            },
+            priorOwnerEpoch: 2,
+            newOwnerEpoch: null,
+            eligibleForContinuation: false,
+          },
+        },
+        { onReconciliationWriteAbandoned: (detail) => abandonments.push(detail) },
+      ),
+    ).resolves.toBeUndefined();
+
+    // (b) the operator channel survives the loss of the audit channel — the whole reason the
+    // swallow above it is defensible.
+    expect(abandonments).toHaveLength(1);
+    expect(abandonments[0]).toContain("owner-record.json");
+
+    // The refusal itself still holds: nothing was written through.
+    await expect(readFile(join(runDir, "reconciliation-record.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("writes contract, state, events, and attempt artifacts", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     await initializeRunFiles(runDir, contract, state);

@@ -104,6 +104,66 @@ describe("resumeLoop", () => {
     expect(await readEventTypes(runDir)).toContain("resume_adopted");
   });
 
+  // A8's fourth layer. The 12d(iii)/(iv) tests stop at runLoopFromState, so without this one a
+  // mutation that deletes resumeLoop's single forwarding line leaves the whole suite green — the
+  // same "both ends green, middle severed" shape 12d(iv) exists to prevent, one layer up.
+  //
+  // The corruption of owner-transfer.json has to happen from inside `execute` rather than in the
+  // fixture: resumeLoop reads that same file itself, before the gate, so a file that is already
+  // corrupt at entry refuses the resume outright and never reaches runLoopFromState.
+  it("forwards onReconciliationWriteAbandoned into the resumed runLoopFromState", async () => {
+    const repoPath = await createRepo();
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    const abandonments: string[] = [];
+
+    const adapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context: { worktreePath: string; abortSignal?: AbortSignal }) {
+        // ownerStatus "lost" plus changed paths => OWNER_UNDECIDABLE, takeover denied, so the
+        // transfer branch never runs and never replaces the corrupt file below.
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+          runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 2,
+          currentProcessInstanceId: buildProcessInstanceId(), lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+          ownerStatus: "lost", supersededByEpoch: null,
+        }));
+        await writeFile(join(runDir, "owner-transfer.json"), "{ not json");
+        await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 2;\n");
+        await new Promise<void>((resolve) => {
+          if (context.abortSignal === undefined || context.abortSignal.aborted) {
+            resolve();
+            return;
+          }
+          context.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    await resumeLoop(runDir, adapter as never, {
+      onReconciliationWriteAbandoned: (detail) => abandonments.push(detail),
+    });
+
+    expect(abandonments).toHaveLength(1);
+    expect(abandonments[0]).toContain("JSON");
+  });
+
   it("refuses (and mutates nothing) when eligibility is not published", async () => {
     const repoPath = await createRepo();
     const contract = createContract(repoPath);
