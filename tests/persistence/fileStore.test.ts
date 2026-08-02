@@ -2174,9 +2174,13 @@ describe("fileStore", () => {
   //   - Gaps 1..13 are pre-commit and refuse. Gaps 14..17 are past the commit point: all three
   //     files are published there and every eligibility criterion passes, so refusing would be
   //     the bug, not the guard. They carry the name's "commits idempotently past it" clause —
-  //     gap 14 still has the marker, so recovery republishes identical bytes and then reclaims
-  //     the marker and all three pendings; gaps 15..17 have no marker, so recovery is the
-  //     zero-write read (cleanup is gated on lockHeld) and the residue must survive byte-exact.
+  //     gap 14 still has the marker, so recovery republishes and then reclaims the marker and all
+  //     three pendings; gaps 15..17 have no marker, so recovery is the zero-write read (cleanup is
+  //     gated on lockHeld) and the residue survives unchanged.
+  //     What the snapshot actually observes, and therefore all this clause pins, is presence and
+  //     epoch: which of the three files exist and what epoch each carries, whether the marker is
+  //     there (and parses), and which pendings remain. It does NOT compare file contents byte for
+  //     byte, so a republish that rewrote a field the snapshot does not render would pass here.
   //   - resumeLoop reads the owner record THROUGH recovery (readOwnerRecord) and the other two
   //     RAW, all inside one Promise.all. So a mid-transaction gap is seen as "post-recovery owner
   //     record + pre-recovery transfer/reconciliation". That interleaving is exactly what the two
