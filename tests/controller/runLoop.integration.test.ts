@@ -1297,10 +1297,16 @@ describe("runLoop", () => {
   // follow it. Driven through runLoopFromState (via runLoop, which calls it) for a REAL transfer
   // — the same winner scenario as the test above — with heartbeat.assertHeld() wrapped so its
   // very next call after the transaction publishes reconciliation-record.json throws instead of
-  // delegating. If the file only existed because of the later writeBoundaryArtifacts call (the
-  // pre-A4 shape), this injected failure — which fires before that call is ever reached — would
-  // leave the file missing. It does not: the file is already on disk, and a resume afterwards is
-  // still eligible.
+  // delegating.
+  //
+  // The discriminating assertion is boundary-analysis.json's ABSENCE, not reconciliation-record
+  // .json's presence: the injection's own trigger condition (pathExists on
+  // reconciliation-record.json) already guarantees the latter once the crash is observed at all,
+  // so asserting it alone would be implied by the setup rather than by the fix. boundary-analysis
+  // .json is written by the very call (writeBoundaryArtifacts) this task's winner path now skips,
+  // which sits AFTER the injected failure — so its absence is genuine, falsifiable evidence that
+  // reconciliation was already committed before that later call was ever reached. See the inline
+  // comment at the assertion itself for the full argument (fix-wave-1 review finding).
   //
   // ⚠️ Do not rewrite this as "prove refusal before the fix, success after": a single committed
   // test can only run one tree. The pre-fix (red) side is provided separately by the reverse
@@ -1391,8 +1397,20 @@ describe("runLoop", () => {
       // where its last real write left it: "executing", from before persistBoundaryAnalysis was
       // ever called.
       const finalState = await observedRunLoop(contract, runDir, adapter);
-      expect(finalState.status).toBe("failed");
-      expect(finalState.stopReason).toContain(injectedFailureMessage);
+
+      // ⚠️ Fix-wave-1 review finding: the injected assertHeld only ever throws once
+      // pathExists("reconciliation-record.json") is already true, so `finalState.status ===
+      // "failed"` alone is IMPLIED by that trigger condition and cannot discriminate "reconciliation
+      // was published transactionally" from any other explanation of the crash — checking
+      // pathExists("reconciliation-record.json") right after would be tautological. The assertion
+      // that actually carries this test's claim is the one below: boundary-analysis.json must be
+      // ABSENT. It is written by the SAME writeBoundaryArtifacts call the winner path now skips
+      // (src/controller/runLoop.ts, persistBoundaryAnalysis's tail), which sits AFTER the injected
+      // assertHeld — so its absence is not implied by the injection's own trigger condition, and it
+      // is what distinguishes "reconciliation came from the transaction, before that call was ever
+      // reached" from "reconciliation came from writeBoundaryArtifacts", which — had it run at all —
+      // would have written this file too.
+      expect(await pathExists(join(runDir, "boundary-analysis.json"))).toBe(false);
 
       // (a) reconciliation-record.json is already on disk despite the crash.
       expect(await pathExists(join(runDir, "reconciliation-record.json"))).toBe(true);
@@ -1409,12 +1427,30 @@ describe("runLoop", () => {
       expect(reconciliation.newOwnerEpoch).toBe(2);
       expect(reconciliation.eligibleForContinuation).toBe(true);
 
-      // (b) resumeLoop permits continuation. Reconstructs exactly what a genuine crash would have
-      // left on loop-state.json — status "executing", nothing else — in place of the "failed"
-      // status runLoop's own (unrelated, unchanged-by-this-task) catch wrote once it caught the
-      // injected error in this JS process; see the comment above. Every OTHER artifact resumeLoop
-      // reads (owner-record.json, owner-transfer.json, reconciliation-record.json) is untouched by
-      // that catch and already reflects the real, transactionally-published transfer.
+      // Supporting, not decisive on their own (see the note above): the crash's own visible
+      // symptom, kept as corroborating evidence once the boundary-analysis.json / reconciliation
+      // assertions above have already done the discriminating work.
+      expect(finalState.status).toBe("failed");
+      expect(finalState.stopReason).toContain(injectedFailureMessage);
+
+      // (b) SCOPE NOTE (fix-wave-1 review finding): this does not prove "resumeLoop lets the actual
+      // crashed run through" — the production path in THIS scenario never leaves loop-state.json at
+      // a resumable status, because runLoop.ts's own generic attempt-failure catch (unrelated to
+      // this task, unchanged by it) always writes a decisive terminal "failed" once it catches a
+      // JS-level exception, and "failed" is not in RESUMABLE_STATUSES. No JS-catchable injection can
+      // avoid that catch, since it is the same try/catch surrounding the await this test's injection
+      // fires from. What this DOES prove, narrower than "resumeLoop permits continuation of this
+      // scenario": the reconciliation-record.json this transaction published is itself
+      // eligibility-shaped — feeding it (plus the untouched owner-record.json/owner-transfer.json,
+      // also published by the same transaction) to resumeLoop's gate, alongside a loop-state.json
+      // status a genuine OS-level crash (as opposed to this JS-catchable stand-in for one) would
+      // have left in place, does not trip resume_denied. The assertion below is still falsifiable —
+      // a draft field assembled wrong (e.g. wrong ownershipVerdict, mismatched newOwnerEpoch, or
+      // eligibleForContinuation false) fails resumeLoop's criteria 2/3/4 and would show up as
+      // resume_denied — so this is a real, scope-limited check, not a tautology dressed up as one.
+      // Every artifact resumeLoop reads other than loop-state.json (owner-record.json,
+      // owner-transfer.json, reconciliation-record.json) is untouched by the generic catch above and
+      // already reflects the real, transactionally-published transfer.
       const crashedLoopState = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8")) as {
         status: string;
       };

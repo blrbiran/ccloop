@@ -1590,10 +1590,28 @@ describe("lease heartbeat lifecycle", () => {
   // through on the winner path. So a committed transfer now ALWAYS carries its reconciliation
   // record with it — that is the whole point of the L3 "sweep and transactional continuation"
   // work this test's own commit belongs to, closing exactly the crash window the pre-A4 spec
-  // amendment below described as intentional. `docs/superpowers/specs/2026-07-27-owner-transfer-
-  // contention-design.md` §5.3's amendment (e) — "a completed owner-transfer.json no longer
-  // implies a reconciliation-record.json" — described the OLD (pre-transactionalization) gap;
-  // it is superseded by this plan, not violated by it.
+  // amendment below described as intentional.
+  //
+  // `docs/superpowers/specs/2026-07-27-owner-transfer-contention-design.md` §5.3's amendment (e),
+  // quoted in FULL because the second half is the half that would otherwise read as forbidding
+  // this exact change (this repo has a prior incident of exactly that half being dropped from a
+  // citation): "a completed `owner-transfer.json` no longer implies a `reconciliation-record.json`
+  // ... That is requirement 7's intended behaviour, not a gap in it — the transfer is real and
+  // committed by a CAS this process passed, and the refused write is a process that no longer owns
+  // the run declining to write into it. ... The same ruling deliberately gave up the losing
+  // process's synthesis of the winner's reconciliation view; if that view is still wanted,
+  // assigning it to a process that still holds the run is L5's problem."
+  //
+  // Per human ruling: L3's transactionalization SUPERSEDES this amendment, it does not violate the
+  // L5 assignment the second half makes. That assignment was about who may SYNTHESIZE a
+  // reconciliation view for a transfer this process did NOT itself author — squarely "a process
+  // that no longer owns the run declining to write into it". This case is different in kind: the
+  // reconciliation record now on disk is not a synthesis by a process that lost the run: it is
+  // published by the SAME CAS-authorized write, inside the SAME transaction, as the
+  // `owner-transfer.json` amendment (e) itself already treats as real and committed regardless of
+  // the later supersession. Task A4 does not hand a losing process new authority to write; it moves
+  // WHEN an already-authorized write happens, earlier within a span that process was already
+  // authorized to write in.
   //
   // Modelled on the "owner_transfer_contended" test's OWNER_LOST + takeoverAllowed fixture
   // (same execute-timeout shape, same "lost" owner record), reaching the SAME call site
