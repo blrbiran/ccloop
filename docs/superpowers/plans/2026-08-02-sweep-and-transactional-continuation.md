@@ -69,6 +69,21 @@
 
    已核对：A1–A5 的报告里 `-t` 全部用的是裸 `it` 名，过滤器确实命中，落地的变异证据不受影响；A6 用的是空格拼接全名，并在报告里自己披露了这处偏离。
 
+   **Amended 2026-08-02 (f)：上面这句「A1–A5 全部用的是裸 `it` 名」是假的，而且它恰好长在「专门用来堵住未经核实的绿色断言」的这条注记里面。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。实测重跑：
+
+   ```
+   $ rtk proxy "grep -rnoE -e \"-t '[^']*'\" .superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-A{1,2,3,4,5}-report.md"
+   ...（共 45 处命中：A1 3 / A2 13 / A3 16 / A4 11 / A5 2。逐条看过，只有下面两处不是裸 `it` 名）
+   .superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-A4-report.md:424:-t 'writes no boundary artifact'
+   .superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-A4-report.md:830:-t 'writes no boundary artifact'
+   ```
+
+   `task-A4-report.md` 的第 424、830 行用的是**前缀**，不是裸 `it` 名。落地的全名在 `tests/controller/leaseLifecycle.integration.test.ts`（符号 `it(`）逐字为 `writes no boundary artifact — but its own already-committed transfer's reconciliation record stands — when superseded after its own transfer completes (spec requirement 7, amended by task A4)`。另外两处看着像例外、核过后不是：`task-A5-report.md:1482` 写作 `-t '$TNAME'`，上一行的 `export TNAME=...` 展开后正是裸 `it` 名；`task-A5-report.md:263` 用的是改名前的旧名字，但它整段被该报告自己的 supersession 标注圈住（「该名字在人裁定改名后**已不存在于代码树**……不要拿它们当现行证据」），是逐字保留的历史输出，不是现行断言。
+
+   **实质结论仍然成立，不要因为这条更正就去动 A4 的证据**：vitest 的 `-t` 是子串匹配，前缀照样命中，而且 A4 这两块的输出都写着 `Tests  1 passed | 24 skipped (25)`——具名那条计数非零，因此不是「全 skipped 假绿」，落地的变异证据不受污染。被更正的是「全部用的是裸 `it` 名」这个**说法过强**：前缀在名字被改短、或另一条测试名恰好包含同一前缀时会静默改变匹配集，这正是本注记要求写全名的原因。
+
+   **补上本文档一直缺的交叉引用：** 支撑这句话的那份逐条核对写在 `.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-errata-report.md` 的「Erratum 1」§2 里，本文档此前没有任何指针指过去。那份核对的第 66 行带着同一处过强说法（原文：「all `-t` values are bare `it` names」），按同一理由读，不要再从那里继承这个断言。
+
 3. **贴两次原始输出**：注入前该条单跑必须**绿**、注入后必须**红**。只贴注入后那一次不算。
 
 **额外要求：变异实验必须跑在一个基线全绿的工作副本上。** 第六波实测过一次教训：评审员在 scratchpad 副本里跑变异，副本不是 git 仓库，`parseArgs > returns 0 for the scripted example run` 因此失败，被误记成击杀。**基线绿之前不许下任何击杀结论。** 若在副本里做，先 `git init` + 一次首提交。
@@ -634,6 +649,13 @@ git commit -m "feat(runLoop): assemble the reconciliation draft outside the epoc
 - [ ] **Step 2: 写两组 fixture 构造器。** 首发转移 / 双转移。**先各写一条最小的冒烟断言证明 fixture 真的构造出了预期磁盘状态**（否则 fixture 本身没有护栏）。
 - [ ] **Step 3: 写失败的测试 2。** 完整测试名：
   `fileStore > refuses resume at every crash gap of the three-file transaction and finishes recovery wherever the marker survives`
+
+  **Amended 2026-08-02 (e)：上面这个测试名已经作废，落地的测试不叫这个名字——照抄它代入 `-t` 会零匹配、全 skipped、退出码 0，正是 `Amended 2026-08-02 (b)` 要堵的那种假绿，而且它就长在本文档里。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。测试在 A5 的修复轮 1 里按人的裁定改了名：裁定见 `.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/progress.md` 的 `Task A5: HUMAN RULING 2 (plan-mandated)` 一条（间隙 14–17 接受是对的，旧名字的中间分句因此没有能失败的断言，违反「测试名里每一个分句都必须有一条能失败的断言」）；同一台账的 `Task A5: minor (deferred) for GATE-A triage` 第 6 条早已记下本处 Step 3 仍留着改名前的旧名字，当时人的裁定只授权改两处前提句，所以只挂账未修——本注记就是补上它。原始单跑输出见 `task-A5-report.md` 的「覆盖测试单跑（现行全名）」一节。现行 `it` 名逐字为：
+
+  `refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives`
+
+  重新求证：`grep -cF 'refuses resume at every pre-commit crash gap' docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md` 在本注记落地前为 **0**（本文档一次都没提过现行名字）；`grep -n 'refuses resume at every pre-commit crash gap' tests/persistence/fileStore.test.ts` 命中落地的 `it(`。代入 `-t` 时用上面这个裸 `it` 名。
+
   按 Step 1 数出的 N + M 个间隙逐个注入。
 - [ ] **Step 4: 跑它。** 若绿（实现已正确），**不算完成**——直接进 Step 5 的变异证明。若红，先修测试本身（不是修生产代码）。
 - [ ] **Step 5: 变异实验（四次）。**
