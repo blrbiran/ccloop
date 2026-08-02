@@ -329,6 +329,9 @@ const OWNER_RECORD_PENDING_FILE = ".owner-record.pending.json";
 const OWNER_TRANSFER_PENDING_FILE = ".owner-transfer.pending.json";
 const OWNER_TRANSFER_MARKER_FILE = ".owner-transfer.transaction.json";
 const OWNER_TRANSFER_LOCK_FILE = ".owner-transfer.lock";
+const OWNER_TRANSFER_MARKER_TEMP_FILE = ".owner-transfer.transaction.tmp";
+const OWNER_RECORD_PENDING_TEMP_FILE = ".owner-record.pending.tmp";
+const OWNER_TRANSFER_PENDING_TEMP_FILE = ".owner-transfer.pending.tmp";
 
 type OwnerTransferTransactionMarker = {
   version: 1;
@@ -345,6 +348,9 @@ type OwnerTransferPaths = {
   transferPendingPath: string;
   transactionMarkerPath: string;
   lockPath: string;
+  transactionMarkerTempPath: string;
+  ownerPendingTempPath: string;
+  transferPendingTempPath: string;
 };
 
 type OwnerTransferLockRecord = {
@@ -362,6 +368,9 @@ function getOwnerTransferPaths(runDir: string): OwnerTransferPaths {
     transferPendingPath: join(runDir, OWNER_TRANSFER_PENDING_FILE),
     transactionMarkerPath: join(runDir, OWNER_TRANSFER_MARKER_FILE),
     lockPath: join(runDir, OWNER_TRANSFER_LOCK_FILE),
+    transactionMarkerTempPath: join(runDir, OWNER_TRANSFER_MARKER_TEMP_FILE),
+    ownerPendingTempPath: join(runDir, OWNER_RECORD_PENDING_TEMP_FILE),
+    transferPendingTempPath: join(runDir, OWNER_TRANSFER_PENDING_TEMP_FILE),
   };
 }
 
@@ -598,11 +607,22 @@ async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () =
 }
 
 async function cleanupOwnerTransferStagingWithoutMarker(runDir: string): Promise<void> {
-  const { ownerPendingPath, transferPendingPath, ownerTempPath, transferTempPath } = getOwnerTransferPaths(runDir);
+  const {
+    ownerPendingPath,
+    transferPendingPath,
+    ownerTempPath,
+    transferTempPath,
+    ownerPendingTempPath,
+    transferPendingTempPath,
+    transactionMarkerTempPath,
+  } = getOwnerTransferPaths(runDir);
   await safeUnlink(ownerPendingPath);
   await safeUnlink(transferPendingPath);
   await safeUnlink(ownerTempPath);
   await safeUnlink(transferTempPath);
+  await safeUnlink(ownerPendingTempPath);
+  await safeUnlink(transferPendingTempPath);
+  await safeUnlink(transactionMarkerTempPath);
 }
 
 async function finalizePendingOwnerTransfer(runDir: string): Promise<void> {
@@ -672,9 +692,9 @@ export async function writeOwnerTransferArtifacts(
       finalizeOrder: [OWNER_TRANSFER_FILE, OWNER_RECORD_FILE],
     };
 
-    await writeJsonFile(paths.transferPendingPath, transferRecord);
-    await writeJsonFile(paths.ownerPendingPath, ownerRecord);
-    await writeJsonFile(paths.transactionMarkerPath, marker);
+    await writeJsonFileViaFixedTemp(paths.transferPendingTempPath, paths.transferPendingPath, transferRecord);
+    await writeJsonFileViaFixedTemp(paths.ownerPendingTempPath, paths.ownerPendingPath, ownerRecord);
+    await writeJsonFileViaFixedTemp(paths.transactionMarkerTempPath, paths.transactionMarkerPath, marker);
     await finalizePendingOwnerTransfer(runDir);
   } finally {
     await lock.release();
@@ -715,6 +735,18 @@ async function writeOwnerRecordAtomically(runDir: string, ownerRecord: OwnerReco
   await safeUnlink(ownerTempPath);
   await writeJsonFile(ownerTempPath, ownerRecord);
   await rename(ownerTempPath, ownerPath);
+}
+
+// Same shape as writeOwnerRecordAtomically, generalized to a caller-supplied temp path: the
+// owner-transfer transaction's three staged files (marker, owner-pending, transfer-pending)
+// each need their own fixed temp name so cleanupOwnerTransferStagingWithoutMarker can find and
+// remove leftovers by name after a crash. Deliberately not sharing writeJsonFileAtomically,
+// whose buildAtomicTempPath stamps a process id and per-call sequence number into the temp
+// name — that name is unrecoverable by any later process.
+async function writeJsonFileViaFixedTemp(tempPath: string, targetPath: string, value: unknown): Promise<void> {
+  await safeUnlink(tempPath);
+  await writeJsonFile(tempPath, value);
+  await rename(tempPath, targetPath);
 }
 
 async function updateOwnerRecordWithPrecondition(

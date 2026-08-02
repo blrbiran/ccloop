@@ -1063,6 +1063,174 @@ describe("fileStore", () => {
     await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();
   });
 
+  it("publishes the transaction marker by rename, leaving only .owner-transfer.transaction.tmp when the rename fails", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        rename: async (...args: Parameters<typeof actual.rename>) => {
+          if (String(args[0]).endsWith(".owner-transfer.transaction.tmp")) {
+            throw new Error("simulated marker rename failure");
+          }
+
+          return actual.rename(...args);
+        },
+      };
+    });
+
+    try {
+      const fileStore = await import("../../src/persistence/fileStore.js");
+      const transfer = applyOwnerEpochTransfer(
+        initialOwnerRecord,
+        "pid:67890",
+        "2026-07-22T10:05:00.000Z",
+        "owner lost after reconciliation",
+      );
+
+      await fileStore.writeOwnerRecord(runDir, initialOwnerRecord);
+      await expect(
+        fileStore.writeOwnerTransferArtifacts(runDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord),
+      ).rejects.toThrow("simulated marker rename failure");
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+
+    await expect(readFile(join(runDir, ".owner-transfer.transaction.json"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(runDir, ".owner-transfer.transaction.tmp"), "utf8")).resolves.toContain("stagedAt");
+
+    await claimOwnerRecordWithPrecondition(runDir, initialOwnerRecord, initialOwnerRecord);
+
+    await expect(readFile(join(runDir, ".owner-transfer.transaction.json"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(runDir, ".owner-transfer.transaction.tmp"), "utf8")).rejects.toThrow();
+  });
+
+  it("publishes .owner-record.pending.json by rename, leaving only .owner-record.pending.tmp when the rename fails", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        rename: async (...args: Parameters<typeof actual.rename>) => {
+          if (String(args[0]).endsWith(".owner-record.pending.tmp")) {
+            throw new Error("simulated owner-pending rename failure");
+          }
+
+          return actual.rename(...args);
+        },
+      };
+    });
+
+    try {
+      const fileStore = await import("../../src/persistence/fileStore.js");
+      const transfer = applyOwnerEpochTransfer(
+        initialOwnerRecord,
+        "pid:67890",
+        "2026-07-22T10:05:00.000Z",
+        "owner lost after reconciliation",
+      );
+
+      await fileStore.writeOwnerRecord(runDir, initialOwnerRecord);
+      await expect(
+        fileStore.writeOwnerTransferArtifacts(runDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord),
+      ).rejects.toThrow("simulated owner-pending rename failure");
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+
+    await expect(readFile(join(runDir, ".owner-record.pending.json"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(runDir, ".owner-record.pending.tmp"), "utf8")).resolves.toContain("currentOwnerEpoch");
+
+    await claimOwnerRecordWithPrecondition(runDir, initialOwnerRecord, initialOwnerRecord);
+
+    await expect(readFile(join(runDir, ".owner-record.pending.json"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(runDir, ".owner-record.pending.tmp"), "utf8")).rejects.toThrow();
+  });
+
+  it("publishes .owner-transfer.pending.json by rename, leaving only .owner-transfer.pending.tmp when the rename fails", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        rename: async (...args: Parameters<typeof actual.rename>) => {
+          if (String(args[0]).endsWith(".owner-transfer.pending.tmp")) {
+            throw new Error("simulated transfer-pending rename failure");
+          }
+
+          return actual.rename(...args);
+        },
+      };
+    });
+
+    try {
+      const fileStore = await import("../../src/persistence/fileStore.js");
+      const transfer = applyOwnerEpochTransfer(
+        initialOwnerRecord,
+        "pid:67890",
+        "2026-07-22T10:05:00.000Z",
+        "owner lost after reconciliation",
+      );
+
+      await fileStore.writeOwnerRecord(runDir, initialOwnerRecord);
+      await expect(
+        fileStore.writeOwnerTransferArtifacts(runDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord),
+      ).rejects.toThrow("simulated transfer-pending rename failure");
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+
+    await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(runDir, ".owner-transfer.pending.tmp"), "utf8")).resolves.toContain("priorOwnerEpoch");
+
+    await claimOwnerRecordWithPrecondition(runDir, initialOwnerRecord, initialOwnerRecord);
+
+    await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(runDir, ".owner-transfer.pending.tmp"), "utf8")).rejects.toThrow();
+  });
+
   it("writes contract, state, events, and attempt artifacts", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     await initializeRunFiles(runDir, contract, state);
