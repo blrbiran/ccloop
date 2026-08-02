@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { access, chmod, mkdtemp, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1683,6 +1683,235 @@ describe("runLoop", () => {
       expect(reconciliation.newOwnerEpoch).toBe(2);
     } finally {
       vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
+
+  // Task A9 / §4.3 test 6e: the only guardrail for this layer's finalize-order re-ruling
+  // (owner-transfer.json is published FIRST, reconciliation-record.json LAST). Two processes meet
+  // inside the publish window: P1 (the winner) is mid-transaction, and P2 (the loser) reaches its
+  // own boundary write while P1's three renames are still in flight.
+  //
+  // Deterministic interleaving, decided by the MOCK and never by the fixture: node:fs/promises'
+  // `rename` is wrapped, and the FIRST rename whose source is one of the transaction's three fixed
+  // publish temps — whichever file finalizeOrder happens to put first — runs the loser's entire
+  // runLoopFromState to completion before P1 is allowed to proceed. That is what keeps the fixture
+  // out of the mutation surface: both mutations recorded in task-A9-report.md change production
+  // code only, and this fixture is byte-identical across the unmutated and both mutated runs. A
+  // fixture-driven interleaving (a fixed sleep, or staging the files by hand) would move the
+  // interleaving point every time production changed which file is published first — i.e. it would
+  // mutate along with the code and pin nothing.
+  //
+  // The loser side must go through runLoopFromState because persistBoundaryAnalysis is not
+  // exported and must not be exported for this; the winner side is hand-built directly on
+  // fileStore's export surface.
+  //
+  // ⚠️ What assertion (a) pins, stated honestly: it pins whether the loser's protection check was
+  // EVALUATED at all — with owner-transfer.json already published, the loser reads it and reaches
+  // transferRepresentsPublishedWinner. It does NOT pin "the winner was not overwritten". It cannot:
+  // that check returns false here (owner-record.json is still the old epoch — P1's rename #2 has
+  // not happened), so the loser does go on to write its downgraded record, which is exactly the
+  // shape of the residual TOCTOU this layer leaves open (§13, 4th entry). The stronger property is
+  // not pinnable at this layer. Do not read assertion (a) as more than it is.
+  //
+  // ⚠️ No terminal-state assertion, deliberately. "P1's third rename puts the winner's record back"
+  // is an ordering this harness imposes, not a property of the system — in production the loser's
+  // write may perfectly well land after rename #3. Asserting it as correct behaviour would write a
+  // damaged trajectory into the suite. Everything asserted below is scoped to the loser's window.
+  //
+  // Assertion (b) observes finalize through its rename SOURCES rather than through a spy on
+  // finalizePendingOwnerTransfer (not exported, and not to be exported for a test), and it is a
+  // set-membership assertion rather than a rename COUNT: writeBoundaryArtifacts renames on its own
+  // account, so counting renames gives two numbers that are both wrong. The transaction's three
+  // publish temps are fixed names; the loser's own atomic writes go through buildAtomicTempPath,
+  // whose per-process stamp and sequence number make a collision impossible.
+  //
+  // ⚠️ Mutation 2 (removing the live-process early return in tryRecoverStaleOwnerTransferLock) also
+  // fails a handful of pre-existing tests elsewhere in the suite that have nothing to do with this
+  // one — the list is in task-A9-report.md. That list is NOISE, not this test's guardrail: the only
+  // thing that counts as evidence is this named test, run alone, going red.
+  it("keeps the loser from writing through the winner's reconciliation inside the publish window", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const state: RunState = {
+      status: "planning",
+      currentAttempt: 0,
+      attemptsUsed: 0,
+      lastTransitionAt: "2026-07-23T00:00:00.000Z",
+      waitingOnHuman: false,
+      stopReason: null,
+      budgetSnapshot: {
+        attemptsRemaining: contract.executionPolicy.maxAttempts,
+        timeRemainingMs: contract.executionPolicy.totalRuntimeBudgetMs,
+        tokenBudgetRemaining: contract.executionPolicy.tokenBudget,
+      },
+      recentFailures: [],
+    };
+
+    const transactionPublishTempNames = new Set([
+      ".owner-transfer.publish.tmp",
+      ".owner-record.publish.tmp",
+      ".reconciliation-record.publish.tmp",
+    ]);
+
+    let loserWindowOpen = false;
+    let interleaved = false;
+    let runLoserInsideWindow: (() => Promise<void>) | null = null;
+    const ownerTransferReadOutcomesInWindow: string[] = [];
+    const publishTempRenameSourcesInWindow: string[] = [];
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        readFile: async (...args: Parameters<typeof actual.readFile>) => {
+          const observed = loserWindowOpen && basename(String(args[0])) === "owner-transfer.json";
+
+          try {
+            const contents = await actual.readFile(...args);
+
+            if (observed) {
+              ownerTransferReadOutcomesInWindow.push("ok");
+            }
+
+            return contents;
+          } catch (error) {
+            if (observed) {
+              ownerTransferReadOutcomesInWindow.push(`failed:${(error as NodeJS.ErrnoException).code}`);
+            }
+
+            throw error;
+          }
+        },
+        rename: async (...args: Parameters<typeof actual.rename>) => {
+          const source = basename(String(args[0]));
+
+          if (loserWindowOpen && transactionPublishTempNames.has(source)) {
+            publishTempRenameSourcesInWindow.push(source);
+          }
+
+          await actual.rename(...args);
+
+          // The window opens AFTER the first publish rename has landed, so the loser observes the
+          // transaction one file into its finalize — the instant the re-ruling is about.
+          if (!interleaved && runLoserInsideWindow !== null && transactionPublishTempNames.has(source)) {
+            interleaved = true;
+            loserWindowOpen = true;
+
+            try {
+              await runLoserInsideWindow();
+            } finally {
+              loserWindowOpen = false;
+            }
+          }
+        },
+      };
+    });
+
+    try {
+      const { writeOwnerTransferArtifacts } = await import("../../src/persistence/fileStore.js");
+      const { runLoopFromState: observedRunLoopFromState } = await import("../../src/controller/runLoop.js");
+      const { applyOwnerEpochTransfer } = await import("../../src/ownership/ownerController.js");
+
+      await initializeRunFiles(runDir, contract, state);
+      // The pre-transfer truth, and P1's CAS expectation. `ownerStatus: "lost"` plus changed paths
+      // is the same lever the OWNER_UNDECIDABLE test above pulls: it keeps the loser's verdict at
+      // OWNER_UNDECIDABLE with takeover denied, so the loser never attempts a transfer of its own
+      // and reaches writeBoundaryArtifacts carrying a stale_candidate reconciliation record —
+      // without which preserveSuccessfulReconciliationIfNeeded early-returns and neither assertion
+      // below could observe anything.
+      const priorOwnerRecord = {
+        runId: "task-1",
+        logicalSessionId: "task-1:publish-window",
+        currentOwnerEpoch: 1,
+        currentProcessInstanceId: buildProcessInstanceId(),
+        lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+        ownerStatus: "lost" as const,
+        supersededByEpoch: null,
+        leaseAffirmedAt: null,
+      };
+      await writeOwnerRecord(runDir, priorOwnerRecord);
+      expect(await pathExists(join(runDir, "owner-transfer.json"))).toBe(false);
+
+      const winner = applyOwnerEpochTransfer(
+        priorOwnerRecord,
+        "pid:67890",
+        "2026-07-23T00:01:00.000Z",
+        "owner lost after reconciliation",
+      );
+
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 2;\n");
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      runLoserInsideWindow = async () => {
+        await observedRunLoopFromState(contract, runDir, adapter, state);
+      };
+
+      // P1. Its lock is held for the whole transaction by `pid:${process.pid}` — this very test
+      // process, hence a demonstrably LIVE pid — which is the second step of the re-ruling: the
+      // loser's readOwnerRecord must find that live lock and decline to finalize P1's transaction
+      // on its behalf. Mutation 2 removes exactly that decline.
+      await writeOwnerTransferArtifacts(
+        runDir,
+        priorOwnerRecord,
+        winner.nextOwnerRecord,
+        winner.transferRecord,
+        {
+          staleSuspicionBasis: ["winner: continuity suspicion confirmed"],
+          staleConfirmed: true,
+          ownershipVerdict: "OWNER_LOST",
+          lastTrustedBoundary: "execute",
+          conflictingEvidence: [],
+          takeoverPermission: { allowed: true, reason: "strict owner-loss conditions satisfied" },
+          priorOwnerEpoch: 1,
+          newOwnerEpoch: 2,
+          eligibleForContinuation: true,
+        },
+      );
+
+      // Fixture preconditions. Without these, both assertions below would pass vacuously on a
+      // window that never opened or a loser that never carried a reconciliation record.
+      expect(interleaved).toBe(true);
+      const analysis = JSON.parse(
+        await readFile(join(runDir, "boundary-analysis.json"), "utf8"),
+      ) as { status: string };
+      expect(analysis.status).toBe("stale_candidate");
+
+      // (a) The loser's protection check was reached: owner-transfer.json was already published
+      // when the loser read it, so the read succeeded. Under the finalize order this test pins,
+      // that file is published first and this is guaranteed; publish it later and the loser's read
+      // ends in ENOENT, taking the check with it.
+      expect(ownerTransferReadOutcomesInWindow).toContain("ok");
+
+      // (b) The loser did not finalize the winner's transaction on its behalf: no rename inside its
+      // window took one of the transaction's publish temps as its source.
+      expect(publishTempRenameSourcesInWindow).toEqual([]);
+    } finally {
+      vi.doUnmock("node:fs/promises");
       vi.resetModules();
     }
   });
