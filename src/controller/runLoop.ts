@@ -550,6 +550,11 @@ type BoundaryEvidence = {
 function buildBoundaryEvidence(executionRecovery: ExecutionRecovery | null): BoundaryEvidence {
   if (executionRecovery === null) {
     return {
+      // GATE-A fix wave 2: this empty list — not any literal at the evaluateRunBoundary call site —
+      // is what keeps runLoopFromState's non-timeout `execution === null` branch off
+      // `stale_candidate`, and that is the whole proof behind the "provably dead" note on the
+      // `onReconciliationWriteAbandoned` argument forwarded from there. Making it non-empty
+      // re-activates that argument without touching the warned line — read that comment first.
       continuitySuspicion: [],
       conflictingEvidence: [],
       currentProcessStillTrusted: false,
@@ -740,11 +745,6 @@ async function persistBoundaryAnalysis(
   const boundaryEvidence = buildBoundaryEvidence(executionRecovery ?? null);
   const boundaryAnalysis = evaluateRunBoundary({
     now: new Date().toISOString(),
-    // GATE-A fix wave: these two literals are what keep runLoopFromState's non-timeout
-    // `execution === null` branch off `stale_candidate`, and that is the whole proof behind the
-    // "provably dead" note on the `onReconciliationWriteAbandoned` argument forwarded from there.
-    // Changing either re-activates that argument without touching the warned line — see that
-    // comment before you do.
     previous: null,
     runState: state,
     observedStrongProgress: false,
@@ -1214,13 +1214,20 @@ export async function runLoopFromState(
         // `reconciliationRecord: undefined` down — which makes writeBoundaryArtifacts skip the
         // entire abandon block. Measured, not merely reasoned: a probe driving this exact branch
         // with a corrupt owner-transfer.json on disk observed status `no_progress`, zero callback
-        // invocations, and no reconciliation write. TWO routes re-activate this argument, and only
-        // the first touches this line: (1) a future edit gives this branch real execution recovery;
-        // (2) — the likelier one — persistBoundaryAnalysis's `evaluateRunBoundary` call stops
-        // hardcoding `observedStrongProgress: false` / `previous: null`, either of which can yield
-        // `stale_candidate` from here and re-open the abandon block without anyone reading this
-        // comment. Those two literals carry a back-pointer here. Either way the path goes live and
-        // needs its own covering test.
+        // invocations, and no reconciliation write. The gate is the EMPTY `continuitySuspicion` and
+        // nothing else: evaluateRunBoundary (stopController.ts) returns `stale_candidate` only for
+        // `!observedStrongProgress && continuitySuspicion.length > 0`. TWO edits open that gate, and
+        // only the first touches this line: (1) a future edit gives this branch a real
+        // `executionRecovery` — every non-null branch of buildBoundaryEvidence returns a NON-EMPTY
+        // `continuitySuspicion`; (2) buildBoundaryEvidence's `executionRecovery === null` branch
+        // stops returning `continuitySuspicion: []`, which re-opens the abandon block for every
+        // recovery-less caller at once, without anyone reading this comment. That branch carries a
+        // back-pointer here. Either way the path goes live and needs its own covering test.
+        // What is NOT a route, because a previous fix wave claimed it was: persistBoundaryAnalysis's
+        // hardcoded `observedStrongProgress: false` and `previous: null`. `input.previous` never
+        // reaches a status branch at all (it only fills `strongProgressAt` / `weakProgressAt` in the
+        // returned payload), and flipping `observedStrongProgress` to true returns `healthy` — one
+        // branch FURTHER from `stale_candidate`, not nearer.
         await persistBoundaryAnalysis(runDir, state, heartbeat, undefined, options?.onReconciliationWriteAbandoned);
         throw new Error("execute phase completed without a result");
       }
