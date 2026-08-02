@@ -4,33 +4,46 @@
 
 ---
 
+## 快速接手入口（先读这 8 行，够开工）
+
+1. **L3 的 spec 与实施计划都已定稿并在 `main` 上。不要重新 brainstorm、不要重写 spec、不要重写计划。**
+2. **下一个动作是任务 A5**，计划在 `docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md`，然后 A6 → A7 → A8 → A9 → GATE-A。
+3. **先读 ledger**：`.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/progress.md`。它是压缩后唯一可信的进度来源，**任何情况下都先读它再决定从哪继续**。
+4. **组 A 的 A1–A4 已完成并已合入 `main`**（一笔 `--no-ff` 合并，提交信息里明写「THIS IS NOT GATE-A」）。**A5–A9 与 GATE-A 全部未做。**
+5. **执行方式**：`superpowers:subagent-driven-development` —— 每任务「实施者 → 独立评审员 → 有 Critical/Important 则进修复环 → scoped 再评审 → ledger 记 complete」。**不接受实施者自证。**
+6. **两个会静默出错的环境陷阱**：`EnterWorktree` 默认从 `origin/<默认分支>` 开分支而非你的 HEAD；全局 `rtk` hook 会自动过滤 vitest 输出。详见下面「两个会静默出错的环境陷阱」。
+7. **「变异必须红」= 具名那一条单跑必须红**，不是套件红。实测过一条变异会杀掉 6 条与它无关的既有测试。
+8. **状态一律用命令自查**，见下一节。本文不写死 HEAD、提交笔数与待推数——提交本文这个动作本身就会改变它们。
+
+---
+
 ## 当前状态（2026-08-02）—— 取代下方一切关于「第三波修复待做」的描述
 
 ### 一句话
 
-**L3 的 spec 与实施计划都已完成并推上 `main`；代码工作在一支未合并的分支上，组 A（债 1）的 9 个任务做完了 4 个，停在 A4/A5 边界等交接。**
+**L3 的 spec 与实施计划已定稿；组 A（债 1）的 9 个任务做完了 4 个并已合入 `main`，停在 A4/A5 边界交接。A5–A9 与 GATE-A 未做。**
 
 ### 先跑这些，以输出为准（不要相信本文任何数字）
 
 ```bash
 cd /Users/biran/code/skills/loop/ccloop
-git worktree list          # 应有两项：主仓库(main) + .claude/worktrees/l3-debt1-group-a(feat/…)
-git log --oneline -1 main
-git log --oneline -1 origin/main
-git rev-list --count origin/main..main            # 交接时为 0
+git log --oneline --decorate -6            # 只用来看形势，不要假设 HEAD 是哪一笔
+git rev-list --count origin/main..main     # 待推笔数，以此为准
+git worktree list                          # 交接时两项：主仓库 + .claude/worktrees/l3-debt1-group-a
+git branch --list                          # main / feat/l3-debt1-transactional-continuation / backup/…（备份分支禁删）
 
-cd .claude/worktrees/l3-debt1-group-a
-git log --oneline --reverse $(git merge-base main HEAD)..HEAD   # 交接时 6 笔
-ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run  # 交接时 29 files / 460 tests, exit 0
-npm run typecheck && npm run build                 # 均 exit 0
+# 组 A 已合入的那笔（合并提交信息里明写「THIS IS NOT GATE-A」，用它区分真正的门）
+git log --merges --format='%h %cd %s' --date=iso --reverse
+
+ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run
+npm run typecheck && npm run build
 ```
 
-**460 会随任何新增测试腐坏**（基线 446 → A1 449 → A2 453 → A3 457/458 → A4 460）。以你自己那次执行的输出为准。
+**测试数会随任何新增测试腐坏**，本会话的轨迹是 446（基线）→ 449（A1）→ 453（A2）→ 457/458（A3）→ 460（A4）。**以你自己那次执行的输出为准，不要引用这里的任何一个数。** 交接时的实测：`29 files / 460 tests`、`TEST_EXIT=0`、`TYPECHECK_EXIT=0`、`BUILD_EXIT=0`，两条允许的 flake (B)(F) 均未出现。
 
-### 分支与提交
+⚠️ **`main` 上有若干笔未 push。** 具体几笔用上面那条命令查，**不要照抄任何数字**——提交本文就会再加一笔。**push 与 merge 都只在人明确下指令时执行。**
 
-`main` = `origin/main` = 计划那一笔（`docs(plan): L3 implementation plan — sixteen tasks behind three gates`），**已推，无待推**。
-分支 `feat/l3-debt1-transactional-continuation` 从它分出，6 笔，**未合并、未推**：
+### 已合入 `main` 的组 A 内容（按任务，不写 hash——用 `git log` 自查）
 
 | 提交主题 | 任务 |
 |---|---|
@@ -40,6 +53,12 @@ npm run typecheck && npm run build                 # 均 exit 0
 | 拒绝 `finalizeOrder` 非完整全排列的 v2 marker | A3 修复轮 |
 | 草稿组装点、`newOwnerEpoch` 由事务内部填、赢家不再二次写 | A4 |
 | 让 `boundary-analysis.json` 缺席成为测试 1 的决定性断言 | A4 修复轮 |
+
+**分支 `feat/l3-debt1-transactional-continuation` 仍然存在且已合并**，worktree 在 `.claude/worktrees/l3-debt1-group-a`。**A5 起可以继续在它上面做**（GATE-A 的整分支评审要看整个组 A 的 diff，留着这支分支更方便），也可以另开——但**不要在 `main` 上直接动代码**。
+
+⚠️ **那笔合并不是 GATE-A，且刻意不带评审结论。** 计划 §15 验收 7 用「合并提交信息里带评审结论」来定位任务组的门；组 A 还没有整分支评审，所以那笔不配当门，消息里也明写了。**真正的 GATE-A 合并将来要另写一笔、并带上评审结论。**
+
+**没有合进来的**（务必知道）：A7 的读侧收窄（处置一）、A8 的四层 abandonment 回调、**A9 的测试 6e —— 也就是本层排序改判的护栏本身**。换句话说，`main` 上现在的事务化改动**尚无那条护栏**。
 
 ### 下一个动作
 
@@ -83,6 +102,19 @@ ENOENT 归因选「把 `readOwnerTransferRecordRaw` 移出 `Promise.all` 单独 
 - **spec 层的评审有物理下限，剩下的只能靠实施结清。** 停止 spec 评审前，剩余风险已经全是「这条测试到底会不会红」——而测试 6e 的变异一在当时的代码上**不可表达**（`finalizeOrder` 只有两项，三项版本正是本层要建的），`src/sweep/` 整个目录不存在。再派评审只会继续得到「我分辨不出」。**第六波把判据从「套件红」改成「具名那条红 + `-t` 单跑 + 注入前后两份原始输出 + 绿色基线」，就是把这些风险推到实施阶段被强制结清的机制。**
 - **「变异必须红」≠「这条测试必须红」，这个区别值一整轮。** 第六波实测：为 §4.3 排序改判新加的变异**今天就杀掉 6 条与它无关的既有测试**，其中一条恰好就是它要钉的那句话。于是「写一条断言写空的测试 → 注入 → 套件红 → 贴输出 → 宣布达标」这条路走得通。**套件红不是证据。**
 - **实施会撞出 spec 层五轮评审都撞不出的东西。** L1b 与 L3 的那条归属冲突（人裁 3）不是任何评审发现的，是 A2 的事务化真的落到代码上、然后撞上一条既有测试的断言那一刻才显形的。同样，A4 那条「最承重的测试其头号断言被自己的注入触发条件蕴含」也只有在代码存在时才看得见。
+
+---
+
+### 建议调用的 skills（取代下方那份 2026-08-01 的同名清单）
+
+| skill | 何时 | 注意 |
+|---|---|---|
+| `superpowers:subagent-driven-development` | **立刻，做 A5 时** | 本轮的执行框架。先读 ledger 再决定从哪继续；每任务一个实施者 + 一个独立评审员；修复环最多 5 轮，1–3 轮 resume 原实施者、4–5 轮换更强模型的新实施者 |
+| `superpowers:requesting-code-review` | 每任务一次 + **GATE-A 整分支一次** | 提示词必写：不接受实施者自证、findings 带可构造场景、锚点用符号名不用行号。GATE-A 的评审员必须**没参与过 A1–A9 任何一条** |
+| `superpowers:verification-before-completion` | 声称「通过/完成」之前 | 复跑全套件 + typecheck + build 并贴**未过滤**输出 |
+| `superpowers:systematic-debugging` | 撞到不在 flake 名单内的失败时 | 名单只有 (B) 与 (F) 两条，见下方遗留事项 2 |
+| `superpowers:finishing-a-development-branch` | GATE-A 之后 | 合并要带评审结论（§15 验收 7 的判据 (1) 靠它定位）；删分支要单独授权 |
+| ~~`superpowers:brainstorming`~~ / ~~`superpowers:writing-plans`~~ | — | **都已做完，不要重跑。** spec 与计划都在 `main` 上 |
 
 ---
 
