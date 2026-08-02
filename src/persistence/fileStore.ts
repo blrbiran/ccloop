@@ -253,48 +253,100 @@ async function readPersistedReconciliationRecord(runDir: string): Promise<Reconc
   }
 }
 
-async function readPersistedSuccessfulTransferArtifacts(
-  runDir: string,
-): Promise<
+// Three outcomes, not two, because "no transfer was ever published" and "the transfer artifacts
+// could not be read" demand opposite handling and the old `| null` could not tell them apart:
+// the first must be waved through (most runs never transfer ownership), the second must fail
+// closed (writing through it can overwrite a winner's record with a loser's downgrade).
+type PersistedTransferArtifactsRead =
   | {
+      kind: "artifacts";
       ownerRecord: OwnerRecord;
       ownerTransferRecord: OwnerTransferRecord;
       reconciliationRecord: ReconciliationRecord | undefined;
     }
-  | null
-> {
+  | { kind: "no_published_transfer" }
+  | { kind: "unreadable"; error: unknown };
+
+// The abandon arm carries the error rather than collapsing to a bare marker: it is the only thing
+// the abandonment has to say about why the write was given up.
+type ReconciliationWriteDecision =
+  | { kind: "write"; record: ReconciliationRecord }
+  | { kind: "abandon"; error: unknown };
+
+async function readPersistedSuccessfulTransferArtifacts(
+  runDir: string,
+): Promise<PersistedTransferArtifactsRead> {
+  let ownerTransferRecord: OwnerTransferRecord;
+
+  // owner-transfer.json is read in its own try so that an ENOENT is attributed to *this* read by
+  // control flow. An ENOENT means "no transfer was ever published" only when it is this file's
+  // read that raised it — a missing owner-record.json raises an indistinguishable ENOENT and means
+  // something entirely different. Attributing by `error.code` plus `error.path` inside one shared
+  // catch reads the same today and breaks silently the day any of these reads wraps its cause in a
+  // custom error class: the wrapper drops `path` while every existing test stays green.
   try {
-    const [ownerRecord, ownerTransferRecord, reconciliationRecord] = await Promise.all([
+    ownerTransferRecord = await readOwnerTransferRecordRaw(runDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      // This return also skips the owner-record read below, and with it that read's
+      // recoverInterruptedOwnerTransfer side effect. Deliberate, and not a behavior loss: when the
+      // three reads shared one Promise.all, the array was evaluated eagerly, so this file's
+      // readFile was issued before recovery reached any rename — the observation was pre-recovery
+      // either way — and a rejecting Promise.all left that recovery dangling and unawaited. An
+      // interrupted transfer's marker and pendings are reclaimed by every path that actually
+      // claims or transfers ownership; a protective read is not one of them and must not write.
+      return { kind: "no_published_transfer" };
+    }
+
+    return { kind: "unreadable", error };
+  }
+
+  // readPersistedReconciliationRecord carries its own `catch { return undefined }` and never
+  // throws, so anything this catch sees came from the owner-record read.
+  try {
+    const [ownerRecord, reconciliationRecord] = await Promise.all([
       readOwnerRecord(runDir),
-      readOwnerTransferRecordRaw(runDir),
       readPersistedReconciliationRecord(runDir),
     ]);
 
-    return { ownerRecord, ownerTransferRecord, reconciliationRecord };
-  } catch {
-    return null;
+    return { kind: "artifacts", ownerRecord, ownerTransferRecord, reconciliationRecord };
+  } catch (error) {
+    return { kind: "unreadable", error };
   }
 }
 
 async function preserveSuccessfulReconciliationIfNeeded(
   runDir: string,
   nextReconciliationRecord: ReconciliationRecord,
-): Promise<ReconciliationRecord> {
+): Promise<ReconciliationWriteDecision> {
   if (nextReconciliationRecord.eligibleForContinuation) {
-    return nextReconciliationRecord;
+    return { kind: "write", record: nextReconciliationRecord };
   }
 
   const persistedArtifacts = await readPersistedSuccessfulTransferArtifacts(runDir);
-  if (persistedArtifacts === null) {
-    return nextReconciliationRecord;
+
+  if (persistedArtifacts.kind === "no_published_transfer") {
+    // Deliberately permissive, and this square must stay: every stale_candidate run reaches here
+    // with a reconciliation record whether or not ownership ever changed hands, so failing closed
+    // on a merely-absent owner-transfer.json would stop most runs from ever writing
+    // reconciliation-record.json. That deletes a product of the normal path; it does not add a
+    // refusal. The residual TOCTOU behind this observation is named and carried onward (§13).
+    return { kind: "write", record: nextReconciliationRecord };
   }
 
-  return preserveSuccessfulReconciliationIfNeededFromArtifacts(
-    persistedArtifacts.ownerRecord,
-    persistedArtifacts.ownerTransferRecord,
-    persistedArtifacts.reconciliationRecord,
-    nextReconciliationRecord,
-  );
+  if (persistedArtifacts.kind === "unreadable") {
+    return { kind: "abandon", error: persistedArtifacts.error };
+  }
+
+  return {
+    kind: "write",
+    record: preserveSuccessfulReconciliationIfNeededFromArtifacts(
+      persistedArtifacts.ownerRecord,
+      persistedArtifacts.ownerTransferRecord,
+      persistedArtifacts.reconciliationRecord,
+      nextReconciliationRecord,
+    ),
+  };
 }
 
 
@@ -305,18 +357,62 @@ export async function writeBoundaryArtifacts(
     boundaryAnalysis: RunBoundaryAnalysis;
     reconciliationRecord?: ReconciliationRecord;
   },
+  // A8 §4.3: the operator channel for a protective abandonment. Optional at every one of the
+  // four layers, so all existing call sites keep working unchanged; absent, the abandonment is
+  // recorded in events.jsonl only and is routed nowhere. The callback's contract is "must not
+  // throw" — see the note at its call site below.
+  options?: { onReconciliationWriteAbandoned?: (detail: string) => void },
 ): Promise<void> {
   await writeJsonFileAtomically(join(runDir, "boundary-analysis.json"), artifacts.boundaryAnalysis);
 
   if (artifacts.reconciliationRecord !== undefined) {
-    const reconciliationRecord = await preserveSuccessfulReconciliationIfNeeded(
+    const decision = await preserveSuccessfulReconciliationIfNeeded(
       runDir,
       artifacts.reconciliationRecord,
     );
 
+    if (decision.kind === "abandon") {
+      // Swallowed by contract, same shape and same reason as appendLeaseEvent in
+      // leaseHeartbeat.ts. Three constraints meet here:
+      //   1. A protective abandonment must not throw. Left unswallowed, an unwritable events.jsonl
+      //      (ENOSPC / EACCES / directory already removed) would propagate out of
+      //      writeBoundaryArtifacts, through persistBoundaryAnalysis, into runLoopFromState's outer
+      //      catch — where isLeaseStopError does not match an I/O error — and end the attempt as
+      //      failed. Refusing to overwrite a winner's record would be upgraded into a failure.
+      //   2. Only the audit half is swallowed, never the whole signal: at-the-moment visibility is
+      //      carried by the operator callback that A8 inserts immediately above this appendEvent.
+      //      Absent that callback, events.jsonl would be the sole outlet and swallowing it here
+      //      would be a genuine silent failure.
+      //   3. The precedent is this repository's own, in the same function (appendEvent) for the
+      //      same reason, so this is conformance rather than a new shape.
+      // The callback deliberately does NOT get this treatment: its body is inside this layer's
+      // control (a single array push, no I/O), so a throw from it is a programming error and must
+      // be loud. appendFile's I/O is nobody's to fix — a throw from it is an environment fact, and
+      // converting it into a failed attempt only hides a small error behind a larger one.
+      // Ordered BEFORE appendEvent on purpose — and stated honestly: with the swallow below in
+      // place, that ordering has NO killing mutation, because swapping the two lines is an
+      // equivalent mutation (a swallowed appendEvent cannot stop the callback that follows it
+      // either). It is defence in depth against a future edit that removes the swallow and
+      // leaves the order alone, at which point an unwritable events.jsonl would take the
+      // operator's line down with it.
+      options?.onReconciliationWriteAbandoned?.(String(decision.error));
+
+      try {
+        await appendEvent(runDir, {
+          type: "reconciliation_write_abandoned",
+          at: new Date().toISOString(),
+          detail: String(decision.error),
+        });
+      } catch {
+        // Swallowed by contract: the refusal to overwrite must stand without the audit line.
+      }
+
+      return;
+    }
+
     await writeJsonFileAtomically(
       join(runDir, "reconciliation-record.json"),
-      reconciliationRecord,
+      decision.record,
     );
   }
 }

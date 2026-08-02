@@ -725,6 +725,9 @@ async function persistBoundaryAnalysis(
   // be adopted; see the adopt call further down.
   heartbeat: LeaseHeartbeat,
   executionRecovery?: ExecutionRecovery,
+  // A8: pure pass-through to writeBoundaryArtifacts, with no catch of its own — a throw from
+  // the callback is a programming error and belongs to whoever supplied it.
+  onReconciliationWriteAbandoned?: (detail: string) => void,
 ): Promise<void> {
   // Task 5 / §5.4 / §12 requirement 6: precedes EVERYTHING, including readOwnerRecord just
   // below (inside the exclusive span), because readOwnerRecord runs
@@ -889,7 +892,10 @@ async function persistBoundaryAnalysis(
   // exactly the "winner writes it twice" this task removes. The loser / no-transfer-attempted
   // cases (nextOwnerEpoch still null) are unchanged: this call site remains their only writer.
   if (nextOwnerEpoch !== null) {
-    await writeBoundaryArtifacts(runDir, { boundaryAnalysis });
+    // Forwarded even though this branch passes no reconciliationRecord and therefore cannot
+    // reach the abandon branch today: the alternative is a call site that silently stops
+    // routing the moment someone gives this branch a record.
+    await writeBoundaryArtifacts(runDir, { boundaryAnalysis }, { onReconciliationWriteAbandoned });
   } else {
     await writeBoundaryArtifacts(runDir, {
       boundaryAnalysis,
@@ -913,7 +919,7 @@ async function persistBoundaryAnalysis(
               eligibleForContinuation,
             }
           : undefined,
-    });
+    }, { onReconciliationWriteAbandoned });
   }
 }
 
@@ -999,6 +1005,13 @@ export function createLeaseLossSignal(): LeaseLossSignal {
   return { lost: null };
 }
 
+// A8 §4.3/§5.4: the seventh parameter is an OBJECT, not a scalar, so later layers (B2, C1) add
+// KEYS here rather than further positional parameters. The parameter count stops growing at
+// seven.
+export type RunLoopFromStateOptions = {
+  onReconciliationWriteAbandoned?: (detail: string) => void;
+};
+
 export async function runLoopFromState(
   contract: LoopContract,
   runDir: string,
@@ -1006,6 +1019,7 @@ export async function runLoopFromState(
   initialLoopState: RunState,
   heartbeat: LeaseHeartbeat = INERT_LEASE_HEARTBEAT,
   leaseLoss: LeaseLossSignal = { lost: null },
+  options?: RunLoopFromStateOptions,
 ): Promise<RunState> {
   let state = initialLoopState;
 
@@ -1155,7 +1169,7 @@ export async function runLoopFromState(
             plan,
             executionRecovery,
           }));
-          await persistBoundaryAnalysis(runDir, state, heartbeat, executionRecovery);
+          await persistBoundaryAnalysis(runDir, state, heartbeat, executionRecovery, options?.onReconciliationWriteAbandoned);
           state = await persistTerminalState(
             runDir,
             state,
@@ -1187,7 +1201,17 @@ export async function runLoopFromState(
       }
 
       if (execution === null) {
-        await persistBoundaryAnalysis(runDir, state, heartbeat);
+        // A8 fix wave 1: forwarded because §9 names both call sites, but recorded honestly — the
+        // callback is PROVABLY unreachable through here today, so no fixture can cover this
+        // argument. This site passes executionRecovery `undefined`, so buildBoundaryEvidence(null)
+        // returns its input-independent empty evidence, evaluateRunBoundary therefore yields
+        // `no_progress` rather than `stale_candidate`, and a non-stale_candidate boundary passes
+        // `reconciliationRecord: undefined` down — which makes writeBoundaryArtifacts skip the
+        // entire abandon block. Measured, not merely reasoned: a probe driving this exact branch
+        // with a corrupt owner-transfer.json on disk observed status `no_progress`, zero callback
+        // invocations, and no reconciliation write. If a future edit ever gives this branch real
+        // execution recovery, the path goes live and needs its own covering test.
+        await persistBoundaryAnalysis(runDir, state, heartbeat, undefined, options?.onReconciliationWriteAbandoned);
         throw new Error("execute phase completed without a result");
       }
 
