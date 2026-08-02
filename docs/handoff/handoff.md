@@ -1,5 +1,91 @@
-# ccloop Handoff — **L3 spec 已过两波修复 + 六个独立评审员；第三波修复的清单已就绪、待做，之后才写实施计划**
+# ccloop Handoff — **L3 spec 已定稿、计划已写、组 A 的 9 个任务做完 4 个；停在 A4/A5 边界**
 
+> ⚠️ **本文件从「## 当前状态」往下的所有小节，都停在 2026-08-01 那一天的视角**，那时「第三波修复」还没做。**它们没有被删除，因为其中的教训仍然有效；但凡是描述「现在该做什么」「现在在哪一笔」的句子，一律以下面这一节为准。** 就地注解、不改原件，与本仓库对 `run-registry-design.md` 的 `*Amended (x)*` 与 `9e554ce` 提交信息勘误同一立场。
+
+---
+
+## 当前状态（2026-08-02）—— 取代下方一切关于「第三波修复待做」的描述
+
+### 一句话
+
+**L3 的 spec 与实施计划都已完成并推上 `main`；代码工作在一支未合并的分支上，组 A（债 1）的 9 个任务做完了 4 个，停在 A4/A5 边界等交接。**
+
+### 先跑这些，以输出为准（不要相信本文任何数字）
+
+```bash
+cd /Users/biran/code/skills/loop/ccloop
+git worktree list          # 应有两项：主仓库(main) + .claude/worktrees/l3-debt1-group-a(feat/…)
+git log --oneline -1 main
+git log --oneline -1 origin/main
+git rev-list --count origin/main..main            # 交接时为 0
+
+cd .claude/worktrees/l3-debt1-group-a
+git log --oneline --reverse $(git merge-base main HEAD)..HEAD   # 交接时 6 笔
+ECC_GATEGUARD=off DISABLE_OMC=1 npm test -- --run  # 交接时 29 files / 460 tests, exit 0
+npm run typecheck && npm run build                 # 均 exit 0
+```
+
+**460 会随任何新增测试腐坏**（基线 446 → A1 449 → A2 453 → A3 457/458 → A4 460）。以你自己那次执行的输出为准。
+
+### 分支与提交
+
+`main` = `origin/main` = 计划那一笔（`docs(plan): L3 implementation plan — sixteen tasks behind three gates`），**已推，无待推**。
+分支 `feat/l3-debt1-transactional-continuation` 从它分出，6 笔，**未合并、未推**：
+
+| 提交主题 | 任务 |
+|---|---|
+| marker 与两份既有 pending 改原子写 | A1 |
+| reconciliation 成为 owner-transfer 事务的第三个文件 | A2 |
+| finalize 改为 marker 驱动，marker 不可解析 / pending 缺失时 fail-closed | A3 |
+| 拒绝 `finalizeOrder` 非完整全排列的 v2 marker | A3 修复轮 |
+| 草稿组装点、`newOwnerEpoch` 由事务内部填、赢家不再二次写 | A4 |
+| 让 `boundary-analysis.json` 缺席成为测试 1 的决定性断言 | A4 修复轮 |
+
+### 下一个动作
+
+**任务 A5**（`docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md` 里的 `### Task A5`），然后 A6 → A7 → A8 → A9 → GATE-A。
+**A5–A9 的任务简报已经预先抽好**，在 `.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-A5-brief.md` … `task-A9-brief.md`，每份 = 计划的 Global Constraints 逐字 + 该任务全文逐字。直接拿去派单，不要让实施者读整个计划文件。
+
+**执行方式**：`superpowers:subagent-driven-development`，每任务「一个实施者 → 一个独立评审员 → 有 Critical/Important 则进修复环（最多 5 轮，1–3 轮 resume 原实施者）→ scoped 再评审 → ledger 记 complete」。**ledger 在 `.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/progress.md`，它是压缩后唯一可信的进度来源，先读它再决定从哪继续。**
+
+### ⚠️ 两个会静默出错的环境陷阱（都是实测撞出来的）
+
+1. **`EnterWorktree` 默认 `baseRef: fresh`，从 `origin/<默认分支>` 开分支，不是从你的 HEAD。** 本次若照默认走，worktree 会建在三波 spec 修复之前、且没有计划文件，**而且不会报错**——实施者会照着过期三波的 spec 干活。本次的解法：先 `git worktree add <path> -b <branch> HEAD` 显式指定基点，再用 `EnterWorktree` 的 `path` 参数接管（该工具明确支持这个流程），既拿到正确基点又不留 harness 看不见的 phantom state。
+2. **全局 `rtk` shell hook 会自动过滤 / 摘要 vitest 输出**，与本仓库「验证跑绝不过滤输出」的铁律直接冲突。绕过方式：`rtk proxy "<命令>"`（注意它不接受引号串里以环境变量赋值开头，要先 `export`）。**A2 与 A3 各被抓到一次证据形式缺陷**（一次是块在 `Tests` 行后截断、一次是块里含字面 `...` 省掉整段 29 文件清单而报告还自证「没有任何截断」），**两次都是评审员抓的，不是实施者自己发现的**。派单时必须写明：贴出的每个块要完整、每条命令回显退出码、写自证句之前自己回头扫一遍有没有 `...`。
+
+### 三次人裁（本会话产生，不要重开）
+
+1. **三份 pending 一并改原子写**，与 marker 的修法逐字同形（spec §4.0.3a）。
+2. **`reconciliation_write_abandoned` 事件必须路由到 sweep 的 stderr**，不接受「落盘但不路由」。推翻了第四波按 Rule 2 判的最小解（spec §4.3 / §8，第五波落地）。
+3. **L3 的事务化取代 L1b 的 `Amended 2026-07-28 (e)`**（`docs/superpowers/specs/2026-07-27-owner-transfer-contention-design.md:113`）。该修正明文写着「若仍然想要赢家 reconciliation 视图，把它交给一个仍持有 run 的进程是 **L5 的问题**」，而 L3 的事务化让它在 L3 就发生了。人裁：取代，不是违反——理由是 reconciliation 现在由进程合法通过的**同一次 CAS** 发布，与 (e) 自己承认「真实且已提交」的 `owner-transfer.json` 同权威，不再是「失去 run 的进程往里写」。
+   ⚠️ **这条留了一个未做的尾巴**：`2026-07-27-…md:113` 现在陈述了一件被生产代码推翻的事。本仓库惯例是就地加 `*Amended (f)*` 注记（债 4 的先例明写「L3 若再证伪什么，接着写、就地注解」），**但人批准的范围只覆盖「代码注释 + ledger」，没有包含改 spec**，所以刻意未做。**由人决定何时做。**
+
+### 计划阶段的三次裁定（写在计划里，优先于 spec 的对应措辞）
+
+ENOENT 归因选「把 `readOwnerTransferRecordRaw` 移出 `Promise.all` 单独 try」（不选 `error.path`，因为包一层自定义错误就会静默丢掉该字段**而测试全绿**）；abandon 上传选判别式联合 `ReconciliationWriteDecision`（`| null` 会丢掉 error，不达标）；**推翻 spec §4.6「`preserveSuccessfulReconciliationIfNeeded` 代码零改动」那句话**（它在处置一落地后必然为假）。
+
+### 组 A 已确立、后续任务不要破坏的东西
+
+- `cleanupOwnerTransferStagingWithoutMarker` = **10 个逐个具名的 `safeUnlink`**，六处联动
+- `finalizePendingOwnerTransfer` **严格只按 `marker.finalizeOrder` 分流**（文件集合与顺序），**不按 `version` 硬编码** —— 测试 5（置换顺序）是 §4.4 整个方案的支点，退回硬编码会让它红
+- `isValidFinalizeOrder` 在**任何读/写/删之前**校验完整全排列（顺序自由、无重复、无未知名）
+- 四个并列**不继承**的具名错误类
+- `writeJsonFileViaFixedTemp` 刻意不与 `writeJsonFileAtomically` / `buildAtomicTempPath` 合并（后者用进程戳生成一次性名、不可从目标名推回，而 staging 回收需要可推回的名字）
+- 守卫：`grep -cF 'return { ok: false' src/controller/resumeLoop.ts` 必须仍为 **8**；`grep -rnF 'currentOwnerEpoch + 1' src/` 必须单点命中；`src/registry/` 零改动
+
+### 19 条待 GATE-A 分诊的 Minor
+
+全部逐条写在 ledger 里，**不要重新发现它们**。GATE-A 的整分支评审要拿那份清单做分诊输入，判哪些必须在合并前修。
+
+### 本会话最值钱的三条教训
+
+- **spec 层的评审有物理下限，剩下的只能靠实施结清。** 停止 spec 评审前，剩余风险已经全是「这条测试到底会不会红」——而测试 6e 的变异一在当时的代码上**不可表达**（`finalizeOrder` 只有两项，三项版本正是本层要建的），`src/sweep/` 整个目录不存在。再派评审只会继续得到「我分辨不出」。**第六波把判据从「套件红」改成「具名那条红 + `-t` 单跑 + 注入前后两份原始输出 + 绿色基线」，就是把这些风险推到实施阶段被强制结清的机制。**
+- **「变异必须红」≠「这条测试必须红」，这个区别值一整轮。** 第六波实测：为 §4.3 排序改判新加的变异**今天就杀掉 6 条与它无关的既有测试**，其中一条恰好就是它要钉的那句话。于是「写一条断言写空的测试 → 注入 → 套件红 → 贴输出 → 宣布达标」这条路走得通。**套件红不是证据。**
+- **实施会撞出 spec 层五轮评审都撞不出的东西。** L1b 与 L3 的那条归属冲突（人裁 3）不是任何评审发现的，是 A2 的事务化真的落到代码上、然后撞上一条既有测试的断言那一刻才显形的。同样，A4 那条「最承重的测试其头号断言被自己的注入触发条件蕴含」也只有在代码存在时才看得见。
+
+---
+
+> 以下为 2026-08-01 的原文，**状态描述已过期，教训仍然有效**。
 > 更新于 2026-08-01。接手前先用 Git / 文件系统核对每一条状态声明再动手。
 > **本文不写死 commit hash、提交笔数或 HEAD**：提交本文即会改变 HEAD、push 会改变待推笔数。历史 commit hash（如 `07180a7`、各修复波与那笔 merge 的 hash）是**已固定的过去锚点**，可以引用；**当前状态一律用命令自查**，见「如何定位当前状态」。
 
