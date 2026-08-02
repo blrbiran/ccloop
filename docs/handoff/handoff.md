@@ -1,4 +1,4 @@
-# ccloop Handoff — **L3 spec 与计划已定稿；组 A 九个任务全部完成，停在 GATE-A 之前**
+# ccloop Handoff — **L3 spec 与计划已定稿；组 A 九个任务全部完成并已合入 `main`（那笔不是 GATE-A）；GATE-A 未做**
 
 > ⚠️ **本文件从下方「以下为 2026-08-01 的原文」那条分隔线往下的所有小节，都停在 2026-08-01 那一天的视角。** 它们没有被删除，因为其中的教训仍然有效；但凡是描述「现在该做什么」「现在在哪一笔」的句子，**一律以本节为准**。就地注解、不改原件，与本仓库对 `run-registry-design.md` 的 `*Amended (x)*` 与 `9e554ce` 提交信息勘误同一立场。
 
@@ -8,9 +8,9 @@
 
 1. **L3 的 spec 与实施计划都已定稿。不要重新 brainstorm、不要重写 spec、不要重写计划。**
 2. **先读 ledger**：`.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/progress.md`。**它是唯一可信的进度来源，任何情况下都先读它再决定从哪继续。**
-3. **组 A 的 A1–A9 九个任务全部实施完成并各自通过独立评审**，全部落在分支 `feat/l3-debt1-transactional-continuation`（worktree `.claude/worktrees/l3-debt1-group-a`）。**`main` 本轮一个字节都没动。**
-4. **唯一未做的是 GATE-A**：整分支评审 + 合并。评审员必须**没参与过 A1–A9 任何一条**、用最强模型，并拿 ledger 里那份 deferred-minor 清单做分诊输入。
-5. **但紧接着的一步不是 GATE-A**，是 A9 改名修复轮欠着的那次 scoped 再评审——见「下一个动作」。
+3. **组 A 的 A1–A9 九个任务全部实施完成、各自通过独立评审，并已用 `--no-ff` 合入 `main`。** 分支 `feat/l3-debt1-transactional-continuation` 与 worktree `.claude/worktrees/l3-debt1-group-a` **都保留着**，GATE-A 的整分支 diff 还要用它们。
+4. **⚠️ 那笔合并不是 GATE-A。** 提交信息里明写 `*** THIS IS NOT GATE-A. ***` 且**刻意不带任何评审结论**——计划 §15 验收 7 正是用「合并信息里有没有评审结论」来定位任务组的门。真正的 GATE-A 合并要**另写一笔并带上结论**。目前 `main` 上有**两笔**指向同一分支的合并（`787789e` 组 A 前四任务、`94d7c0a` 后五任务），**两笔都明写不是门**。
+5. **两道工序仍然欠着**：(a) A9 改名修复轮的 scoped 再评审没跑；(b) GATE-A 整分支评审没做，评审员必须**没参与过 A1–A9 任何一条**、用最强模型，拿 ledger 里那份 deferred-minor 清单做分诊输入。**先做 (a) 再做 (b)。**
 6. **执行方式**：`superpowers:subagent-driven-development`，每任务「实施者 → 独立评审员 → 有 Critical/Important 则进修复环 → scoped 再评审 → ledger 记 complete」。**不接受实施者自证。**
 7. **三个会静默出错的陷阱**（第三个是本轮实测撞出来的新的）：`EnterWorktree` 默认从 `origin/<默认分支>` 开分支；全局 `rtk` hook 会过滤 vitest **与 `git diff`** 的输出；`-t 'describe > it'` 匹配不到任何测试却 exit 0。详见下方专节。
 8. **状态一律用命令自查。** 本文不写死 HEAD、提交笔数与测试数——提交本文这个动作本身就会改变前两者。
@@ -21,18 +21,24 @@
 
 ### 一句话
 
-**组 A（债 1）的九个任务全部实施并各自通过独立评审，停在 GATE-A 之前；产出全在分支上，`main` 未动，未 push、未合并。**
+**组 A（债 1）的九个任务全部实施并各自通过独立评审，已合入 `main`（那笔明写不是 GATE-A、不带评审结论）；GATE-A 整分支评审与 A9 修复轮的 scoped 再评审都还没做。**
+
+> ⚠️ **关于 push：不要假设「本地提交就只是本地的」。** 本轮实测：合并落地约四分钟后，`refs/remotes/origin/main` 出现了一条 `update by push`，`git ls-remote` 确认远端已有该合并——**而这个 push 不是本会话执行的**（本会话没有跑过任何 `git push`）。合理推断是这台机器上的某个自动化或人手动推的。**接手时先用 `git ls-remote origin refs/heads/main` 与 `git reflog show refs/remotes/origin/main --date=iso` 自查真实推送状态，不要照抄任何「未 push」的描述**，也不要据此认为本地提交是可以随手回滚的私有状态。
 
 ### 先跑这些，以输出为准（不要相信本文任何数字）
 
 ```bash
-cd /Users/biran/code/skills/loop/ccloop/.claude/worktrees/l3-debt1-group-a
+cd /Users/biran/code/skills/loop/ccloop      # 组 A 已合入，主仓库就够用了
 
-git log --oneline main..HEAD          # 本轮分支上的全部提交，从新到旧
-git log --oneline -1 main             # main 是否仍停在组 A 合并之后那笔 handoff
-git worktree list                     # 主仓库 + .claude/worktrees/l3-debt1-group-a
-git rev-list --count origin/main..main   # main 上的待推笔数
-git status --short                    # 工作区应当只剩 ledger 的未提交改动或干净
+git log --oneline -8                  # 只用来看形势，不要假设 HEAD 是哪一笔
+git log --merges --format='%h %cd %s' --date=iso --reverse   # 两笔组 A 合并都明写不是门
+git worktree list                     # 主仓库 + .claude/worktrees/l3-debt1-group-a（都还在）
+git ls-remote origin refs/heads/main  # 远端真实状态；不要相信「未 push」的旧描述
+git status --short                    # 两个工作区都应当干净
+
+# GATE-A 的整分支范围（hash 锚点已固定，可以引用）：
+#   ba8f8a0 = 计划提交，也是分支的基点；分支尖端含 A1–A9 全部九个任务
+git diff --stat ba8f8a0..feat/l3-debt1-transactional-continuation
 
 export ECC_GATEGUARD=off DISABLE_OMC=1
 rtk proxy "npm test -- --run"         # 见下方 rtk 陷阱：不用 rtk proxy 会被静默过滤
@@ -42,12 +48,12 @@ npm run build;     echo "build_exit=$?"
 # 三条守卫，任何任务结束时都必须成立
 grep -cF 'return { ok: false' src/controller/resumeLoop.ts   # 必须是 8
 grep -rnF 'currentOwnerEpoch + 1' src/                        # 必须单点命中
-git diff --name-only main..HEAD -- src/registry/              # 必须为空
+git diff --name-only ba8f8a0..feat/l3-debt1-transactional-continuation -- src/registry/   # 必须为空
 ```
 
 **测试数会随任何新增测试腐坏。** 本会话轨迹：446（计划期基线）→ 460（组 A 前四任务合入 main 后）→ 463（A5）→ 473（A6）→ 477（A7）→ 481（A8）→ 482（A9）。**以你自己那次执行的输出为准，不要引用这里任何一个数。**
 
-### 组 A 九个任务的落点（按任务，不写 hash——用 `git log --oneline main..HEAD` 自查）
+### 组 A 九个任务的落点（按任务，不写 hash——用 `git log --oneline ba8f8a0..feat/l3-debt1-transactional-continuation` 自查）
 
 | 提交主题（可用它在 `git log` 里定位） | 任务 |
 |---|---|
@@ -73,11 +79,15 @@ git diff --name-only main..HEAD -- src/registry/              # 必须为空
 
 ### 下一个动作
 
+**0. 先认清：合并已经发生，但门还没开。** A1–A9 全部在 `main` 上，两笔合并都明写不是 GATE-A、都不带评审结论。所以「代码已在 main」**不等于**「已通过组 A 的把关」。
+
 **1. 先补 A9 改名修复轮欠着的 scoped 再评审。** A9 的实施与首轮评审已完成（评审结论 **Approved，零 Critical**），随后人裁要求改测试名，改名提交已落地，**但那一轮的 scoped 再评审还没跑**。要验的是：改名后两次变异重跑的证据是否齐全且红在新名字上；测试注释里那处「(a) 钉的是保护判定被求值」被改成「钉的是其前置条件」后表述是否准确；计划里新加的那条 `### Task A9` 勘误是否只动了 A9 一节、原文是否保留。
 
-**2. 然后才是 GATE-A。** 整分支 review package 用 `scripts/review-package <plan> $(git merge-base main HEAD) HEAD`，派一个**没参与过 A1–A9 任何一条**的评审员、用最强模型，并把 ledger 里那份 deferred-minor 清单作为分诊输入。之后至多一轮修复波 + 一次 scoped 再评审，残余按 breaker 规则裁定或上报。
+**2. 然后才是 GATE-A。** 整分支 review package 用 `scripts/review-package <plan> ba8f8a0 feat/l3-debt1-transactional-continuation`——**不要再用 `git merge-base main HEAD`**，分支已合入，那条命令现在算不出组 A 的范围了。派一个**没参与过 A1–A9 任何一条**的评审员、用最强模型，并把 ledger 里那份 deferred-minor 清单作为分诊输入。之后至多一轮修复波 + 一次 scoped 再评审，残余按 breaker 规则裁定或上报。
 
-**3. 停在 GATE-A，不进组 B。** **合并与 push 都只在人明确下指令时执行**；GATE-A 的合并要**另写一笔并带上评审结论**（计划 §15 验收 7 用「合并提交信息里带评审结论」来定位任务组的门，组 A 那笔旧合并刻意不带、且明写「THIS IS NOT GATE-A」）。
+**3. GATE-A 通过后，门本身要另写一笔带评审结论的提交。** 代码已经在 `main` 上了，所以那一笔不再是「合并」——可以是一笔记录评审结论的 `docs(sdd)` 提交，或（若 GATE-A 产生修复波）是修复波的合并。**关键是计划 §15 验收 7 要能靠「带评审结论」定位到它**，而现有两笔合并都刻意不带。
+
+**4. 停在 GATE-A，不进组 B。** 组 B 的前置硬门是 GATE-A 已完成；组 C 的 C1 第一步就要能填出组 A 的门 hash，填不出说明顺序被违反。**删分支、删 worktree 都要单独授权**（GATE-A 的整分支 diff 依赖它们）。
 
 ### ⚠️ 三个会静默出错的环境陷阱（都是实测撞出来的）
 
