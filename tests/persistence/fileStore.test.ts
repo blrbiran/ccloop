@@ -2171,16 +2171,19 @@ describe("fileStore", () => {
   //     that already finalized deletes the pendings out from under a second recovery.
   //
   // Two boundaries this matrix pins that are easy to get backwards:
-  //   - Gaps 14..17 are past the commit point. All three files are published there, so refusing
-  //     resume would be the bug, not the guard; they assert `resume=accepted` plus the exact
-  //     residue left behind. The name's "every crash gap" refuses covers gaps 1..13.
+  //   - Gaps 1..13 are pre-commit and refuse. Gaps 14..17 are past the commit point: all three
+  //     files are published there and every eligibility criterion passes, so refusing would be
+  //     the bug, not the guard. They carry the name's "commits idempotently past it" clause —
+  //     gap 14 still has the marker, so recovery republishes identical bytes and then reclaims
+  //     the marker and all three pendings; gaps 15..17 have no marker, so recovery is the
+  //     zero-write read (cleanup is gated on lockHeld) and the residue must survive byte-exact.
   //   - resumeLoop reads the owner record THROUGH recovery (readOwnerRecord) and the other two
   //     RAW, all inside one Promise.all. So a mid-transaction gap is seen as "post-recovery owner
   //     record + pre-recovery transfer/reconciliation". That interleaving is exactly what the two
   //     epoch-equality criteria in evaluateResumeEligibility exist to refuse, and it is why the
   //     double-transfer fixture — not the first-transfer one — is what makes them load-bearing.
   it(
-    "refuses resume at every crash gap of the three-file transaction and finishes recovery wherever the marker survives",
+    "refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives",
     async () => {
       // Soft, so one run reports BOTH fixtures' verdicts instead of aborting at the first
       // divergence: which fixture a mutation kills is the whole point of §10 test 6b.
@@ -3005,12 +3008,26 @@ async function stageDoubleOwnerTransferCrashedAt(gap: number): Promise<string> {
   return runDir;
 }
 
+// "Not published yet" and "published but torn" are different facts and must never render as the
+// same string. Collapsing them is what makes this whole matrix blind to the single regression
+// class the three-file transaction exists to prevent: swap a publish `rename` for a `writeFile`
+// and a crash mid-write leaves a half-written owner-transfer.json, which a single flat catch
+// would report as `T=absent` — exactly what gaps 5..7 of the first-transfer fixture already
+// expect, so all 34 lines would stay green through the regression. No gap in this matrix
+// produces `torn`; if one ever does, a publish stopped being atomic.
 async function publishedEpoch(runDir: string, fileName: string, key: string): Promise<string> {
+  let raw: string;
+
   try {
-    const parsed = JSON.parse(await readFile(join(runDir, fileName), "utf8")) as Record<string, unknown>;
-    return `e${String(parsed[key])}`;
+    raw = await readFile(join(runDir, fileName), "utf8");
   } catch {
     return "absent";
+  }
+
+  try {
+    return `e${String((JSON.parse(raw) as Record<string, unknown>)[key])}`;
+  } catch {
+    return "torn";
   }
 }
 

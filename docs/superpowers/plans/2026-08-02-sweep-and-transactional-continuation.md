@@ -591,6 +591,8 @@ git commit -m "feat(runLoop): assemble the reconciliation draft outside the epoc
 - **测试 6b — 两条 epoch 相等判定承重**：变异掉 `evaluateResumeEligibility` 的任一条 epoch 相等判定 → **测试 2 必须红**。
   - **判据 A**（`reconciliation.newOwnerEpoch !== ownerTransfer.newOwnerEpoch`）：**只有双转移 fixture 杀得掉**。单转移时，reconciliation 已发布而 transfer 未发布的那些间隙里 `owner-transfer.json` 尚不存在，读它直接抛、`resumeLoop` 在进门前就拒绝，**判据 A 根本没被求值，变异存活**。双转移下盘上是「reconciliation.newOwnerEpoch = N+1、ownerTransfer.newOwnerEpoch = N+2、ownerRecord.currentOwnerEpoch = N+2」，判据 B 通过、**只有判据 A 拒绝**——这才是唯一杀得掉它的形状。
   - **判据 B**（`ownerRecord.currentOwnerEpoch !== ownerTransfer.newOwnerEpoch`）：**「整条删掉」这个变异**任何单转移场景都能杀。**⚠️ 但 `!==` → `<` 这个变异两组 fixture 都杀不掉**（首发是 `N < N+1`，变异体照样拒绝；双转移是 `N+2 === N+2`，该判据本来就不拒绝）——那一条属 A6 的第三组 fixture。
+
+    **Amended 2026-08-02 (a)：「任何单转移场景都能杀」这个前提是假的，A5 实测证伪。** 这纠正的是*本文档*的缺陷，不是实现的缺陷——实现是对的，一直是对的。实测：判据 B 在首发转移 fixture 的 17 个崩溃间隙里**一次都没有被求值**，「整条删掉」这个变异在首发 fixture 下**存活**（原始输出见 `task-A5-report.md` 的第 3 次变异实验）。结构原因与本节给判据 A 的论证是同一条：`src/controller/resumeLoop.ts` 的 `Promise.all` 里 `readOwnerRecord` 是**经恢复**的读，`readOwnerTransferRecord` / `readReconciliationRecord` 是**未经恢复**的裸读。首发转移下 `owner-transfer.json` 要么尚不存在（读它直接抛，`resumeLoop` 在进闸门前就拒绝），要么已经等于恢复后的 owner epoch，所以 `ownerRecord.currentOwnerEpoch !== ownerTransfer.newOwnerEpoch` 永远不成立。唯一本可能咬到的形状——间隙 8–10，`owner-transfer.json` 已发布而 `owner-record.json` 尚未发布——被 `reconciliation-record.json` 仍然缺失遮住了：`readReconciliationRecord` 先抛，闸门根本没进。**结论：在磁盘层面，判据 B 与判据 A 一样，只由双转移 fixture 承重**（双转移的间隙 5–7：判据 A 通过、只有判据 B 拒绝）。首发 fixture 承重的是另一件事——证明首发转移下闸门到不了，这正是判据 A 变异存活的原因。本条后半句关于 `!==` → `<` 的判断不受影响，仍然成立。
   - **两组 fixture 各跑一次变异**，四份原始输出。
 
 **陷阱清单：**
@@ -612,8 +614,12 @@ git commit -m "feat(runLoop): assemble the reconciliation draft outside the epoc
   1. 判据 A 整条删掉 × 首发转移 fixture → 预期**不红**（记录这个事实，它就是「判据 A 只有双转移杀得掉」的证据）
   2. 判据 A 整条删掉 × 双转移 fixture → **测试 2 必红**
   3. 判据 B 整条删掉 × 首发转移 fixture → **测试 2 必红**
+
+     **Amended 2026-08-02 (a)：实测不红——变异存活，这是预期结果而不是缺陷。** 与上方判据 B 那条同一处修订，理由见那里（首发转移下判据 B 零次求值）。这一条因此与第 1 条同类：把原始输出照样贴出来，作为「fixture 分工」与本修订的证据，而不是击杀。**杀掉判据 B 的是第 4 条（双转移间隙 5–7）。**
   4. 判据 B 整条删掉 × 双转移 fixture → 记录结果
   **第 2、3 两条走完整三步判据（注入前单跑绿 + 注入后单跑红 + 两份原始输出）；第 1、4 两条把原始输出照样贴出来，作为「fixture 分工」的证据。**
+
+  **Amended 2026-08-02 (a) 对本行的连带更正：** 走完整三步击杀判据的是**第 2、4** 两条；第 **1、3** 两条是非击杀，按「贴原始输出」处理。
 - [ ] **Step 6: 全套件 + typecheck + build，未过滤贴出。**
 - [ ] **Step 7: 提交。**
 
