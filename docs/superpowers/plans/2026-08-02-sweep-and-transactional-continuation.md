@@ -84,6 +84,31 @@
 
    **补上本文档一直缺的交叉引用：** 支撑这句话的那份逐条核对写在 `.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-errata-report.md` 的「Erratum 1」§2 里，本文档此前没有任何指针指过去。那份核对的第 66 行带着同一处过强说法（原文：「all `-t` values are bare `it` names」），按同一理由读，不要再从那里继承这个断言。
 
+   **Amended 2026-08-02 (g)：(f) 的「共 45 处命中」本身就是一次未经核实的完备性断言，长在「专门用来堵住未经核实的完备性断言」的注记里。** (f) 贴的那条命令只匹配**单引号**的 `-t` 值，因此漏掉 `task-A5-report.md` 的 `-t "$TNAME"` 形式；(f) 用的又是 `grep -c` 语义之外的直觉计数，而 `grep -c` 数的是**行**、不是**出现次数**。改用对引号形式不敏感（单引号／双引号／裸变量三种都收）的扫描，并显式按出现次数计：
+
+   ```
+   $ for f in 1 2 3 4 5; do
+       P=".superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-A${f}-report.md"
+       SQ=$(grep -oE -e "-t '[^']*'" "$P" | wc -l | tr -d ' ')
+       ANY=$(grep -oE -e "-t +(\"[^\"]*\"|'[^']*'|[^ \"']+)" "$P" | wc -l | tr -d ' ')
+       echo "A${f}: single-quoted-only=${SQ}  quoting-agnostic=${ANY}"
+     done
+   A1: single-quoted-only=3  quoting-agnostic=3
+   A2: single-quoted-only=13  quoting-agnostic=13
+   A3: single-quoted-only=16  quoting-agnostic=16
+   A4: single-quoted-only=11  quoting-agnostic=11
+   A5: single-quoted-only=2  quoting-agnostic=3
+   ```
+
+   **正确的数字是 46，不是 45：A1 3 / A2 13 / A3 16 / A4 11 / A5 3。** 多出来的唯一一处是 `task-A5-report.md:824`，形式为 `-t "$TNAME"`——这是一条**命令模板**（上一行写着「`$TNAME` = 上面那个新全名」），不是贴出的实跑输出；它与 (f) 已核过的 `task-A5-report.md:1482` 用的是同一个变量，而本文档里 `TNAME` 的唯一具体绑定在第 1481 行的 `export TNAME='refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives'`，与 `tests/persistence/fileStore.test.ts:2628` 的 `it(` 名逐字相同（本轮已重新对过，未从 (f) 继承）：
+
+   ```
+   $ rtk proxy "grep -n 'refuses resume at every pre-commit crash gap' tests/persistence/fileStore.test.ts"
+   2628:    "refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives",
+   ```
+
+   **因此 (f) 的实质结论不变**：唯二不是裸 `it` 名的仍然只有 A4 的第 424、830 行（前缀），第 46 处展开后是裸全名。被更正的只有两样：**数字 45→46**，以及**方法**——只匹配单引号的扫描不足以支撑「共 N 处、逐条看过」这种完备性说法，重数时必须对引号形式不敏感，且按出现次数而非行数计。
+
 3. **贴两次原始输出**：注入前该条单跑必须**绿**、注入后必须**红**。只贴注入后那一次不算。
 
 **额外要求：变异实验必须跑在一个基线全绿的工作副本上。** 第六波实测过一次教训：评审员在 scratchpad 副本里跑变异，副本不是 git 仓库，`parseArgs > returns 0 for the scripted example run` 因此失败，被误记成击杀。**基线绿之前不许下任何击杀结论。** 若在副本里做，先 `git init` + 一次首提交。
