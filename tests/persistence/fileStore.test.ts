@@ -2101,6 +2101,223 @@ describe("fileStore", () => {
     expect(reconciliation.takeoverPermission.allowed).toBe(true);
   });
 
+  // Test 6f (§10). The three cases below pin the read-side narrowing in
+  // preserveSuccessfulReconciliationIfNeeded: a read failure it cannot attribute to "no transfer
+  // was ever published" must abandon the reconciliation write rather than write through it.
+  //
+  // They are three separate `it`s on purpose. Merged into one, an implementation that waves every
+  // ENOENT through would satisfy half the assertions while the other half sat behind the same
+  // `expect` — exactly the shape that let the old bare `catch { return null }` look correct.
+  //
+  // Scope: these pin the DECISION to abandon, not its visibility. The "events.jsonl gained a line"
+  // assertions below are artifact assertions — an implementation that writes the event but never
+  // routes it to an operator passes them. Visibility is carried by 12d.
+  it("still writes the reconciliation record when owner-transfer.json is simply absent", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    // The precondition this case exists for: a run that never transferred ownership. Every
+    // stale_candidate run reaches writeBoundaryArtifacts with a reconciliation record regardless
+    // of whether a transfer ever happened, so the missing owner-transfer.json here is the normal
+    // case, not a fault. Narrowing that fails closed on it would stop most runs from ever writing
+    // reconciliation-record.json at all — a deleted product, not an added refusal.
+    await writeOwnerRecord(runDir, {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-23T00:00:01.000Z",
+      ownerStatus: "current",
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    });
+    await expect(readFile(join(runDir, "owner-transfer.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const loserReconciliation: ReconciliationRecord = {
+      staleSuspicionBasis: ["continuity evidence missing"],
+      staleConfirmed: true,
+      ownershipVerdict: "OWNER_UNDECIDABLE",
+      lastTrustedBoundary: "execute",
+      conflictingEvidence: [],
+      takeoverPermission: {
+        allowed: false,
+        reason: "deny-by-default until strict owner-loss and transfer conditions are fully met",
+      },
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: null,
+      eligibleForContinuation: false,
+    };
+
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis: {
+        status: "stale_candidate",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: "continuity evidence missing",
+      },
+      reconciliationRecord: loserReconciliation,
+    });
+
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as ReconciliationRecord;
+
+    expect(reconciliation).toEqual(loserReconciliation);
+  });
+
+  it("abandons the reconciliation write when owner-record.json is missing, appending reconciliation_write_abandoned", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    // owner-transfer.json is readable, so the ENOENT that follows cannot be attributed to "no
+    // transfer was ever published" — it comes from a different read. This is the only one of the
+    // three cases that kills an implementation which waves every ENOENT through.
+    await writeOwnerTransferRecord(runDir, {
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      priorProcessInstanceId: "pid:12345",
+      newProcessInstanceId: "pid:winner",
+      transferredAt: "2026-07-23T00:00:01.000Z",
+      reason: "owner lost after reconciliation",
+      eligibleForContinuation: true,
+    });
+    await expect(readFile(join(runDir, "owner-record.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    // Fixture precondition for the "exactly one line" assertion below: nothing has written to
+    // events.jsonl yet, so the count is a property of this call and not of the environment.
+    await expect(readFile(join(runDir, "events.jsonl"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis: {
+        status: "stale_candidate",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: "continuity evidence missing",
+      },
+      reconciliationRecord: {
+        staleSuspicionBasis: ["continuity evidence missing"],
+        staleConfirmed: true,
+        ownershipVerdict: "OWNER_UNDECIDABLE",
+        lastTrustedBoundary: "execute",
+        conflictingEvidence: [],
+        takeoverPermission: {
+          allowed: false,
+          reason: "deny-by-default until strict owner-loss and transfer conditions are fully met",
+        },
+        priorOwnerEpoch: 2,
+        newOwnerEpoch: null,
+        eligibleForContinuation: false,
+      },
+    });
+
+    // boundary-analysis.json is written before the protection runs, so it is still there.
+    const analysis = JSON.parse(
+      await readFile(join(runDir, "boundary-analysis.json"), "utf8"),
+    ) as { status: string };
+    expect(analysis.status).toBe("stale_candidate");
+
+    await expect(readFile(join(runDir, "reconciliation-record.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line) as { type: string; detail: string });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe("reconciliation_write_abandoned");
+  });
+
+  it("abandons the reconciliation write when owner-record.json is not valid JSON, appending reconciliation_write_abandoned", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    // All three files exist; owner-record.json simply does not parse. The failure is not an ENOENT
+    // at all, so this is the case the old bare `catch { return null }` — which waved through every
+    // read failure, not just the missing-file one — cannot survive.
+    const persistedReconciliation: ReconciliationRecord = {
+      staleSuspicionBasis: ["owner transfer already published"],
+      staleConfirmed: true,
+      ownershipVerdict: "OWNER_LOST",
+      lastTrustedBoundary: "execute",
+      conflictingEvidence: [],
+      takeoverPermission: {
+        allowed: true,
+        reason: "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
+      },
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      eligibleForContinuation: true,
+    };
+
+    await writeFile(join(runDir, "owner-record.json"), "{ not json");
+    await writeOwnerTransferRecord(runDir, {
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      priorProcessInstanceId: "pid:12345",
+      newProcessInstanceId: "pid:winner",
+      transferredAt: "2026-07-23T00:00:01.000Z",
+      reason: "owner lost after reconciliation",
+      eligibleForContinuation: true,
+    });
+    await writeFile(
+      join(runDir, "reconciliation-record.json"),
+      JSON.stringify(persistedReconciliation, null, 2),
+    );
+    // Fixture precondition for the "exactly one line" assertion below.
+    await expect(readFile(join(runDir, "events.jsonl"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis: {
+        status: "stale_candidate",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: "continuity evidence missing",
+      },
+      reconciliationRecord: {
+        staleSuspicionBasis: ["continuity evidence missing"],
+        staleConfirmed: true,
+        ownershipVerdict: "OWNER_UNDECIDABLE",
+        lastTrustedBoundary: "execute",
+        conflictingEvidence: [],
+        takeoverPermission: {
+          allowed: false,
+          reason: "deny-by-default until strict owner-loss and transfer conditions are fully met",
+        },
+        priorOwnerEpoch: 2,
+        newOwnerEpoch: null,
+        eligibleForContinuation: false,
+      },
+    });
+
+    const analysis = JSON.parse(
+      await readFile(join(runDir, "boundary-analysis.json"), "utf8"),
+    ) as { status: string };
+    expect(analysis.status).toBe("stale_candidate");
+
+    // Not overwritten: the winner's record survives untouched.
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as ReconciliationRecord;
+    expect(reconciliation).toEqual(persistedReconciliation);
+
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line) as { type: string; detail: string });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe("reconciliation_write_abandoned");
+  });
+
   it("writes contract, state, events, and attempt artifacts", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     await initializeRunFiles(runDir, contract, state);
