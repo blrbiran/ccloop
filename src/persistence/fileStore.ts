@@ -288,6 +288,13 @@ async function readPersistedSuccessfulTransferArtifacts(
     ownerTransferRecord = await readOwnerTransferRecordRaw(runDir);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      // This return also skips the owner-record read below, and with it that read's
+      // recoverInterruptedOwnerTransfer side effect. Deliberate, and not a behavior loss: when the
+      // three reads shared one Promise.all, the array was evaluated eagerly, so this file's
+      // readFile was issued before recovery reached any rename — the observation was pre-recovery
+      // either way — and a rejecting Promise.all left that recovery dangling and unawaited. An
+      // interrupted transfer's marker and pendings are reclaimed by every path that actually
+      // claims or transfers ownership; a protective read is not one of them and must not write.
       return { kind: "no_published_transfer" };
     }
 
