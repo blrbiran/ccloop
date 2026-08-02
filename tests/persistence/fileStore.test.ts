@@ -8,6 +8,7 @@ import {
   claimOwnerRecordWithPrecondition,
   initializeRunFiles,
   OwnerTransferLockBusyError,
+  OwnerTransferMarkerFinalizeOrderInvalidError,
   OwnerTransferMarkerUnreadableError,
   OwnerTransferPendingMissingError,
   OwnerTransferPreconditionError,
@@ -404,6 +405,74 @@ describe("fileStore", () => {
 
     const renamedTargets = renameSpy.mock.calls.map((call) => basename(String(call[1])));
     expect(renamedTargets).toEqual(["owner-record.json", "owner-transfer.json", "reconciliation-record.json"]);
+  });
+
+  // Fix-wave 1, Important 2+3: a v2 marker's finalizeOrder must be a complete permutation of all
+  // three legal files, not merely a subset the old code would iterate literally. Before this
+  // check existed, a finalizeOrder naming only 2 of the 3 legal v2 files would publish those two,
+  // delete the marker, and leave the third pending (staged on disk right alongside the other two)
+  // silently orphaned forever — worse than pre-A3 behavior, which handled all three v2 files
+  // unconditionally regardless of finalizeOrder.
+  it("refuses to finalize a v2 marker whose finalizeOrder omits a legal file, rather than silently orphaning the omitted pending", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+    const reconciliationRecord: ReconciliationRecord = {
+      staleSuspicionBasis: ["owner transfer already published"],
+      staleConfirmed: true,
+      ownershipVerdict: "OWNER_LOST",
+      lastTrustedBoundary: "execute",
+      conflictingEvidence: [],
+      takeoverPermission: { allowed: true, reason: "strict owner-loss conditions satisfied" },
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      eligibleForContinuation: true,
+    };
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    await writeOwnerTransferRecord(runDir, transfer.transferRecord);
+    await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(transfer.transferRecord, null, 2));
+    await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(transfer.nextOwnerRecord, null, 2));
+    // Fixture precondition this test depends on: the reconciliation pending IS staged on disk,
+    // matching a real v2 transaction — the marker below simply never mentions it.
+    await writeFile(join(runDir, ".reconciliation-record.pending.json"), JSON.stringify(reconciliationRecord, null, 2));
+    await writeFile(
+      join(runDir, ".owner-transfer.transaction.json"),
+      JSON.stringify(
+        {
+          version: 2,
+          stagedAt: transfer.transferRecord.transferredAt,
+          finalizeOrder: ["owner-transfer.json", "owner-record.json"],
+        },
+        null,
+        2,
+      ),
+    );
+
+    await expect(readOwnerRecord(runDir)).rejects.toBeInstanceOf(OwnerTransferMarkerFinalizeOrderInvalidError);
+
+    // Nothing was published and nothing was deleted: the rejection fires before any pending is
+    // even read, let alone any temp/rename/unlink happens.
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as { currentOwnerEpoch: number };
+    expect(owner.currentOwnerEpoch).toBe(1);
+    await expect(readFile(join(runDir, ".owner-transfer.transaction.json"), "utf8")).resolves.toEqual(expect.any(String));
+    await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
+    await expect(readFile(join(runDir, ".owner-record.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
+    await expect(readFile(join(runDir, ".reconciliation-record.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
   });
 
   // §4.4 rule 2, fail-closed / depth-defense. This branch IS reachable in production (a v2

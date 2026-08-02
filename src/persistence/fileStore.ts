@@ -534,6 +534,19 @@ export class OwnerTransferPendingMissingError extends Error {
   }
 }
 
+// Sibling of OwnerTransferPreconditionError, deliberately NOT a subclass, same reasoning as its
+// two siblings immediately above: an invalid finalizeOrder is a fourth, unrelated failure — the
+// marker parsed fine, but its finalizeOrder is not a legal permutation of the file set its own
+// version declares (wrong length, an unrecognized file name, or a duplicate). It reaches the same
+// instanceof-routed consumers (runLoop.ts, resumeLoop.ts, leaseHeartbeat.ts) through the same
+// acquireOwnerTransferLock / readOwnerRecord call chain as the other three.
+export class OwnerTransferMarkerFinalizeOrderInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OwnerTransferMarkerFinalizeOrderInvalidError";
+  }
+}
+
 async function safeUnlink(path: string): Promise<void> {
   try {
     await unlink(path);
@@ -678,12 +691,46 @@ type FinalizeFileTarget = {
   targetPath: string;
 };
 
+// The only two legal finalizeOrder file sets, keyed by the version that declares them. Used
+// exclusively to validate that a marker's finalizeOrder is a complete permutation of the set its
+// own version promises — never to decide dispatch order or which pendings get read/published.
+// That stays driven by finalizeOrder itself (see the comment on finalizePendingOwnerTransfer).
+function legalFinalizeOrderFileNames(version: 1 | 2): ReadonlySet<TransactionFileName> {
+  return version === 2
+    ? new Set([OWNER_TRANSFER_FILE, OWNER_RECORD_FILE, RECONCILIATION_RECORD_FILE])
+    : new Set([OWNER_TRANSFER_FILE, OWNER_RECORD_FILE]);
+}
+
+// A marker's finalizeOrder is well-formed only if it is a full permutation of its version's legal
+// file set: same length as the legal set, no unrecognized names, no duplicates. finalizeOrder is
+// read at runtime off a JSON.parse'd, merely type-asserted value, so nothing here is guaranteed by
+// the TransactionFileName type at the boundary where this data enters the process.
+function isValidFinalizeOrder(finalizeOrder: readonly string[], legalFileNames: ReadonlySet<TransactionFileName>): boolean {
+  if (finalizeOrder.length !== legalFileNames.size) {
+    return false;
+  }
+
+  const seen = new Set<string>();
+
+  for (const fileName of finalizeOrder) {
+    if (!legalFileNames.has(fileName as TransactionFileName) || seen.has(fileName)) {
+      return false;
+    }
+
+    seen.add(fileName);
+  }
+
+  return true;
+}
+
 // §4.4 rule 1: marker is a field that gets READ, and finalize dispatches strictly off
 // marker.finalizeOrder — the file set AND the order — never off marker.version. version stays a
-// discriminant on the type (so v1's finalizeOrder can stay a fixed two-element tuple) but is not
-// consulted here to decide what finalize does; a v2 marker whose finalizeOrder someday omitted
+// discriminant on the type (so v1's finalizeOrder can stay a fixed two-element tuple) and is read
+// exactly once below, only to look up which file set finalizeOrder is required to permute — never
+// to decide what finalize does. A v2 marker whose finalizeOrder someday omitted
 // reconciliation-record.json (the type permits it, even though nothing produces it today) would
-// still be honored literally.
+// be rejected by the validation below, not silently honored and not silently orphaning the
+// omitted pending.
 async function finalizePendingOwnerTransfer(runDir: string): Promise<void> {
   const paths = getOwnerTransferPaths(runDir);
 
@@ -694,6 +741,17 @@ async function finalizePendingOwnerTransfer(runDir: string): Promise<void> {
   } catch {
     // §4.4 rule 3: an unparseable marker is fail-closed — reject before anything is touched.
     throw new OwnerTransferMarkerUnreadableError("owner transfer transaction marker could not be read or parsed");
+  }
+
+  if (!isValidFinalizeOrder(marker.finalizeOrder, legalFinalizeOrderFileNames(marker.version))) {
+    // Fail-closed, same as rules 2/3: nothing has been read or touched on disk yet. Without this,
+    // a v2 marker whose finalizeOrder named only 2 of the 3 legal files would iterate exactly what
+    // it names, publish those, delete the marker, and leave the omitted pending silently orphaned
+    // with no error and no cleanup path pointing at it — strictly less safe than the pre-A3 code,
+    // which ignored finalizeOrder and unconditionally handled all three v2 files.
+    throw new OwnerTransferMarkerFinalizeOrderInvalidError(
+      `owner transfer transaction marker's finalizeOrder is not a valid permutation of the v${marker.version} file set`,
+    );
   }
 
   const fileTargets: Record<TransactionFileName, FinalizeFileTarget> = {
