@@ -23,11 +23,13 @@ import {
   writeOwnerTransferRecord,
   writeRunState,
 } from "../../src/persistence/fileStore.js";
+import { resumeLoop, ResumeNotEligibleError } from "../../src/controller/resumeLoop.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { applyOwnerEpochTransfer } from "../../src/ownership/ownerController.js";
 import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
+import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import type { RunBoundaryAnalysis, RunState } from "../../src/state/types.js";
-import type { OwnerRecord, ReconciliationRecord } from "../../src/runtime/types.js";
+import type { OwnerRecord, OwnerTransferRecord, ReconciliationRecord } from "../../src/runtime/types.js";
 
 // Test 5 (§4.4 rule 1) needs the actual `rename` call sequence finalizePendingOwnerTransfer
 // issues, to prove it is driven by the marker's `finalizeOrder` rather than by the hardcoded
@@ -2120,6 +2122,124 @@ describe("fileStore", () => {
     expect(savedEvents).toContain("attempt_started");
     expect(savedPlan.summary).toBe("change src/index.ts");
   });
+
+  // §10 test 2, fixture guard. The two crash fixtures below only mean something if they really
+  // put different bytes on disk, so each gets one smoke assertion first. Everything asserted here
+  // is produced by writeOwnerTransferArtifacts, never written by the fixture itself — the fixture
+  // writes exactly one file (owner-record.json at epoch 1) and lets the production transaction
+  // stage the rest.
+  it("stages a first owner transfer with no owner-transfer.json on disk beforehand", async () => {
+    const runDir = await stageFirstOwnerTransferCrashedAt(5);
+
+    // The defining property of the first-transfer fixture: none of the three transaction files
+    // has ever been published, so all three are absent while the staging is complete.
+    expect(await crashSnapshot(runDir)).toBe("T=absent O=e1 R=absent M=v2 P=TOR");
+    expect(JSON.parse(await readFile(join(runDir, OWNER_TRANSFER_MARKER_FILE), "utf8")).finalizeOrder)
+      .toEqual(["owner-transfer.json", "owner-record.json", "reconciliation-record.json"]);
+    expect(JSON.parse(await readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).newOwnerEpoch).toBe(2);
+    expect(JSON.parse(await readFile(join(runDir, ".owner-record.pending.json"), "utf8")).currentOwnerEpoch).toBe(2);
+    expect(JSON.parse(await readFile(join(runDir, ".reconciliation-record.pending.json"), "utf8")).newOwnerEpoch).toBe(2);
+  });
+
+  it("stages a second owner transfer over a first one that already published all three files", async () => {
+    const runDir = await stageDoubleOwnerTransferCrashedAt(5);
+
+    // The defining difference from the first-transfer fixture: epoch N -> N+1 is already
+    // published on all three paths, and the staged pendings carry N+2.
+    expect(await crashSnapshot(runDir)).toBe("T=e2 O=e2 R=e2 M=v2 P=TOR");
+    expect(JSON.parse(await readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).newOwnerEpoch).toBe(3);
+    expect(JSON.parse(await readFile(join(runDir, ".owner-record.pending.json"), "utf8")).currentOwnerEpoch).toBe(3);
+    expect(JSON.parse(await readFile(join(runDir, ".reconciliation-record.pending.json"), "utf8")).newOwnerEpoch).toBe(3);
+  });
+
+  // §10 test 2. The interval is the 4 readFile+JSON.parse that finalizePendingOwnerTransfer runs
+  // BEFORE its try (marker 1 + pending 3) plus each of the 13 steps inside the try; the two
+  // counts are recounted from the landed code, not from the spec (see the task report for the
+  // raw `grep -nF -A22 'async function finalizePendingOwnerTransfer('` output). 4 + 13 = 17
+  // injection points, run against both fixtures.
+  //
+  // The mock surface has to include `unlink`, because steps 14..17 are safeUnlink calls and
+  // nothing else can produce the tail states (marker gone, pendings still present).
+  //
+  // The four pre-try gaps are realised as real disk states rather than as mocked read failures:
+  // a mocked read leaves a perfectly staged transaction behind, so all four would collapse into
+  // one indistinguishable state and three of the four would assert nothing.
+  //   - gap 1 (marker parse) is the load-bearing one: §4.4 rule 3. It is DEFENCE IN DEPTH, not a
+  //     reachable path — the marker is published by rename from a fully written temp, so no crash
+  //     can leave it half-written. It is pinned because the branch exists and must stay fail-closed.
+  //   - gaps 2..4 (a pending missing) are §4.4 rule 2 and ARE reachable: a concurrent recovery
+  //     that already finalized deletes the pendings out from under a second recovery.
+  //
+  // Two boundaries this matrix pins that are easy to get backwards:
+  //   - Gaps 14..17 are past the commit point. All three files are published there, so refusing
+  //     resume would be the bug, not the guard; they assert `resume=accepted` plus the exact
+  //     residue left behind. The name's "every crash gap" refuses covers gaps 1..13.
+  //   - resumeLoop reads the owner record THROUGH recovery (readOwnerRecord) and the other two
+  //     RAW, all inside one Promise.all. So a mid-transaction gap is seen as "post-recovery owner
+  //     record + pre-recovery transfer/reconciliation". That interleaving is exactly what the two
+  //     epoch-equality criteria in evaluateResumeEligibility exist to refuse, and it is why the
+  //     double-transfer fixture — not the first-transfer one — is what makes them load-bearing.
+  it(
+    "refuses resume at every crash gap of the three-file transaction and finishes recovery wherever the marker survives",
+    async () => {
+      // Soft, so one run reports BOTH fixtures' verdicts instead of aborting at the first
+      // divergence: which fixture a mutation kills is the whole point of §10 test 6b.
+      expect.soft(await observeCrashMatrix(stageFirstOwnerTransferCrashedAt)).toEqual([
+        // Nothing is published yet, so resume never reaches the eligibility gate at all: reading
+        // owner-transfer.json / reconciliation-record.json throws first.
+        "gap 01 | T=absent O=e1 R=absent M=unparseable P=TOR | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferMarkerUnreadableError | after T=absent O=e1 R=absent M=unparseable P=TOR",
+        "gap 02 | T=absent O=e1 R=absent M=v2 P=-OR | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=absent O=e1 R=absent M=v2 P=-OR",
+        "gap 03 | T=absent O=e1 R=absent M=v2 P=T-R | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=absent O=e1 R=absent M=v2 P=T-R",
+        "gap 04 | T=absent O=e1 R=absent M=v2 P=TO- | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=absent O=e1 R=absent M=v2 P=TO-",
+        "gap 05 | T=absent O=e1 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 06 | T=absent O=e1 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 07 | T=absent O=e1 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 08 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 09 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 10 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 11 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 12 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 13 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        // Past the commit point: all three published. Gap 14 still has the marker, so recovery
+        // republishes idempotently and reclaims it; gaps 15..17 have no marker, so recovery is
+        // the zero-write read (cleanup is gated on lockHeld) and the residue survives untouched.
+        "gap 14 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 15 | T=e2 O=e2 R=e2 M=absent P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=TOR",
+        "gap 16 | T=e2 O=e2 R=e2 M=absent P=-OR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=-OR",
+        "gap 17 | T=e2 O=e2 R=e2 M=absent P=--R | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=--R",
+      ]);
+
+      expect.soft(await observeCrashMatrix(stageDoubleOwnerTransferCrashedAt)).toEqual([
+        // Gaps 1..4: the published triple is internally consistent at e2 and would pass the gate
+        // on its own. The refusal comes only from recovery refusing to decide — an undecidable
+        // transaction must not resume even when what is published looks eligible.
+        "gap 01 | T=e2 O=e2 R=e2 M=unparseable P=TOR | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferMarkerUnreadableError | after T=e2 O=e2 R=e2 M=unparseable P=TOR",
+        "gap 02 | T=e2 O=e2 R=e2 M=v2 P=-OR | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=e2 O=e2 R=e2 M=v2 P=-OR",
+        "gap 03 | T=e2 O=e2 R=e2 M=v2 P=T-R | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=e2 O=e2 R=e2 M=v2 P=T-R",
+        "gap 04 | T=e2 O=e2 R=e2 M=v2 P=TO- | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=e2 O=e2 R=e2 M=v2 P=TO-",
+        // Gaps 5..7: recovery advances owner-record.json to e3 while owner-transfer.json is still
+        // the e2 one. Criterion B (ownerRecord.currentOwnerEpoch !== ownerTransfer.newOwnerEpoch)
+        // is the ONLY criterion that refuses this shape — criterion A sees e2 === e2 and passes.
+        "gap 05 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=refused: published eligibility has been superseded by a newer owner epoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 06 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=refused: published eligibility has been superseded by a newer owner epoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 07 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=refused: published eligibility has been superseded by a newer owner epoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        // Gaps 8..13: owner-transfer.json is already e3 and the owner record reads e3, but
+        // reconciliation-record.json is still the e2 one. Criterion B passes (e3 === e3); only
+        // criterion A (reconciliation.newOwnerEpoch !== ownerTransfer.newOwnerEpoch) refuses.
+        "gap 08 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=refused: reconciliation newOwnerEpoch does not match owner-transfer newOwnerEpoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 09 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=refused: reconciliation newOwnerEpoch does not match owner-transfer newOwnerEpoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 10 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=refused: reconciliation newOwnerEpoch does not match owner-transfer newOwnerEpoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 11 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=refused: reconciliation newOwnerEpoch does not match owner-transfer newOwnerEpoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 12 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=refused: reconciliation newOwnerEpoch does not match owner-transfer newOwnerEpoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 13 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=refused: reconciliation newOwnerEpoch does not match owner-transfer newOwnerEpoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 14 | T=e3 O=e3 R=e3 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 15 | T=e3 O=e3 R=e3 M=absent P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=TOR",
+        "gap 16 | T=e3 O=e3 R=e3 M=absent P=-OR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=-OR",
+        "gap 17 | T=e3 O=e3 R=e3 M=absent P=--R | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=--R",
+      ]);
+    },
+    120000,
+  );
 });
 
 function ownerRecord(overrides: Partial<OwnerRecord> = {}): OwnerRecord {
@@ -2691,3 +2811,288 @@ describe("writeBoundaryArtifacts publishes each of its two files by replacing th
     );
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// §10 test 2 / test 6b: the crash-gap matrix of the three-file owner-transfer transaction.
+// ---------------------------------------------------------------------------------------------
+
+const OWNER_TRANSFER_MARKER_FILE = ".owner-transfer.transaction.json";
+
+// Order matters: it is finalizeOrder's order, so gaps 2/3/4 map onto the first, second and third
+// pending read before finalizePendingOwnerTransfer's try.
+const CRASH_PENDING_FILES = [
+  ["T", ".owner-transfer.pending.json"],
+  ["O", ".owner-record.pending.json"],
+  ["R", ".reconciliation-record.pending.json"],
+] as const;
+
+const CRASH_GAP_COUNT = 17; // 4 reads before the try + 13 steps inside it
+
+function crashContract(runDir: string): LoopContract {
+  return {
+    ...contract,
+    // Deliberately absent: the gaps that get past the eligibility gate must not go on to do real
+    // git work, and a path inside the run dir cannot collide with anything on the host.
+    context: { ...contract.context, repoPath: join(runDir, "repo-that-does-not-exist") },
+  };
+}
+
+function crashOwnerRecord(): OwnerRecord {
+  return {
+    runId: "task-1",
+    logicalSessionId: "task-1/session-1",
+    currentOwnerEpoch: 1,
+    currentProcessInstanceId: "pid:12345",
+    lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+    ownerStatus: "current",
+    supersededByEpoch: null,
+    leaseAffirmedAt: null,
+  };
+}
+
+function crashReconciliation(priorOwnerEpoch: number): ReconciliationRecord {
+  return {
+    staleSuspicionBasis: ["owner transfer already published"],
+    staleConfirmed: true,
+    ownershipVerdict: "OWNER_LOST",
+    lastTrustedBoundary: "execute",
+    conflictingEvidence: [],
+    takeoverPermission: { allowed: true, reason: "strict owner-loss conditions satisfied" },
+    priorOwnerEpoch,
+    newOwnerEpoch: priorOwnerEpoch + 1,
+    eligibleForContinuation: true,
+  };
+}
+
+// Everything resumeLoop needs to get as far as the eligibility gate: a parseable contract, a
+// resumable run state, and an events log. owner-record.json is written by the caller.
+async function seedCrashRunDir(): Promise<string> {
+  const runDir = await mkdtemp(join(tmpdir(), "ccloop-crash-gap-"));
+  await writeFile(join(runDir, "loop-contract.json"), JSON.stringify(crashContract(runDir), null, 2));
+  await writeFile(join(runDir, "events.jsonl"), "");
+  await writeFile(join(runDir, "loop-state.json"), JSON.stringify({
+    status: "executing", currentAttempt: 1, attemptsUsed: 1,
+    lastTransitionAt: "2026-07-25T00:00:00.000Z", waitingOnHuman: false, stopReason: null,
+    budgetSnapshot: { attemptsRemaining: 2, timeRemainingMs: 5000, tokenBudgetRemaining: 1000 },
+    recentFailures: [],
+  }, null, 2));
+  return runDir;
+}
+
+function crashError(): NodeJS.ErrnoException {
+  // Deliberately not ENOENT: safeUnlink swallows ENOENT, so an ENOENT fault would be absorbed at
+  // exactly the four unlink-only steps this matrix needs to reach.
+  const error = new Error("simulated crash") as NodeJS.ErrnoException;
+  error.code = "EIO";
+  return error;
+}
+
+// Runs one owner transfer through the production write path with a fault armed at the given step
+// of finalizePendingOwnerTransfer, and leaves the run dir in whatever state that produced.
+//
+// Step numbering starts at the marker's own publish rename: everything before that is staging,
+// everything after is finalize. Step 1 is therefore the marker readFile, steps 2..4 the three
+// pending readFiles, steps 5..17 the thirteen steps inside the try.
+async function crashOwnerTransferAtStep(
+  runDir: string,
+  expectedOwnerRecord: OwnerRecord,
+  nextOwnerRecord: OwnerRecord,
+  transferRecord: OwnerTransferRecord,
+  reconciliationRecord: ReconciliationRecord,
+  faultAtStep: number,
+): Promise<void> {
+  let armed = false;
+  let seen = 0;
+
+  vi.resetModules();
+  vi.doMock("node:fs/promises", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const isFaultStep = (): boolean => {
+      if (!armed) {
+        return false;
+      }
+
+      seen += 1;
+      return seen === faultAtStep;
+    };
+
+    return {
+      ...actual,
+      readFile: async (...args: Parameters<typeof actual.readFile>) => {
+        if (isFaultStep()) throw crashError();
+        return actual.readFile(...args);
+      },
+      writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+        if (isFaultStep()) throw crashError();
+        return actual.writeFile(...args);
+      },
+      unlink: async (...args: Parameters<typeof actual.unlink>) => {
+        if (isFaultStep()) throw crashError();
+        return actual.unlink(...args);
+      },
+      rename: async (...args: Parameters<typeof actual.rename>) => {
+        if (armed && isFaultStep()) throw crashError();
+        const result = await actual.rename(...args);
+        if (!armed && basename(String(args[1])) === OWNER_TRANSFER_MARKER_FILE) {
+          armed = true;
+        }
+        return result;
+      },
+    };
+  });
+
+  try {
+    const fileStore = await import("../../src/persistence/fileStore.js");
+    await expect(
+      fileStore.writeOwnerTransferArtifacts(runDir, expectedOwnerRecord, nextOwnerRecord, transferRecord, reconciliationRecord),
+    ).rejects.toThrow();
+  } finally {
+    vi.doUnmock("node:fs/promises");
+    vi.resetModules();
+  }
+}
+
+// The four pre-try gaps are read+parse failures, and a mocked read leaves a perfectly staged
+// transaction behind. So they are staged with the fault at step 1 (nothing on disk touched yet)
+// and then given the disk state the corresponding read would actually have hit.
+async function damageForPreTryGap(runDir: string, gap: number): Promise<void> {
+  if (gap === 1) {
+    await writeFile(join(runDir, OWNER_TRANSFER_MARKER_FILE), "{ not json");
+    return;
+  }
+
+  await unlink(join(runDir, CRASH_PENDING_FILES[gap - 2][1]));
+}
+
+// Fixture 1 of 2: owner-transfer.json has never existed. Epoch N -> N+1 crashes at `gap`.
+async function stageFirstOwnerTransferCrashedAt(gap: number): Promise<string> {
+  const runDir = await seedCrashRunDir();
+  const initial = crashOwnerRecord();
+  await writeOwnerRecord(runDir, initial);
+
+  const transfer = applyOwnerEpochTransfer(initial, "pid:67890", "2026-07-22T10:05:00.000Z", "owner lost after reconciliation");
+  await crashOwnerTransferAtStep(
+    runDir, initial, transfer.nextOwnerRecord, transfer.transferRecord, crashReconciliation(1), gap <= 4 ? 1 : gap,
+  );
+
+  if (gap <= 4) {
+    await damageForPreTryGap(runDir, gap);
+  }
+
+  return runDir;
+}
+
+// Fixture 2 of 2: epoch N -> N+1 has already published all three files; N+1 -> N+2 crashes at
+// `gap`. This is the only shape in which the eligibility gate is reached mid-transaction at all,
+// because owner-transfer.json and reconciliation-record.json are readable throughout.
+async function stageDoubleOwnerTransferCrashedAt(gap: number): Promise<string> {
+  const runDir = await seedCrashRunDir();
+  const initial = crashOwnerRecord();
+  await writeOwnerRecord(runDir, initial);
+
+  const first = applyOwnerEpochTransfer(initial, "pid:67890", "2026-07-22T10:05:00.000Z", "owner lost after reconciliation");
+  await writeOwnerTransferArtifacts(runDir, initial, first.nextOwnerRecord, first.transferRecord, crashReconciliation(1));
+
+  const second = applyOwnerEpochTransfer(first.nextOwnerRecord, "pid:99999", "2026-07-22T10:10:00.000Z", "owner lost again");
+  await crashOwnerTransferAtStep(
+    runDir, first.nextOwnerRecord, second.nextOwnerRecord, second.transferRecord, crashReconciliation(2), gap <= 4 ? 1 : gap,
+  );
+
+  if (gap <= 4) {
+    await damageForPreTryGap(runDir, gap);
+  }
+
+  return runDir;
+}
+
+async function publishedEpoch(runDir: string, fileName: string, key: string): Promise<string> {
+  try {
+    const parsed = JSON.parse(await readFile(join(runDir, fileName), "utf8")) as Record<string, unknown>;
+    return `e${String(parsed[key])}`;
+  } catch {
+    return "absent";
+  }
+}
+
+// One line describing everything the transaction can be observed to have done so far: which of
+// the three files are published and at which epoch, whether the marker survives (and parses), and
+// which of the three pendings are still on disk.
+async function crashSnapshot(runDir: string): Promise<string> {
+  const transfer = await publishedEpoch(runDir, "owner-transfer.json", "newOwnerEpoch");
+  const owner = await publishedEpoch(runDir, "owner-record.json", "currentOwnerEpoch");
+  const reconciliation = await publishedEpoch(runDir, "reconciliation-record.json", "newOwnerEpoch");
+
+  let marker: string;
+  try {
+    const raw = await readFile(join(runDir, OWNER_TRANSFER_MARKER_FILE), "utf8");
+    try {
+      marker = `v${String((JSON.parse(raw) as { version: number }).version)}`;
+    } catch {
+      marker = "unparseable";
+    }
+  } catch {
+    marker = "absent";
+  }
+
+  let pendings = "";
+  for (const [letter, fileName] of CRASH_PENDING_FILES) {
+    try {
+      await stat(join(runDir, fileName));
+      pendings += letter;
+    } catch {
+      pendings += "-";
+    }
+  }
+
+  return `T=${transfer} O=${owner} R=${reconciliation} M=${marker} P=${pendings}`;
+}
+
+// Only the head of the reason is recorded for the read failures: which of the two absent files
+// loses the Promise.all race is not something the transaction decides.
+async function observeResume(runDir: string): Promise<string> {
+  try {
+    await resumeLoop(runDir, new ScriptedAdapter([]));
+    return "accepted";
+  } catch (error) {
+    if (!(error instanceof ResumeNotEligibleError)) {
+      return `unexpected ${(error as Error).name}`;
+    }
+
+    return error.message.startsWith("cannot read run artifacts")
+      ? "refused: cannot read run artifacts"
+      : `refused: ${error.message}`;
+  }
+}
+
+// readOwnerRecord is recoverInterruptedOwnerTransfer's only unforced entry point, so this is what
+// the next process does when it opens the run dir: finish the transaction where the marker
+// survives, refuse loudly where the marker cannot be trusted, write nothing where it is gone.
+async function observeRecovery(runDir: string): Promise<string> {
+  try {
+    await readOwnerRecord(runDir);
+    return "ok";
+  } catch (error) {
+    return `throws ${(error as Error).name}`;
+  }
+}
+
+// Both observations mutate the run dir (resume claims, recovery finalizes), so each gets its own
+// freshly staged copy of the same gap.
+async function observeCrashMatrix(stage: (gap: number) => Promise<string>): Promise<string[]> {
+  const lines: string[] = [];
+
+  for (let gap = 1; gap <= CRASH_GAP_COUNT; gap += 1) {
+    const label = `gap ${String(gap).padStart(2, "0")}`;
+    const forResume = await stage(gap);
+    const staged = await crashSnapshot(forResume);
+    const resume = await observeResume(forResume);
+
+    const forRecovery = await stage(gap);
+    const recovery = await observeRecovery(forRecovery);
+    const after = await crashSnapshot(forRecovery);
+
+    lines.push(`${label} | ${staged} | resume=${resume} | recovery=${recovery} | after ${after}`);
+  }
+
+  return lines;
+}
