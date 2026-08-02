@@ -8,6 +8,8 @@ import {
   claimOwnerRecordWithPrecondition,
   initializeRunFiles,
   OwnerTransferLockBusyError,
+  OwnerTransferMarkerUnreadableError,
+  OwnerTransferPendingMissingError,
   OwnerTransferPreconditionError,
   readOwnerRecord,
   readRunState,
@@ -25,6 +27,25 @@ import { applyOwnerEpochTransfer } from "../../src/ownership/ownerController.js"
 import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
 import type { RunBoundaryAnalysis, RunState } from "../../src/state/types.js";
 import type { OwnerRecord, ReconciliationRecord } from "../../src/runtime/types.js";
+
+// Test 5 (§4.4 rule 1) needs the actual `rename` call sequence finalizePendingOwnerTransfer
+// issues, to prove it is driven by the marker's `finalizeOrder` rather than by the hardcoded
+// production constants. There is no seam for that in fileStore.ts's public surface, so this
+// wraps node:fs/promises' `rename` and forwards every call to the real implementation — every
+// other test in this file (and fileStore.ts itself) sees unchanged behavior; only the recorded
+// call log is new.
+const renameSpy = vi.fn();
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      renameSpy(...args);
+      return actual.rename(...args);
+    },
+  };
+});
 
 const contract: LoopContract = {
   objective: { taskId: "task-1", goal: "Fix test", successCondition: "tests pass", nonGoals: [] },
@@ -321,6 +342,195 @@ describe("fileStore", () => {
     await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).rejects.toThrow();
     await expect(readFile(join(runDir, ".owner-record.pending.json"), "utf8")).rejects.toThrow();
     await expect(readFile(join(runDir, ".reconciliation-record.pending.json"), "utf8")).rejects.toThrow();
+  });
+
+  // §4.4 rule 1, Critical — the whole marker-driven design turns on this. The production
+  // constants (OWNER_TRANSFER_FILE, OWNER_RECORD_FILE, RECONCILIATION_RECORD_FILE) are used both
+  // to BUILD a v2 marker's finalizeOrder and, if finalize were still hardcoded, to decide publish
+  // order — so with the production default order they would agree even if finalize secretly
+  // ignored the marker. This fixture deliberately stages a finalizeOrder that swaps the first two
+  // entries, so agreement is only possible if finalize genuinely reads and obeys
+  // marker.finalizeOrder.
+  it("finalizes in the order the v2 marker declares, not in the order the production constants declare", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+    const reconciliationRecord: ReconciliationRecord = {
+      staleSuspicionBasis: ["owner transfer already published"],
+      staleConfirmed: true,
+      ownershipVerdict: "OWNER_LOST",
+      lastTrustedBoundary: "execute",
+      conflictingEvidence: [],
+      takeoverPermission: { allowed: true, reason: "strict owner-loss conditions satisfied" },
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      eligibleForContinuation: true,
+    };
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    await writeOwnerTransferRecord(runDir, transfer.transferRecord);
+    await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(transfer.transferRecord, null, 2));
+    await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(transfer.nextOwnerRecord, null, 2));
+    await writeFile(join(runDir, ".reconciliation-record.pending.json"), JSON.stringify(reconciliationRecord, null, 2));
+    await writeFile(
+      join(runDir, ".owner-transfer.transaction.json"),
+      JSON.stringify(
+        {
+          version: 2,
+          stagedAt: transfer.transferRecord.transferredAt,
+          finalizeOrder: ["owner-record.json", "owner-transfer.json", "reconciliation-record.json"],
+        },
+        null,
+        2,
+      ),
+    );
+
+    renameSpy.mockClear();
+    await readOwnerRecord(runDir);
+
+    const renamedTargets = renameSpy.mock.calls.map((call) => basename(String(call[1])));
+    expect(renamedTargets).toEqual(["owner-record.json", "owner-transfer.json", "reconciliation-record.json"]);
+  });
+
+  // §4.4 rule 2, fail-closed / depth-defense. This branch IS reachable in production (a v2
+  // marker staged with all three pendings can still find the reconciliation pending gone by the
+  // time finalize runs), but "the marker and all staging survive intact" is NOT a promise that
+  // survives the most common way this branch is actually reached: concurrent stale-lock recovery.
+  // P2 clears a stale lock, P3 races in and reaches finalize first via the unlocked
+  // readOwnerRecord fast path, P2 (still mid-cleanup from the recovery it started) deletes the
+  // marker and every pending out from under P3, and P3's read of the reconciliation pending gets
+  // ENOENT with nothing left to "keep". Do not cite this test as evidence of an invariant — it
+  // only pins the single-process, no-racing-cleaner case.
+  it("refuses to finalize a v2 marker whose reconciliation pending is missing, keeping the marker and staging in place", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    await writeOwnerTransferRecord(runDir, transfer.transferRecord);
+    await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(transfer.transferRecord, null, 2));
+    await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(transfer.nextOwnerRecord, null, 2));
+    // Fixture precondition this test depends on: the reconciliation pending is deliberately never
+    // written, even though the marker below declares a v2, three-file finalizeOrder that requires it.
+    await writeFile(
+      join(runDir, ".owner-transfer.transaction.json"),
+      JSON.stringify(
+        {
+          version: 2,
+          stagedAt: transfer.transferRecord.transferredAt,
+          finalizeOrder: ["owner-transfer.json", "owner-record.json", "reconciliation-record.json"],
+        },
+        null,
+        2,
+      ),
+    );
+
+    await expect(readOwnerRecord(runDir)).rejects.toBeInstanceOf(OwnerTransferPendingMissingError);
+
+    await expect(readFile(join(runDir, ".owner-transfer.transaction.json"), "utf8")).resolves.toEqual(expect.any(String));
+    await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
+    await expect(readFile(join(runDir, ".owner-record.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
+  });
+
+  // §4.4 rule 3, depth-defense. writeJsonFileViaFixedTemp's safeUnlink → write → rename sequence
+  // means production can never leave a half-written marker at this path, so this fixture reaches
+  // the "unparseable" branch the only way a test can: corrupting the marker directly after it was
+  // already published.
+  it("refuses to finalize an unparseable marker, keeping every staged file in place", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    await writeOwnerTransferRecord(runDir, transfer.transferRecord);
+    await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(transfer.transferRecord, null, 2));
+    await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(transfer.nextOwnerRecord, null, 2));
+    await writeFile(join(runDir, ".owner-transfer.transaction.json"), "{not valid json");
+
+    await expect(readOwnerRecord(runDir)).rejects.toBeInstanceOf(OwnerTransferMarkerUnreadableError);
+
+    await expect(readFile(join(runDir, ".owner-transfer.transaction.json"), "utf8")).resolves.toBe("{not valid json");
+    await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
+    await expect(readFile(join(runDir, ".owner-record.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
+  });
+
+  it("finalizes a v1 marker over its two files without throwing", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+
+    await expect(
+      writeOwnerTransferArtifacts(runDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord),
+    ).resolves.toBeUndefined();
+
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as { currentOwnerEpoch: number };
+    const publishedTransfer = JSON.parse(await readFile(join(runDir, "owner-transfer.json"), "utf8")) as {
+      newOwnerEpoch: number;
+    };
+
+    expect(owner.currentOwnerEpoch).toBe(2);
+    expect(publishedTransfer.newOwnerEpoch).toBe(2);
+    // Only two files are in a v1 finalizeOrder; reconciliation-record.json is never part of the
+    // transaction, so it must stay entirely untouched.
+    await expect(readFile(join(runDir, "reconciliation-record.json"), "utf8")).rejects.toThrow();
   });
 
   it("rejects owner transfer while a live transfer lock is held", async () => {

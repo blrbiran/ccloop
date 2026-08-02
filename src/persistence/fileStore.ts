@@ -508,6 +508,32 @@ export class OwnerTransferLockBusyError extends Error {
   }
 }
 
+// Sibling of OwnerTransferPreconditionError, deliberately NOT a subclass: a corrupt marker is a
+// third, unrelated failure from a CAS mismatch or lock contention. It surfaces through the same
+// call chain as those two errors — acquireOwnerTransferLock's locked callers, and readOwnerRecord's
+// unlocked recoverInterruptedOwnerTransfer / tryRecoverStaleOwnerTransferLock path — so a subclass
+// would let their downstream `instanceof OwnerTransferPreconditionError` routing (runLoop.ts,
+// resumeLoop.ts, leaseHeartbeat.ts) start matching an unreadable marker too, silently reusing
+// behaviour that was only ever correct for a lost CAS race.
+export class OwnerTransferMarkerUnreadableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OwnerTransferMarkerUnreadableError";
+  }
+}
+
+// Sibling of OwnerTransferPreconditionError, deliberately NOT a subclass, for the same reason as
+// OwnerTransferMarkerUnreadableError immediately above: a missing v2 pending file is a
+// fail-closed refusal to finalize, not a CAS mismatch or lock contention, and it reaches the same
+// instanceof-routed consumers through the same acquireOwnerTransferLock /
+// tryRecoverStaleOwnerTransferLock call chain.
+export class OwnerTransferPendingMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OwnerTransferPendingMissingError";
+  }
+}
+
 async function safeUnlink(path: string): Promise<void> {
   try {
     await unlink(path);
@@ -646,36 +672,74 @@ async function cleanupOwnerTransferStagingWithoutMarker(runDir: string): Promise
   await safeUnlink(transactionMarkerTempPath);
 }
 
+type FinalizeFileTarget = {
+  pendingPath: string;
+  tempPath: string;
+  targetPath: string;
+};
+
+// §4.4 rule 1: marker is a field that gets READ, and finalize dispatches strictly off
+// marker.finalizeOrder — the file set AND the order — never off marker.version. version stays a
+// discriminant on the type (so v1's finalizeOrder can stay a fixed two-element tuple) but is not
+// consulted here to decide what finalize does; a v2 marker whose finalizeOrder someday omitted
+// reconciliation-record.json (the type permits it, even though nothing produces it today) would
+// still be honored literally.
 async function finalizePendingOwnerTransfer(runDir: string): Promise<void> {
   const paths = getOwnerTransferPaths(runDir);
-  const marker = JSON.parse(await readFile(paths.transactionMarkerPath, "utf8")) as OwnerTransferTransactionMarker;
-  const ownerRecord = JSON.parse(await readFile(paths.ownerPendingPath, "utf8")) as OwnerRecord;
-  const transferRecord = JSON.parse(await readFile(paths.transferPendingPath, "utf8")) as OwnerTransferRecord;
-  const reconciliationRecord =
-    marker.version === 2
-      ? (JSON.parse(await readFile(paths.reconciliationPendingPath, "utf8")) as ReconciliationRecord)
-      : undefined;
+
+  let marker: OwnerTransferTransactionMarker;
 
   try {
-    await safeUnlink(paths.transferTempPath);
-    await safeUnlink(paths.ownerTempPath);
-    await safeUnlink(paths.reconciliationTempPath);
-    await writeJsonFile(paths.transferTempPath, transferRecord);
-    await rename(paths.transferTempPath, paths.transferPath);
-    await writeJsonFile(paths.ownerTempPath, ownerRecord);
-    await rename(paths.ownerTempPath, paths.ownerPath);
+    marker = JSON.parse(await readFile(paths.transactionMarkerPath, "utf8")) as OwnerTransferTransactionMarker;
+  } catch {
+    // §4.4 rule 3: an unparseable marker is fail-closed — reject before anything is touched.
+    throw new OwnerTransferMarkerUnreadableError("owner transfer transaction marker could not be read or parsed");
+  }
 
-    if (reconciliationRecord !== undefined) {
-      await writeJsonFile(paths.reconciliationTempPath, reconciliationRecord);
-      await rename(paths.reconciliationTempPath, paths.reconciliationPath);
+  const fileTargets: Record<TransactionFileName, FinalizeFileTarget> = {
+    [OWNER_TRANSFER_FILE]: { pendingPath: paths.transferPendingPath, tempPath: paths.transferTempPath, targetPath: paths.transferPath },
+    [OWNER_RECORD_FILE]: { pendingPath: paths.ownerPendingPath, tempPath: paths.ownerTempPath, targetPath: paths.ownerPath },
+    [RECONCILIATION_RECORD_FILE]: {
+      pendingPath: paths.reconciliationPendingPath,
+      tempPath: paths.reconciliationTempPath,
+      targetPath: paths.reconciliationPath,
+    },
+  };
+
+  const staged: Array<FinalizeFileTarget & { value: unknown }> = [];
+
+  for (const fileName of marker.finalizeOrder) {
+    const target = fileTargets[fileName];
+    let value: unknown;
+
+    try {
+      value = JSON.parse(await readFile(target.pendingPath, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        // §4.4 rule 2: fail-closed — a marker that promises this file but finds no pending for
+        // it refuses to finalize, leaving the marker and every already-checked pending in place.
+        throw new OwnerTransferPendingMissingError(
+          `owner transfer pending file for ${fileName} is missing while finalizing a v${marker.version} marker`,
+        );
+      }
+
+      throw error;
+    }
+
+    staged.push({ ...target, value });
+  }
+
+  try {
+    for (const entry of staged) {
+      await safeUnlink(entry.tempPath);
+      await writeJsonFile(entry.tempPath, entry.value);
+      await rename(entry.tempPath, entry.targetPath);
     }
 
     await safeUnlink(paths.transactionMarkerPath);
-    await safeUnlink(paths.transferPendingPath);
-    await safeUnlink(paths.ownerPendingPath);
 
-    if (reconciliationRecord !== undefined) {
-      await safeUnlink(paths.reconciliationPendingPath);
+    for (const entry of staged) {
+      await safeUnlink(entry.pendingPath);
     }
   } catch (error) {
     await safeUnlink(paths.transferTempPath);
