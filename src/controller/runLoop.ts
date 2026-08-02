@@ -740,6 +740,11 @@ async function persistBoundaryAnalysis(
   const boundaryEvidence = buildBoundaryEvidence(executionRecovery ?? null);
   const boundaryAnalysis = evaluateRunBoundary({
     now: new Date().toISOString(),
+    // GATE-A fix wave: these two literals are what keep runLoopFromState's non-timeout
+    // `execution === null` branch off `stale_candidate`, and that is the whole proof behind the
+    // "provably dead" note on the `onReconciliationWriteAbandoned` argument forwarded from there.
+    // Changing either re-activates that argument without touching the warned line — see that
+    // comment before you do.
     previous: null,
     runState: state,
     observedStrongProgress: false,
@@ -1209,8 +1214,13 @@ export async function runLoopFromState(
         // `reconciliationRecord: undefined` down — which makes writeBoundaryArtifacts skip the
         // entire abandon block. Measured, not merely reasoned: a probe driving this exact branch
         // with a corrupt owner-transfer.json on disk observed status `no_progress`, zero callback
-        // invocations, and no reconciliation write. If a future edit ever gives this branch real
-        // execution recovery, the path goes live and needs its own covering test.
+        // invocations, and no reconciliation write. TWO routes re-activate this argument, and only
+        // the first touches this line: (1) a future edit gives this branch real execution recovery;
+        // (2) — the likelier one — persistBoundaryAnalysis's `evaluateRunBoundary` call stops
+        // hardcoding `observedStrongProgress: false` / `previous: null`, either of which can yield
+        // `stale_candidate` from here and re-open the abandon block without anyone reading this
+        // comment. Those two literals carry a back-pointer here. Either way the path goes live and
+        // needs its own covering test.
         await persistBoundaryAnalysis(runDir, state, heartbeat, undefined, options?.onReconciliationWriteAbandoned);
         throw new Error("execute phase completed without a result");
       }

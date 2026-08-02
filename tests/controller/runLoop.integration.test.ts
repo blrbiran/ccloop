@@ -1715,12 +1715,20 @@ describe("runLoop", () => {
   // owner-transfer.json — i.e. the PRECONDITION for the published-winner check, not the check
   // itself. With that file already published, readPersistedSuccessfulTransferArtifacts gets past
   // its first read and can go on to reach transferRepresentsPublishedWinner; published later, the
-  // read ends in ENOENT and takes the check with it. One path satisfies (a) without the check ever
-  // running: if the readOwnerRecord in that function's subsequent Promise.all throws, the read
-  // returns { kind: "unreadable" } and the write is abandoned — (a) would still be green with
-  // transferRepresentsPublishedWinner never evaluated. That path is loud (an abandonment, routed to
-  // the operator callback and events.jsonl), not silent, which is why the gap is left named rather
-  // than closed here.
+  // read ends in ENOENT and takes the check with it. More than one path satisfies (a) without the
+  // check ever running — two are known, and this list is examples, not an enumeration. (i) if the
+  // readOwnerRecord in that function's subsequent Promise.all throws, the read returns
+  // { kind: "unreadable" } and the write is abandoned. (ii) readOwnerTransferRecordRaw is the
+  // single statement `JSON.parse(await readFile(...))`, and the doMock'd readFile below pushes
+  // "ok" the instant `actual.readFile` resolves — BEFORE the parse — so a present-but-torn
+  // owner-transfer.json records "ok" for (a) and then the parse throws a SyntaxError, which is
+  // non-ENOENT, so the first catch returns { kind: "unreadable" } too. In both, (a) is green with
+  // transferRepresentsPublishedWinner never evaluated, which is the point: (a) pins the
+  // precondition, not the check. Neither path is silent — the abandonment always reaches
+  // events.jsonl, and reaches the operator callback only when one was supplied
+  // (onReconciliationWriteAbandoned is optional at all four layers; writeBoundaryArtifacts' own
+  // in-source note says that absent it the abandonment is recorded in events.jsonl only). That is
+  // why the gap is left named rather than closed here.
   //
   // It does NOT pin "the winner was not overwritten". It cannot: the check returns false here
   // (owner-record.json is still the old epoch — P1's rename #2 has not happened), so the loser does
