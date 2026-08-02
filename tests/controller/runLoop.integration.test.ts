@@ -1706,13 +1706,22 @@ describe("runLoop", () => {
   // exported and must not be exported for this; the winner side is hand-built directly on
   // fileStore's export surface.
   //
-  // ⚠️ What assertion (a) pins, stated honestly: it pins whether the loser's protection check was
-  // EVALUATED at all — with owner-transfer.json already published, the loser reads it and reaches
-  // transferRepresentsPublishedWinner. It does NOT pin "the winner was not overwritten". It cannot:
-  // that check returns false here (owner-record.json is still the old epoch — P1's rename #2 has
-  // not happened), so the loser does go on to write its downgraded record, which is exactly the
-  // shape of the residual TOCTOU this layer leaves open (§13, 4th entry). The stronger property is
-  // not pinnable at this layer. Do not read assertion (a) as more than it is.
+  // ⚠️ What assertion (a) pins, stated honestly: it pins the loser's successful PROTECTIVE READ of
+  // owner-transfer.json — i.e. the PRECONDITION for the published-winner check, not the check
+  // itself. With that file already published, readPersistedSuccessfulTransferArtifacts gets past
+  // its first read and can go on to reach transferRepresentsPublishedWinner; published later, the
+  // read ends in ENOENT and takes the check with it. One path satisfies (a) without the check ever
+  // running: if the readOwnerRecord in that function's subsequent Promise.all throws, the read
+  // returns { kind: "unreadable" } and the write is abandoned — (a) would still be green with
+  // transferRepresentsPublishedWinner never evaluated. That path is loud (an abandonment, routed to
+  // the operator callback and events.jsonl), not silent, which is why the gap is left named rather
+  // than closed here.
+  //
+  // It does NOT pin "the winner was not overwritten". It cannot: the check returns false here
+  // (owner-record.json is still the old epoch — P1's rename #2 has not happened), so the loser does
+  // go on to write its downgraded record, which is exactly the shape of the residual TOCTOU this
+  // layer leaves open (§13, 4th entry). The stronger property is not pinnable at this layer. Do not
+  // read assertion (a) as more than it is.
   //
   // ⚠️ No terminal-state assertion, deliberately. "P1's third rename puts the winner's record back"
   // is an ordering this harness imposes, not a property of the system — in production the loser's
@@ -1730,7 +1739,14 @@ describe("runLoop", () => {
   // fails a handful of pre-existing tests elsewhere in the suite that have nothing to do with this
   // one — the list is in task-A9-report.md. That list is NOISE, not this test's guardrail: the only
   // thing that counts as evidence is this named test, run alone, going red.
-  it("keeps the loser from writing through the winner's reconciliation inside the publish window", async () => {
+  // The name is deliberately NOT the one the plan's Step 2 mandated ("keeps the loser from writing
+  // through the winner's reconciliation inside the publish window"): that name's first clause has
+  // no assertion behind it and states the opposite of what the ⚠️ block above documents — the loser
+  // DOES write its downgrade in this window, because the residual TOCTOU is not closed at this
+  // layer. A name is what appears in failure output, so it names the two things actually asserted:
+  // clause 1 is assertion (a), clause 2 is assertion (b). Human ruling; the plan carries the
+  // matching in-place amendment note (Amended 2026-08-02 (d), §Task A9).
+  it("reads owner-transfer.json for the published-winner check and finalizes none of the winner's transaction inside the publish window", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -1901,7 +1917,7 @@ describe("runLoop", () => {
       ) as { status: string };
       expect(analysis.status).toBe("stale_candidate");
 
-      // (a) The loser's protection check was reached: owner-transfer.json was already published
+      // (a) The loser's protective read succeeded: owner-transfer.json was already published
       // when the loser read it, so the read succeeded. Under the finalize order this test pins,
       // that file is published first and this is guaranteed; publish it later and the loser's read
       // ends in ENOENT, taking the check with it.

@@ -1113,6 +1113,12 @@ git commit -m "feat(controller): thread an optional onReconciliationWriteAbandon
 - [ ] **Step 2: 写测试 6e 的骨架与断言。** 完整测试名：
   `runLoop > keeps the loser from writing through the winner's reconciliation inside the publish window`
   两条断言：(a) 输家那次调用期间发生过一次针对 `owner-transfer.json` 的**成功**读；(b) 输家那次调用期间**没有任何 rename 以事务发布 temp 为源**。
+
+  **Amended 2026-08-02 (d)：上面这个测试名的第一个分句「keeps the loser from writing through the winner's reconciliation」背后没有断言，而且在本层今天是*假的*，已按人的裁定改名。** 这纠正的是*本文档*的缺陷，不是实现的缺陷——两条断言本身与本 Step 写的一字不差，没有为了迁就名字调整过任何断言。理由：窗口内 `owner-record.json` 仍是旧 epoch（赢家的 rename #2 尚未发生），所以 `transferRepresentsPublishedWinner` 求值为 **false**，输家**确实**在窗口内写下了它那份降级 reconciliation——这正是残余 TOCTOU（§13 第 4 笔）未关闭的形状，A9 的测试注释也是这么写的。一个断言了「与已记录事实相反的东西」的名字，比一个仅仅夸大范围的名字更坏，而且**名字才是失败输出里出现的东西**。本测试实际钉住的是：(a) 输家窗口内对 `owner-transfer.json` 的**成功保护性读**（即那次判定的*前置条件*，不是判定本身），(b) 窗口内**零**次以三个事务发布 temp 为源的 rename。新名字逐字为：
+
+  `runLoop > reads owner-transfer.json for the published-winner check and finalizes none of the winner's transaction inside the publish window`
+
+  第一个分句对应断言 (a)，第二个分句对应断言 (b)，两个分句各自都有一条实测可失败的断言（变异一杀 (a)、变异二杀 (b)，原始输出见 `task-A9-report.md` 的「修复轮 1」一节）。
 - [ ] **Step 3: 跑它确认绿（它钉的是落地后就正确的行为），贴原始输出。**
 - [ ] **Step 4: 注入变异一并单跑。** 把生产常量 `finalizeOrder` 改成 `[RECONCILIATION_RECORD_FILE, OWNER_TRANSFER_FILE, OWNER_RECORD_FILE]`，`-t` 单跑 6e。**必须红。贴注入前后两次原始输出。** 还原。
   **若它不红**：不要调整断言让它红——**先弄清为什么**（打印输家那次调用期间的读序列），然后**停下并上报**。这是本层最承重的一处改判，连续三轮零有效护栏。
