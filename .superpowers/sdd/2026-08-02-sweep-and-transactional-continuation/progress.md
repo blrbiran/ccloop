@@ -205,3 +205,103 @@ Task A9: minor (deferred) for GATE-A triage:
 Task A9: COMPLETE (commits ced77e5..6226fb6, review clean after one fix round + scoped re-review).
 
 *** GROUP A's NINE TASKS ARE ALL COMPLETE AND EACH INDIVIDUALLY REVIEWED CLEAN. THE ONLY REMAINING WORK IN THIS GROUP IS GATE-A ITSELF. ***
+
+=== GATE-A BLOCKER: the post-resume published-winner replacement (Option 2 implemented) ===
+
+THE DEFECT, AS ESTABLISHED BY EXECUTION (not by reading the code — that is the point):
+  `transferRepresentsPublishedWinner` in src/persistence/fileStore.ts is a three-clause conjunction. Its
+  third clause is `ownerRecord.currentProcessInstanceId === ownerTransferRecord.newProcessInstanceId`.
+  src/controller/resumeLoop.ts builds `nextOwnerRecord` by spreading `ownerRecord` — so
+  `currentOwnerEpoch` is UNCHANGED — with a fresh `buildProcessInstanceId()`, then CAS-writes it via
+  `claimOwnerRecordWithPrecondition`. Therefore after ANY successful resume the third clause is false AT
+  THE SAME EPOCH, with no race and no crash.
+  A probe drove the real resumeLoop -> runLoopFromState -> persistBoundaryAnalysis -> writeBoundaryArtifacts
+  chain and observed: `heartbeat.assertHeld()` PASSES (the resumed process legitimately owns the run);
+  control reaches the `nextOwnerEpoch === null` arm carrying a downgraded record;
+  `preserveSuccessfulReconciliationIfNeeded` returns `{ kind: "write" }`; and the previously-published
+  `eligibleForContinuation: true` reconciliation record is OVERWRITTEN by the downgrade with ZERO events
+  and ZERO callbacks — because both `onReconciliationWriteAbandoned` and the
+  `reconciliation_write_abandoned` event live in the `abandon` arm, and this takes the `write` arm.
+
+THE HUMAN RULING (recorded, not reopened):
+  S-3's "never permit more" DOES forbid preserving an already-published eligible record in the window
+  after a legitimate resume CAS. The obvious fix — deleting the third clause — is permit-MORE: with it
+  deleted, `evaluateResumeEligibility` flips from `{ok:false}` to `{ok:true}` for a surviving winner
+  record, for an ABSENT record, and — worst — for a CORRUPT one, where
+  `readPersistedReconciliationRecord`'s `catch { return undefined }` routes the corruption into the
+  synthesis arm, which fabricates `eligibleForContinuation: true` over a file that today makes resume
+  refuse outright.
+  Four reasons on the record:
+    1. the permit-more is MEASURED while the benefit is ARGUED;
+    2. the corrupt-file case cannot be separated from the one-line deletion without a second, uncovered
+       change;
+    3. a live 2026-07-27 ruling deleted a reconciliation-synthesis path on exactly this ground and
+       accepted losing the synthesis;
+    4. the deletion's safety would rest on a crash window that group B/C may remove.
+
+WHY OPTION 2 RATHER THAN THE PREDICATE CHANGE:
+  The predicate's behaviour is forbidden to change, so the only thing left to fix is the SILENCE. Option 2
+  writes the downgrade exactly as today and additionally records the loss. It is inert by construction:
+  the reconciliation write, the decision, and every existing arm are untouched; the only new runtime
+  effect is one appendEvent that is swallowed on failure. `transferRepresentsPublishedWinner`'s body is
+  byte-identical (sha256 of the function body, `awk '/^function transferRepresentsPublishedWinner\(/,/^}$/'`
+  piped to `shasum -a 256`: b1d03f926fb865def86fb6814daeac84cbe0ad2ee8a8dcfd7bf44b21d604356f, before AND
+  after). Only a comment was added above it — the symbol was NOT renamed, because six call-site-and-doc
+  linkages elsewhere reference it by name.
+
+WHAT WAS BUILT:
+  1. `describePublishedWinnerReplacement` in src/persistence/fileStore.ts — the detection point. It is
+     `shouldProtectSuccessfulTransferTruth`'s own conjunction with the first conjunct negated, expressed by
+     CALLING the same two predicates rather than restating either:
+     `transferRepresentsPublishedWinner(...) === false && shouldPreserveExistingReconciliationRecord(...) === true`.
+     The synthesis disjunct is deliberately NOT asked: synthesis requires
+     `persistedReconciliationRecord === undefined`, so nothing on disk is destroyed there and there is no
+     loss to record.
+  2. `ReconciliationWriteDecision`'s `write` arm gained an OPTIONAL `publishedWinnerReplacedDetail?: string`.
+     No third arm: the union is not exported and group C's planned test 12d reaches this channel through
+     resumeLoop / writeBoundaryArtifacts / runLoopFromState without destructuring it, so a third arm would
+     make group C absorb a shape change for nothing.
+  3. `writeBoundaryArtifacts` appends a `reconciliation_published_winner_replaced` event carrying both
+     epochs and both process instance ids — AFTER the reconciliation write (the event asserts a record was
+     destroyed; if `writeJsonFileAtomically` throws, it was not), inside a swallowing `try { … } catch { }`
+     matching the abandon arm's existing swallow in form and reasoning. THE SWALLOW IS LOAD-BEARING:
+     `appendEvent` is a bare `appendFile` that can reject, and left unswallowed an unwritable events.jsonl
+     would propagate into `runLoopFromState`'s outer catch (where `isLeaseStopError` does not match an I/O
+     error) and convert a SUCCESSFUL write into a FAILED attempt — the exact behaviour change Option 2 was
+     chosen for not making. `RunEvent.type` is a bare `string` (verified at src/persistence/fileStore.ts,
+     `export type RunEvent`), so no type change was needed for the new event name.
+  4. One new test in tests/persistence/fileStore.test.ts pinning BOTH halves on the post-resume fixture.
+
+FINDING — CONTRADICTS THE DISPATCH, reported rather than worked around:
+  The dispatch named `shouldPreserveExistingSuccessfulReconciliation` among the helpers to consider as a
+  detection point. That helper is DEAD CODE: `grep -rn 'shouldPreserveExistingSuccessfulReconciliation'
+  src tests` returns exactly one hit — its own definition at src/persistence/fileStore.ts. The live
+  protection calls `shouldPreserveExistingReconciliationRecord` instead. The two are LOGICALLY IDENTICAL:
+  `shouldPreserveExistingReconciliationRecord`'s `(isLoserDowngradeAttempt(n,t) ||
+  shouldSynthesizeSuccessfulReconciliation(undefined, n, t))` reduces to `(A || A)` because
+  `shouldSynthesizeSuccessfulReconciliation(undefined, …)`'s first conjunct is `undefined === undefined`.
+  The live one was used so the detection point is literally the negated conjunct of the live predicate.
+  The dead duplicate was NOT deleted — Rule 3, and it is not this change's blast radius. Flagged for
+  GATE-A triage.
+
+WHAT REMAINS OPEN:
+  1. The winner's published reconciliation record is STILL DESTROYED on this path. Option 2 records the
+     loss; it does not prevent it. That is the ruling's accepted cost, not an oversight.
+  2. The crash-window reachability was NEVER SIMULATED. Reason 4 above rests on it, and it is asserted, not
+     measured.
+  3. *** FOR GROUP C's BRIEF: *** if group B/C introduces a SECOND non-terminal route to
+     `persistBoundaryAnalysis`, that removes the bound which makes the predicate change unsafe today —
+     i.e. it reopens the ruling. Group C's brief must carry this line.
+
+VERIFICATION (unfiltered, via `rtk proxy`, ECC_GATEGUARD=off DISABLE_OMC=1):
+  `npm test -- --run`: `Test Files 29 passed (29)` / `Tests 483 passed (483)`, Duration 16.50s, EXIT=0.
+  Baseline was 482; +1 is exactly the one new test. `npm run typecheck` EXIT=0. `npm run build` EXIT=0.
+  Three guards re-checked after the change: `grep -cF 'return { ok: false' src/controller/resumeLoop.ts`
+  = 8; `grep -rnF 'currentOwnerEpoch + 1' src/` = single hit (src/ownership/ownerController.ts:166);
+  `git status --porcelain src/registry` empty.
+  Mutation evidence (each a separate single-run, both with NONZERO named counts, whole blocks in
+  gate-a-option2-report.md): delete the append -> half (ii) RED (`ENOENT … events.jsonl`,
+  `1 failed | 74 skipped (75)`); delete the predicate's third clause -> half (i) RED
+  (`expected 'OWNER_LOST' to be 'OWNER_UNDECIDABLE'`, `1 failed | 74 skipped (75)`). Reverted after each,
+  revert proven by a green single-run (`1 passed | 74 skipped (75)`) AND by the function-body sha256
+  matching the pre-change value.
