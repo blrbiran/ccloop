@@ -269,26 +269,46 @@ function preserveSuccessfulReconciliationIfNeededFromArtifacts(
 // that first conjunct negated, expressed by calling the same two predicates rather than restating
 // either. Only shouldPreserveExistingReconciliationRecord is asked, not the synthesis disjunct:
 // synthesis requires persistedReconciliationRecord === undefined, so nothing on disk is destroyed
-// there and there is no loss to record. Returns the detail line for the event, or undefined when
-// this write destroys nothing that the protection would have kept.
+// there and there is no loss to record.
+//
+// Total by construction, hence the try/catch: readPersistedReconciliationRecord casts an
+// unvalidated JSON.parse result to ReconciliationRecord, so a reconciliation-record.json whose
+// content parses to `null` is `!== undefined` and makes isSuccessfulReconciliationForTransfer
+// throw on property access. Left uncontained that throw leaves writeBoundaryArtifacts, passes
+// through persistBoundaryAnalysis, and reaches runLoopFromState's outer catch — where
+// isLeaseStopError does not match — ending an otherwise-successful attempt as failed. Recording a
+// loss must never be able to manufacture one, and this signal's whole warrant is that it moves no
+// decision. The containment is deliberately scoped to THIS function: the identical throw on the
+// transferRepresentsPublishedWinner === true square arrives via
+// shouldProtectSuccessfulTransferTruth and is left exactly as it was before this signal existed,
+// because degrading it to `undefined` there would route a corrupt record into the synthesis arm
+// and permit MORE.
+//
+// Returns the detail line for the event, or undefined when this write destroys nothing that the
+// protection would have kept.
 function describePublishedWinnerReplacement(
   persistedOwnerRecord: OwnerRecord,
   persistedOwnerTransferRecord: OwnerTransferRecord,
   persistedReconciliationRecord: ReconciliationRecord | undefined,
   nextReconciliationRecord: ReconciliationRecord,
 ): string | undefined {
-  if (
-    transferRepresentsPublishedWinner(persistedOwnerRecord, persistedOwnerTransferRecord)
-    || !shouldPreserveExistingReconciliationRecord(
-      persistedReconciliationRecord,
-      nextReconciliationRecord,
-      persistedOwnerTransferRecord,
-    )
-  ) {
+  try {
+    if (
+      transferRepresentsPublishedWinner(persistedOwnerRecord, persistedOwnerTransferRecord)
+      || !shouldPreserveExistingReconciliationRecord(
+        persistedReconciliationRecord,
+        nextReconciliationRecord,
+        persistedOwnerTransferRecord,
+      )
+    ) {
+      return undefined;
+    }
+
+    return `published winner reconciliation replaced by downgrade: transfer epoch ${persistedOwnerTransferRecord.priorOwnerEpoch} -> ${persistedOwnerTransferRecord.newOwnerEpoch} won by ${persistedOwnerTransferRecord.newProcessInstanceId}; owner-record epoch ${persistedOwnerRecord.currentOwnerEpoch} now held by ${persistedOwnerRecord.currentProcessInstanceId}`;
+  } catch {
+    // A value that cannot be interpreted degrades to "no detail", never to a throw.
     return undefined;
   }
-
-  return `published winner reconciliation replaced by downgrade: transfer epoch ${persistedOwnerTransferRecord.priorOwnerEpoch} -> ${persistedOwnerTransferRecord.newOwnerEpoch} won by ${persistedOwnerTransferRecord.newProcessInstanceId}; owner-record epoch ${persistedOwnerRecord.currentOwnerEpoch} now held by ${persistedOwnerRecord.currentProcessInstanceId}`;
 }
 
 async function readPersistedReconciliationRecord(runDir: string): Promise<ReconciliationRecord | undefined> {
