@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startLeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
 import { INERT_LEASE_HEARTBEAT } from "../../src/controller/runLoop.js";
-import { LEASE_HEARTBEAT_INTERVAL_MS, LEASE_TTL_MS } from "../../src/ownership/lease.js";
+import {
+  LEASE_HEARTBEAT_INTERVAL_MS,
+  LEASE_TTL_MS,
+  RunHeartbeatStoppedError,
+  RunLeaseLostError,
+  RunLeaseUnverifiableError,
+} from "../../src/ownership/lease.js";
 import type { OwnerRecord } from "../../src/runtime/types.js";
 
 const SELF = "pid:4242:2000";
@@ -339,6 +345,30 @@ describe("startLeaseHeartbeat", () => {
 
     expect((await readOwner(runDir)).leaseAffirmedAt).not.toBeNull();
     await heartbeat.stop();
+  });
+
+  // Task B1 / L3 §5.3 test 7. `stopped` means "this process no longer intends to act", which is
+  // a claim assertHeld cannot make: assertHeld reads the persisted owner record and answers "is
+  // this run still ours", and never reads `stopped` at all. So this refusal is not a second,
+  // weaker copy of assertHeld's — it is the only home the claim has.
+  //
+  // The `fn` spy is not decoration. runExclusive's one production caller wraps
+  // persistBoundaryAnalysis's read -> evaluate -> CAS-transfer span, and that span publishes
+  // reconciliation-record.json transactionally (persistOwnerTransfer). An implementation that
+  // ran `fn` first and only then consulted `stopped` would throw AFTER a completed publish, and
+  // the non-terminal return path B1 adds in runLoopFromState would leave that publish standing
+  // behind an unterminated run. Refusing before `fn` runs is what keeps that from happening, and
+  // "did it reject" alone cannot tell the two implementations apart.
+  it("refuses runExclusive after stop, throwing RunHeartbeatStoppedError", async () => {
+    const runDir = await seed(record());
+    const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
+
+    await heartbeat.stop();
+
+    const fn = vi.fn(async () => "must not run");
+
+    await expect(heartbeat.runExclusive(fn)).rejects.toBeInstanceOf(RunHeartbeatStoppedError);
+    expect(fn).not.toHaveBeenCalled();
   });
 });
 
@@ -703,5 +733,26 @@ describe("assertHeld", () => {
 
     await expect(heartbeat.assertHeld()).resolves.toBeUndefined();
     await heartbeat.stop();
+  });
+});
+
+// Task B1 / L3 §5.3 hard constraint, first half — the companion assertion to test 7b in
+// tests/controller/runLoop.integration.test.ts, kept in this file because the plan confines the
+// task to these two test files. It is asserted directly on the classes rather than through
+// isLeaseStopError because that predicate is module-private to runLoop.ts and no test can observe
+// it: the ONLY thing standing between "a stopped heartbeat returns a resumable state" and "a
+// stopped heartbeat writes the terminal cancelled status" is that the predicate's two instanceof
+// checks miss this error. Making it a subclass of either — or giving all three a common base —
+// re-arms that write with the predicate unchanged, which is both easier to do by accident than
+// editing the predicate and invisible in every other test name.
+describe("lease", () => {
+  it("RunHeartbeatStoppedError is a sibling of the two lease stop errors, not a subclass of either", () => {
+    const stopped = new RunHeartbeatStoppedError("run heartbeat has stopped");
+
+    expect(stopped instanceof RunLeaseLostError).toBe(false);
+    expect(stopped instanceof RunLeaseUnverifiableError).toBe(false);
+    // The sibling half: still a plain Error, so runLoopFromState's outer catch receives it.
+    expect(stopped).toBeInstanceOf(Error);
+    expect(stopped.stopReason).toBe("heartbeat_stopped");
   });
 });

@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseChangedPathsFromGitStatus, runLoop, runLoopFromState } from "../../src/controller/runLoop.js";
 import { initializeRunFiles, writeOwnerRecord } from "../../src/persistence/fileStore.js";
+import { RunHeartbeatStoppedError } from "../../src/ownership/lease.js";
+import type { LeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
 import { resumeLoop } from "../../src/controller/resumeLoop.js";
 import { SubprocessClaudeAdapter } from "../../src/runtime/claude/subprocessClaudeAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
@@ -1106,6 +1108,132 @@ describe("runLoop", () => {
     expect(reconciliation.conflictingEvidence.join(" ")).not.toContain("with cleanup");
     expect(reconciliation.conflictingEvidence.join(" ")).not.toContain("retained");
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "loop_exhausted"]);
+  });
+
+  // Task B1 / L3 §5.3 test 7b (§10 test 9 folded in). runLoopFromState is driven directly because
+  // runLoop() builds its own heartbeat, and the heartbeat is the injection point: runExclusive has
+  // exactly one production call site, inside persistBoundaryAnalysis.
+  //
+  // The fixture is the execute-timeout-with-no-result route. That choice is load-bearing, not
+  // convenience: it is the route where persistBoundaryAnalysis is followed IMMEDIATELY by
+  // persistTerminalState("exhausted"), so "the run was not terminated" is an observation with
+  // something to observe. Three of the assertions below pin degradations the plan declares
+  // ACCEPTED rather than desirable — the boundary/reconciliation write, the cleanupStatus
+  // backfill and the worktree cleanup are all skipped by this branch. They are asserted precisely
+  // because an accepted behaviour change that no test names is a silent one.
+  it("returns a resumable state without terminating the run when the heartbeat stops mid-attempt", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const state: RunState = {
+      status: "planning",
+      currentAttempt: 0,
+      attemptsUsed: 0,
+      lastTransitionAt: "2026-07-23T00:00:00.000Z",
+      waitingOnHuman: false,
+      stopReason: null,
+      budgetSnapshot: {
+        attemptsRemaining: contract.executionPolicy.maxAttempts,
+        timeRemainingMs: contract.executionPolicy.totalRuntimeBudgetMs,
+        tokenBudgetRemaining: contract.executionPolicy.tokenBudget,
+      },
+      recentFailures: [],
+    };
+
+    await initializeRunFiles(runDir, contract, state);
+
+    let observedWorktreePath = "";
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        observedWorktreePath = context.worktreePath;
+        // Fixture precondition for reaching the injection at all: a changed path is what makes
+        // buildBoundaryEvidence return a non-empty continuitySuspicion, so evaluateRunBoundary
+        // answers `stale_candidate` and persistBoundaryAnalysis does NOT take its `healthy` early
+        // return — which sits above runExclusive.
+        await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 2;\n");
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    let runExclusiveCalls = 0;
+    // A stub standing in for a real heartbeat whose stop() landed while this attempt was in
+    // flight. ONLY runExclusive refuses: per the second half of the hard constraint, assertHeld
+    // must never throw this error — from inside the workspace retry loop it would miss
+    // isLeaseStopError, fall through to the infra-retry escalation and terminate the run as
+    // blocked_waiting_human, which is the same permanent termination through a third door.
+    const heartbeat: LeaseHeartbeat = {
+      adopt: () => {},
+      affirmNow: async () => {},
+      assertHeld: async () => {},
+      runExclusive: async () => {
+        runExclusiveCalls += 1;
+        throw new RunHeartbeatStoppedError("run heartbeat has stopped: test-injected mid-attempt stop");
+      },
+      stop: async () => {},
+    };
+
+    const finalState = await runLoopFromState(contract, runDir, adapter, state, heartbeat);
+
+    // Fixture precondition: the injection really fired, at the one production call site, exactly
+    // once. Without it every assertion below would hold vacuously for a run that never reached
+    // persistBoundaryAnalysis.
+    expect(runExclusiveCalls).toBe(1);
+    expect(observedWorktreePath).not.toBe("");
+
+    const persisted = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8")) as RunState;
+    const recovery = JSON.parse(
+      await readFile(join(runDir, "attempts", "1", "execution-recovery.json"), "utf8"),
+    ) as { executeEntered: boolean; cleanupStatus: string };
+
+    // (i) persistTerminalState was not called. It is the only writer of a `loop_<terminal>` event
+    // and of a terminal status, and neither appears — in the event log, on disk, or in the return
+    // value. The event list is exact rather than a `not.toContain`, so the new branch's own
+    // `heartbeat_stopped` event is pinned in the same assertion.
+    expect(await readEventTypes(runDir)).toEqual(["attempt_started", "execute_started", "heartbeat_stopped"]);
+    expect(persisted.status).toBe("executing");
+    expect(persisted.stopReason).toBeNull();
+    // What the branch's extra writeRunState buys, and the reason it is not redundant with the
+    // top-of-loop write: `state` has been advanced by applyPhaseUsage since then (the execute
+    // phase consumed measurable runtime), so a branch that only returned it would hand back a
+    // state whose budgetSnapshot disagrees with the one on disk.
+    expect(persisted).toEqual(finalState);
+
+    // (ii) execution-recovery.json's cleanupStatus was never backfilled: it still carries the
+    // value written before persistBoundaryAnalysis ran.
+    expect(recovery.executeEntered).toBe(true);
+    expect(recovery.cleanupStatus).toBe("retained");
+
+    // (iii) the run stays resumable. RESUMABLE_STATUSES is module-private in
+    // src/controller/resumeLoop.ts, so its three members are inlined here rather than exported.
+    expect(["planning", "executing", "verifying"]).toContain(finalState.status);
+
+    // (iv) cleanupAttemptWorkspaceBestEffort did not run. It removes the worktree with
+    // `git worktree remove --force` (src/workspace/worktreeManager.ts), so the directory
+    // surviving is the observable of the call never happening. Accepted by the plan on the same
+    // grounds as L1 §12 requirement 9: the residual worktree is the next owner's to collect.
+    expect(await pathExists(observedWorktreePath)).toBe(true);
+
+    // The write persistBoundaryAnalysis performs AFTER runExclusive returns never happened
+    // either — the refusal escapes before it, which is what keeps a published reconciliation
+    // record out of this branch's reach.
+    expect(await pathExists(join(runDir, "boundary-analysis.json"))).toBe(false);
   });
 
   it("writes owner-record.json when a run is initialized", async () => {

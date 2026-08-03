@@ -20,7 +20,7 @@ import { applyOwnerEpochTransfer, evaluateOwnership } from "../ownership/ownerCo
 import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
 import type { LeaseHeartbeat } from "./leaseHeartbeat.js";
-import { RunLeaseLostError, RunLeaseUnverifiableError } from "../ownership/lease.js";
+import { RunHeartbeatStoppedError, RunLeaseLostError, RunLeaseUnverifiableError } from "../ownership/lease.js";
 import type {
   AttemptContext,
   AttemptPlan,
@@ -1432,6 +1432,30 @@ export async function runLoopFromState(
 
       return state;
     } catch (error) {
+      // Task B1 / L3 §5.3, option (a): a stopped heartbeat abandons the attempt in place exactly
+      // as a refused lease does — no cleanup, no boundary write, no phase usage — but it must NOT
+      // terminate the run. Deliberately its OWN branch, ordered ahead of isLeaseStopError rather
+      // than folded into it: that branch persists "cancelled", and nothing in this codebase leads
+      // back out of a terminal status (resume, sweep and runLoop all refuse one), so routing a
+      // stop signal there would end the run permanently on a signal that means only "this process
+      // is done acting". It is also ahead of the generic failure handling below, which would
+      // otherwise transition to "failed" — a stop is not an attempt failure.
+      //
+      // The writeRunState is not redundant with the one at the top of the loop. §5.4's stop point
+      // sits there, where the returned state is byte-identical to disk; this branch fires
+      // mid-attempt, where `state` may have been advanced by applyPhaseUsage since that write.
+      // Without it the returned state and the persisted one disagree and the claim that this is
+      // structurally the same stop as §5.4's is false.
+      if (error instanceof RunHeartbeatStoppedError) {
+        await appendEvent(runDir, {
+          type: "heartbeat_stopped",
+          at: new Date().toISOString(),
+          detail: String(error),
+        });
+        await writeRunState(runDir, state);
+        return state;
+      }
+
       // §8.1: the side effect was skipped and the attempt is abandoned IN PLACE. No further
       // side effect of this attempt is attempted, including its worktree cleanup — cleanup
       // is itself a side effect on a worktree the new owner may already be reading, and
