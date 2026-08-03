@@ -516,3 +516,510 @@ report files under `.superpowers/sdd/2026-08-02-sweep-and-transactional-continua
 `git add -f`, since that directory's `.gitignore` is `*`).
 
 No new artifact file, no new callback channel, no new exported type. Rule 2 held.
+
+---
+
+# FIX ROUND 1 — independent review returned "Needs fixes" (1 Important, 3 Minor)
+
+Commits: `bf5d12d` (fix), `5495c9b` (test), `03ba382` (comments), plus this docs commit. `main` was already
+pushed, so these are follow-up commits only — nothing amended, nothing rewritten, nothing forced.
+
+## 0. Did anything contradict the dispatch?
+
+No. The Important finding reproduced exactly as described, on the first try, with the described error text
+and the described difference between trees. The three Minor findings all check out against the landed text.
+The out-of-scope item (deleting `shouldPreserveExistingSuccessfulReconciliation`) was left alone, and the
+ledger already carried it — progress.md's `FINDING — CONTRADICTS THE DISPATCH` block ends "The dead
+duplicate was NOT deleted — Rule 3, and it is not this change's blast radius. Flagged for GATE-A triage."
+Nothing added; nothing needed.
+
+## 1. F1 (Important) — ADDRESSED. The probe first, because the dispatch says measure it.
+
+A throwaway probe test wrote the post-resume fixture (owner-record.json at epoch 2 naming `pid:resumer`,
+owner-transfer.json at newOwnerEpoch 2 naming `pid:winner`) with `reconciliation-record.json` containing the
+five bytes `null`, called `writeBoundaryArtifacts`, and logged what came back. Run against the tree as
+landed:
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop
+
+stdout | tests/persistence/zzprobe.test.ts > probe > probe null reconciliation content
+PROBE thrown: TypeError: Cannot read properties of null (reading 'eligibleForContinuation')
+PROBE reconciliation-record.json: null
+PROBE boundary-analysis.json exists: true
+
+ ✓ tests/persistence/zzprobe.test.ts (1 test) 3ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  08:35:03
+   Duration  270ms (transform 44ms, setup 0ms, collect 41ms, tests 3ms, environment 0ms, prepare 43ms)
+
+EXIT=0
+```
+
+The same probe, unchanged, against the PRE-CHANGE `src/persistence/fileStore.ts`
+(`git checkout b70b40f^ -- src/persistence/fileStore.ts`, restored immediately after):
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop
+
+stdout | tests/persistence/zzprobe.test.ts > probe > probe null reconciliation content
+PROBE thrown: undefined
+PROBE reconciliation-record.json: {
+  "staleSuspicionBasis": [
+    "continuity evidence missing"
+  ],
+  "staleConfirmed": true,
+  "ownershipVerdict": "OWNER_UNDECIDABLE",
+  "lastTrustedBoundary": "execute",
+  "conflictingEvidence": [],
+  "takeoverPermission": {
+    "allowed": false,
+    "reason": "deny-by-default until strict owner-loss and transfer conditions are fully met"
+  },
+  "priorOwnerEpoch": 2,
+  "newOwnerEpoch": null,
+  "eligibleForContinuation": false
+}
+PROBE boundary-analysis.json exists: true
+
+ ✓ tests/persistence/zzprobe.test.ts (1 test) 5ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  08:35:11
+   Duration  258ms (transform 40ms, setup 0ms, collect 40ms, tests 5ms, environment 0ms, prepare 34ms)
+
+EXIT=0
+```
+
+Confirmed, with nothing left to argue about: pre-change the downgrade lands and the call returns; as landed
+the call throws. The mechanism is the one the reviewer named — `readPersistedReconciliationRecord` casts an
+unvalidated `JSON.parse` result, `null !== undefined`, and `describePublishedWinnerReplacement` asks
+`shouldPreserveExistingReconciliationRecord` on the `!transferRepresentsPublishedWinner` square, which the
+pre-change code reached only through `shouldProtectSuccessfulTransferTruth`'s `&&`, i.e. only when the
+predicate was TRUE. The complement square is newly evaluated, and on it the record is dereferenced.
+
+**Form chosen: a `try { … } catch { return undefined }` around the whole detail computation, inside
+`describePublishedWinnerReplacement`.** Three candidates were considered:
+
+  (a) Validate in `readPersistedReconciliationRecord` — REJECTED, and this one is a trap. It would also
+      change the `transferRepresentsPublishedWinner === true` square, where a `null` file throws today
+      through `shouldProtectSuccessfulTransferTruth`. Turning that throw into `undefined` routes a corrupt
+      record into the SYNTHESIS arm, which is permit-MORE — precisely what reason #2 of the human ruling
+      forbids. A fix for a permit-less defect must not introduce a permit-more one.
+  (b) A `null` guard inside the helper — REJECTED. `persistedReconciliationRecord === null` does not
+      type-check against `ReconciliationRecord | undefined` without a cast, and it hardens against exactly
+      one of the values disk can hold. `{}` does not throw today only because
+      `isSuccessfulReconciliationForTransfer` reads no nested field; the day it reads one, the guard is
+      already stale.
+  (c) Contain the computation — CHOSEN. Total by construction against ANY shape, no cast, and its worst
+      outcome is "no detail", which is the dispatch's own criterion. It is also this repository's existing
+      shape for this exact concern: both `appendEvent` calls in `writeBoundaryArtifacts` are swallowed with
+      the same one-line reason, "recording a loss must never be able to manufacture one".
+
+Scope of the containment is the helper only. On the `transferRepresentsPublishedWinner === true` square the
+first disjunct short-circuits and the helper never reaches the throwing predicate, so that square's
+behaviour is bit-for-bit what it was before this signal existed — and it stays that way because
+`preserveSuccessfulReconciliationIfNeeded`'s object literal evaluates `record:` (which calls
+`preserveSuccessfulReconciliationIfNeededFromArtifacts`) BEFORE `publishedWinnerReplacedDetail:`.
+
+The same probe, re-run after the fix, is byte-for-byte the pre-change result:
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop
+
+stdout | tests/persistence/zzprobe.test.ts > probe > probe null reconciliation content
+PROBE thrown: undefined
+PROBE reconciliation-record.json: {
+  "staleSuspicionBasis": [
+    "continuity evidence missing"
+  ],
+  "staleConfirmed": true,
+  "ownershipVerdict": "OWNER_UNDECIDABLE",
+  "lastTrustedBoundary": "execute",
+  "conflictingEvidence": [],
+  "takeoverPermission": {
+    "allowed": false,
+    "reason": "deny-by-default until strict owner-loss and transfer conditions are fully met"
+  },
+  "priorOwnerEpoch": 2,
+  "newOwnerEpoch": null,
+  "eligibleForContinuation": false
+}
+
+ ✓ tests/persistence/zzprobe.test.ts (1 test) 4ms
+stdout | tests/persistence/zzprobe.test.ts > probe > probe null reconciliation content
+PROBE boundary-analysis.json exists: true
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  08:37:44
+   Duration  280ms (transform 42ms, setup 0ms, collect 41ms, tests 4ms, environment 0ms, prepare 41ms)
+
+EXIT=0
+```
+
+Both probe files were deleted before the full suite ran; the count below (484 = 483 + 1) is the proof that
+neither survived into the tree.
+
+### The pin, and its killing mutation
+
+New test in `tests/persistence/fileStore.test.ts`, immediately after the Option 2 test it shares a fixture
+with:
+
+`it("still lands the downgrade when reconciliation-record.json holds a value the record type cannot describe")`
+
+It asserts the pre-change outcome and nothing else: `writeBoundaryArtifacts` is awaited without a `.rejects`
+wrapper (so a regression surfaces as the TypeError itself, which is the diagnosis), then the four fields of
+`reconciliation-record.json` are asserted to be the downgrade. It deliberately does NOT assert on
+events.jsonl — the corrupt-file square is a named open gap (§F3 below), and pinning silence there would go
+red the day that gap is legitimately closed.
+
+Green single-run before injection:
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop
+
+ ✓ tests/persistence/fileStore.test.ts (76 tests | 75 skipped) 4ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 75 skipped (76)
+   Start at  19:33:41
+   Duration  532ms (transform 230ms, setup 0ms, collect 267ms, tests 4ms, environment 0ms, prepare 41ms)
+
+EXIT=0
+```
+
+Mutation — delete `describePublishedWinnerReplacement`'s `try`/`catch`, leaving the body exactly as it was
+before this fix round:
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop
+
+ ❯ tests/persistence/fileStore.test.ts (76 tests | 1 failed | 75 skipped) 10ms
+   × fileStore > still lands the downgrade when reconciliation-record.json holds a value the record type cannot describe 9ms
+     → Cannot read properties of null (reading 'eligibleForContinuation')
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/persistence/fileStore.test.ts > fileStore > still lands the downgrade when reconciliation-record.json holds a value the record type cannot describe
+TypeError: Cannot read properties of null (reading 'eligibleForContinuation')
+ ❯ isSuccessfulReconciliationForTransfer src/persistence/fileStore.ts:120:26
+    118| ): boolean {
+    119|   return (
+    120|     reconciliationRecord.eligibleForContinuation
+       |                          ^
+    121|     && reconciliationRecord.ownershipVerdict === "OWNER_LOST"
+    122|     && reconciliationRecord.priorOwnerEpoch === ownerTransferRecord.pr…
+ ❯ shouldPreserveExistingReconciliationRecord src/persistence/fileStore.ts:204:8
+ ❯ describePublishedWinnerReplacement src/persistence/fileStore.ts:309:9
+ ❯ preserveSuccessfulReconciliationIfNeeded src/persistence/fileStore.ts:430:36
+ ❯ Module.writeBoundaryArtifacts src/persistence/fileStore.ts:456:22
+ ❯ tests/persistence/fileStore.test.ts:2101:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 75 skipped (76)
+   Start at  19:37:42
+   Duration  508ms (transform 214ms, setup 0ms, collect 248ms, tests 10ms, environment 0ms, prepare 36ms)
+
+EXIT=1
+```
+
+Reverted, and the revert proven by a green single-run rather than by assertion:
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop
+
+ ✓ tests/persistence/fileStore.test.ts (76 tests | 75 skipped) 4ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 75 skipped (76)
+   Start at  19:37:59
+   Duration  593ms (transform 208ms, setup 0ms, collect 241ms, tests 4ms, environment 0ms, prepare 39ms)
+
+EXIT=0
+```
+
+`1 passed | 75 skipped` before injection and `1 failed | 75 skipped` after: both counts NONZERO for the
+named test, so neither run is an all-skipped fake green.
+
+## 2. F2 (Minor) — ADDRESSED. Both comments now name the predicate, not one clause.
+
+`describePublishedWinnerReplacement`'s header said "the one square where
+`shouldProtectSuccessfulTransferTruth` would have protected but for `transferRepresentsPublishedWinner`'s
+process-instance-id clause"; `transferRepresentsPublishedWinner`'s closing sentence said "(a) holds, (b)
+does not". The code tests `!transferRepresentsPublishedWinner`, a strict SUPERSET of that: a false
+`eligibleForContinuation === true` or a `currentOwnerEpoch !== newOwnerEpoch` land on the same square. The
+reviewer is right that this is reachability, not behaviour — `applyOwnerEpochTransfer` always writes
+`eligibleForContinuation: true`, so nothing in this repo takes the other routes — but an inaccurate comment
+on this exact symbol is what made the F1 defect require execution to find. Both now state the negated
+predicate and record that the post-resume route is merely the only reachable one.
+
+## 3. F3 (Minor) — ADDRESSED, as a reword plus a named gap; the signal was NOT widened.
+
+The synthesis-disjunct justification claimed synthesis requires `persistedReconciliationRecord === undefined`
+"so nothing on disk is destroyed there". That is true of preserved TRUTH and false of disk contents:
+`readPersistedReconciliationRecord`'s `catch { return undefined }` maps a CORRUPT file to `undefined` as
+well, so on that square a corrupt `reconciliation-record.json` is overwritten with no event — the same
+silence this change exists to remove, one square over. Reworded to "nothing THE PROTECTION WOULD HAVE
+PRESERVED is lost", with the corrupt-file square named in the comment and carried in progress.md. It was
+NOT covered: widening the signal to distinguish absent from corrupt is a different change with a different
+justification, and it is the same conflation that is reason #2 of the human ruling.
+
+## 4. F4 (Minor) — ADDRESSED by supersession; `0d557e9`'s message is published and stays as written.
+
+That commit says "deleting the predicate's third clause kills (i) only". Measured with a second throwaway
+probe on the landed fixture (the winner's VALID record on disk), which logs both halves instead of stopping
+at the first failed assertion. Unmutated baseline first:
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop
+
+ ✓ tests/persistence/zzprobe2.test.ts (1 test) 4ms
+stdout | tests/persistence/zzprobe2.test.ts > probe2 > probe landed fixture halves
+PROBE2 (i) verdict: OWNER_UNDECIDABLE eligible: false
+PROBE2 (ii) events.jsonl: "{\"type\":\"reconciliation_published_winner_replaced\",\"at\":\"2026-08-03T00:36:33.915Z\",\"detail\":\"published winner reconciliation replaced by downgrade: transfer epoch 1 -> 2 won by pid:winner; owner-record epoch 2 now held by pid:resumer\"}\n"
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  08:36:33
+   Duration  310ms (transform 45ms, setup 0ms, collect 42ms, tests 4ms, environment 0ms, prepare 36ms)
+
+EXIT=0
+```
+
+Then with `transferRepresentsPublishedWinner`'s third clause deleted (mutation 2 of `0d557e9`):
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop
+
+stdout | tests/persistence/zzprobe2.test.ts > probe2 > probe landed fixture halves
+PROBE2 (i) verdict: OWNER_LOST eligible: true
+PROBE2 (ii) events.jsonl: "<ENOENT>"
+
+ ✓ tests/persistence/zzprobe2.test.ts (1 test) 4ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  08:36:44
+   Duration  258ms (transform 43ms, setup 0ms, collect 43ms, tests 4ms, environment 0ms, prepare 35ms)
+
+EXIT=0
+```
+
+(The probe asserts nothing — it only logs — so its own EXIT=0 says nothing about the mutation; the two
+`PROBE2` lines are the measurement. `<ENOENT>` is the probe's own placeholder for "events.jsonl does not
+exist", not vitest output.)
+
+Half (i) is red under that mutation — the winner's `OWNER_LOST` / `eligible: true` record was PRESERVED
+instead of replaced — and `events.jsonl` does not exist at all. With the clause deleted the protection ENGAGES,
+so `describePublishedWinnerReplacement`'s first disjunct is true, no detail is produced, and no event is
+written — mutation 2 kills half (ii) as well as half (i). Half (i) merely fails first because its
+assertions come first in the test body. **`0d557e9`'s "kills (i) only" is therefore WRONG and is superseded
+by this report and by the progress.md entry below.** The commit message itself is published history and is
+not edited.
+
+## 5. Out of scope, confirmed left alone
+
+`shouldPreserveExistingSuccessfulReconciliation` — the dead helper whose agreement with the live predicate
+rests on an unreduced `(A || A)` — was not touched. progress.md already carries it as flagged for GATE-A
+triage; verified by reading, not assumed.
+
+## 6. Full verification, unfiltered
+
+`export ECC_GATEGUARD=off DISABLE_OMC=1` then `rtk proxy "npm test -- --run"`:
+
+```
+> ccloop@0.1.0 test
+> vitest run --run
+
+
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop
+
+ ✓ tests/registry/renderRuns.test.ts (11 tests) 7ms
+ ✓ tests/controller/resumeLoop.gate.test.ts (27 tests) 4ms
+ ✓ tests/registry/scanRuns.test.ts (9 tests) 7ms
+ ✓ tests/controller/leaseHeartbeat.test.ts (20 tests) 419ms
+ ✓ tests/registry/zeroWrite.test.ts (2 tests) 157ms
+ ✓ tests/ownership/ownerController.test.ts (13 tests) 4ms
+ ✓ tests/controller/leaseGate.test.ts (12 tests) 51ms
+ ✓ tests/registry/observeFields.test.ts (13 tests) 5ms
+ ✓ tests/registry/readObservedFile.test.ts (6 tests) 4ms
+ ✓ tests/persistence/leaseStore.test.ts (9 tests) 32ms
+stderr | tests/cli/cli.test.ts > parseArgs > returns exit code 1 when required flags are missing
+missing required flags
+
+ ✓ tests/persistence/fileStore.test.ts (76 tests) 2049ms
+   ✓ fileStore > refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives 1640ms
+ ✓ tests/ownership/lease.test.ts (16 tests) 4ms
+stderr | tests/cli/cli.test.ts > main ls (spec §9, §12.8) > exits 1 when the root does not exist — the scan itself failed
+ENOENT: no such file or directory, scandir '/var/folders/nb/068k_scs4gzgclcp66f9hys40000gn/T/ccloop-ls-missing-tg33DC/does-not-exist'
+
+stdout | tests/cli/cli.test.ts > main ls (spec §9, §12.8) > exits 0 for a scan that produces an unreadable row, never 2
+Fields within a row are independent observations and do not constitute a consistent snapshot. eligibleForContinuation is an observed field, not a decision that the run may be resumed.
+
+RUN  /var/folders/nb/068k_scs4gzgclcp66f9hys40000gn/T/ccloop-ls-damaged-HUiXl2/run-1  observed 2026-08-03T11:38:10.370Z
+  loop-state.json
+    status: unreadable(parse): Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    currentAttempt: unreadable(parse): Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    attemptsUsed: unreadable(parse): Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    lastTransitionAt: unreadable(parse): Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    stopReason: unreadable(parse): Expected property name or '}' in JSON at position 1 (line 1 column 2)
+  owner-record.json
+    runId: absent
+    currentOwnerEpoch: absent
+    ownerStatus: absent
+    currentProcessInstanceId: absent
+    leaseAffirmedAt: absent
+  owner-transfer.json
+    eligibleForContinuation: absent
+
+ ✓ tests/cli/cli.test.ts (15 tests) 434ms
+   ✓ parseArgs > returns 0 for the scripted example run 305ms
+ ✓ tests/registry/observeRun.test.ts (4 tests) 4ms
+ ✓ tests/contract/loadContract.test.ts (7 tests) 20ms
+ ✓ tests/runtime/scriptedAdapter.test.ts (1 test) 2ms
+ ✓ tests/controller/resumeLoop.integration.test.ts (12 tests) 2729ms
+   ✓ resumeLoop > resumes an eligible run from the next attempt and claims ownership 311ms
+   ✓ resumeLoop > forwards onReconciliationWriteAbandoned into the resumed runLoopFromState 303ms
+   ✓ resumeLoop > discards a residual worktree from the interrupted attempt during resume (next-attempt-fresh) 302ms
+   ✓ resumeLoop > does not refuse a resume immediately after an owner transfer (lastAffirmedAt is not the lease field) 301ms
+ ✓ tests/stop/stopController.test.ts (4 tests) 2ms
+ ✓ tests/state/stateMachine.test.ts (4 tests) 3ms
+ ✓ tests/workspace/worktreeManager.test.ts (1 test) 372ms
+   ✓ worktreeManager > creates and removes a detached worktree 371ms
+ ✓ tests/validation/prepareA04.test.ts (52 tests) 3327ms
+   ✓ inspectMetadataBackedA04History > uses the brief-specified contradiction phrases for historical diagnoses and paid-call approval 401ms
+   ✓ inspectMetadataBackedA04History > confirms paid-call approval from the live 2026-07-18 A-04 boundary wording 304ms
+   ✓ inspectMetadataBackedA04History > marks historical diagnoses contradictory when any canonical A-01 through A-03 diagnosis drifts 341ms
+   ✓ inspectMetadataBackedA04History > treats retained stashes as present only when a required retained stash matches 398ms
+   ✓ inspectMetadataBackedA04History > reports the discovered legacy evidence worktree paths 366ms
+   ✓ inspectMetadataBackedA04History > reports an unreadable legacy preserved evidence tree as a soft signal instead of failing inspection 411ms
+   ✓ inspectMetadataBackedA04History > reports unreadable required metadata docs through the summary contract 334ms
+   ✓ inspectMetadataBackedA04History > keeps the backup branch present when merge-base reachability is unavailable 533ms
+ ✓ tests/validation/contracts.test.ts (19 tests) 2807ms
+   ✓ render-contract CLI > writes a validated scenario contract JSON file 683ms
+   ✓ render-contract CLI > rejects scenario C without an explicit timeout 584ms
+   ✓ render-contract CLI > rejects a non-git repository path 612ms
+   ✓ render-contract CLI > refuses to overwrite an existing output file 920ms
+ ✓ tests/runtime/processIdentity.test.ts (2 tests) 3ms
+ ✓ tests/policy/pathPolicy.test.ts (2 tests) 3ms
+ ✓ tests/validation/fixture.test.ts (2 tests) 747ms
+   ✓ createFixture > creates a clean Git fixture at one baseline commit 744ms
+ ✓ tests/controller/leaseLifecycle.integration.test.ts (25 tests) 6953ms
+   ✓ lease heartbeat lifecycle > appends owner_transfer_contended and abandons the transfer when the owner-transfer lock stays busy 590ms
+   ✓ lease heartbeat lifecycle > retries a busy owner-transfer lock and completes once it clears (spec requirement 1) 554ms
+   ✓ lease heartbeat lifecycle > abandons the transfer once the retry bound is exhausted, with the contention event appended exactly once (spec requirement 2) 594ms
+   ✓ lease heartbeat lifecycle > retries zero times on a CAS mismatch (spec requirement 3) 557ms
+   ✓ lease heartbeat lifecycle > refuses the catch-path re-read once superseded, rather than finalizing a staged transfer it no longer owns 517ms
+   ✓ lease heartbeat lifecycle > blocks a due affirm until the transfer's exclusive span completes, with zero CAS failures and no lease_lost (spec requirement 4) 387ms
+   ✓ lease heartbeat lifecycle > a self-performed transfer with adopt inside the exclusive span appends no lease_lost event (spec requirement 5) 382ms
+   ✓ lease heartbeat lifecycle > writes no boundary artifact — but its own already-committed transfer's reconciliation record stands — when superseded after its own transfer completes (spec requirement 7, amended by task A4) 368ms
+ ✓ tests/runtime/claude/subprocessClaudeAdapter.test.ts (28 tests) 10092ms
+   ✓ SubprocessClaudeAdapter > reports token usage for snake-only usage envelope 511ms
+   ✓ SubprocessClaudeAdapter > reports token usage for camel-only usage envelope 402ms
+   ✓ SubprocessClaudeAdapter > reports token usage for duplicate camel and snake aliases without double counting 392ms
+   ✓ SubprocessClaudeAdapter > reports token usage for mixed aliases when only snake input and camel output are present 451ms
+   ✓ SubprocessClaudeAdapter > reports usage evidence when missing usage keeps evidence absent 481ms
+   ✓ SubprocessClaudeAdapter > reports usage evidence when null usage is recorded as invalid 369ms
+   ✓ SubprocessClaudeAdapter > reports usage evidence when all usage aliases have invalid types 458ms
+   ✓ SubprocessClaudeAdapter > reports usage evidence when invalid snake input type keeps finite output token usage 422ms
+   ✓ SubprocessClaudeAdapter > reports usage evidence when negative and fractional values preserve current semantics 361ms
+   ✓ SubprocessClaudeAdapter > reports usage evidence when zero total is not reported 362ms
+   ✓ SubprocessClaudeAdapter > reports usage evidence when negative total is not reported 360ms
+   ✓ SubprocessClaudeAdapter > falls back from a non-finite snake alias to a finite camel alias 360ms
+   ✓ SubprocessClaudeAdapter > ignores a non-finite alias when no finite fallback exists 374ms
+   ✓ SubprocessClaudeAdapter > omits token usage when finite selected fields overflow in sum 368ms
+   ✓ SubprocessClaudeAdapter > returns null when aborted execute yields no final result 495ms
+   ✓ SubprocessClaudeAdapter > terminates the inner Claude process when plan is interrupted 361ms
+   ✓ SubprocessClaudeAdapter > parses a large partial execute payload after wrapper interruption 640ms
+   ✓ SubprocessClaudeAdapter > includes brand-new untracked files in partial execute diff recovery 515ms
+   ✓ SubprocessClaudeAdapter > includes both staged and unstaged edits in partial execute diff recovery 378ms
+   ✓ SubprocessClaudeAdapter > waits for close before interrupting a close-pending successful execute 754ms
+   ✓ SubprocessClaudeAdapter > returns repo-relative target paths for renamed and quoted files 389ms
+ ✓ tests/controller/runLoop.integration.test.ts (53 tests) 11328ms
+   ✓ runLoop > succeeds when verification approves 319ms
+   ✓ runLoop > persists retry-ready planning state before retry cleanup runs 355ms
+   ✓ runLoop > stops immediately when a stopOn signal matches 409ms
+   ✓ runLoop > exhausts the run when planning exceeds per-attempt timeout 398ms
+   ✓ runLoop > persists phase usage evidence from the subprocess adapter without recomputing controller totals 773ms
+ ✓ tests/validation/evidence.test.ts (39 tests) 16095ms
+   ✓ finalize-review CLI > rejects unknown verdicts and diagnoses 1354ms
+   ✓ finalize-review CLI > stores diagnosis null as JSON null and refuses overwrite 1222ms
+   ✓ run-scenario CLI > records env names only and tracks descendants rooted at the spawned pid 2949ms
+   ✓ run-scenario CLI > works when invoked outside the repo root 1569ms
+   ✓ run-scenario CLI > runs when invoked through a canonical-path alias 1568ms
+   ✓ run-scenario CLI > creates a fresh nested evidence directory when its parent does not exist 1504ms
+   ✓ run-scenario CLI > writes evidence files even when ccloop fails before creating the run directory 580ms
+   ✓ run-scenario CLI > fails on an existing evidence directory without overwriting it 579ms
+   ✓ run-scenario CLI > fails on an existing run directory without creating evidence or harvesting stale run data 574ms
+   ✓ run-scenario CLI > rejects a fixture path that does not match the rendered contract repoPath 943ms
+   ✓ run-scenario CLI > rejects a scenario that does not match contract objective.taskId before child launch 568ms
+   ✓ run-scenario CLI > records claudeChildExited as NOT_OBSERVABLE when no adapter descendant was tracked 2505ms
+
+ Test Files  29 passed (29)
+      Tests  484 passed (484)
+   Start at  19:38:07
+   Duration  16.70s (transform 2.05s, setup 0ms, collect 3.37s, tests 57.66s, environment 3ms, prepare 1.69s)
+
+EXIT=0
+```
+
+`Tests 484 passed (484)` against this round's stated baseline of 483 — exactly +1, the one new test, and no
+other count moved. 29 files, unchanged.
+
+`rtk proxy "npm run typecheck"`:
+
+```
+> ccloop@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.json
+
+EXIT=0
+```
+
+`rtk proxy "npm run build"`:
+
+```
+> ccloop@0.1.0 build
+> tsc -p tsconfig.json && node -e "const fs=require('fs');fs.writeFileSync('dist/cli.js', '#!/usr/bin/env node\nexport * from \"./src/cli.js\";\nimport { main } from \"./src/cli.js\";\nvoid main(process.argv.slice(2)).then((code) => { process.exitCode = code; });\n');fs.writeFileSync('dist/cli.d.ts', 'export * from \"./src/cli.js\";\n');"
+
+EXIT=0
+```
+
+## 7. Guards and the predicate sha256, re-measured after the change
+
+Script (symbol-anchored, no line numbers), run through `rtk proxy` because the shell hook filters:
+
+```
+grep -cF 'return { ok: false' src/controller/resumeLoop.ts
+grep -rnF 'currentOwnerEpoch + 1' src/
+git status --porcelain src/registry/ ; git diff --stat b126137 -- src/registry/
+awk '/^function transferRepresentsPublishedWinner\(/,/^}/' src/persistence/fileStore.ts | shasum -a 256
+```
+
+```
+== guard 1: return { ok: false count ==
+8
+== guard 2: currentOwnerEpoch + 1 ==
+src/ownership/ownerController.ts:166:  const nextEpoch = ownerRecord.currentOwnerEpoch + 1;
+== guard 3: src/registry status (empty = untouched) ==
+== predicate sha256 ==
+b1d03f926fb865def86fb6814daeac84cbe0ad2ee8a8dcfd7bf44b21d604356f  -
+EXIT=0
+```
+
+All three hold, and the predicate's function body still hashes to
+`b1d03f926fb865def86fb6814daeac84cbe0ad2ee8a8dcfd7bf44b21d604356f` — the dispatch's required value.
+`transferRepresentsPublishedWinner`'s logic is byte-identical; only the comment ABOVE it moved (F2).
+
+## 8. Scope of this round
+
+`src/persistence/fileStore.ts` (one `try`/`catch` and three comment blocks),
+`tests/persistence/fileStore.test.ts` (one added test), and these two ledger / report files. No new artifact
+file, no new callback channel, no new exported type, no signature change. Rule 2 held.

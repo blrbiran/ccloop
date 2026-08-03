@@ -305,3 +305,80 @@ VERIFICATION (unfiltered, via `rtk proxy`, ECC_GATEGUARD=off DISABLE_OMC=1):
   (`expected 'OWNER_LOST' to be 'OWNER_UNDECIDABLE'`, `1 failed | 74 skipped (75)`). Reverted after each,
   revert proven by a green single-run (`1 passed | 74 skipped (75)`) AND by the function-body sha256
   matching the pre-change value.
+
+FIX ROUND 1 ON OPTION 2 (commits bf5d12d fix, 5495c9b test, 03ba382 comments, + this docs commit)
+  Independent review of b70b40f / 0d557e9 / 9fe1f02 returned "Needs fixes": 1 Important, 3 Minor. Follow-up
+  commits only — main was already pushed; nothing amended, rewritten, or forced. Full evidence, every block
+  whole, in gate-a-option2-report.md's "FIX ROUND 1" section.
+
+  F1 (Important) — FIXED. describePublishedWinnerReplacement was NOT TOTAL. It evaluates
+  shouldPreserveExistingReconciliationRecord on the !transferRepresentsPublishedWinner square; the
+  pre-change code reached that helper only through shouldProtectSuccessfulTransferTruth's `&&`, i.e. only
+  when the predicate was TRUE, so the complement square was newly evaluated. readPersistedReconciliationRecord
+  casts an unvalidated JSON.parse result, so a reconciliation-record.json parsing to `null` is `!== undefined`
+  and isSuccessfulReconciliationForTransfer dereferences it. MEASURED on one fixture, both trees: pre-change
+  writeBoundaryArtifacts returns and the downgrade lands; as landed a TypeError propagates out through
+  persistBoundaryAnalysis into runLoopFromState's outer catch (isLeaseStopError does not match) and ENDS THE
+  ATTEMPT AS FAILED, boundary-analysis.json already written and the corrupt file still in place. Only `null`
+  throws — `[]`, `"x"`, `1`, `true` box harmlessly — and no writer in this repo can produce it, hence
+  Important not Critical, and permit-LESS not permit-more. It was still A DECISION THAT MOVED, in a change
+  whose entire warrant is that none does.
+    Form: try/catch around the whole detail computation, INSIDE describePublishedWinnerReplacement. Rejected
+    validating in readPersistedReconciliationRecord — that also changes the predicate-TRUE square, where a
+    corrupt record would then route into the SYNTHESIS arm, i.e. permit MORE, which is exactly reason #2 of
+    the ruling. Rejected a `null` guard — needs a cast against `ReconciliationRecord | undefined` and hardens
+    against one value rather than any shape. The containment is scoped so the predicate-TRUE square still
+    throws exactly as it did before this signal existed; preserveSuccessfulReconciliationIfNeeded's object
+    literal evaluates `record:` before `publishedWinnerReplacedDetail:`, which keeps that ordering true.
+    Pinned by a new test on the `null` fixture asserting the downgrade STILL LANDS. Killing mutation: delete
+    the try/catch -> `1 failed | 75 skipped (76)`, EXIT=1, "Cannot read properties of null"; restored ->
+    `1 passed | 75 skipped (76)`, EXIT=0. Both counts nonzero for the named test.
+
+  F2 (Minor) — FIXED, comments only. describePublishedWinnerReplacement's header and
+  transferRepresentsPublishedWinner's closing sentence described the fire condition as "(a) holds, (b) does
+  not" / "would have protected but for the process-instance-id clause". The code tests
+  `!transferRepresentsPublishedWinner`, a strict SUPERSET — `eligibleForContinuation === false` or
+  `currentOwnerEpoch !== newOwnerEpoch` land there too. Not reachable from applyOwnerEpochTransfer (always
+  writes eligibleForContinuation: true), so behaviour was never wrong; but an inaccurate comment on this
+  exact symbol is what made F1 require execution to find. Both now name the predicate.
+
+  F3 (Minor) — FIXED as a reword, and THE GAP IS NAMED, NOT CLOSED. The synthesis-disjunct justification said
+  synthesis requires persistedReconciliationRecord === undefined "so nothing on disk is destroyed there".
+  True of preserved TRUTH, false of disk contents: readPersistedReconciliationRecord's
+  `catch { return undefined }` maps a CORRUPT file to undefined too.
+    *** KNOWN GAP — CORRUPT-FILE SQUARE ***: when reconciliation-record.json exists but is CORRUPT and the
+    write reaches the synthesis square, the corrupt file is overwritten with NO reconciliation_published_
+    winner_replaced event and no other output — the same silence Option 2 exists to remove, one square over.
+    Deliberately not covered: widening the signal to distinguish absent from corrupt is a different change
+    with a different justification, and it is the SAME absent-vs-corrupt conflation that is reason #2 of the
+    2026-08-02 human ruling. Carried to GATE-A triage alongside the dead-helper item. The new F1 test
+    deliberately makes NO assertion about events.jsonl so that closing this gap does not turn it red.
+
+  F4 (Minor) — SUPERSEDED, not edited. *** SUPERSESSION NOTE: commit 0d557e9's message says deleting the
+  predicate's third clause "kills (i) only". THAT IS WRONG. *** Measured with a probe on the landed fixture:
+  with the clause deleted the protection ENGAGES, so describePublishedWinnerReplacement's first disjunct is
+  true, no detail is produced, and events.jsonl DOES NOT EXIST — mutation 2 kills half (ii) as well. Half (i)
+  merely fails first because its assertions come first in the test body. 0d557e9's message is published
+  history and stands as written; this entry and gate-a-option2-report.md §FIX ROUND 1.4 supersede it, per this
+  repo's convention for a published statement that turned out wrong.
+
+  OUT OF SCOPE, CONFIRMED LEFT ALONE: the reviewer's third item — deleting
+  shouldPreserveExistingSuccessfulReconciliation, the dead helper whose agreement with the live predicate
+  rests on an unreduced (A || A) — is deferred to GATE-A triage. This ledger already carried it (see the
+  FINDING block above, "Flagged for GATE-A triage"); verified by reading, nothing added.
+
+  VERIFICATION (unfiltered, via `rtk proxy`, ECC_GATEGUARD=off DISABLE_OMC=1):
+  `npm test -- --run`: `Test Files 29 passed (29)` / `Tests 484 passed (484)`, Duration 16.70s, EXIT=0.
+  Baseline for this round was 483; +1 is exactly the one new test, and both throwaway probe files were
+  deleted before this run. `npm run typecheck` EXIT=0. `npm run build` EXIT=0.
+  Guards re-checked after the change: `grep -cF 'return { ok: false' src/controller/resumeLoop.ts` = 8;
+  `grep -rnF 'currentOwnerEpoch + 1' src/` = single hit (src/ownership/ownerController.ts:166);
+  `git status --porcelain src/registry/` empty. transferRepresentsPublishedWinner's function-body sha256,
+  via `awk '/^function transferRepresentsPublishedWinner\(/,/^}/' src/persistence/fileStore.ts | shasum -a 256`,
+  is b1d03f926fb865def86fb6814daeac84cbe0ad2ee8a8dcfd7bf44b21d604356f — unchanged. Only the comment ABOVE the
+  predicate moved.
+
+  STILL OPEN, UNCHANGED BY THIS ROUND: the winner's published reconciliation record is still DESTROYED on
+  this path (Option 2 records the loss, it does not prevent it); the crash-window reachability is still
+  asserted rather than simulated; and the line for group C's brief still stands — a SECOND non-terminal route
+  to persistBoundaryAnalysis reopens the ruling.
