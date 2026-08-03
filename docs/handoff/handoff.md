@@ -1,4 +1,30 @@
-# ccloop Handoff — **L3 spec 与计划已定稿；组 A 九个任务全部完成并已合入 `main`（那笔不是 GATE-A）；GATE-A 未做**
+# ccloop Handoff — **GATE-A 已通过并已开门（`e5bf650`）；组 A（L3 债 1）关闭；下一步是组 B**
+
+> ⚠️ **2026-08-03 更新：门开了。** 下方「快速接手入口」与「当前状态」两节仍停在 2026-08-02「门还关着」的视角，**凡是说 GATE-A 未做、说下一步是补 A9 再评审或跑 GATE-A 的句子，一律作废**，以本节为准。其余（陷阱、教训、组 A 确立的不变量）仍然有效。
+
+## 2026-08-03：门已开，这是现在的真实状态
+
+**先跑这些，以输出为准：**
+
+```bash
+cd /Users/biran/code/skills/loop/ccloop
+git log --merges --format='%h %cd %s' --date=iso --reverse | tail -3   # 第三笔才是门
+git ls-remote origin refs/heads/main                                   # 远端真实状态，见下方警告
+git status --short && git worktree list
+export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy "npm test -- --run"
+```
+
+1. **GATE-A 通过，门是 `e5bf650`**，主题行 `GATE-A PASSED: L3 debt 1 group A (A1-A9), two independent reviewers, 0 Critical`。**这就是计划 §15 验收 7 判据 (1) 定位到的那一笔，也是组 C 的 C1 要填的 `$A4`。** 另外两笔指向同一分支的合并（`787789e` / `94d7c0a`）**都明写不是门、都不带结论**——别拿错。
+2. **门为什么必须是 merge**：判据 (1) 逐字是 `git log --merges --format='%h %cd %s'`——**只枚举 merge、只打印主题行**。一笔带结论的普通提交它根本看不见。这条是 GATE-A 评审当场发现的，别再退回「写一笔 docs 提交记结论」的方案。
+3. **门的完整结论、证据与遗留全在 ledger 里**：`.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/progress.md` 末尾那一大段 `*** GATE-A: PASSED ***`。**七条 open 项逐条具名**，其中第 4 条是给组 B/C 的硬约束：**若组 B 或 C 给 `persistBoundaryAnalysis` 加了第二条不立刻走终态的路由，那条「保留即放宽」的人裁就重新打开**——组 C 的 brief 必须带上这句。
+4. **门前落了两波修复 + 一次生产改动**，全部在 `main` 上、全部经独立评审并各有一次再评审。生产改动是 `reconciliation_published_winner_replaced` 事件（把一次静默的记录销毁变响亮），**谓词 `transferRepresentsPublishedWinner` 一个字节没动**（人裁：保留即放宽），函数体 sha256 `b1d03f92…` 在门上复验过。
+5. **分支与 worktree 仍在，删除仍需单独授权**：`feat/l3-debt1-transactional-continuation`（`20457e6`）、`.claude/worktrees/l3-debt1-group-a`、以及门分支 `gate/l3-debt1-group-a`（`bf7c031`，已并入 `main`）。**清理前先枚举 worktree 下会被一并销毁的未入库产物**（brief / report / review diff）——ledger 与 `task-*-report.md` 是 tracked 的，review `.diff` 不是。
+6. **下一步是组 B（§5 债 3：`heartbeat.stop()` 释放窗口）。** 前置硬门已满足。组 B 往 A8 建的 `RunLoopFromStateOptions` 上加键——**注意 A8 实际建了两个单键 options 类型**（`ResumeLoopOptions` 与 `RunLoopFromStateOptions`），跨层的键要两边都加并在 `resumeLoop` 里转发，**不要新建第三个**。
+7. **门上验证**：29 files / 484 tests exit 0；typecheck 0；build 0；三守卫 8 / 单点 / `src/registry/` 空；两条允许的 flake 都没出现。
+
+> ⚠️ **推送：本会话中途远端又被推了一次，而 push 不是本会话做的。** 实测 `git reflog show refs/remotes/origin/main` 有 `2026-08-03 09:35:55 update by push`，落点是 `9fe1f02`——**这意味着 Option 2 那笔连同它当时还没修的一条缺陷已经发布，而修复轮四笔当时还没发布。** 本会话从未执行 `git push`。**接手时一律用 `git ls-remote origin refs/heads/main` 自查，不要相信任何文字描述，也不要把本地提交当成可以随手回滚的私有状态。**
+
+---
 
 > ⚠️ **本文件从下方「以下为 2026-08-01 的原文」那条分隔线往下的所有小节，都停在 2026-08-01 那一天的视角。** 它们没有被删除，因为其中的教训仍然有效；但凡是描述「现在该做什么」「现在在哪一笔」的句子，**一律以本节为准**。就地注解、不改原件，与本仓库对 `run-registry-design.md` 的 `*Amended (x)*` 与 `9e554ce` 提交信息勘误同一立场。
 
