@@ -136,6 +136,27 @@ function isLoserDowngradeAttempt(
   );
 }
 
+// This function tests TWO propositions; its name carries only the first.
+//   (a) "a transfer was successfully published" — the `eligibleForContinuation === true` clause
+//       and the `currentOwnerEpoch === newOwnerEpoch` clause.
+//   (b) "the process that won that transfer is still the process named as owner" — the
+//       `currentProcessInstanceId === newProcessInstanceId` clause, and nothing else tests it.
+// (b) goes false at the SAME epoch after any successful resume, with no race and no crash:
+// resumeLoop builds nextOwnerRecord by spreading ownerRecord (so currentOwnerEpoch is unchanged)
+// with a fresh buildProcessInstanceId(), then CAS-writes it. From that moment the resumer's id is
+// on disk where the winner's was, this function returns false, shouldProtectSuccessfulTransferTruth
+// stops protecting, and writeBoundaryArtifacts replaces the winner's already-published
+// eligibleForContinuation record with the resumed process's downgrade.
+//
+// That divergence is INTENDED, per the human ruling recorded in
+// .superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/progress.md: deleting clause (b)
+// was measured to permit MORE resumes — for a surviving winner record, for an ABSENT one, and for
+// a CORRUPT one, where readPersistedReconciliationRecord's `catch { return undefined }` routes the
+// corruption into the synthesis arm — and S-3's "never permit more" forbids that. The behaviour
+// kept here is therefore deliberate, not an oversight. What changed is only that the loss is no
+// longer silent: on exactly the square where (a) holds, (b) does not, and an on-disk successful
+// record is about to be replaced, describePublishedWinnerReplacement marks the write and
+// writeBoundaryArtifacts appends a reconciliation_published_winner_replaced event.
 function transferRepresentsPublishedWinner(
   ownerRecord: OwnerRecord,
   ownerTransferRecord: OwnerTransferRecord,
@@ -243,6 +264,33 @@ function preserveSuccessfulReconciliationIfNeededFromArtifacts(
   );
 }
 
+// The one square where shouldProtectSuccessfulTransferTruth would have protected but for
+// transferRepresentsPublishedWinner's process-instance-id clause: it is the conjunction above with
+// that first conjunct negated, expressed by calling the same two predicates rather than restating
+// either. Only shouldPreserveExistingReconciliationRecord is asked, not the synthesis disjunct:
+// synthesis requires persistedReconciliationRecord === undefined, so nothing on disk is destroyed
+// there and there is no loss to record. Returns the detail line for the event, or undefined when
+// this write destroys nothing that the protection would have kept.
+function describePublishedWinnerReplacement(
+  persistedOwnerRecord: OwnerRecord,
+  persistedOwnerTransferRecord: OwnerTransferRecord,
+  persistedReconciliationRecord: ReconciliationRecord | undefined,
+  nextReconciliationRecord: ReconciliationRecord,
+): string | undefined {
+  if (
+    transferRepresentsPublishedWinner(persistedOwnerRecord, persistedOwnerTransferRecord)
+    || !shouldPreserveExistingReconciliationRecord(
+      persistedReconciliationRecord,
+      nextReconciliationRecord,
+      persistedOwnerTransferRecord,
+    )
+  ) {
+    return undefined;
+  }
+
+  return `published winner reconciliation replaced by downgrade: transfer epoch ${persistedOwnerTransferRecord.priorOwnerEpoch} -> ${persistedOwnerTransferRecord.newOwnerEpoch} won by ${persistedOwnerTransferRecord.newProcessInstanceId}; owner-record epoch ${persistedOwnerRecord.currentOwnerEpoch} now held by ${persistedOwnerRecord.currentProcessInstanceId}`;
+}
+
 async function readPersistedReconciliationRecord(runDir: string): Promise<ReconciliationRecord | undefined> {
   try {
     return JSON.parse(
@@ -269,8 +317,14 @@ type PersistedTransferArtifactsRead =
 
 // The abandon arm carries the error rather than collapsing to a bare marker: it is the only thing
 // the abandonment has to say about why the write was given up.
+//
+// publishedWinnerReplacedDetail rides the EXISTING write arm rather than becoming a third kind:
+// this union is not exported, and the callers that reach this channel — resumeLoop,
+// writeBoundaryArtifacts, runLoopFromState — never destructure it, so a third arm would make them
+// absorb a shape change for a signal that changes nothing about what gets written. Optional
+// because it is set on one square only; the write itself is identical with or without it.
 type ReconciliationWriteDecision =
-  | { kind: "write"; record: ReconciliationRecord }
+  | { kind: "write"; record: ReconciliationRecord; publishedWinnerReplacedDetail?: string }
   | { kind: "abandon"; error: unknown };
 
 async function readPersistedSuccessfulTransferArtifacts(
@@ -346,6 +400,12 @@ async function preserveSuccessfulReconciliationIfNeeded(
       persistedArtifacts.reconciliationRecord,
       nextReconciliationRecord,
     ),
+    publishedWinnerReplacedDetail: describePublishedWinnerReplacement(
+      persistedArtifacts.ownerRecord,
+      persistedArtifacts.ownerTransferRecord,
+      persistedArtifacts.reconciliationRecord,
+      nextReconciliationRecord,
+    ),
   };
 }
 
@@ -414,6 +474,27 @@ export async function writeBoundaryArtifacts(
       join(runDir, "reconciliation-record.json"),
       decision.record,
     );
+
+    // Appended AFTER the write, not before: the event asserts that a published winner's record was
+    // destroyed, and if writeJsonFileAtomically throws it was not.
+    if (decision.publishedWinnerReplacedDetail !== undefined) {
+      try {
+        await appendEvent(runDir, {
+          type: "reconciliation_published_winner_replaced",
+          at: new Date().toISOString(),
+          detail: decision.publishedWinnerReplacedDetail,
+        });
+      } catch {
+        // Swallowed by contract, same shape and same reason as the abandon arm's appendEvent
+        // above. Left unswallowed, an unwritable events.jsonl (ENOSPC / EACCES / directory already
+        // removed) would propagate out of writeBoundaryArtifacts, through persistBoundaryAnalysis,
+        // into runLoopFromState's outer catch — where isLeaseStopError does not match an I/O
+        // error — and end the attempt as failed. Here the reconciliation write has ALREADY
+        // succeeded, so that would convert a successful write into a failed attempt: recording a
+        // loss must never be able to manufacture one. This signal is purely observational and
+        // changes nothing about what was written, which is exactly why it may be dropped.
+      }
+    }
   }
 }
 
