@@ -382,3 +382,162 @@ FIX ROUND 1 ON OPTION 2 (commits bf5d12d fix, 5495c9b test, 03ba382 comments, + 
   this path (Option 2 records the loss, it does not prevent it); the crash-window reachability is still
   asserted rather than simulated; and the line for group C's brief still stands — a SECOND non-terminal route
   to persistBoundaryAnalysis reopens the ruling.
+
+================================================================================
+*** GATE-A: PASSED. 2026-08-03. ***
+================================================================================
+
+This entry is the gate's review verdict. The merge commit that carries it in its
+subject line is what plan §15 acceptance 7 criterion (1) locates.
+
+REVIEWERS. Two, dispatched in parallel with deliberately disjoint lanes, both on
+the most capable model, NEITHER having worked on any of A1-A9 (session 3 is a
+fresh session; independence is structural, not asserted).
+  Lane 1 — production code, whole-branch design coherence, risk grading.
+  Lane 2 — triage of the deferred Minor backlog, and a re-scan of every mutation
+           evidence artefact across all nine tasks.
+Range: the fixed anchors ba8f8a0..feat/l3-debt1-transactional-continuation.
+`git merge-base main HEAD` does NOT compute this range — the branch was already
+merged before the gate ran. Do not substitute it.
+
+THE PLAN'S OWN GATE-A STEP 1 CHECKLIST — ALL SIX PASS.
+  C1 cleanupOwnerTransferStagingWithoutMarker = exactly 10 individually-named
+     safeUnlink; all six linked sites agree, checked one at a time against code.
+     ONE LIMITATION STATED RATHER THAN PAPERED OVER: the fifth site ("test 14
+     mechanism 2 = 11") cannot be checked against code today — sweepRuns does not
+     exist yet, it is group C's. The spec text is self-consistent; that cell is
+     verifiable only after group C lands.
+  C2 finalizePendingOwnerTransfer's catch gained exactly one symmetric safeUnlink;
+     semantics otherwise byte-identical. The try-head pair moved into the publish
+     loop, which is the plan's mandated per-entry form, not a semantic change.
+  C3 evaluateResumeEligibility byte-unchanged — proven by shasum of the function
+     body on both sides (cae8933d15640f116c9cad6c36daa469b5fcc49a), not by reading.
+     A6's eight-criteria mutation campaign therefore still stands.
+  C4 the four-layer callback channel is optional at every layer and changed no
+     return type; both call sites forward at each of the two forwarding layers.
+  C5 both places the plan itself called "never verified" carry raw output, and
+     A9's mutation 1 is red on the predicted assertion via the predicted mechanism.
+     *** THE PLAN'S ONE OPEN RISK IS DISCHARGED. ***
+  C6 37 mutation experiments swept across all nine tasks plus the errata: 37 of 37
+     are paired (pre-injection green + post-injection red), every block shows a
+     NONZERO named count, and no kill is credited to a neighbouring test. ZERO
+     fake greens: the only two all-skipped blocks in the whole corpus are labelled
+     demonstrations of that very defect. Named exceptions, form only: trailing
+     truncation is confined to A1 (12/12 blocks) and A2 (13/13) and to no other
+     task; 9 of 37 experiments cite a pre-injection green located elsewhere in the
+     same report rather than beside the red; revert proof is uneven (A6 is the
+     gold standard, A1 and A4 establish revert only in aggregate).
+
+DEFERRED-MINOR TRIAGE. 44 discrete items, re-derived by COUNTING the itemised list
+in this ledger — not copied from the handoff's "about thirty", which undercounts.
+Both the controller and lane-2 reviewer counted 44 independently. Disposition:
+6 FIX BEFORE GATE (all landed, see below) / 11 CARRY TO GROUP C / 2 CARRY TO L5 /
+21 RECORD ONLY / 4 NO LONGER APPLICABLE.
+
+FIXES LANDED BEFORE THIS GATE. Two waves, each followed by a mandatory re-review,
+because this repo's record is twelve consecutive fix waves each carrying a defect
+and not one found by the implementer who wrote it. That record held again: wave 1
+carried a false mechanism claim, caught by its re-review.
+  Wave 1 (8 items): test 6d's inode clause moved above the shape guards so the
+    clause the test is NAMED for can fail (verified: A4's mutation 2 now reds on
+    the inode assertion, not on capturedArtifactKeys); the plan's Task A5 Step 3
+    stopped naming a test that no longer exists (a live fake-green trap inside the
+    plan); the plan's own `-t` audit sentence corrected — it was FALSE, A4 twice
+    passed a PREFIX of an it name; two comment-accuracy corrections on test 6e;
+    the A7 S-3 adjudication scoped to the ENOENT arm; A2's block count 12 -> 13.
+  Wave 2 (4 items): wave 1's "second re-activation route" was factually wrong in
+    both directions and its back-pointer sat on two literals that do not control
+    the outcome — re-anchored on the real gate (buildBoundaryEvidence(null)'s
+    empty continuitySuspicion); an unconditional events.jsonl claim made
+    conditional; the -t census corrected to 46 by a quoting-agnostic method (two
+    method defects, not one); three report-artefact corrections.
+
+THE ONE IMPORTANT FINDING, AND HOW IT WAS CLOSED.
+  Lane 1 found that the loser's protective read compares a POST-recovery owner
+  record against a PRE-recovery transfer record, and disposed of it itself as
+  "defer to L5". The human declined that disposition on a reviewer's word and
+  ordered an independent verification. That verification REPRODUCED all five links
+  against source and, at the writeBoundaryArtifacts layer, with a running probe —
+  and overturned the reviewer's own framing: the trigger is NOT a crash-timing
+  race. transferRepresentsPublishedWinner also compares currentProcessInstanceId,
+  and resumeLoop rewrites it on EVERY successful resume, so the protection fails
+  with no marker, no crash and no interleaving.
+  A second probe then drove the composed path through the real entry points
+  (resumeLoop -> runLoopFromState -> persistBoundaryAnalysis ->
+  writeBoundaryArtifacts) and observed the winner's published record replaced by a
+  downgrade with zero events and zero callbacks. THAT SAME PROBE ALSO BOUNDED THE
+  HARM, and the bound is recorded because it is inconvenient: on the only route
+  that reaches the write, persistTerminalState runs in the very next statement, so
+  the run is terminal anyway and the counterfactual with the winner's record
+  restored is refused too. The observed harm is durable SILENT DESTRUCTION of a
+  published record plus a wrong refusal reason — NOT a stranded resumable run. The
+  scenario where a resumable run is stranded needs a crash between those two
+  statements and WAS NOT SIMULATED and IS NOT CLAIMED.
+
+  HUMAN RULING (S-3 scope). A design pass established that the instance-id clause
+  is UNMANDATED — no ruling, no spec requirement backs it; the spec in fact
+  miscounted the predicate twice. But deleting it was MEASURED to be permit-more:
+  evaluateResumeEligibility flips {ok:false} -> {ok:true} for a surviving winner
+  record, an ABSENT one, and a CORRUPT one — the corrupt case because the read's
+  `catch { return undefined }` routes it into the synthesis arm, which FABRICATES
+  eligibility over a file that today refuses resume outright. Human ruled:
+  *** PRESERVING IS PERMITTING. The predicate must not change. ***
+  Four recorded reasons: the permit-more is measured while the benefit is argued;
+  the corrupt-file case cannot be separated from the one-line deletion without a
+  second uncovered change; the 2026-07-27 ruling deleted a reconciliation-
+  synthesis path on exactly this ground and accepted losing the synthesis; and the
+  deletion's safety would rest on a crash window that group B/C may remove.
+
+  WHAT LANDED (Option 2): the predicate is byte-identical — re-proven at the gate,
+  function-body sha256 b1d03f926fb865def86fb6814daeac84cbe0ad2ee8a8dcfd7bf44b21d604356f
+  — and the destructive replacement now appends
+  reconciliation_published_winner_replaced instead of vanishing. Its review found
+  the change was NOT decision-inert (a reconciliation-record.json parsing to
+  literal `null` threw out of writeBoundaryArtifacts, ending an attempt that
+  previously succeeded — measured on two trees), one fix round contained it, and
+  the scoped re-review re-established inertness by comparing HEAD against the
+  pre-signal tree across a 26-cell behavioural matrix: every outcome identical
+  except the two new event lines. It also independently proved the rejected
+  alternative really would have been permit-more.
+
+WHAT IS STILL OPEN, NAMED SO IT CANNOT BE INHERITED AS CLOSED.
+  1. The winner's published record is still DESTROYED — now recorded, not
+     prevented. Reopening the predicate requires reopening the ruling above.
+  2. The corrupt-file square is a KNOWN GAP: a corrupt reconciliation-record.json
+     maps to `undefined`, so it is overwritten with NO event — the same silence
+     this signal removes, one square over. Deliberately not widened; that is scope
+     this change did not have.
+  3. The crash-window reachability behind ruling-reason 4 was never simulated.
+  4. IF GROUP B OR C ADDS A SECOND, NON-TERMINAL ROUTE TO persistBoundaryAnalysis,
+     the bound that makes the predicate change unsafe today disappears and THE
+     RULING REOPENS. Group C's brief must carry this line.
+  5. shouldPreserveExistingSuccessfulReconciliation is DEAD CODE. It agrees with
+     the live shouldPreserveExistingReconciliationRecord only through an unreduced
+     (A || A); anyone who simplifies that disjunction desynchronises a live
+     predicate from a same-named dead twin. Triaged to group C as a deletion.
+  6. Two Minor artefact-integrity items in the Option-2 fix report: its three
+     single-run fences record no -t command (the re-reviewer reproduced all three
+     runs itself and confirmed them, so the substance is established by an
+     independent party, but the artefact does not record it), and its guard-script
+     fence does not match its output fence. All four guard values re-derive.
+  7. ACCEPTANCE 7's LOCATOR, and why this gate is a merge. Criterion (1) runs
+     `git log --merges` and prints %s — it enumerates MERGE commits and reads
+     SUBJECT lines only. Group A was already merged twice, with identical subjects
+     and both bodies explicitly disclaiming the gate, so a plain commit carrying a
+     verdict would be INVISIBLE to it and $A4 was ambiguous between those two
+     hashes. Human ruled the gate be written as a real --no-ff merge whose SUBJECT
+     carries the verdict. That merge is the third and only verdict-bearing merge
+     of this branch's work; $A4 is that hash.
+
+FINAL VERIFICATION AT THE GATE, unfiltered, ECC_GATEGUARD=off DISABLE_OMC=1:
+  Test Files 29 passed (29) / Tests 484 passed (484), TEST_EXIT=0, Duration 16.49s
+  TYPECHECK_EXIT=0; BUILD_EXIT=0
+  Guard 1 `return { ok: false` = 8
+  Guard 2 `currentOwnerEpoch + 1` single hit, src/ownership/ownerController.ts:166
+  Guard 3 `git diff --name-only ba8f8a0..HEAD -- src/registry/` empty
+  Neither allowed flake (B) nor (F) appeared.
+
+VERDICT: GATE-A PASSES. Zero Critical across the whole branch. The one Important
+was verified by execution, ruled on by the human, closed by a reviewed change with
+its own fix round and re-review. Group B's precondition is met. Group C's C1 can
+fill in the gate hash: it is the merge commit that carries this verdict.
