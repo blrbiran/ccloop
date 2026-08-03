@@ -520,6 +520,9 @@ WHAT IS STILL OPEN, NAMED SO IT CANNOT BE INHERITED AS CLOSED.
      runs itself and confirmed them, so the substance is established by an
      independent party, but the artefact does not record it), and its guard-script
      fence does not match its output fence. All four guard values re-derive.
+     [ANNOTATED IN PLACE 2026-08-03, original text above unchanged: THIS ITEM IS
+     NOW CLOSED — see the POST-GATE ARTEFACT CLEAN-UP entry at the end of this
+     file. Items 1-5 and 7 remain open.]
   7. ACCEPTANCE 7's LOCATOR, and why this gate is a merge. Criterion (1) runs
      `git log --merges` and prints %s — it enumerates MERGE commits and reads
      SUBJECT lines only. Group A was already merged twice, with identical subjects
@@ -541,3 +544,75 @@ VERDICT: GATE-A PASSES. Zero Critical across the whole branch. The one Important
 was verified by execution, ruled on by the human, closed by a reviewed change with
 its own fix round and re-review. Group B's precondition is met. Group C's C1 can
 fill in the gate hash: it is the merge commit that carries this verdict.
+
+================================================================================
+POST-GATE ARTEFACT CLEAN-UP. 2026-08-03. Closes GATE-A open item 6 ONLY.
+================================================================================
+
+Human ordered this before group B opens. Documentation only: no source file, no
+test file and no plan file was touched, so no code conclusion of GATE-A is
+affected and the gate hash e5bf650 is unchanged.
+
+BOTH HALVES OF OPEN ITEM 6 ARE NOW CLOSED, each by measurement rather than by
+assertion, and each labelled in place as a 2026-08-03 reconstruction rather than
+back-dated into the original round.
+
+  6a. The Option-2 fix report's three single-run fences recorded no -t command.
+      The command was reconstructed and RE-RUN against today's unmutated tree. It
+      is ONE LINE and is deliberately NOT wrapped to this file's 80 columns, because
+      wrapping it broke it twice over: a continuation line beginning with `;` is a
+      bash syntax error (exit 2), and a wrap inside the double-quoted string put
+      vitest into watch mode with `run` demoted to a filter (`DEV v2.1.9` /
+      `No test files found`). Copy the next line whole:
+
+export ECC_GATEGUARD=off DISABLE_OMC=1 && rtk proxy "npx vitest run tests/persistence/fileStore.test.ts -t 'still lands the downgrade when reconciliation-record.json holds a value the record type cannot describe'"; echo "EXIT=$?"
+
+      (The trailing `; echo "EXIT=$?"` is part of the command, not decoration: the
+      first draft of THIS ledger bullet dropped it while still reporting EXIT=0 —
+      the very defect class 6b names, recurring inside the entry announcing 6b's
+      closure. Both that omission and the wrap that replaced it were caught by the
+      clean-up round's re-reviewer, each time by running the bullet's block
+      VERBATIM rather than reading it. The command matches the form recorded in the
+      report, whose §5 fence already uses the identical `'"; echo "EXIT=$?"` form.)
+      Observed: Test Files 1 passed (1) / Tests 1 passed | 75 skipped (76) /
+      EXIT=0 — the same counts and exit code as the pre-injection fence it
+      annotates. NONZERO named count, so this is not an all-skipped fake green.
+      The two mutation fences differ from it only by the injected source, and no
+      mutation was re-injected in this round: their substance was already
+      established by THE OPTION-2 FIX ROUND's independent re-reviewer (not the
+      clean-up round's), who reproduced all three runs. What was missing was the
+      record, and only the record was added.
+
+  6b. The report's guard-script fence omitted FIVE lines — the four `echo` headers
+      and the trailing `echo "EXIT=$?"` — so the script as printed could emit
+      neither the `== guard N: … ==` headers nor the `EXIT=0` that its own output
+      fence shows. The corrected script was RE-RUN through rtk proxy and compared
+      to that fence MECHANICALLY: `diff` exits 0, i.e. byte-identical. Guard 1 = 8;
+      guard 2 = the single hit at src/ownership/ownerController.ts:166; guard 3
+      empty; predicate sha256
+      b1d03f926fb865def86fb6814daeac84cbe0ad2ee8a8dcfd7bf44b21d604356f; EXIT=0.
+      Only the five echo lines were added; no guard, anchor or value changed.
+
+  THE ANCHOR b126137 WAS CHECKED AND IS LIVE. `git rev-parse b126137^{commit}` →
+  b126137ccfd174a9bdcff5fd158bf1b0833e3f2e, in both the main repo and the group-A
+  worktree. No amendment to the anchor was made. Recorded because a transient
+  "fatal: Needed a single revision" during this round briefly read as a dead
+  anchor: that failure came from passing a COMPOUND command to `rtk proxy`
+  (`rtk proxy "git rev-parse --short X && git log …"` — the shell operator and
+  everything after it reach git as further revisions, exit 128). The plain form
+  `rtk proxy "git rev-parse --short b126137"` exits 0 and prints b126137. It is
+  stated as the COMPOUND form's failure rather than `--short`'s, because the first
+  draft of this ledger entry blamed `--short` and that was FALSE — caught by the
+  clean-up round's independent reviewer, who ran the command four ways, and
+  re-verified by the controller before commit.
+  CARRY FORWARD, NOT YET DONE: this trap belongs in the environment-trap list in
+  docs/handoff/handoff.md, which today reads "三个会静默出错的环境陷阱" and
+  enumerates three. This round did NOT touch that file — its scope is the two
+  artefacts named above — so the trap currently lives ONLY here. Whoever next
+  rewrites the handoff must add it as a fourth entry, or group B meets it cold.
+
+STILL OPEN AFTER THIS ROUND: open items 1, 2, 3, 4, 5 and 7 of the GATE-A entry
+above are UNTOUCHED. In particular item 4 — a second, non-terminal route to
+persistBoundaryAnalysis reopens the "preserving is permitting" ruling — still
+stands and must be carried into group C's brief. This round closed item 6 and
+nothing else.

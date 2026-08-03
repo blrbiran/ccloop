@@ -678,6 +678,23 @@ wrapper (so a regression surfaces as the TypeError itself, which is the diagnosi
 events.jsonl — the corrupt-file square is a named open gap (§F3 below), and pinning silence there would go
 red the day that gap is legitimately closed.
 
+*Amended 2026-08-03 — artefact integrity, ledger GATE-A open item 6, first half.* The three single-run
+fences below recorded their OUTPUT but not the COMMAND that produced it. All three ran the same command;
+only the source underneath differs. The command is:
+
+```
+export ECC_GATEGUARD=off DISABLE_OMC=1 && rtk proxy "npx vitest run tests/persistence/fileStore.test.ts -t 'still lands the downgrade when reconciliation-record.json holds a value the record type cannot describe'"; echo "EXIT=$?"
+```
+
+This is a reconstruction, and it is labelled as one rather than back-dated: the controller of the 2026-08-03
+clean-up round re-ran it against today's unmutated tree and got `Test Files 1 passed (1)` /
+`Tests 1 passed | 75 skipped (76)` / `EXIT=0` — the same counts and exit code as the pre-injection fence
+below (timestamps and durations differ, as they must). The substance of all three runs was already
+established independently: the re-reviewer of THE OPTION-2 FIX ROUND — the round this report documents, not
+the 2026-08-03 clean-up round — reproduced all three itself. Naming it that way matters, because the
+clean-up round re-ran only the UNMUTATED green; it re-injected no mutation and makes no claim to have. What
+was missing was only the record, and this is it.
+
 Green single-run before injection:
 
 ```
@@ -997,11 +1014,28 @@ EXIT=0
 Script (symbol-anchored, no line numbers), run through `rtk proxy` because the shell hook filters:
 
 ```
+echo "== guard 1: return { ok: false count =="
 grep -cF 'return { ok: false' src/controller/resumeLoop.ts
+echo "== guard 2: currentOwnerEpoch + 1 =="
 grep -rnF 'currentOwnerEpoch + 1' src/
+echo "== guard 3: src/registry status (empty = untouched) =="
 git status --porcelain src/registry/ ; git diff --stat b126137 -- src/registry/
+echo "== predicate sha256 =="
 awk '/^function transferRepresentsPublishedWinner\(/,/^}/' src/persistence/fileStore.ts | shasum -a 256
+echo "EXIT=$?"
 ```
+
+*Amended 2026-08-03 — artefact integrity, ledger GATE-A open item 6, second half.* FIVE lines above were
+missing from this fence — the four `echo` headers and the trailing `echo "EXIT=$?"` — so the script as
+printed could produce neither the `== guard N: … ==` headers nor the `EXIT=0` that the output fence below
+shows: the command block and the output block did not match. The 2026-08-03 clean-up round re-ran the
+corrected script through `rtk proxy` against today's tree and compared the two MECHANICALLY rather than by
+eye: `diff` of the run's output against the output fence below exits **0**, so the reproduction is
+byte-identical — `8`, the single `ownerController.ts:166` hit, an empty guard 3, the same predicate sha256,
+and `EXIT=0`. Only the five missing `echo` lines were added; no guard, no anchor and no value changed.
+`b126137` still resolves (`git rev-parse b126137^{commit}` → `b126137ccfd174a9bdcff5fd158bf1b0833e3f2e`).
+*(The first draft of this amendment omitted the `EXIT=$?` line and still claimed a line-for-line match. An
+independent reviewer of the clean-up round caught it by running `diff`; corrected before commit.)*
 
 ```
 == guard 1: return { ok: false count ==
