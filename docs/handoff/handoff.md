@@ -4,6 +4,12 @@
 >
 > **关于 hash 的读法**：本节引用的 `e5bf650` / `787789e` / `94d7c0a` / `ba8f8a0` 等都是**已固定的历史锚点**，可以放心引用。**当前 HEAD、领先远端几笔、测试总数一律自查**——提交本文这个动作本身就会改变前两者。
 
+> ⚠️ **2026-08-03 晚，补 Minor 那一轮之后的三处就地作废（其余照读）：**
+> 1. **ledger open 项 6 那两条 Minor 产物完整性问题已关闭**（提交 `0bbe0c8`）。下方第 35 行「另有两条 Minor 是有意留下的」**作废**。open 项 1/2/3/4/5/7 一条没动，**仍然全开**。
+> 2. **组 A 的分支与 worktree 已按人的授权删除**：`feat/l3-debt1-transactional-continuation`（`20457e6`）、`gate/l3-debt1-group-a`（`bf7c031`）、`.claude/worktrees/l3-debt1-group-a` 都不在了。删前两者都验过 `--is-ancestor main` exit 0，不丢提交；worktree 下那 25 个未入库产物（16 份 `review-*.diff` + 9 份 `task-A*-brief.md`）**已拷进主仓库同目录**（仍是 gitignored）。下方第 23 行与「明确没做的三件事」第 2 条**作废**。
+> 3. **仍然没有 push。** 那一条不作废。当时实测本地领先远端一笔；**接手时照旧 `git ls-remote origin refs/heads/main` 自查**。
+> 4. **陷阱清单已从三条变成四条**（新增 `rtk proxy` 只吃单条命令 / 文档里折行的命令会烂），见下方专节。
+
 ## 2026-08-03：门已开，这是现在的真实状态
 
 **先跑这些，以输出为准：**
@@ -157,11 +163,14 @@ git diff --name-only ba8f8a0..feat/l3-debt1-transactional-continuation -- src/re
 
 **4. 停在 GATE-A，不进组 B。** 组 B 的前置硬门是 GATE-A 已完成；组 C 的 C1 第一步就要能填出组 A 的门 hash，填不出说明顺序被违反。**删分支、删 worktree 都要单独授权**（GATE-A 的整分支 diff 依赖它们）。
 
-### ⚠️ 三个会静默出错的环境陷阱（都是实测撞出来的）
+### ⚠️ 四个会静默出错的环境陷阱（都是实测撞出来的）
+
+> **第 4 条是 2026-08-03 补 Minor 那一轮新撞出来的**，与前三条同等硬。
 
 1. **`EnterWorktree` 默认 `baseRef: fresh`，从 `origin/<默认分支>` 开分支，不是从你的 HEAD**，而且不报错——会让你照着过期的 spec 干活。解法：先 `git worktree add <path> -b <branch> HEAD` 显式指定基点，再用 `EnterWorktree` 的 `path` 参数接管。
 2. **全局 `rtk` shell hook 会自动过滤 / 摘要输出**，与本仓库「验证跑绝不过滤输出」的铁律直接冲突。它不只影响 vitest：**`git diff` / `git diff --name-only` 也会被摘要成 `Changes:` 之类的空壳**，本轮控制器就因此把「空 diff」误读过一次。绕过方式：`rtk proxy "<命令>"`（它不接受以环境变量赋值开头的引号串，要先 `export`）。另注意 `mv` 被 alias 成交互式，脚本里要用 `command mv -f`。
 3. **`-t 'describe > it'` 在 vitest 2.1.9 下匹配不到任何测试，输出是 `Tests N skipped (N)` ＋ exit 0——看上去就是绿的。** 计划 §10 那条全文适用的「变异必须红」判据，逐字照做正好得到这个形状。**已就地勘误为 `Amended 2026-08-02 (b)`**，并新增了真正堵洞的那条硬要求：**每个单跑块必须显示具名测试的非零计数**（注入前 `1 passed | N skipped`、注入后 `1 failed | N skipped`），全 skipped 不算绿——因为换命令形状挡不住「测试名打错」。已核实 A1–A5 实际用的都是裸 `it` 名，**已落地的变异证据没有被污染**。
+4. **`rtk proxy` 只吃*单条*命令；给它复合命令会静默走形。** 实测：`rtk proxy "git rev-parse --short X && git log -1 X"` → `fatal: Needed a single revision`、**exit 128**，因为 `&&` 与其后的一切都被当成又一个 revision 传给了 `git`——本轮据此一度把一个**活着的**锚点误判为失效锚点。同型的第二种走形更阴：**把一条命令按 80 列折行写进文档，照抄会烂在两个不同的地方**——以 `;` 开头的续行是 bash 语法错误（exit 2），而折在双引号字符串内部会让 `npx vitest run …` 变成 `DEV` watch 模式、`run` 降格成过滤器，输出 `No test files found`。**规矩：一条 `rtk proxy` 一条命令；要复合就 `bash -c` 或写成脚本文件；文档里的命令宁可超宽也不折行，并写明「这是一行」。**
 
 ### 本轮产生的人裁（不要重开）
 
