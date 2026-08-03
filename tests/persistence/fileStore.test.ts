@@ -1950,6 +1950,112 @@ describe("fileStore", () => {
     expect(reconciliation.takeoverPermission.allowed).toBe(true);
   });
 
+  // The post-resume square. resumeLoop keeps currentOwnerEpoch and CAS-writes a FRESH
+  // currentProcessInstanceId, so transferRepresentsPublishedWinner's third clause is false for
+  // every write the resumed process makes — no race, no crash. The protection above therefore does
+  // not engage and the winner's published record is destroyed. Both halves are pinned on purpose:
+  //   (i) that the record IS still replaced. This is the assertion that goes red the day someone
+  //       "fixes" this by deleting that third clause, which the 2026-08-02 ruling forbids because
+  //       it was measured to permit MORE resumes — including over an absent and a corrupt
+  //       reconciliation-record.json.
+  //   (ii) that the destruction is recorded rather than silent. Before this event existed the
+  //       write took the `write` arm, so neither the abandon arm's callback nor its event fired
+  //       and the loss produced zero output of any kind.
+  it("records reconciliation_published_winner_replaced when a resumed owner downgrade replaces the published winner record", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    const winnerReconciliation: ReconciliationRecord = {
+      staleSuspicionBasis: ["owner transfer already published"],
+      staleConfirmed: true,
+      ownershipVerdict: "OWNER_LOST",
+      lastTrustedBoundary: "execute",
+      conflictingEvidence: [],
+      takeoverPermission: {
+        allowed: true,
+        reason: "strict owner-loss conditions satisfied; continuation still requires a later transfer step",
+      },
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      eligibleForContinuation: true,
+    };
+
+    // owner-record.json at epoch 2 naming the RESUMER, not the winner: exactly what
+    // claimOwnerRecordWithPrecondition leaves behind after resumeLoop adopts the run.
+    await writeOwnerRecord(runDir, {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 2,
+      currentProcessInstanceId: "pid:resumer",
+      lastAffirmedAt: "2026-07-23T00:00:02.000Z",
+      ownerStatus: "current",
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    });
+    await writeOwnerTransferRecord(runDir, {
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      priorProcessInstanceId: "pid:12345",
+      newProcessInstanceId: "pid:winner",
+      transferredAt: "2026-07-23T00:00:01.000Z",
+      reason: "owner lost after reconciliation",
+      eligibleForContinuation: true,
+    });
+    await writeFile(
+      join(runDir, "reconciliation-record.json"),
+      JSON.stringify(winnerReconciliation, null, 2),
+    );
+    // Fixture precondition for the "exactly one line" assertion below.
+    await expect(readFile(join(runDir, "events.jsonl"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis: {
+        status: "stale_candidate",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: "continuity evidence missing",
+      },
+      reconciliationRecord: {
+        staleSuspicionBasis: ["continuity evidence missing"],
+        staleConfirmed: true,
+        ownershipVerdict: "OWNER_UNDECIDABLE",
+        lastTrustedBoundary: "execute",
+        conflictingEvidence: [],
+        takeoverPermission: {
+          allowed: false,
+          reason: "deny-by-default until strict owner-loss and transfer conditions are fully met",
+        },
+        priorOwnerEpoch: 2,
+        newOwnerEpoch: null,
+        eligibleForContinuation: false,
+      },
+    });
+
+    // (i) The downgrade still wins. Deleting transferRepresentsPublishedWinner's third clause
+    // turns these four assertions red.
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as ReconciliationRecord;
+    expect(reconciliation.ownershipVerdict).toBe("OWNER_UNDECIDABLE");
+    expect(reconciliation.priorOwnerEpoch).toBe(2);
+    expect(reconciliation.newOwnerEpoch).toBe(null);
+    expect(reconciliation.eligibleForContinuation).toBe(false);
+
+    // (ii) ...and the destroyed winner is named in events.jsonl.
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line) as { type: string; detail: string });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe("reconciliation_published_winner_replaced");
+    expect(events[0]?.detail).toBe(
+      "published winner reconciliation replaced by downgrade: transfer epoch 1 -> 2 won by pid:winner; owner-record epoch 2 now held by pid:resumer",
+    );
+  });
+
   it("synthesizes a successful reconciliation view when winner transfer truth exists before any success reconciliation is written", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
 
