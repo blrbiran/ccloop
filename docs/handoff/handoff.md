@@ -1,6 +1,8 @@
 # ccloop Handoff — **GATE-A 已通过并已开门（`e5bf650`）；组 A（L3 债 1）关闭；下一步是组 B**
 
-> ⚠️ **2026-08-03 更新：门开了。** 下方「快速接手入口」与「当前状态」两节仍停在 2026-08-02「门还关着」的视角，**凡是说 GATE-A 未做、说下一步是补 A9 再评审或跑 GATE-A 的句子，一律作废**，以本节为准。其余（陷阱、教训、组 A 确立的不变量）仍然有效。
+> ⚠️ **2026-08-03 更新：门开了。** 下方「快速接手入口」与「当前状态（2026-08-02 晚）」两节仍停在「门还关着」的视角。**具体作废这几句**：那两节里「两道工序仍然欠着」（A9 scoped 再评审 / GATE-A 整分支评审）——**两道都做完了**；「真正的 GATE-A 合并要另写一笔」——**已经写了**；「下一个动作是先补 A9 再评审」——**已完成**。其余（三个陷阱、各轮教训、组 A 确立的不变量、约定与铁律）**全部仍然有效，请照读**。就地注解、不改原件，与本仓库对 `run-registry-design.md` 的 `*Amended (x)*` 同一立场。
+>
+> **关于 hash 的读法**：本节引用的 `e5bf650` / `787789e` / `94d7c0a` / `ba8f8a0` 等都是**已固定的历史锚点**，可以放心引用。**当前 HEAD、领先远端几笔、测试总数一律自查**——提交本文这个动作本身就会改变前两者。
 
 ## 2026-08-03：门已开，这是现在的真实状态
 
@@ -23,6 +25,46 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy "npm test -- --run"
 7. **门上验证**：29 files / 484 tests exit 0；typecheck 0；build 0；三守卫 8 / 单点 / `src/registry/` 空；两条允许的 flake 都没出现。
 
 > ⚠️ **推送：本会话中途远端又被推了一次，而 push 不是本会话做的。** 实测 `git reflog show refs/remotes/origin/main` 有 `2026-08-03 09:35:55 update by push`，落点是 `9fe1f02`——**这意味着 Option 2 那笔连同它当时还没修的一条缺陷已经发布，而修复轮四笔当时还没发布。** 本会话从未执行 `git push`。**接手时一律用 `git ls-remote origin refs/heads/main` 自查，不要相信任何文字描述，也不要把本地提交当成可以随手回滚的私有状态。**
+
+### 明确没做的三件事（不是遗漏，是边界）
+
+1. **没有 push。** 由人手动做。
+2. **没有删任何分支或 worktree。** 需单独授权。
+3. **没有进组 B。**
+
+另有**两条 Minor 是有意留下的**，不是漏的：Option 2 修复报告的三个单跑块没记 `-t` 命令（再评审员自己把三次全重跑复现过，实质由独立方确立，只是产物没记），以及一处守卫脚本的命令块与输出块对不上（四个值都复验正确）。**都写在 ledger open 项第 6 条。** 若你认为门不该带着产物完整性问题开，补一轮清掉即可，不影响任何代码结论。
+
+### 本轮产物索引（都在仓库里，不要重新推导）
+
+| 产物 | 路径 |
+|---|---|
+| **唯一可信进度源 + GATE-A 完整结论与七条 open 项** | `.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/progress.md`（末尾 `*** GATE-A: PASSED ***` 那段） |
+| 九个任务各自的完整报告 | 同目录 `task-A1..A9-report.md`、`task-errata-report.md` |
+| GATE-A 两波修复的报告 | 同目录 `gate-a-fix-wave-report.md` |
+| Option 2（生产改动）的报告与修复轮 | 同目录 `gate-a-option2-report.md` |
+| 评审包（未入库，`git worktree remove` 会连带删掉） | 同目录 `review-*.diff`、`gate-a-package-*.diff` |
+| 计划（含 (a)–(g) 七处就地勘误） | `docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md` |
+| spec（§4.6 有一句已知过期，计划裁定三覆盖它） | `docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md` |
+| 打包脚本（**不在本仓库**） | `~/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/review-package` |
+
+### 建议调用的 skills（接手组 B 时）
+
+| skill | 何时 | 注意 |
+|---|---|---|
+| `superpowers:subagent-driven-development` | **立刻** | 组 B 的执行框架。**先读 ledger 再决定从哪开始。** 每任务「实施者 → 独立评审员 → 有 Critical/Important 进修复环 → scoped 再评审 → ledger 记 complete」，**不接受实施者自证** |
+| `superpowers:using-git-worktrees` | 开组 B 之前 | ⚠️ `EnterWorktree` 默认从 `origin/<默认分支>` 开分支且不报错。先 `git worktree add <path> -b <branch> HEAD` 显式指定基点，再用 `EnterWorktree` 的 `path` 接管 |
+| `superpowers:requesting-code-review` | 每任务一次 + GATE-B 一次 | 提示词必写：不接受实施者自证、findings 带可构造场景、锚点用符号名不用行号。**GATE-B 的评审员必须没参与过组 B 任何一条** |
+| `superpowers:verification-before-completion` | 声称「通过/完成」之前 | 复跑全套件 + typecheck + build 并贴**未过滤**输出（`rtk proxy`），**连每文件 `✓` 清单一起贴**——本轮有一次因「为了宽度省掉 60 行清单」被评审员记为违规 |
+| `superpowers:systematic-debugging` | 撞到不在 flake 名单内的失败 | 名单只有 (B) 与 (F) 两条 |
+| `superpowers:finishing-a-development-branch` | GATE-B 之后 | ⚠️ **门必须是 merge、结论必须在主题行**（见上方第 2 条），删分支要单独授权 |
+| ~~`superpowers:brainstorming`~~ / ~~`superpowers:writing-plans`~~ | — | **L3 全程都已做完，不要重跑。** |
+
+### 本轮最值钱的四条教训（组 B 会原样再遇到）
+
+1. **验收判据要照着它的命令读，不要照着它的意思读。** §15 验收 7 写的是「合并信息里带评审结论」，读起来像「任何带结论的提交」；它的命令 `git log --merges --format='%h %cd %s'` 只枚举 merge、只打印主题行。**差别直到 GATE-A 评审员逐字读命令才暴露**，而当时门的写法已经定了。
+2. **评审员给的「延后」处置，和评审员给的「发现」，是两件可信度不同的事。** 本轮那条 Important，发现是对的，**处置理由是错的**——它把触发写成崩溃竞态，实测是每一次成功续跑。核验推翻的是前提，不是结论。
+3. **「最直觉的修法」要先跑再选。** 删掉那个合取项看起来是一行最小改动，实测是 permit-more，还会把一份损坏文件修复成「可续跑」。**设计分析花的那一轮，省掉了一次会被评审打回的实施轮。**
+4. **修复波自带缺陷的规律没有被打破，现在是十三波。** 本轮两波修复各自带缺陷，都是**再评审**抓出来的，没有一次是实施者自己发现的。**「修完必须再评审」不是流程洁癖。**
 
 ---
 
