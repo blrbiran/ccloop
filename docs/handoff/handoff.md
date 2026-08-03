@@ -4,13 +4,70 @@
 >
 > **关于 hash 的读法**：本节引用的 `e5bf650` / `787789e` / `94d7c0a` / `ba8f8a0` 等都是**已固定的历史锚点**，可以放心引用。**当前 HEAD、领先远端几笔、测试总数一律自查**——提交本文这个动作本身就会改变前两者。
 
-> ⚠️ **2026-08-03 晚，补 Minor 那一轮之后的三处就地作废（其余照读）：**
-> 1. **ledger open 项 6 那两条 Minor 产物完整性问题已关闭**（提交 `0bbe0c8`）。下方第 35 行「另有两条 Minor 是有意留下的」**作废**。open 项 1/2/3/4/5/7 一条没动，**仍然全开**。
-> 2. **组 A 的分支与 worktree 已按人的授权删除**：`feat/l3-debt1-transactional-continuation`（`20457e6`）、`gate/l3-debt1-group-a`（`bf7c031`）、`.claude/worktrees/l3-debt1-group-a` 都不在了。删前两者都验过 `--is-ancestor main` exit 0，不丢提交；worktree 下那 25 个未入库产物（16 份 `review-*.diff` + 9 份 `task-A*-brief.md`）**已拷进主仓库同目录**（仍是 gitignored）。下方第 23 行与「明确没做的三件事」第 2 条**作废**。
-> 3. **仍然没有 push。** 那一条不作废。当时实测本地领先远端一笔；**接手时照旧 `git ls-remote origin refs/heads/main` 自查**。
-> 4. **陷阱清单已从三条变成四条**（新增 `rtk proxy` 只吃单条命令 / 文档里折行的命令会烂），见下方专节。
+---
 
-## 2026-08-03：门已开，这是现在的真实状态
+# 【最新】2026-08-03 收尾之后的真实状态 —— 本节取代下方一切状态描述
+
+> 下方所有小节（含「2026-08-03：门已开」那节）都停在更早的视角。**凡描述「现在该做什么 / 现在在哪一笔 / 还剩什么没做」的句子，一律以本节为准**；其余（陷阱、教训、组 A 确立的不变量、约定与铁律）照读。就地注解、不改原件。
+
+## 一句话
+
+**GATE-A 早已通过（门 = merge `e5bf650`），组 A 关闭；此后又跑完一轮「补产物完整性 Minor」并按人的授权清理了组 A 的分支与 worktree。下一个动作是组 B（§5 债 3），一行代码都还没写。**
+
+## 先跑这些，以输出为准（本文不写死 HEAD —— 提交本文就会改变它）
+
+```bash
+cd /Users/biran/code/skills/loop/ccloop
+git log --merges --format='%h %cd %s' --date=iso --reverse | tail -3   # 第三笔 e5bf650 是门
+git ls-remote origin refs/heads/main    # 远端会被本会话之外的东西推进，实测过两次
+git status --short; git worktree list; git branch
+export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy "npm test -- --run"
+```
+
+**门是 `e5bf650`**（主题行 `GATE-A PASSED: L3 debt 1 group A (A1-A9), two independent reviewers, 0 Critical`），**这就是组 C 的 C1 要填的 `$A4`**。另外两笔 merge 明写不是门。**门必须是 merge**：验收 7 判据 (1) 只枚举 merge、只打印 `%s`，普通提交它看不见 —— GATE-B 照此办理。
+
+## 这一轮（补 Minor + 清理）做了什么，别重做
+
+1. **ledger GATE-A open 项 6 已关闭**：Option-2 修复报告的三个单跑块补记了 `-t` 命令（重跑复现，标注为 2026-08-03 的重建、未回填时间），守卫脚本块补齐五行 `echo` 后与输出块 `diff` 退出 0。**下方第 35 行「另有两条 Minor 是有意留下的」作废。**
+2. **open 项 1/2/3/4/5/7 一条没动，仍然全开。** 其中第 4 条是给组 B/C 的硬约束（见下）。
+3. **组 A 的分支与 worktree 已删**：`feat/l3-debt1-transactional-continuation`（`20457e6`）、`gate/l3-debt1-group-a`（`bf7c031`）、`.claude/worktrees/l3-debt1-group-a`。删前两者都验过 `--is-ancestor main` exit 0，不丢提交。**worktree 下那 25 个未入库产物（16 份 `review-*.diff` + 9 份 `task-A*-brief.md`）已 `cp -n` 拷进主仓库 `.superpowers/sdd/2026-08-02-…/`（仍是 gitignored，20 → 45 个文件）。下方第 23 行与「明确没做的三件事」第 2 条作废。**
+4. **仍然没有 push。** 需人单独授权。**接手时一律 `git ls-remote` 自查，不要相信任何文字描述。**
+
+## 下一个动作：组 B（§5 债 3），执行顺序 B1 → B2 → GATE-B
+
+**计划逐字在** `docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md` 的 `### Task B1` / `### Task B2` / `### GATE-B` 三节，**Steps、测试名、变异实验、陷阱清单全在里面，不要重新推导、不要重写计划**。brief = `## Global Constraints` 整节逐字 + 该任务整段逐字。
+
+**开工前的三件事：**
+
+1. **开隔离工作区**：`git worktree add .claude/worktrees/l3-debt3-heartbeat-stop -b feat/l3-debt3-heartbeat-stop HEAD`，**先显式指定基点再用 `EnterWorktree` 的 `path` 接管**（陷阱 1）。
+2. **⚠️ B1 的第一步是一次具名的可达性分析，不是写代码。** `runExclusive` 唯一的生产调用点在 `persistBoundaryAnalysis` 内（计划 B1 陷阱清单实测 1 行），而 B1 要加的新分支恰恰是「`persistBoundaryAnalysis` 抛出后**不**走 `persistTerminalState`」。**这在字面上就可能构成 ledger open 项 4 说的「第二条不立刻走终态的路由」——若成立，「保留即放宽」那条人裁当场重新打开，必须上报给人，不许控制器自裁。** 逐环节验（拒绝发生在写之前 ⇒ 破坏性写根本没发生？还是界确实消失？），结论落 ledger，**不接受实施者一句话断言**。
+3. **组 B 往 A8 的 options 上加键**：有**两个**单键类型 `RunLoopFromStateOptions`（`src/controller/runLoop.ts`）与 `ResumeLoopOptions`（`src/controller/resumeLoop.ts`），跨层的键**两边都加并在 `resumeLoop` 里转发**，**不要建第三个**。
+
+**GATE-B**：派**没参与过 B1/B2 任何一条**的评审员做整分支评审（沿用组 A 的两条错开分工），至多一轮修复波 + 一次 scoped 再评审，ledger 落完整结论与 open 项，**合并只在人明确下指令时执行、结论写在 merge 的主题行**。
+
+**组 C 的 brief 必须带这句**（ledger open 项 4 原话）：若给 `persistBoundaryAnalysis` 加了第二条不立刻走终态的路由，「保留即放宽」那条人裁就重新打开。
+
+## 这一轮新增的教训（比缺陷本身值钱）
+
+- **十三波变十四波，而且是在专门用来关「产物完整性缺陷」的那一轮里破的。** 补 Minor 这一轮走了「实施 → 评审 → 修 → 评审 → 修 → 再评审 → 修 → 再评审 Approved」，**三次评审各抓到一条上一次修复引入的新缺陷**（一句关于 `git rev-parse --short` 的假话；一个差了一行 `EXIT=0` 的「line for line」；一条被折行折到以 `;` 开头、照抄即语法错误的命令），**没有一条是实施者自己发现的**。「修完必须再评审」不是流程洁癖。
+- **文档里的命令必须能被逐字节抽出来跑，而不是「看着对」。** 验证方式就是 `awk '/^export /' <file> > x.sh && bash x.sh`，不要重打一遍 —— 重打会掩盖折行缺陷。
+- **控制器自己也会违铁律。** 本轮全套件第一跑加了 `| grep -v '^stderr |'`，`grep` 与 `tail` 同罪，已作废重跑。**验证跑绝不过滤，连每文件 `✓` 清单也整段贴。**
+
+## 建议调用的 skills（接手组 B）
+
+| skill | 何时 | 注意 |
+|---|---|---|
+| `superpowers:subagent-driven-development` | **立刻** | 组 B 的执行框架。**先读 ledger 再决定从哪开始。** 每任务「实施者 → 独立评审员 → 有 Critical/Important 进修复环 → scoped 再评审 → ledger 记 complete」，**不接受实施者自证**。人已定：**每任务 1 个评审员，GATE-B 派 2 个错开分工** |
+| `superpowers:using-git-worktrees` | 开组 B 之前 | 见上「开工前第 1 件事」 |
+| `superpowers:requesting-code-review` | 每任务一次 + GATE-B 一次 | 提示词必写：不接受实施者自证、findings 带可构造场景、锚点用符号名不用行号 |
+| `superpowers:verification-before-completion` | 声称「通过/完成」之前 | 复跑全套件 + typecheck + build，`rtk proxy`，**未过滤** |
+| `superpowers:systematic-debugging` | 撞到不在 flake 名单内的失败 | 名单只有 (B) 与 (F) 两条 |
+| `superpowers:finishing-a-development-branch` | GATE-B 之后 | 门必须是 merge、结论在主题行；删分支要单独授权 |
+| ~~`superpowers:brainstorming`~~ / ~~`superpowers:writing-plans`~~ | — | **L3 全程都已做完，不要重跑。** |
+
+---
+
+## 2026-08-03：门已开（本节已被上方取代，保留作历史）
 
 **先跑这些，以输出为准：**
 
