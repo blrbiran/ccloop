@@ -2056,6 +2056,81 @@ describe("fileStore", () => {
     );
   });
 
+  // Same post-resume square as the test above, but with a reconciliation-record.json whose content
+  // parses to `null` — out-of-schema, and reachable only from outside this repo's writers, since
+  // writeJsonFileAtomically always serialises a record and a truncated file yields a parse error
+  // that readPersistedReconciliationRecord's catch maps to undefined. It is pinned because `null`
+  // is the one such value that BREAKS: readPersistedReconciliationRecord casts an unvalidated
+  // JSON.parse result, `null !== undefined`, and isSuccessfulReconciliationForTransfer then reads
+  // a property off it (`[]`, `"x"`, `1`, `true` all box harmlessly instead).
+  //
+  // What this pins is that the observational signal changed NO decision: before it existed this
+  // fixture wrote the downgrade and returned, so it must still do exactly that. Uncontained, the
+  // TypeError leaves writeBoundaryArtifacts, passes persistBoundaryAnalysis, and lands in
+  // runLoopFromState's outer catch, where isLeaseStopError does not match — turning a successful
+  // write into a failed attempt while the corrupt file survives. Recording a loss must never be
+  // able to manufacture one. Deleting describePublishedWinnerReplacement's try/catch turns this red.
+  it("still lands the downgrade when reconciliation-record.json holds a value the record type cannot describe", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+
+    // owner-record.json at epoch 2 naming the RESUMER: the same square the test above pins, so the
+    // only difference under test is what is on disk where the winner's record should be.
+    await writeOwnerRecord(runDir, {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 2,
+      currentProcessInstanceId: "pid:resumer",
+      lastAffirmedAt: "2026-07-23T00:00:02.000Z",
+      ownerStatus: "current",
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    });
+    await writeOwnerTransferRecord(runDir, {
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      priorProcessInstanceId: "pid:12345",
+      newProcessInstanceId: "pid:winner",
+      transferredAt: "2026-07-23T00:00:01.000Z",
+      reason: "owner lost after reconciliation",
+      eligibleForContinuation: true,
+    });
+    await writeFile(join(runDir, "reconciliation-record.json"), "null");
+
+    // No `.rejects` wrapper on purpose: an unhandled rejection here fails the test with the
+    // TypeError itself, which is the diagnosis rather than a bare "expected not to throw".
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis: {
+        status: "stale_candidate",
+        strongProgressAt: "2026-07-21T10:00:00.000Z",
+        weakProgressAt: "2026-07-21T10:05:00.000Z",
+        suspectReason: "healthy window exceeded",
+        staleCandidateReason: "continuity evidence missing",
+      },
+      reconciliationRecord: {
+        staleSuspicionBasis: ["continuity evidence missing"],
+        staleConfirmed: true,
+        ownershipVerdict: "OWNER_UNDECIDABLE",
+        lastTrustedBoundary: "execute",
+        conflictingEvidence: [],
+        takeoverPermission: {
+          allowed: false,
+          reason: "deny-by-default until strict owner-loss and transfer conditions are fully met",
+        },
+        priorOwnerEpoch: 2,
+        newOwnerEpoch: null,
+        eligibleForContinuation: false,
+      },
+    });
+
+    const reconciliation = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as ReconciliationRecord;
+    expect(reconciliation.ownershipVerdict).toBe("OWNER_UNDECIDABLE");
+    expect(reconciliation.priorOwnerEpoch).toBe(2);
+    expect(reconciliation.newOwnerEpoch).toBe(null);
+    expect(reconciliation.eligibleForContinuation).toBe(false);
+  });
+
   it("synthesizes a successful reconciliation view when winner transfer truth exists before any success reconciliation is written", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
 
