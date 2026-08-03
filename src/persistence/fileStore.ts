@@ -154,9 +154,12 @@ function isLoserDowngradeAttempt(
 // a CORRUPT one, where readPersistedReconciliationRecord's `catch { return undefined }` routes the
 // corruption into the synthesis arm — and S-3's "never permit more" forbids that. The behaviour
 // kept here is therefore deliberate, not an oversight. What changed is only that the loss is no
-// longer silent: on exactly the square where (a) holds, (b) does not, and an on-disk successful
+// longer silent: on exactly the square where THIS PREDICATE IS FALSE and an on-disk successful
 // record is about to be replaced, describePublishedWinnerReplacement marks the write and
-// writeBoundaryArtifacts appends a reconciliation_published_winner_replaced event.
+// writeBoundaryArtifacts appends a reconciliation_published_winner_replaced event. That square is
+// named by the whole predicate, not by clause (b): a false `eligibleForContinuation === true` or a
+// `currentOwnerEpoch !== newOwnerEpoch` land on it too. (b) is merely the only route this repo can
+// actually take there, because applyOwnerEpochTransfer always writes eligibleForContinuation: true.
 function transferRepresentsPublishedWinner(
   ownerRecord: OwnerRecord,
   ownerTransferRecord: OwnerTransferRecord,
@@ -264,12 +267,21 @@ function preserveSuccessfulReconciliationIfNeededFromArtifacts(
   );
 }
 
-// The one square where shouldProtectSuccessfulTransferTruth would have protected but for
-// transferRepresentsPublishedWinner's process-instance-id clause: it is the conjunction above with
-// that first conjunct negated, expressed by calling the same two predicates rather than restating
-// either. Only shouldPreserveExistingReconciliationRecord is asked, not the synthesis disjunct:
-// synthesis requires persistedReconciliationRecord === undefined, so nothing on disk is destroyed
-// there and there is no loss to record.
+// The square where shouldProtectSuccessfulTransferTruth's second conjunct holds but
+// transferRepresentsPublishedWinner is FALSE: the conjunction above with that first conjunct
+// negated, expressed by calling the same two predicates rather than restating either. What is
+// tested is the negated predicate, which is a strict SUPERSET of "the process-instance-id clause
+// is the only false one" — see that predicate's note; the post-resume route is simply the only one
+// this repo can reach.
+//
+// Only shouldPreserveExistingReconciliationRecord is asked, not the synthesis disjunct: synthesis
+// requires persistedReconciliationRecord === undefined, so nothing THE PROTECTION WOULD HAVE
+// PRESERVED is lost there. That is not the same as "nothing on disk is destroyed":
+// readPersistedReconciliationRecord's `catch { return undefined }` maps a CORRUPT
+// reconciliation-record.json to undefined as well, so on that square a corrupt file is still
+// overwritten with no event — the same silence this signal exists to remove, one square over. It
+// is carried as a named gap in progress.md rather than fixed here; widening the signal to cover
+// absent-vs-corrupt is a different change with a different justification.
 //
 // Total by construction, hence the try/catch: readPersistedReconciliationRecord casts an
 // unvalidated JSON.parse result to ReconciliationRecord, so a reconciliation-record.json whose
