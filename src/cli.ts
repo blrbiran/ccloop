@@ -3,12 +3,14 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { loadContract } from "./contract/loadContract.js";
 import { resumeLoop } from "./controller/resumeLoop.js";
-import { runLoop } from "./controller/runLoop.js";
+import { createStopRequestSignal, runLoop } from "./controller/runLoop.js";
+import type { StopRequestSignal } from "./controller/runLoop.js";
 import { renderScanTable, scanRootFailureDetail, toScanResult } from "./registry/renderRuns.js";
 import { defaultScanDeps, scanRuns } from "./registry/scanRuns.js";
 import { SubprocessClaudeAdapter } from "./runtime/claude/subprocessClaudeAdapter.js";
 import { ScriptedAdapter } from "./runtime/scriptedAdapter.js";
 import type { RuntimeAdapter } from "./runtime/types.js";
+import { sweepRuns } from "./sweep/sweepRuns.js";
 
 export type ParsedArgs =
   | {
@@ -23,6 +25,13 @@ export type ParsedArgs =
       runDir: string;
       adapter: "scripted" | "claude";
       adapterConfigPath: string;
+    }
+  | {
+      command: "sweep";
+      root: string;
+      adapter: "scripted" | "claude";
+      adapterConfigPath: string;
+      maxRuns: number;
     }
   | {
       command: "ls";
@@ -52,13 +61,48 @@ export function parseArgs(argv: string[]): ParsedArgs {
     return { command, root, json };
   }
 
-  if (command !== "run" && command !== "resume") {
-    throw new Error("expected `run`, `resume`, or `ls` command");
+  if (command !== "run" && command !== "resume" && command !== "sweep") {
+    throw new Error("expected `run`, `resume`, `sweep`, or `ls` command");
   }
 
   const values = new Map<string, string>();
   for (let index = 1; index < argv.length; index += 2) {
     values.set(argv[index]!, argv[index + 1]!);
+  }
+
+  // `sweep` takes its root as `--root`, not as a positional (L3 §6): the pairing loop above is
+  // pure flag/value, so `sweep <root> --adapter x` would pair `<root>` with `--adapter` and then
+  // report missing flags on a command line that reads as legal. Handled before the `--run-dir`
+  // check below because a sweep has no single run directory to require.
+  if (command === "sweep") {
+    const root = values.get("--root");
+    const sweepAdapter = values.get("--adapter");
+    const sweepAdapterConfigPath = values.get("--adapter-config");
+    const maxRunsRaw = values.get("--max-runs");
+
+    if (!root || !sweepAdapter || !sweepAdapterConfigPath || !maxRunsRaw) {
+      throw new Error("missing required flags");
+    }
+
+    if (sweepAdapter !== "scripted" && sweepAdapter !== "claude") {
+      throw new Error("invalid adapter");
+    }
+
+    // §12's governance position: --max-runs is the bound a human approves the sweep against, so
+    // anything that is not literally a positive integer refuses the sweep rather than defaulting
+    // it. The digits-only test is deliberate — Number("1e3") is 1000 and parseInt("2abc") is 2,
+    // and neither is a bound anyone typed.
+    if (!/^\d+$/.test(maxRunsRaw) || Number(maxRunsRaw) < 1) {
+      throw new Error("--max-runs must be a positive integer");
+    }
+
+    return {
+      command,
+      root,
+      adapter: sweepAdapter,
+      adapterConfigPath: sweepAdapterConfigPath,
+      maxRuns: Number(maxRunsRaw),
+    };
   }
 
   const runDir = values.get("--run-dir");
@@ -96,14 +140,55 @@ export function parseArgs(argv: string[]): ParsedArgs {
   };
 }
 
-async function loadAdapter(parsed: Exclude<ParsedArgs, { command: "ls" }>): Promise<RuntimeAdapter> {
-  const config = JSON.parse(await readFile(parsed.adapterConfigPath, "utf8")) as unknown;
-
-  if (parsed.adapter === "scripted") {
+// Construction only, no I/O. Split out of loadAdapter because `sweep` has to read and parse its
+// adapter config BEFORE the scan (§8's first line: a config that cannot be read exits 1 without
+// scanning) yet must not construct the adapter until sweepRuns adopts a run — the two halves that
+// run/resume perform together happen at different times there.
+function buildAdapter(adapter: "scripted" | "claude", config: unknown): RuntimeAdapter {
+  if (adapter === "scripted") {
     return new ScriptedAdapter((config as ScriptedAdapterConfig).frames);
   }
 
   return new SubprocessClaudeAdapter(config as ConstructorParameters<typeof SubprocessClaudeAdapter>[0]);
+}
+
+// `sweep` is deliberately NOT in this parameter's type. It carries an `adapter` and an
+// `adapterConfigPath` and so is structurally accepted by `Exclude<ParsedArgs, { command: "ls" }>`,
+// which would let a future edit place the sweep branch after this call — legal to the compiler,
+// and a violation of both the config-read ordering above and C3's banner ordering.
+async function loadAdapter(parsed: Extract<ParsedArgs, { command: "run" | "resume" }>): Promise<RuntimeAdapter> {
+  return buildAdapter(parsed.adapter, JSON.parse(await readFile(parsed.adapterConfigPath, "utf8")) as unknown);
+}
+
+// L3 §5.4's escape hatch. ONE counter across both signals: the first fills the stop slot the loop
+// reads at its next boundary, the second exits immediately. Counting per signal kind would mean
+// "Ctrl-C, then kill" — the escalation an operator reaches for when the first press seems to have
+// done nothing — never reaches the hatch at all.
+//
+// The handler is handed the stop SLOT and nothing else. It cannot stop the heartbeat, and does
+// not: the two `heartbeat.stop()` call sites stay in the `finally` after runLoopFromState.
+export function registerStopHandlers(
+  signal: StopRequestSignal,
+  options?: { exit?: (code: number) => void },
+): () => void {
+  const exit = options?.exit ?? ((code: number) => process.exit(code));
+  let received = 0;
+
+  const handle = () => {
+    received += 1;
+    signal.requested = true;
+    if (received >= 2) {
+      exit(130);
+    }
+  };
+
+  process.on("SIGINT", handle);
+  process.on("SIGTERM", handle);
+
+  return () => {
+    process.off("SIGINT", handle);
+    process.off("SIGTERM", handle);
+  };
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -123,6 +208,34 @@ export async function main(argv: string[]): Promise<number> {
       const result = toScanResult(rows);
       console.log(parsed.json ? JSON.stringify(result, null, 2) : renderScanTable(result));
       return 0;
+    }
+
+    // `sweep` returns HERE — before loadAdapter, not merely before the two `? 0 : 2` mappings
+    // below. Its exit codes are sweepRuns' own (1 iff the scan failed at its root, else 0), and
+    // exit 2 is not among them. Placing it after loadAdapter would still satisfy "before the
+    // mappings" while constructing the adapter before the sweep has scanned or printed its
+    // banner, breaking §8's ordering and C1's createAdapter contract.
+    if (parsed.command === "sweep") {
+      // §8's first line: read and parse the config before scanning, so an unreadable config
+      // exits 1 having swept nothing. What crosses into sweepRuns is a closure that does no I/O.
+      const config = JSON.parse(await readFile(parsed.adapterConfigPath, "utf8")) as unknown;
+      const adapterName = parsed.adapter;
+      const stopRequested = createStopRequestSignal();
+      const unregisterStopHandlers = registerStopHandlers(stopRequested);
+
+      try {
+        return await sweepRuns({
+          root: parsed.root,
+          adapterName,
+          createAdapter: () => buildAdapter(adapterName, config),
+          maxRuns: parsed.maxRuns,
+          stopRequested,
+          stdout: (line) => console.log(line),
+          stderr: (line) => console.error(line),
+        });
+      } finally {
+        unregisterStopHandlers();
+      }
     }
 
     const adapter = await loadAdapter(parsed);
