@@ -309,8 +309,12 @@ describe("lease heartbeat lifecycle", () => {
 
       affirmed = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as OwnerRecord;
       // Premise: the loop's top-of-loop affirmNow really did take a live lease, so there is
-      // something for the release below to fail to clear.
-      expect(affirmed.leaseAffirmedAt).not.toBeNull();
+      // something for the release below to fail to clear. Asserted as "a string" rather than
+      // "not null": when affirmNow does not run the field is undefined and JSON.stringify drops
+      // the key entirely, and `.not.toBeNull()` passes on undefined — the guard would wave through
+      // exactly the state it exists to reject, and the test would go red much later on an
+      // unrelated message. GATE-B lane 2 measured that vacuous pass.
+      expect(affirmed.leaseAffirmedAt).toEqual(expect.any(String));
 
       // The supersession. Only the epoch moves; leaseAffirmedAt keeps the value the heartbeat
       // itself wrote, so what refuses below is the real lease this run took, not a fabricated one.
