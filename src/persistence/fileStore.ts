@@ -182,18 +182,6 @@ function shouldSynthesizeSuccessfulReconciliation(
   );
 }
 
-function shouldPreserveExistingSuccessfulReconciliation(
-  persistedReconciliationRecord: ReconciliationRecord | undefined,
-  nextReconciliationRecord: ReconciliationRecord,
-  ownerTransferRecord: OwnerTransferRecord,
-): boolean {
-  return (
-    persistedReconciliationRecord !== undefined
-    && isSuccessfulReconciliationForTransfer(persistedReconciliationRecord, ownerTransferRecord)
-    && isLoserDowngradeAttempt(nextReconciliationRecord, ownerTransferRecord)
-  );
-}
-
 function shouldPreserveExistingReconciliationRecord(
   persistedReconciliationRecord: ReconciliationRecord | undefined,
   nextReconciliationRecord: ReconciliationRecord,
