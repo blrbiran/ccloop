@@ -1562,6 +1562,18 @@ grep -rnF 'succeeded" ? 0 : 2' src/
 # 计划阶段实测 2 行，都在 src/cli.ts（resume 分支与 run 分支各一处）。sweep 分支必须在这两处之前返回。
 ```
 
+**Amended 2026-08-04：本节反复写的边界「必须在两处 `? 0 : 2` 映射之前返回」指错了位置——真正的边界是 `src/cli.ts` 的 `main` 里 `const adapter = await loadAdapter(parsed);` 那一行，它更早、且无条件。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。同一句话在本节出现四处（上表 `2` 那一行、上面这个 `grep` 块的注释、下方陷阱清单第二条、Step 4；Step 10 的评审重点同源）。`sweep` 变体带 `adapter` / `adapterConfigPath`，会被 `loadAdapter` 原本的参数类型 `Exclude<ParsedArgs, { command: "ls" }>` 收进去且类型检查通过，于是「在两处映射之前、却在 `loadAdapter` 之后返回」是一个**满足本文档字面、却在扫描与横幅之前就构造了 adapter** 的合法落点——直接违反本节陷阱清单第四条（配置先读、adapter 由 sweep 在领养时才构造）与 §8/C3 的横幅顺序。**读作：sweep 分支必须在 `loadAdapter` 那一行之前返回；「在两处 `? 0 : 2` 之前」是它的推论，不是判据。** C2 落地后实测（未过滤）：
+
+```
+$ rtk proxy "grep -rnF 'const adapter = await loadAdapter(parsed);' src/"
+src/cli.ts:241:    const adapter = await loadAdapter(parsed);
+$ rtk proxy "grep -rnF 'succeeded\" ? 0 : 2' src/"
+src/cli.ts:244:      return finalState.status === "succeeded" ? 0 : 2;
+src/cli.ts:248:    return finalState.status === "succeeded" ? 0 : 2;
+```
+
+映射仍是 2 处、都在 `src/cli.ts`，且两处（244、248）都晚于 `loadAdapter` 的调用（241）——本条更正的是**判据指向哪一行**，不是那个「2」。
+
 **`scanRootFailureDetail` 是判据本身，不要重新发明**：§7 的「root 不存在或不可读 → exit 1」与 §8 的「扫描 issue 行 → 记录、不中断」在**根目录自身不可读**时重叠；`cli.ts` 的 `ls` 分支已经用这个符号区分了两者，sweep 分支照抄同一判据（实际调用在 `sweepRuns` 内，C1 已实现；C2 只需把它的返回值映射成退出码）。
 
 **逃生口（§5.4，否则装了处理器反而让 sweep 杀不掉）：第二次收到停机信号立即 `exit(130)`。**
