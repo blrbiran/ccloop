@@ -13,11 +13,66 @@ import { scanRuns as defaultScan, defaultScanDeps } from "../registry/scanRuns.j
 import type { ScanDeps, ScanRow } from "../registry/scanRuns.js";
 import { scanRootFailureDetail } from "../registry/renderRuns.js";
 import type { RunObservation } from "../registry/observeRun.js";
-import { resumeLoop } from "../controller/resumeLoop.js";
+import { ResumeNotEligibleError, resumeLoop } from "../controller/resumeLoop.js";
 import type { ResumeLoopOptions } from "../controller/resumeLoop.js";
 import type { StopRequestSignal } from "../controller/runLoop.js";
+import { RunLeaseHeldError } from "../ownership/lease.js";
 import type { RuntimeAdapter } from "../runtime/types.js";
-import type { RunState } from "../state/types.js";
+import type { RunState, RunStatus } from "../state/types.js";
+
+// §8's outcome domain, exactly eight values. The five terminal RunStatus values are reported
+// under their own names — `cancelled` is NOT folded into `failed`, because the operator's next
+// step differs (a run that failed on its own merits vs one stopped for ownership/signal reasons).
+type Outcome =
+  | "succeeded"
+  | "failed"
+  | "exhausted"
+  | "blocked_waiting_human"
+  | "cancelled"
+  | "interrupted"
+  | "refused"
+  | "error";
+
+// Exhaustive over RunStatus on purpose: a new status added to the state machine becomes a
+// compile error here rather than a silently miscounted tally key. The split mirrors
+// state/stateMachine.ts's legalTransitions — a status is terminal exactly when nothing legally
+// follows it — and tests/sweep/sweepRuns.test.ts asserts the two agree.
+function outcomeForStatus(status: RunStatus): Outcome {
+  switch (status) {
+    case "succeeded":
+    case "failed":
+    case "exhausted":
+    case "blocked_waiting_human":
+    case "cancelled":
+      return status;
+    case "queued":
+    case "planning":
+    case "executing":
+    case "verifying":
+      return "interrupted";
+  }
+}
+
+// §8's error-routing table. The prefix test comes FIRST: a read-side failure is a
+// ResumeNotEligibleError too, and it is the one refusal that is not a normal result.
+function classifyThrow(error: unknown): { outcome: Outcome; detail: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  // §4.4: the routing key is the message prefix, not the error type. `Error.cause` was rejected
+  // there — ResumeNotEligibleError's single-argument constructor is a public signature the tests
+  // also `new`, and the prefix already catches every read-side throw out of resumeLoop's
+  // Promise.all without touching resumeLoop.ts. The cost, accepted here: this collapses ALL
+  // read-side failures into `error` without distinguishing the cause. Nothing is lost for
+  // diagnosis — the detail carries the full message, which embeds the original String(error).
+  if (error instanceof ResumeNotEligibleError && message.startsWith("cannot read run artifacts:")) {
+    return { outcome: "error", detail: message };
+  }
+  // A refusal is a REPORTED RESULT, not a sweep failure: the gate said no, or another process
+  // holds the lease and is presumably running the very run this sweep wanted.
+  if (error instanceof ResumeNotEligibleError || error instanceof RunLeaseHeldError) {
+    return { outcome: "refused", detail: message };
+  }
+  return { outcome: "error", detail: message };
+}
 
 export type SweepDeps = {
   scan?: (root: string, deps: ScanDeps) => Promise<ScanRow[]>;
@@ -77,15 +132,33 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
   // §8/§12: banner first, adapter second. N bounds the number of runs ENTERED, not the number of
   // paid model calls — each run keeps its own attempt loop, so the paid ceiling is N ×
   // maxAttempts. The banner deliberately does not state that product: maxAttempts is per-contract
-  // and no contract has been read at this point.
+  // and no contract has been read at this point. Both numbers are required: §12's whole argument
+  // is that choosing `--adapter claude` is an INFORMED and BOUNDED approval of this sweep, and
+  // without N the "informed" half does not hold.
   options.stderr(
-    `sweep: ${candidates.length} eligible run(s) under ${options.root}, max-runs ${options.maxRuns}, adapter ${options.adapterName}`,
+    `sweep: ${candidates.length} eligible run(s) under ${options.root}, will attempt at most ${options.maxRuns}, adapter=${options.adapterName}`,
   );
 
   const adapter = options.createAdapter();
 
   let adopted = 0;
-  let refused = 0;
+  let attempted = 0;
+  const tally: Record<Outcome, number> = {
+    succeeded: 0,
+    failed: 0,
+    exhausted: 0,
+    blocked_waiting_human: 0,
+    cancelled: 0,
+    interrupted: 0,
+    refused: 0,
+    error: 0,
+  };
+  // The callback's whole implementation: one push. No I/O, no formatting, no throw — it runs
+  // deep inside runLoopFromState, and a throw here would turn a protective abandonment into a
+  // failed attempt. It is deliberately NOT wrapped in try/catch: that would swallow a
+  // programming error silently (Rule 12). The lines are emitted after the loop, in push order,
+  // which is the traversal order of the runs.
+  const notes: { path: string; detail: string }[] = [];
 
   for (const candidate of candidates) {
     // §6, quota accounting point (the amended ruling): the bound is on runs that actually ENTERED
@@ -101,24 +174,63 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
     // further run is started. sweepRuns installs no handler; the slot is filled by cli.ts.
     if (options.stopRequested.requested) break;
 
+    attempted += 1;
+    let report: { outcome: Outcome; detail: string };
     try {
-      await resume(candidate.path, adapter, {
+      const finalState = await resume(candidate.path, adapter, {
         stopRequested: options.stopRequested,
         onAdopted: () => {
           adopted += 1;
         },
-        onReconciliationWriteAbandoned: (detail) =>
-          options.stderr(`sweep: ${candidate.path}: reconciliation write abandoned: ${detail}`),
+        onReconciliationWriteAbandoned: (detail) => {
+          notes.push({ path: candidate.path, detail });
+        },
       });
+      const outcome = outcomeForStatus(finalState.status);
+      report =
+        outcome === "interrupted"
+          ? {
+              outcome,
+              // GATE-B pinned that non-terminal does NOT imply resumable: this layer's filter is
+              // built on ONE of evaluateResumeEligibility's eight criteria, and criteria 5-8 are
+              // never evaluated here. So this line states what is known and nothing more — it
+              // must not be worded, here or anywhere downstream, as "this run can be resumed".
+              detail:
+                `status=${finalState.status}, stopReason=${String(finalState.stopReason)}, ` +
+                `non-terminal — this sweep makes no claim that it can be resumed`,
+            }
+          : { outcome, detail: `stopReason=${String(finalState.stopReason)}` };
     } catch (error) {
-      // Every per-run outcome is a reported outcome, never a sweep failure (§7). A concurrent
-      // sweep losing the lease gate lands here too, and that is expected, not an error.
-      refused += 1;
-      options.stderr(`sweep: ${candidate.path}: ${error instanceof Error ? error.message : String(error)}`);
+      report = classifyThrow(error);
     }
+
+    // Every per-run outcome is a reported outcome, never a sweep failure (§7). A concurrent
+    // sweep losing the lease gate lands here too, and that is expected, not an error.
+    tally[report.outcome] += 1;
+    const sink = report.outcome === "error" ? options.stderr : options.stdout;
+    sink(`${candidate.path}\t${report.outcome}\t${report.detail}`);
   }
 
-  // C3 owns the report's FORMAT; this task only establishes that both sinks exist and are used.
-  options.stdout(`sweep: ${adopted} adopted, ${refused} not started, of ${candidates.length} eligible`);
+  // §4.3: another line entirely, never a cell in the three-column report — the abandonment is
+  // ORTHOGONAL to the run's final classification (a run that ends `succeeded` can still produce
+  // one). One line per callback invocation: no dedup, no aggregation. The only ordering promised
+  // is between note lines themselves, within stderr: the report lines go to stdout, and Node
+  // gives no ordering guarantee between the two streams once they are redirected to one file.
+  for (const note of notes) {
+    // `detail` is a String(error) and a SyntaxError message can contain newlines, which would
+    // split one note into what looks like several output lines. Folded only here — §8's
+    // `errored` line has the same problem, predates this wave, and is deliberately left alone.
+    options.stderr(`note  ${note.path}  reconciliation_write_abandoned  ${note.detail.replace(/\r?\n/g, " ")}`);
+  }
+
+  // C1's summary added `adopted` and `refused`, which are not mutually exclusive: a run that
+  // adopted and then threw counted in BOTH, and the line could read "7 adopted, 2 not started,
+  // of 8 eligible". These counts are derived from the report lines instead — one outcome per
+  // attempted run — so no run is counted twice. Quota is reported separately because it is a
+  // different denominator on purpose: a refusal is attempted and spends nothing.
+  options.stdout(
+    `${attempted} attempted, ${tally.succeeded} succeeded, ${tally.refused} refused, ${tally.error} errored ` +
+      `(quota ${adopted}/${options.maxRuns})`,
+  );
   return 0;
 }

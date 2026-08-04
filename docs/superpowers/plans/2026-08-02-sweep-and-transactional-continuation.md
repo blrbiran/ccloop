@@ -1663,6 +1663,8 @@ git commit -m "feat(cli): add the sweep command with a required --max-runs and a
 | 意料之外的抛错 | 记录**完整 message**，继续下一个 | **stderr**（outcome `error`） |
 | **`reconciliation_write_abandoned`** | **一条独立的备注行**：`note  <path>  reconciliation_write_abandoned  <detail>`。**该 run 自己的 `outcome` 一个字节不变**，**退出码不变**，**汇总行不变** | **stderr** |
 
+**Amended 2026-08-04：上表 `interrupted` 那一行要求「明确标注该 run 仍可续跑」——这句话今天不能被担保，已按人的裁定改成只断言已知的。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。GATE-B 已经钉死「**非终态 ≠ 可被 resume 捡起**」：`evaluateResumeEligibility` 有**八条**判据（守卫实测：`rtk proxy "grep -cF 'return { ok: false' src/controller/resumeLoop.ts"` → **8**），而 sweep 的过滤器只建在 **L2 观测**上（`owner-transfer.json` 的 `eligibleForContinuation` 观测为 literal true）——**它只覆盖八条里的第 1 条**，判据 5–8 在本层从未被求值，本计划也没有任何步骤去建立它们。**读作**：该行仍记为 `interrupted`，`detail` 说明它未达终态，并**明确不对「它能否被续跑」作任何断言**。C3 落地的措辞逐字为 `status=<status>, stopReason=<stopReason>, non-terminal — this sweep makes no claim that it can be resumed`。**「保证 / 一定 / 仍可续跑」这一类措辞不得出现在代码、注释、报告或 stdout/stderr 的任何一处**——C1 已在 `src/sweep/sweepRuns.ts` 的 `isObservedEligible` 与 `tests/sweep/sweepRuns.test.ts` 的文件头守住了同一条线。
+
 **`cannot read run artifacts:` 前缀路由（§4.4 的路由改判）：**
 
 判据是 `error instanceof ResumeNotEligibleError && error.message.startsWith("cannot read run artifacts:")` → outcome `error` → stderr。
@@ -1673,6 +1675,26 @@ grep -rnF 'cannot read run artifacts' src/ tests/
 #   tests/cli/cli.test.ts 一行（既有断言，说明这个前缀已经是被依赖的契约）。
 #   src/ 内只有 resumeLoop.ts 一处产生它 —— 前缀唯一。
 ```
+
+**Amended 2026-08-04：上面这个 `grep` 块的「计划阶段实测 3 行」今天已经腐坏——组 C 开工时实测是 22 行。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。**但「`src/` 内只有 `resumeLoop.ts` 一处产生它 —— 前缀唯一」这半句仍然成立**，腐坏的只有总数与 `tests/` 侧的分布。C3 落地时两次实测（未过滤）：
+
+```
+# 组 C 开工时（分支 HEAD c14f792，本任务的编辑尚未落地）
+$ rtk proxy "grep -rnF 'cannot read run artifacts' src/ tests/"
+# 22 行：src/controller/resumeLoop.ts 2（第 144 行 resume_denied 的 detail、第 145 行 throw，同一个 catch）
+#        tests/cli/cli.test.ts 1
+#        tests/persistence/fileStore.test.ts 19
+
+# C3 落地之后（本任务自己新增 4 行：sweep 的判据 1 行 ＋ 测试 12c 的 fixture 与前置断言 3 行）
+$ rtk proxy "bash -c 'grep -rnF \"cannot read run artifacts\" src/ tests/ | wc -l'"   # → 26
+$ rtk proxy "bash -c 'grep -rnF \"cannot read run artifacts\" src/ | wc -l'"          # → 3
+$ rtk proxy "bash -c 'grep -rnF \"cannot read run artifacts\" tests/ | wc -l'"        # → 23
+$ rtk proxy "grep -cF 'cannot read run artifacts' tests/persistence/fileStore.test.ts" # → 19
+```
+
+新增的那 19 行全部在**组 A** 的 `tests/persistence/fileStore.test.ts` 里——组 A 是在本计划写完之后才落地的：17 行是崩溃矩阵的期望字面（第 2816–2828、2842–2845 行，同属 `fileStore > refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives` 这**一条**测试的两个 `expect.soft`），另 2 行是 `observeResume`（第 3702–3703 行）把 message 映射成矩阵标签的 `startsWith`。
+
+**因此下方「`resumeLoop.ts` 那两处与 sweep 的判据必须同笔改动」漏了第三处**：`tests/persistence/fileStore.test.ts` 的 `observeResume` 里的 `error.message.startsWith("cannot read run artifacts")`——它**不带冒号**，与 sweep 判据的 `startsWith("cannot read run artifacts:")` 形式不同，因此只改冒号之后的部分时它会**静默存活**——以及被它喂养的那 17 行矩阵期望字面。同笔改动的集合在组 A 落地之后是**三处**，不是两处。
 
 **代价，明写**：这条路由把「读侧任何失败」整体归为 `error`，不区分具体原因——**比按类型路由粗**。**本层接受**：§8 那一行要的性质是「有 stderr 即告警」，而 detail 里带完整 message（含原错误的 `String(error)`），诊断信息一点没少。
 **⚠️ 这使前缀字面量成为一条被依赖的契约**，`resumeLoop.ts` 那两处与 sweep 的判据**必须同笔改动**；测试 12c 钉这一点。
