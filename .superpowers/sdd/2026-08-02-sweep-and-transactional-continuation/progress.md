@@ -1061,3 +1061,46 @@ ECC_GATEGUARD=off DISABLE_OMC=1, in the worktree at 62cead9:
 VERDICT: GATE-B PASSES. Zero Critical across the whole branch. Both Importants
 are handover conditions for group C, not defects in group B. Group C's hard
 precondition (GATE-B complete) will be met the moment the human orders the merge.
+
+--------------------------------------------------------------------------------
+GATE-B MERGED. 2026-08-04. *** THE GATE IS bafa6a6. GROUP C's $B IS THIS HASH. ***
+--------------------------------------------------------------------------------
+
+The human ordered the artefacts landed first (467c6b3) and then the merge. Both
+are done. The verdict above was written BEFORE the merge and said "pending the
+human's merge instruction"; that clause is now discharged, and the entry is
+otherwise unchanged rather than rewritten.
+
+  467c6b3  docs(sdd): land group B's ledger entries, task reports and GATE-B
+           evidence — six files via `git add -f`, following group A's shape
+           (ledger and reports tracked; briefs and review packages not)
+  bafa6a6  GATE-B PASSED: L3 debt 3 group B (B1-B2), two independent reviewers,
+           0 Critical  <-- THE GATE, a real --no-ff merge, verdict in the SUBJECT
+
+ACCEPTANCE 7's LOCATOR RE-RUN AFTER THE MERGE, not assumed:
+`git log --merges --format='%h %cd %s' --date=iso --reverse` now lists fifteen
+merges; the last is bafa6a6 with the verdict in its subject, and e5bf650 (GATE-A)
+is the one before it. Both gates are visible to the criterion that enumerates
+merges and reads subject lines only. The two group-A merges that explicitly
+disclaim gate status still read as disclaimers, so $A4 and $B are unambiguous.
+
+VERIFICATION AFTER THE MERGE, on main, run by the controller, unfiltered,
+ECC_GATEGUARD=off DISABLE_OMC=1 — because the merged tree had never been run as
+such (the gate verification ran on the branch tip 62cead9):
+  Test Files 29 passed (29) / Tests 490 passed (490), TEST_EXIT=0, 17.97s
+  TYPECHECK_EXIT=0; BUILD_EXIT=0
+  Neither allowed flake appeared; no failure outside the list; no rerun.
+
+STILL NOT DONE, EACH NEEDING ITS OWN HUMAN INSTRUCTION:
+  1. NO PUSH. origin/main was a7c26c9 when group B opened; this session has never
+     run `git push`. Whoever continues must check with
+     `git ls-remote origin refs/heads/main` rather than trusting any prose —
+     the remote has been advanced from outside this session three times already.
+  2. The branch feat/l3-debt3-heartbeat-stop (62cead9) and the worktree
+     .claude/worktrees/l3-debt3-heartbeat-stop are BOTH STILL PRESENT. Deleting
+     them needs separate authorisation, and before deletion the untracked
+     artefacts under the worktree must be enumerated and copied out — group A's
+     clean-up round found 25 of them.
+  3. Group C has NOT started. Its brief must carry, verbatim: GATE-A open item 4;
+     the four GATE-B conditions above; and the obligation to make its OWN
+     confirmation rather than inherit B1's or B2's.
