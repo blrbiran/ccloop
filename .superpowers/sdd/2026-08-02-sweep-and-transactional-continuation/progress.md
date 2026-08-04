@@ -616,3 +616,448 @@ above are UNTOUCHED. In particular item 4 — a second, non-terminal route to
 persistBoundaryAnalysis reopens the "preserving is permitting" ruling — still
 stands and must be carried into group C's brief. This round closed item 6 and
 nothing else.
+
+================================================================================
+GROUP B OPENS. 2026-08-04. Task B1 Step 0: named reachability analysis.
+================================================================================
+
+Worktree .claude/worktrees/l3-debt3-heartbeat-stop, branch
+feat/l3-debt3-heartbeat-stop, based explicitly on a7c26c9 (git worktree add ...
+HEAD, NOT EnterWorktree's default of origin/<default branch>). Not pushed;
+human authorised local-only for group B.
+
+REMOTE STATE CORRECTION, recorded because the handoff says otherwise. At group
+B's open, `git ls-remote origin refs/heads/main` = a7c26c9c9e7ec2a8ff8bc5e10f5
+16ee80e8ebada = local HEAD. Everything through the handoff commits IS pushed.
+No push was performed by this session. The handoff's "仍然没有 push" is now
+FALSE; whoever next rewrites it must void that line.
+
+THE QUESTION. Open item 4 above reopens the "preserving is permitting" ruling
+IF group B or C adds a SECOND, NON-TERMINAL ROUTE to persistBoundaryAnalysis.
+B1 adds exactly such a route in the literal sense: runExclusive's only
+production call site is INSIDE persistBoundaryAnalysis (src/controller/
+runLoop.ts:786), and B1 makes it throw, with the outer catch returning a
+non-terminal state instead of calling persistTerminalState. So the question was
+put to an independent verifier BEFORE any code was written, on the most capable
+model, with both verdicts framed as live and neither pre-judged.
+
+VERDICT: (B) THE BOUND'S SUBJECT DISAPPEARS; THE RULING DOES NOT REOPEN.
+Report: task-B1-reachability-report.md (five links, each with a rerunnable
+command and unfiltered output). The load-bearing structure, RE-VERIFIED BY THE
+CONTROLLER against source rather than accepted on the verifier's word:
+  - the refusal point is runExclusive at runLoop.ts:786;
+  - the destructive writes are writeBoundaryArtifacts at runLoop.ts:903 and
+    :905, i.e. AFTER the runExclusive call closes at :873, deliberately outside
+    the exclusive span (the comment at :784 states that placement is on
+    purpose);
+  - between them sits only the unconditional `await heartbeat.assertHeld()` at
+    :891, which B1's hard constraint 2 forbids this error from being thrown by;
+  - therefore a RunHeartbeatStoppedError raised at :786 escapes BEFORE any
+    boundary or reconciliation write occurs. The harm the bound describes — a
+    published winner record silently destroyed — DOES NOT HAPPEN on this route.
+    That is not the bound being broken; it is the bound's subject not existing.
+
+THE VERIFIER'S OWN STATED FRAGILE PREMISE, AND WHAT WAS DONE ABOUT IT. The
+verdict holds only if the `stopped` check precedes the INVOCATION of `fn`.
+runExclusive today is `queue.then(fn, fn)` (leaseHeartbeat.ts:196-203): the two
+natural refusal forms — reject at call time, or check at the head of the queued
+continuation — both precede fn. But an implementation that settled fn first and
+only then consulted `stopped` would let fn's line 819 persistOwnerTransfer
+publish reconciliation-record.json transactionally BEFORE the throw escaped,
+and the verdict would flip to (A). The plan's Task B1 does not pin this, and
+neither test 7 nor its Step 10 review checklist distinguishes the two forms.
+
+  CONTROLLER RULING (Rule 7, the same one applied three times in group A: "a
+  component and its coverage are one thing", so adding the coverage SATISFIES
+  the plan rather than departing from it). B1 carries one added hard
+  requirement and one added assertion, both recorded here rather than left to
+  the implementer's discretion:
+    (1) the refusal MUST be evaluated before `fn` is invoked;
+    (2) test 7 MUST assert, with a spy, that `fn` was NEVER CALLED — not merely
+        that the call rejected. Mutation 1 (revert the refusal) reds it too.
+  This is an addition to the plan's test 7, not a replacement: the "throws
+  RunHeartbeatStoppedError" assertion stays.
+
+NOT REOPENED, AND WHY IT IS STILL WRITTEN DOWN: open item 4's line must still
+be carried verbatim into GROUP C's brief. This entry closes the question for
+B1 only. B2's stop-request slot returns from the loop top and does not enter
+persistBoundaryAnalysis at all, but that is B2's own analysis to make, not an
+inheritance from this one.
+
+--------------------------------------------------------------------------------
+Task B1: implemented (commit dab1040, a7c26c9..dab1040), DONE_WITH_CONCERNS.
+Task B1: review 1 — spec ✅, quality: 2 Important / 3 Minor, 0 Critical.
+--------------------------------------------------------------------------------
+
+One independent reviewer, most capable model, did not implement. It re-derived
+every load-bearing claim against source rather than accepting the report:
+RunHeartbeatStoppedError has exactly one throw (inside runExclusive) and one
+instanceof (the new outer-catch branch); assertHeld never reads `stopped`;
+isLeaseStopError unchanged and unexported; stop() unchanged; the new branch
+precedes the isLeaseStopError branch; writeBoundaryArtifacts still sits after
+the runExclusive call closes; guard `return { ok: false` = 8; the three test
+doubles and INERT_LEASE_HEARTBEAT untouched; every single-run fence carries a
+NONZERO named count.
+
+BOTH IMPORTANTS WENT TO THE HUMAN — BUT ONLY AFTER THEIR PREMISES WERE
+INDEPENDENTLY VERIFIED. This repo's own lesson from group A: a controller once
+passed a reviewer's wording to the human uncalibrated and the wording had the
+mechanism wrong. So a third agent re-ran both premises before the question was
+asked. Verification report: task-B1-important-verification.md.
+
+  I-1 PREMISE: TRUE, AND STRONGER THAN THE REVIEWER PUT IT.
+  Injecting ONLY `|| error instanceof RunHeartbeatStoppedError` into
+  isLeaseStopError, changing nothing else, leaves the whole suite GREEN
+  (29 files / 487 tests, typecheck 0) — the dedicated branch precedes the
+  predicate branch and returns, so the error never reaches the predicate.
+  Therefore the PLAN'S OWN Step 7 mutation-2 criterion ("7b's (i) and (iii)
+  must red") IS FALSE UNDER OPTION (a)'S ORDERING. Same defect class as group
+  A's criterion B: a mutation criterion whose premise never holds.
+  The verifier also answered the harder question: with the predicate NOT
+  exported (hard constraint) and the branch order unchanged, the only shape
+  that kills a pure predicate-widening requires assertHeld to throw this error
+  — which hard constraint 2 explicitly forbids, and whose two outcomes are both
+  outside RESUMABLE_STATUSES, i.e. it would pin the third door as expected
+  behaviour. Measured both ways: unwidened -> blocked_waiting_human /
+  "workspace unavailable"; widened -> cancelled / heartbeat_stopped.
+  *** HUMAN RULING: this is a FALSE PREMISE IN THE PLAN, not an implementation
+  defect. Errata in place on ### Task B1 (*Amended 2026-08-04*), gap recorded,
+  NO code change, no test added, branch order and predicate untouched. ***
+  THE GAP, NAMED SO IT CANNOT BE INHERITED AS CLOSED: hard constraint 1 has a
+  failing assertion for its SUBCLASSING half only (7b's instanceof pair). Its
+  PREDICATE-WIDENING half is guarded by a comment. A single edit widening the
+  predicate is behaviourally inert TODAY and green; it detonates on any later
+  edit that reorders the two branches, deletes the dedicated branch, or lets
+  this error escape the INNER catch — which routes to persistTerminalState with
+  "cancelled". GATE-B and group C inherit this, not a closed item.
+
+  I-2 PREMISE: FALSE AS FRAMED. THE REVIEWER'S ANALOGY DOES NOT HOLD.
+  The reviewer called the new branch's unconditional writeRunState asymmetric
+  with its sibling and "isomorphic to debt 2". Verified against source: the
+  sibling's guard is isTerminalRunStatus — it guards TERMINAL STATUS, not
+  ownership (a lost lease is not in its condition), and in the genuinely
+  comparable case the sibling writes MORE (persistTerminalState = an event plus
+  a terminal writeRunState). The sibling is debt 2's body; the new branch never
+  calls persistTerminalState, so this layer's debt-2 contact surface is ZERO,
+  as the plan requires. Similarity of shape is not contact.
+  REACHABILITY, STATED PLAINLY: NOT REACHABLE TODAY. `stopped` is set only by
+  stop(), whose two production call sites (runLoop.ts:989, resumeLoop.ts:198)
+  are both in a `finally` AFTER `await runLoopFromState(...)`, while
+  runExclusive's only production call site is INSIDE runLoopFromState. No
+  reachable path was found.
+  THE HARM SURFACE IS REAL AND IS RECORDED RATHER THAN FIXED: writeRunState ->
+  writeJsonFileAtomically is stringify -> temp -> rename with NO CAS, no
+  read-modify-write and no owner/epoch precondition. If the resident `watch`
+  shape ever makes this branch reachable, it overwrites a new owner's
+  loop-state.json wholesale with a non-terminal state.
+  *** HUMAN RULING: RECORD IT, DO NOT CHANGE THE CODE. *** The plan text is on
+  that side — three separate places make this write unconditional and mandatory
+  (it is the fourth round's own addition), and the plan already records "not
+  reachable in L3 / this is defence in depth". An ownership guard would
+  CONTRADICT the plan (its stated reason — return value must match disk or
+  "isomorphic to §5.4" is false — holds just as well with the lease lost, and
+  7b's expect(persisted).toEqual(finalState) would red). A terminal-status
+  guard would not contradict the plan but would be dead code forever (both
+  persistBoundaryAnalysis call sites are preceded by no terminal write).
+  *** CARRY TO GATE-B AND TO L5: the no-CAS overwrite above. ***
+
+Task B1: minor (deferred): M-2 — the new describe("lease") block lives in
+  tests/controller/leaseHeartbeat.test.ts because the plan's Files list allows
+  only two test files, while the sibling error-class assertions live in
+  tests/ownership/lease.test.ts. Choosing the Files list over the test name was
+  correct; the cost is that one error family's type assertions now sit in two
+  files. Zero assertion impact. GATE-B may rule on relocation.
+Task B1: minor (folded into fix round 1 by human ruling, NOT deferred): M-1 —
+  no mutation existed for deleting the new branch's writeRunState; the reviewer
+  reasoned it would red but did not measure it, and Step 10 names that very
+  requirement as a review focus. Human: measure it.
+Task B1: minor (folded into fix round 1): M-3 — report-file hygiene (two stray
+  tool-marker lines at EOF; section 8 titled "Concerns" contains a non-concern).
+
+ENVIRONMENT TRAP #5, FOUND BY THE IMPLEMENTER, CONFIRMED BY THE REVIEWER, NOT
+YET IN THE HANDOFF: a fresh worktree has no node_modules of its own. Node
+resolves upward so `npm test` runs, but tests/validation/evidence.test.ts
+builds tsxBin from process.cwd(), so 9 `run-scenario CLI` cases fail with
+spawn ENOENT — a shape that is NOT on the two-item allowed-flake list and
+reads as a real regression. `npm ci` in the worktree fixes it with zero code
+change. Whoever next rewrites docs/handoff/handoff.md must add this as the
+FIFTH trap; the list there currently enumerates four.
+
+Task B1: fix round 1/5 (3 addressed, 0 open — F-1 the writeRunState mutation now
+  MEASURED not reasoned; F-2 the plan erratum for the false mutation-2 premise;
+  F-3 report hygiene; commits dab1040..b427c8b).
+
+  The fix commit b427c8b touches ONE file — the plan — 6 insertions, 0
+  deletions, entirely inside ### Task B1. Zero production code, zero test code.
+  F-1's evidence lives in the report, not the diff, because a mutation is
+  injected and reverted.
+
+  F-1 MEASURED RESULT: deleting the new branch's writeRunState reds 7b at
+  `expect(persisted).toEqual(finalState)` — the assertion written for that write
+  — and the whole delta is budgetSnapshot.timeRemainingMs, disk 19 vs returned
+  0, because execute's applyPhaseUsage moved it in memory only. Three fences,
+  named nonzero counts throughout (1 passed|53 skipped / 1 failed|53 skipped /
+  1 passed|53 skipped). THE SCOPED RE-REVIEWER RE-RAN THIS MUTATION ITSELF
+  rather than reading the fences, and reproduced all three states plus a clean
+  tree — the kill is established by a second party.
+
+  SCOPED RE-REVIEW VERDICT: all three ADDRESSED, no new breakage in the fix
+  diff, no Critical, no Important.
+
+  ONE RE-REVIEWER MINOR WAS CHECKED AND IS REFUTED — recorded rather than
+  silently dropped, because the rule cuts both ways. The re-reviewer called the
+  report's cited hunk header `@@ -1288,2 +1288,8 @@` "wrong/unsupported",
+  having compared it against git's DEFAULT three-line context. Controller
+  re-derived it at four context widths: `git --no-pager diff -U1 dab1040
+  b427c8b -- <plan>` prints exactly `@@ -1288,2 +1288,8 @@`; -U0 prints
+  `@@ -1288,0 +1289,6 @@`. The report's number re-derives; the finding assumed
+  a context width the report never claimed. NOT a defect. The re-reviewer's
+  underlying check — no bleed into neighbouring plan sections — was independently
+  true and is what mattered.
+
+Task B1: complete (commits a7c26c9..b427c8b, review clean after 1 fix round).
+  Landed: RunHeartbeatStoppedError as a deliberate NON-subclass naming the
+  predicate it protects; runExclusive refuses after stop, evaluated BEFORE fn is
+  invoked (queued-continuation form, strictly stronger than refusing at call
+  time); runLoopFromState's outer catch gained a branch ahead of the
+  isLeaseStopError branch that appends heartbeat_stopped, writes run state, and
+  returns a RESUMABLE state without persistTerminalState. isLeaseStopError,
+  stop(), the test doubles and INERT_LEASE_HEARTBEAT are byte-unchanged.
+  29 files / 487 tests exit 0 (+3 cases), typecheck 0, build 0, both allowed
+  flakes absent, all three group-A guards still hold.
+
+--------------------------------------------------------------------------------
+Task B2: implemented (commit 6935578, b427c8b..6935578), DONE_WITH_CONCERNS.
+Task B2: review 1 — spec ✅, quality APPROVED, 0 Critical, 0 Important, 4 Minor.
+--------------------------------------------------------------------------------
+
+No fix round: nothing entered the loop. One independent reviewer, most capable
+model, did not implement. What it re-derived itself rather than reading:
+  - the slot sits between the loop-top leaseLoss check and `const attempt =
+    state.attemptsUsed + 1`; the attempt-internal checkpoint is NOT fitted;
+  - `persistTerminalState(` count identical on b427c8b and 6935578 (16 in
+    runLoop.ts + 1 in the integration test) — the plan's "new call sites must be
+    zero" holds, counted, not asserted;
+  - `git diff b427c8b..6935578 -- src/controller/leaseHeartbeat.ts` is EMPTY, so
+    stop() is byte-unchanged; --name-only is exactly the four files the Files
+    list names; src/registry/ untouched;
+  - B1's outer-catch branch still precedes the isLeaseStopError branch, the
+    predicate is unchanged/unexported, both onReconciliationWriteAbandoned
+    forwards are in place — zero hunks in all of those regions;
+  - the key was added to the two EXISTING options types and forwarded in
+    resumeLoop; no third type, no positional collapse;
+  - guard `return { ok: false` = 8;
+  - 8b(i)'s within-TTL assertion is load-bearing because releaseOwnerLease nulls
+    leaseAffirmedAt but PRESERVES lastAffirmedAt, so the assertion really does
+    separate "released" from "aged out";
+  - 8b(ii) is a genuine CAS mismatch: sameOwnerRecord is JSON.stringify
+    equality, and the test rewrites only currentOwnerEpoch while preserving key
+    order, so the mismatch can only come from the epoch. The weaker
+    mock-releaseOwnerLease variant the plan calls insufficient was not used;
+  - both mutations red for the PREDICTED mechanism, not merely red: mutation 1
+    reds on planCalls receiving 1 (an attempt actually spent), mutation 2 on
+    leaseAffirmedAt receiving the current timestamp. Named nonzero counts in
+    every fence.
+
+DEFERRED MINORS FROM B2 — GATE-B TRIAGE INPUT, DO NOT REDISCOVER:
+Task B2: minor (deferred): M-1 *** THE MOST INTERESTING ONE. *** Test 8's
+  "byte-identical" assertion does NOT catch the slot being moved ABOVE the
+  loop-top `writeRunState`: on the first iteration initializeRunFiles has
+  already written the same state, so the test stays green. Every stop test
+  today fires on the FIRST iteration; none sets the signal after an attempt has
+  run — and that is the real shape of an operator pressing Ctrl-C. The
+  divergence it would miss is exactly the one B1's catch-branch comment names
+  (applyPhaseUsage has moved state in memory only).
+Task B2: minor (deferred): M-2 — 8b(ii) has no counterpart under the same
+  wiring, so "the CAS loses BECAUSE of a supersede" is inferred, not pinned. If
+  affirmOwnerLease ever stops returning the record it just wrote, the CAS would
+  mismatch for a DIFFERENT reason and 8b(ii) would stay green with its named
+  semantics silently gone.
+Task B2: minor (deferred): M-3 — the stop check is ordered AFTER the leaseLoss
+  check. The plan does not specify the order; the implementer chose it and said
+  so. Reviewer's finding: no test distinguishes the two orders. Accepted as
+  minimal-change (B2's effect on existing routing is zero), but when both
+  signals are set the run still takes the lease-loss route and writes a terminal
+  state to a possibly-transferred run — pre-existing behaviour B2 neither
+  created nor widened. Reordering costs one line plus one test.
+Task B2: minor (deferred): M-4 — this task's edit pushed resumeLoop.ts:136-137
+  to 142-143, and three historical documents cite those line numbers
+  (2026-07-27 owner-transfer-contention spec and plan). Verified stale by
+  reading b427c8b's version. NOT fixed: those files are outside the Files list
+  and this repo does not rewrite historical documents. For human ruling.
+
+CONCERN 6 IS RECORDED BECAUSE IT IS THE GOOD KIND OF FAILURE: the implementer's
+first draft report filled in a grep's three output lines FROM MEMORY, getting
+line numbers and a keyword wrong; it caught itself, re-ran, corrected, and left
+the self-report in place instead of quietly fixing it. The reviewer re-ran that
+grep independently and the CURRENT values are byte-correct (fileStore.ts:1134
+async function with no export / :1169 / :1184). The plan's premise that
+updateOwnerRecordWithPrecondition cannot be mocked therefore stands.
+
+Task B2: complete (commits b427c8b..6935578, review clean, 0 fix rounds).
+  Landed: StopRequestSignal / createStopRequestSignal shaped after
+  LeaseLossSignal; a stop_requested checkpoint at the loop top that appends the
+  event and returns the current RESUMABLE state without spending an attempt and
+  without persistTerminalState; the key on both existing options types with
+  resumeLoop forwarding. 29 files / 490 tests exit 0 (+3 cases), typecheck 0,
+  build 0.
+
+NAMED CONFIRMATION FOR OPEN ITEM 4, MADE BY B2 ITSELF AND NOT INHERITED FROM
+B1's: B2's new return path does NOT enter persistBoundaryAnalysis — the slot
+returns (not continues) from the loop top, before `const attempt = …`, while
+both persistBoundaryAnalysis call sites lie further in. The "preserving is
+permitting" ruling does NOT reopen for B2 either. THIS COVERS B2 ONLY. Group
+C must make its own, and its brief must still carry open item 4 verbatim.
+
+================================================================================
+*** GATE-B: PASSED (pending the human's merge instruction). 2026-08-04. ***
+================================================================================
+
+This entry is the gate's review verdict. Per plan §15 acceptance 7 criterion (1)
+— which runs `git log --merges` and prints %s, i.e. enumerates MERGE commits and
+reads SUBJECT lines only — the gate must be a real --no-ff merge whose SUBJECT
+carries this verdict. Group A learned that the hard way; group B does not
+relearn it. THE MERGE HAS NOT BEEN MADE: the human's standing instruction is
+that merging happens only on an explicit instruction.
+
+RANGE: a7c26c9..62cead9, four commits.
+  dab1040  B1 implementation
+  b427c8b  B1 fix round 1 (plan erratum + the fifth mutation, docs only)
+  6935578  B2 implementation
+  62cead9  GATE-B fix wave (one test assertion; production code untouched)
+
+REVIEWERS. Two, dispatched in parallel with deliberately disjoint lanes, both on
+the most capable model, NEITHER having worked on B1 or B2 (fresh agents;
+independence is structural, not asserted).
+  Lane 1 — production code, whole-branch design coherence, risk grading.
+  Lane 2 — full rescan of every mutation and test-evidence artefact, plus triage
+           of the deferred-minor list.
+Both returned PASS WITH CONDITIONS, ZERO Critical, and NO item marked "must fix
+before merge". The conditions are handover text for group C, not code.
+
+WHAT LANE 1 ESTABLISHED AGAINST SOURCE (not read from reports):
+  - Option (a) is fully implemented. isLeaseStopError is still two instanceof
+    arms, still unexported, predicate and signature unchanged.
+    RunHeartbeatStoppedError extends Error directly; the three lease errors share
+    no base class; its comment names isLeaseStopError. Exactly one throw in the
+    whole repo (leaseHeartbeat's refuseIfStopped) and one instanceof (the outer
+    catch). assertHeld never reads `stopped` — the second half of hard constraint
+    1 holds, so the blocked_waiting_human "third door" stays shut.
+  - Debt-2 contact surface is zero, with a correction to B2's review: the outer
+    catch's isLeaseStopError arm is one of FOUR same-shaped debt-2 bodies, not
+    the only one. Contact is still zero — no persistTerminalState call site was
+    added or changed. B1 added a SIBLING of debt 2 (an unguarded write), not
+    contact with it.
+  - Change surface confined: leaseHeartbeat.ts is +27/-4 in two hunks (import,
+    and runExclusive plus the comment above it); stop() falls in no hunk;
+    src/registry/ diff empty; INERT_LEASE_HEARTBEAT and all three test doubles
+    untouched.
+  - The two new paths compose: `while (true)` opens with writeRunState, so B2's
+    returned state really is byte-identical to disk — INCLUDING the path where
+    resumeLoop normalises `executing` to `planning` without a separate write,
+    which lane 1 expected to falsify and did not.
+
+WHAT LANE 2 ESTABLISHED BY RE-RUNNING (not by reading fences):
+  SEVEN mutations across the branch (B1: 1, 1b, 2, 3, 5; B2: 1, 2) — the count
+  was re-derived, not copied. 7/7 have all three steps, 7/7 show named NONZERO
+  counts, 7/7 red on the claimed assertion, 7/7 red by the claimed MECHANISM.
+  It re-ran two of them by hand (B1 mutation 2, B2 mutation 1) and reproduced
+  both verbatim, then proved its own tree clean.
+  ASSERTION STRENGTH, which is what this lane exists for:
+    7b (i)   killable — two independent kills.
+    7b (ii)  *** VACUOUS TODAY *** — the cleanupStatus backfill runs AFTER
+             persistBoundaryAnalysis and the stub makes that throw, so no outer-
+             catch mutation can reach it. It is documentation, not a guard. The
+             report's "all four are killable" was WRONG and is now corrected in
+             place.
+    7b (iii) killable.
+    7b (iv)  killable but never demonstrated — lane 2 measured it red.
+    8 killable; 8b(i) killable; 8b(ii) shape correct (real CAS mismatch).
+
+THE MOST VALUABLE FINDING OF THE WHOLE GATE, AND IT WAS A GUARD THAT COULD NOT
+FAIL: 8b(ii)'s precondition `expect(affirmed.leaseAffirmedAt).not.toBeNull()`
+PASSED ON `undefined` — when affirmNow has not run, JSON.stringify drops the key
+entirely. So the assertion that called itself "without this, nothing below can
+fail" was itself unable to fail, and the test ran on to red much later with a
+misleading message. This is the exact defect class this repo keeps naming.
+
+GATE-B FIX WAVE (62cead9) — one wave, one implementer, five findings, then ONE
+scoped re-review, per the plan's GATE-B Step 2.
+  F-3 the vacuous guard is now `toEqual(expect.any(String))`. PRODUCTION CODE
+      UNTOUCHED (`git diff --stat 6935578..62cead9 -- src/` is empty).
+  F-1 the "all four killable" claim corrected in place; (ii) named vacuous.
+  F-2 7b (iv)'s kill measured and recorded, labelled a 2026-08-04 reconstruction
+      rather than back-dated.
+  F-4 "8b(i) is the only coverage of resumeLoop's forwarding" was REASONING;
+      it is now a measured third mutation for B2.
+  F-5 B1's revert proof for mutation 2 scanned for `MUTATION` while the marker
+      was `EVIDENCE-ONLY` — the scan could not have hit it, so the test-side
+      revert was never actually proven at the time. Corrected in place; the
+      revert is established after the fact by lane 2's source read at 6935578.
+  THE SCOPED RE-REVIEW re-derived F-3 BY HAND: with a key-deleting probe the new
+  assertion reds on its own line (`expected undefined to deeply equal
+  Any<String>`) while the OLD form passes vacuously and reds 22 lines later on
+  an unrelated message. All five ADDRESSED, no new breakage, tree clean.
+
+CONDITIONS ON THIS PASS — ALL ARE GROUP C's BRIEF, NONE BLOCK THE MERGE:
+  1. REACHABILITY AND HARM ARE ONE WIRING, NOT TWO (lane 1, F-1). The recorded
+     "writeRunState has no CAS" and "B1's branch is unreachable today" have been
+     tracked as separate items. They are the same item: the single change that
+     brings the branch to life — handing the heartbeat to a SIGINT handler or a
+     resident watch, the same wiring that sets stopRequested — brings the
+     unguarded overwrite to life in the same commit. REQUIREMENT: group C's
+     wiring commit and the ownership-guard ruling must happen in ONE commit, not
+     two. No test will red if they are split.
+  2. NON-TERMINAL IS NOT THE SAME AS RESUMABLE (lane 1, F-2). evaluateResume-
+     Eligibility's first four criteria require owner-transfer.json AND
+     reconciliation-record.json with OWNER_LOST / matching epoch, while
+     initializeRunFiles writes only loop-contract.json, loop-state.json and
+     events.jsonl. So a BRAND-NEW run stopped at the loop top returns a
+     non-terminal state that resumeLoop then REFUSES. 8b(i) is green because
+     seedEligibleRun pre-seeds both files — it proves "a run that has ALREADY
+     been taken over can be picked up again", which is a weaker claim than the
+     one §5.4 leans on. Group C's sweep must not inherit the stronger reading.
+  3. The predicate-widening half still has no test (human-ruled, plan erratum in
+     place). Carry verbatim to group C AND to L5, with the trigger: ANYONE WHO
+     REORDERS THE TWO OUTER-CATCH BRANCHES MUST RE-RUN THE WIDENING EXPERIMENT.
+  4. The no-CAS write: carry to L5. Add the obligation lane 2 found MISSING from
+     the list — if anyone introduces a stop() call site INSIDE the loop, the
+     unreachability argument behind this ledger's B1 and B2 confirmations must be
+     re-run, not inherited.
+  5. appendEvent("heartbeat_stopped") and appendEvent("stop_requested") are also
+     unguarded writes to a possibly-transferred run (lane 1, F-4). Append, not
+     overwrite, so one notch less harmful — but they travel with condition 4 so
+     L5 does not think there is only one site.
+
+DEFERRED-MINOR TRIAGE (lane 2): B1 M-2 record only; B2 M-1 UPGRADED from record-
+only to CARRY TO GROUP C (lane 2 measured it: test 8 stays green if the slot
+moves above the loop-top writeRunState, because on the first iteration
+initializeRunFiles already wrote the same state — and every stop test today
+fires on the FIRST iteration, which is not the shape of a real Ctrl-C); B2 M-2
+carry to group C merged with the 8b(ii) finding; B2 M-3 (stop/leaseLoss ordering
+has zero coverage) carry to group C; B2 M-4 (three historical documents cite
+resumeLoop.ts:136-137, now 142-143) record only — this repo does not rewrite
+historical documents.
+
+THE MOST FRAGILE PREMISE OF THIS WHOLE GATE, STATED BY LANE 1 AND ENDORSED HERE:
+"`stopped` is false for the entire duration of runLoopFromState." The branch's
+low-risk grading, the open-item-4 confirmations and the unreachability of the
+no-CAS write ALL rest on it, and NOTHING TESTS IT — it holds only because both
+stop() call sites happen to sit in a `finally`. Anyone who hands the heartbeat
+outside the loop overturns all three at once, and the suite stays green.
+
+FINAL VERIFICATION AT THE GATE, run by the controller, unfiltered,
+ECC_GATEGUARD=off DISABLE_OMC=1, in the worktree at 62cead9:
+  Test Files 29 passed (29) / Tests 490 passed (490), TEST_EXIT=0, Duration 16.52s
+  TYPECHECK_EXIT=0; BUILD_EXIT=0
+  Guard 1 `return { ok: false` = 8
+  Guard 2 `currentOwnerEpoch + 1` single hit, src/ownership/ownerController.ts:166
+  Guard 3 `git diff --name-only a7c26c9..62cead9 -- src/registry/` empty
+  Guard 4 (this gate's own) `persistTerminalState(` in runLoop.ts = 16 at the
+    branch base a7c26c9 AND 16 at 62cead9 — zero new terminal-state call sites
+    across the whole branch, counted on both ends rather than asserted.
+  Neither allowed flake appeared; no failure outside the list; no rerun.
+
+VERDICT: GATE-B PASSES. Zero Critical across the whole branch. Both Importants
+are handover conditions for group C, not defects in group B. Group C's hard
+precondition (GATE-B complete) will be met the moment the human orders the merge.
