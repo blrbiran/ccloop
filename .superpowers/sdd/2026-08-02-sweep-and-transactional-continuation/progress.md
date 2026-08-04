@@ -1104,3 +1104,41 @@ STILL NOT DONE, EACH NEEDING ITS OWN HUMAN INSTRUCTION:
   3. Group C has NOT started. Its brief must carry, verbatim: GATE-A open item 4;
      the four GATE-B conditions above; and the obligation to make its OWN
      confirmation rather than inherit B1's or B2's.
+
+--------------------------------------------------------------------------------
+POST-GATE-B CLEAN-UP. 2026-08-04. Branch and worktree deleted, on human order.
+--------------------------------------------------------------------------------
+
+Discharges item 2 of the "STILL NOT DONE" list above. Item 1 (push) and item 3
+(group C) are UNTOUCHED and still stand.
+
+BEFORE DELETING, TWO CHECKS — the same two group A's clean-up round used:
+  1. `git merge-base --is-ancestor feat/l3-debt3-heartbeat-stop main` EXIT 0, so
+     the branch was fully contained in main and no commit could be lost.
+  2. The worktree's untracked and ignored files were ENUMERATED first
+     (`git -C <worktree> status --short --ignored=matching`), not assumed. Six
+     entries: .ccmem/, .omc/, .superpowers/sdd/.gitignore, dist/, node_modules/,
+     and ONE artefact that existed nowhere else — the B2 review package
+     review-b427c8b..6935578.diff. Everything but that one is regenerable.
+     The exception was copied out with `cp -n` into the main repo's workspace
+     BEFORE the removal, and both copies measured 25402 bytes.
+     (Group A's round found 25 such artefacts; this round found one, because
+     every brief and report for group B was written straight into the MAIN
+     repo's workspace. Only review-package's output followed the shell's cwd.)
+
+DELETED: worktree .claude/worktrees/l3-debt3-heartbeat-stop (git worktree remove,
+exit 0, no --force needed) and branch feat/l3-debt3-heartbeat-stop (git branch -d
+— the SAFE form, which itself refuses an unmerged branch; it reported "was
+62cead9").
+
+AFTER: `git worktree list` shows the main repo alone; `git branch` shows main and
+the unrelated backup/evidence-first-v1-… branch. `git log --oneline
+a7c26c9..bafa6a6` still lists all six commits — the four of group B's work plus
+the two docs commits — so nothing was orphaned by the deletion.
+
+NOTE FOR WHOEVER OPENS GROUP C: the fifth environment trap recorded earlier in
+this file (a fresh worktree has no node_modules of its own, and
+tests/validation/evidence.test.ts builds tsxBin from process.cwd(), so 9
+run-scenario CLI cases fail with spawn ENOENT — a shape NOT on the allowed-flake
+list) applies to the next worktree too. Run `npm ci` inside it first. That
+node_modules died with this worktree.
