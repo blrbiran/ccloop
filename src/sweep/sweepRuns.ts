@@ -153,13 +153,6 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
     refused: 0,
     error: 0,
   };
-  // The callback's whole implementation: one push. No I/O, no formatting, no throw — it runs
-  // deep inside runLoopFromState, and a throw here would turn a protective abandonment into a
-  // failed attempt. It is deliberately NOT wrapped in try/catch: that would swallow a
-  // programming error silently (Rule 12). The lines are emitted after the loop, in push order,
-  // which is the traversal order of the runs.
-  const notes: { path: string; detail: string }[] = [];
-
   for (const candidate of candidates) {
     // §6, quota accounting point (the amended ruling): the bound is on runs that actually ENTERED
     // runLoopFromState, counted at adoption rather than at return. Counting at return would let a
@@ -182,8 +175,27 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
         onAdopted: () => {
           adopted += 1;
         },
+        // §4.3: another line entirely, never a cell in the three-column report — the abandonment
+        // is ORTHOGONAL to the run's final classification (a run that ends `succeeded` can still
+        // produce one). One line per invocation: no dedup, no aggregation.
+        //
+        // Written AT THE CALLBACK, not buffered for a flush after the loop. A sweep can run for
+        // hours under --max-runs 50; if run 3 abandons a reconciliation write and the process is
+        // SIGKILLed at run 40, a buffer dies with the process and cron's "any stderr is an alert"
+        // rule never fires — for an event whose entire purpose is that visibility. Buffering also
+        // bought nothing: the only ordering §4.3 asks for is between note lines themselves, and a
+        // sequential for-await gives that either way.
+        //
+        // `detail` is a String(error) and a SyntaxError message can contain newlines, which would
+        // split one note into what looks like several output lines. Folded only here — §8's
+        // `errored` line has the same problem, predates this wave, and is deliberately left alone.
+        //
+        // Deliberately NOT wrapped in try/catch: `options.stderr` throwing is a programming error
+        // in the caller, and swallowing it here would hide it (Rule 12).
         onReconciliationWriteAbandoned: (detail) => {
-          notes.push({ path: candidate.path, detail });
+          options.stderr(
+            `note  ${candidate.path}  reconciliation_write_abandoned  ${detail.replace(/\r?\n/g, " ")}`,
+          );
         },
       });
       const outcome = outcomeForStatus(finalState.status);
@@ -209,18 +221,6 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
     tally[report.outcome] += 1;
     const sink = report.outcome === "error" ? options.stderr : options.stdout;
     sink(`${candidate.path}\t${report.outcome}\t${report.detail}`);
-  }
-
-  // §4.3: another line entirely, never a cell in the three-column report — the abandonment is
-  // ORTHOGONAL to the run's final classification (a run that ends `succeeded` can still produce
-  // one). One line per callback invocation: no dedup, no aggregation. The only ordering promised
-  // is between note lines themselves, within stderr: the report lines go to stdout, and Node
-  // gives no ordering guarantee between the two streams once they are redirected to one file.
-  for (const note of notes) {
-    // `detail` is a String(error) and a SyntaxError message can contain newlines, which would
-    // split one note into what looks like several output lines. Folded only here — §8's
-    // `errored` line has the same problem, predates this wave, and is deliberately left alone.
-    options.stderr(`note  ${note.path}  reconciliation_write_abandoned  ${note.detail.replace(/\r?\n/g, " ")}`);
   }
 
   // C1's summary added `adopted` and `refused`, which are not mutually exclusive: a run that

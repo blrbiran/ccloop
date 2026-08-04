@@ -1751,6 +1751,41 @@ $ rtk proxy "grep -cF 'cannot read run artifacts' tests/persistence/fileStore.te
 - [ ] **Step 6: 跑确认失败并贴输出 → 实现 `note` 行（含单行折叠、遍历顺序、回调=一次数组 push）→ 再跑确认通过并贴输出。**
 - [ ] **Step 7: 变异实验（四次）。**
   1. 前缀字面量改掉而不同步改判据 → **12c 必红**
+
+     **Amended 2026-08-04：本条判据为假——把 `resumeLoop.ts` 那两处前缀字面量改掉，12c 实测*存活*。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。**原因是结构性的、与 12c 写得强不强无关**：12c 按本节测试要求的明文规定，注入的是**替身 `resume`**，它抛出的 `ResumeNotEligibleError` 的 message 是 `tests/sweep/sweepRuns.test.ts` 里的**字面量**；生产的 `resumeLoop` 在这条测试里**根本没有被进入**。因此 `resumeLoop.ts` 的字面量与 12c 之间**没有任何数据通路**，改前者不可能让后者变红。C3 落地时实测（未过滤，裸 `it` 名，注入 `cannot read run artifacts: ` → `cannot load run artifacts: `）：
+
+     ```
+     # 注入前
+      Test Files  1 passed (1)
+           Tests  1 passed | 11 skipped (12)
+     # 注入后（仍然绿 —— 变异存活）
+      Test Files  1 passed (1)
+           Tests  1 passed | 11 skipped (12)
+     ```
+
+     **该变异实际杀掉的是另外两条**（同一次注入下实测）：`tests/cli/cli.test.ts > parseArgs resume > prints the refusal reason to stderr when resume is refused (spec §9)` 1 条，以及 `tests/persistence/fileStore.test.ts > fileStore > refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives` 1 条（该条内部两个 `expect.soft` 分别有 13 行与 4 行矩阵期望分歧，共 17 行）。
+
+     **人裁：本条改为变异 `src/sweep/sweepRuns.ts` 的 `classifyThrow` 里那个 `startsWith("cannot read run artifacts:")` 字面量**（**不是** `resumeLoop.ts` 的），它落在本任务自己的 Files 名单内。C3 落地时实测三步（未过滤，裸 `it` 名）：
+
+     ```
+     # 注入前
+      Test Files  1 passed (1)
+           Tests  1 passed | 11 skipped (12)
+     # 注入后（startsWith("cannot read run artifacts:") → startsWith("cannot load run artifacts:")）
+      × sweepRuns > routes a cannot-read-run-artifacts refusal to stderr as an error, not to stdout as a refusal
+        AssertionError: expected [] to deeply equal [ Array(1) ]
+        - "/fake/root/run-1	error	cannot read run artifacts: Error: EACCES: permission denied, open 'owner-transfer.json'"
+        + （空）
+      Test Files  1 failed (1)
+           Tests  1 failed | 11 skipped (12)
+     # 还原后
+      Test Files  1 passed (1)
+           Tests  1 passed | 11 skipped (12)
+     ```
+
+     红在 `expect(h.stderrLines.slice(1))` 那一句上：run-1 从 stderr／`error` 掉回 stdout／`refused`。
+
+     **这条替代变异钉住的是哪一层，写明以免被读得过强**：它钉的是「**C3 确实消费了那个前缀字面量**」——sweep 的路由真的由该前缀决定，不是恒真也不是恒假。它**不**钉「`resumeLoop.ts` 与 sweep 两侧的字面量相等」这一**跨模块**层；那一层今天由 `tests/cli/cli.test.ts` 与 `tests/persistence/fileStore.test.ts` 承重——上面那次对 `resumeLoop.ts` 的注入把它们**双双打红**，即是该层有护栏的证据。
   2. `note` 路由进 `error` 那一格 → **12d(i) 的 (2)(3) 必红**
   3. 退回「不路由」→ **12d(i) 的 (1) 必红**
   4. 记录时机改成「`resume` 正常返回后才记」→ **12d(ii) 必红**
