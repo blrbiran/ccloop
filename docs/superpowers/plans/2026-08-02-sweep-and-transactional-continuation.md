@@ -1642,6 +1642,10 @@ git commit -m "feat(cli): add the sweep command with a required --max-runs and a
 - **启动横幅**（stderr，**扫描之后、`createAdapter()` 之前**）：
   `sweep: <eligible> eligible run(s) under <root>, will attempt at most <N>, adapter=<name>`
   **横幅必须同时显示 eligible 总数与配额 N**——§12 的整个论证是「操作者选 `--adapter claude` 即构成对该次 sweep 的**知情且有界**批准」，**少了 N，「知情」就不成立**。
+
+  **Amended 2026-08-05：上面这个横幅字面量里裸用的 "eligible" 会把「知情」的另一半掏空，已按人的裁定改成带限定的措辞。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。理由与本节 `interrupted` 那条 `Amended 2026-08-04` 同源，只是落在横幅上：sweep 的过滤器只观测 `owner-transfer.json` 的 `eligibleForContinuation`（`src/sweep/sweepRuns.ts` 的 `isObservedEligible`），**它只覆盖 `evaluateResumeEligibility` 八条判据里的第 1 条**（守卫实测：`rtk proxy "bash -c 'cd <worktree> && grep -cF \"return { ok: false\" src/controller/resumeLoop.ts'"` → **8**）。于是一次「17 eligible」的横幅可以对应 17 个全部被门拒的 run，操作者据此批准 `--adapter claude`，§12 要求的「知情」在批准的那一刻就是假的——**这与少写一个 N 是同一种失效，只是发生在另一个数字上**。同仓库同为只读的 `ccloop ls` 在**同一个字段**上一直带着这句限定（`src/registry/renderRuns.ts` 的 `CONSISTENCY_NOTICE`：「eligibleForContinuation is an observed field, not a decision that the run may be resumed」），本横幅照它的口气写，使两个只读表面对同一字段说同一句话。**读作**：横幅仍**必须**同时显示候选集大小与配额 N（这一条一个字不改），但那个计数**必须被命名为它所计的东西**，且不得出现「保证 / 一定 / 能续跑」一类措辞（与 `Amended 2026-08-04` 那条同一条线）。GATE-C 修复波落地的字面量逐字为：
+
+  `sweep: <eligible> run(s) under <root> observed eligibleForContinuation=true (an observed field, not a decision that the run may be resumed), will attempt at most <N>, adapter=<name>`
 - **每个尝试过的 run 一行**（stdout），制表对齐三列 `path | outcome | detail`。
 - **`outcome` 取值域（八个）**：`succeeded` / `failed` / `exhausted` / `blocked_waiting_human` / **`cancelled`** / `interrupted` / `refused` / `error`。
   - **`cancelled` 不归入 `failed`**：两者对操作者意味着不同的下一步（`failed` 是 run 自身失败，`cancelled` 是所有权/信号原因中止）。`detail` 必须携带 `stopReason`。
