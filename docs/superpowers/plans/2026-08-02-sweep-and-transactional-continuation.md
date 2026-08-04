@@ -1712,6 +1712,10 @@ $ rtk proxy "grep -cF 'cannot read run artifacts' tests/persistence/fileStore.te
 - **`ccloop run` / `ccloop resume` 两条 CLI 路径不传回调**，行为与第四轮一致（只进 `events.jsonl`）。**这不是遗漏**：那两条是前台命令，操作者本来就在看着；stderr 路由要解决的是无人值守的 sweep。
 - **回调的实现定死为一次数组 push**（把 `{ path, detail }` 推进本次 sweep 的备注数组），**不做 I/O、不格式化、不得抛出**。它若抛出会一路逃到 `runLoopFromState`，把一次保护性放弃升级成 attempt 失败。**本层刻意不给它包 try/catch**——包了会静默吞掉一个编程错误，违反 Rule 12。
 
+  **Amended 2026-08-04：「一次数组 push」＋「不做 I/O、不格式化」这两句已被人裁推翻——回调改为*当场* `options.stderr(...)`，折行也在回调里当场做。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。**理由不是口味，是缓冲会丢告警**：把 note 收进数组、等整个 for-await 循环结束才统一冲出，等于把这条事件的可见性押在「进程一定活到循环结束」上。一次 `--max-runs 50` 的 sweep 可以跑数小时；若第 3 个 run 触发 `reconciliation_write_abandoned`、进程在第 40 个 run 时被 SIGKILL / OOM / 机器重启，**缓冲数组随进程消失，stderr 上一个字都没有**，cron 的「有 stderr 即告警」**永不触发**——而这条事件的**全部**价值就是那次告警（见本节「退出码不受影响」一条：「可见性由 stderr 独家兑现」）。**且缓冲没有换来任何本节要求的性质**：本节唯一要求的行序是「同一次 sweep 内，各条 `note` 行之间保持 run 的遍历顺序」，而 sweep 是顺序 `for await`，**当场打印同样满足它**。所以那两句要求的是一个零收益、带一条不可见失效模式的形状。
+
+  **本条其余部分不变，并且仍然成立**：一次调用产生一行、不去重、不聚合；**回调仍然不得抛出**，且**仍然刻意不包 try/catch**——`options.stderr` 抛出是调用方的编程错误，吞掉它同样违反 Rule 12。**变的只有「落点是数组」这一件事，改为「落点是 stderr」。**
+
 **测试要求：**
 
 - **测试 12c — `cannot read run artifacts:` 前缀是被依赖的契约**：替身 `resume` 抛一个 message 以该前缀开头的 `ResumeNotEligibleError`，断言该行 outcome 为 **`error`**、写到 **stderr**、detail **含完整 message**。
@@ -1749,6 +1753,8 @@ $ rtk proxy "grep -cF 'cannot read run artifacts' tests/persistence/fileStore.te
   `sweepRuns > prints a reconciliation_write_abandoned note on stderr without changing the run outcome`
   `sweepRuns > keeps the abandonment note on stderr even when the run throws afterwards`
 - [ ] **Step 6: 跑确认失败并贴输出 → 实现 `note` 行（含单行折叠、遍历顺序、回调=一次数组 push）→ 再跑确认通过并贴输出。**
+
+  **Amended 2026-08-04：本步括号里的「回调=一次数组 push」与上面「落点」一节那一句是同一处，已同样被人裁推翻——读作「回调=当场 `options.stderr(...)`（含单行折叠）」。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。完整理由见上面那条 `*Amended 2026-08-04*`（缓冲不换来任何本节要求的性质，却引入一条 SIGKILL 下静默丢失告警的失效模式）。「单行折叠」与「遍历顺序」两项不变。
 - [ ] **Step 7: 变异实验（四次）。**
   1. 前缀字面量改掉而不同步改判据 → **12c 必红**
 

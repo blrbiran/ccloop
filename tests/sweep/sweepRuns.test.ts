@@ -585,10 +585,23 @@ describe("sweepRuns", () => {
     // reached the throw at all.
     expect(abandonedThenThrew).toBe(1);
     expect(exitCode).toBe(0);
-    // BOTH lines survive, on stderr. Their relative order is deliberately NOT asserted: the
-    // cross-stream ordering promise was withdrawn, and the only ordering this layer promises is
-    // between note lines themselves.
-    expect(h.stderrLines).toContain(`note  ${ROOT}/run-1  reconciliation_write_abandoned  ${abandonDetail}`);
-    expect(h.stderrLines).toContain(`${ROOT}/run-1\terror\t${throwMessage}`);
+    // BOTH lines survive, on stderr, and the note comes FIRST — it is written at the callback,
+    // not buffered for a flush after the loop.
+    //
+    // The order is the whole point of asserting the array rather than two `toContain`s, and it is
+    // the only assertion in this file that can tell the two implementations apart: a buffered
+    // implementation produces exactly these three lines, permuted to
+    // [banner, error line, note]. Buffering is not a style choice — a sweep can run for hours
+    // under --max-runs 50, and if the process is SIGKILLed before the flush, the abandonment
+    // never reaches stderr at all and cron's "any stderr is an alert" rule never fires.
+    //
+    // This is an ordering WITHIN stderr, which is deterministic. It is not the cross-stream
+    // ordering promise (report line on stdout vs note on stderr) that §4.3 withdrew, and nothing
+    // here asserts anything about that.
+    expect(h.stderrLines).toEqual([
+      `sweep: 1 eligible run(s) under ${ROOT}, will attempt at most 100, adapter=scripted`,
+      `note  ${ROOT}/run-1  reconciliation_write_abandoned  ${abandonDetail}`,
+      `${ROOT}/run-1\terror\t${throwMessage}`,
+    ]);
   });
 });
