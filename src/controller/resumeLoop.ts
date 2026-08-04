@@ -17,6 +17,7 @@ import type { RunLeaseLostError } from "../ownership/lease.js";
 import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
 import { cleanupAttemptWorkspaceBestEffort, createLeaseLossSignal, runLoopFromState } from "./runLoop.js";
+import type { StopRequestSignal } from "./runLoop.js";
 
 export class ResumeNotEligibleError extends Error {
   constructor(message: string) {
@@ -89,6 +90,11 @@ async function cleanupResidualWorktrees(repoPath: string, runDir: string): Promi
 // positions.
 export type ResumeLoopOptions = {
   onReconciliationWriteAbandoned?: (detail: string) => void;
+  // Task B2: forwarded to runLoopFromState below, never read here. resumeLoop's own refusals
+  // (the lease gate, the eligibility gate, the claim CAS) all run before the loop exists, and a
+  // stop request is not a reason to refuse a resume — it is a reason for the loop this resume
+  // starts to return at its first phase boundary.
+  stopRequested?: StopRequestSignal;
 };
 
 export async function resumeLoop(
@@ -192,6 +198,7 @@ export async function resumeLoop(
 
     return await runLoopFromState(contract, runDir, adapter, resumedState, heartbeat, leaseLoss, {
       onReconciliationWriteAbandoned: options?.onReconciliationWriteAbandoned,
+      stopRequested: options?.stopRequested,
     });
   } finally {
     // §6.0: every exit path — normal completion, stop-boundary exit, and any throw.

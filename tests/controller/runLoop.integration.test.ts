@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseChangedPathsFromGitStatus, runLoop, runLoopFromState } from "../../src/controller/runLoop.js";
+import { createStopRequestSignal, parseChangedPathsFromGitStatus, runLoop, runLoopFromState } from "../../src/controller/runLoop.js";
 import { initializeRunFiles, writeOwnerRecord } from "../../src/persistence/fileStore.js";
 import { RunHeartbeatStoppedError } from "../../src/ownership/lease.js";
 import type { LeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
@@ -1234,6 +1234,91 @@ describe("runLoop", () => {
     // either — the refusal escapes before it, which is what keeps a published reconciliation
     // record out of this branch's reach.
     expect(await pathExists(join(runDir, "boundary-analysis.json"))).toBe(false);
+  });
+
+  // Task B2 / L3 §5.4 test 8. runLoopFromState is driven directly because runLoop() takes no
+  // options object and the stop slot lives on one.
+  //
+  // The adapter script is load-bearing rather than incidental. The slot could have been fitted to
+  // EITHER of the two `leaseLoss.lost !== null` checkpoints, and an implementation that chose the
+  // other one — inside the attempt, on the retryable path after verification is rejected — also
+  // returns a non-terminal state here. What separates them is only that it returns having already
+  // spent an attempt, so frame 1 rejects verification specifically to give that implementation a
+  // path to its checkpoint: planCalls, the untouched loop-state.json and the exact event list are
+  // then three independent observables of "stopped before any attempt" versus "stopped after one".
+  it("returns a resumable state at the loop top when the stop signal is set, without spending an attempt", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+    // attemptsUsed 0, so the attempt this stop prevents would be attempt 1. That number is what
+    // keeps the alternative placement reachable: evaluateStopDecision (src/stop/stopController.ts)
+    // answers `retryable` only for `attemptNumber === 1` and `blocked_waiting_human` for any
+    // later one, and the attempt-internal checkpoint sits on the retryable path alone. Seeded at
+    // attemptsUsed 1 this test would still be red under that mutation, but red for having
+    // terminated rather than for having spent an attempt — a weaker kill.
+    const state: RunState = { ...makeRunState("planning"), currentAttempt: 0, attemptsUsed: 0 };
+
+    await initializeRunFiles(runDir, contract, state);
+    // Written by initializeRunFiles through the same writeJsonFileAtomically that writeRunState
+    // uses (src/persistence/fileStore.ts), so this comparison is a byte comparison and not a
+    // comparison of two serializers.
+    const persistedStateBeforeStop = await readFile(join(runDir, "loop-state.json"), "utf8");
+
+    const base = successFrame();
+    const rejectFrame = {
+      ...base,
+      verification: {
+        ...base.verification,
+        approved: false,
+        rejectCategory: "tests fail",
+        failingCommand: "npm test",
+        safeToRetry: true,
+        evidence: ["FAIL"],
+      },
+    };
+    const scripted = new ScriptedAdapter([rejectFrame, successFrame()]);
+    // plan is the first adapter call of every attempt, so counting it counts attempts entered —
+    // and each one is a real (paid) model call in production.
+    let planCalls = 0;
+    const adapter: RuntimeAdapter = {
+      async plan(context) {
+        planCalls += 1;
+        return await scripted.plan(context);
+      },
+      async execute(context) {
+        return await scripted.execute(context);
+      },
+      async verify(context) {
+        return await scripted.verify(context);
+      },
+    };
+
+    const stopRequested = createStopRequestSignal();
+    stopRequested.requested = true;
+
+    const finalState = await runLoopFromState(contract, runDir, adapter, state, undefined, undefined, {
+      stopRequested,
+    });
+
+    // No attempt was entered at all — the return happens above `const attempt = state.attemptsUsed + 1`.
+    expect(planCalls).toBe(0);
+    expect(await readdir(join(runDir, "attempts"))).toEqual([]);
+
+    // The named requirement: not merely "attemptsUsed did not grow" in the returned value, but
+    // loop-state.json byte-identical to what stood there before the stop. That is what makes the
+    // stop cost nothing — the next sweep re-reads exactly the state it would have read anyway.
+    expect(finalState.attemptsUsed).toBe(state.attemptsUsed);
+    expect(await readFile(join(runDir, "loop-state.json"), "utf8")).toBe(persistedStateBeforeStop);
+
+    // Exactly one event, and no terminal one: persistTerminalState is the only writer of a
+    // `loop_<terminal>` event, and appendTransitionEvent the only writer of `attempt_started`.
+    // Both absences are pinned in the same assertion as the new event's presence.
+    expect(await readEventTypes(runDir)).toEqual(["stop_requested"]);
+
+    // The run stays resumable. RESUMABLE_STATUSES is module-private in
+    // src/controller/resumeLoop.ts, so its three members are inlined here rather than exported.
+    expect(["planning", "executing", "verifying"]).toContain(finalState.status);
+    expect(finalState.stopReason).toBeNull();
   });
 
   it("writes owner-record.json when a run is initialized", async () => {

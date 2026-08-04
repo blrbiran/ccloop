@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
-import { runLoop, runLoopFromState, createLeaseLossSignal } from "../../src/controller/runLoop.js";
+import { createStopRequestSignal, runLoop, runLoopFromState, createLeaseLossSignal } from "../../src/controller/runLoop.js";
 import { resumeLoop } from "../../src/controller/resumeLoop.js";
+import { checkRunLease } from "../../src/controller/leaseGate.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
-import { LEASE_AFFIRM_THROTTLE_MS, LEASE_TTL_MS, RunLeaseLostError } from "../../src/ownership/lease.js";
+import { LEASE_AFFIRM_THROTTLE_MS, LEASE_TTL_MS, RunLeaseHeldError, RunLeaseLostError } from "../../src/ownership/lease.js";
 import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
 import { startLeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
 import type { LeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
@@ -215,6 +216,129 @@ describe("lease heartbeat lifecycle", () => {
 
     const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
     expect(owner.leaseAffirmedAt).toBeNull();
+  });
+
+  // Task B2 / L3 §5.4 test 8b(i) — the load-bearing half of the §5.4 re-decision: a run that
+  // stops on a stop request is picked up again by the NEXT sweep, so "the stop writes no terminal
+  // state" is not paid for with a run nobody can continue.
+  //
+  // Driven through resumeLoop rather than runLoopFromState because resumeLoop owns both ends of
+  // the property: it forwards `stopRequested` into the loop, and its `finally` is what calls
+  // heartbeat.stop(). Everything asserted below is a consequence of that release, so this is
+  // also the only test that covers the forwarding.
+  //
+  // Asserted WELL INSIDE the TTL, as the two tests above are, so "the lease aged out" cannot be
+  // mistaken for "the lease was released". That the lease was live in the first place — and so
+  // that none of this is vacuous — is what Step 7's second mutation demonstrates: deleting
+  // releaseOwnerLease from stop() turns this test red.
+  it("stays eligible immediately after a stop_requested run releases its lease", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    const stopRequested = createStopRequestSignal();
+    stopRequested.requested = true;
+
+    const stopped = await resumeLoop(runDir, new ScriptedAdapter([successFrame()]), { stopRequested });
+
+    // Premise, without which every assertion below would hold for a run that simply finished:
+    // the loop returned at the boundary, non-terminal, having launched no attempt.
+    expect(await readEventTypes(runDir)).toEqual(["resume_requested", "resume_adopted", "stop_requested"]);
+    expect(stopped.status).toBe("planning");
+    expect(stopped.attemptsUsed).toBe(1);
+
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8"));
+    expect(owner.leaseAffirmedAt).toBeNull();
+    // Released, not aged out: the affirm the loop performed one line above its stop check is
+    // still well inside the TTL.
+    expect(Date.now() - Date.parse(owner.lastAffirmedAt)).toBeLessThan(LEASE_TTL_MS);
+
+    // What a sweep actually runs first, from a process that is not this run's owner.
+    const gate = await checkRunLease(runDir, "pid:next-sweep:1");
+    expect(gate.kind).toBe("no_lease");
+
+    // And the whole gate, not just the lease half: the same directory resumes and completes.
+    const resumed = await resumeLoop(runDir, new ScriptedAdapter([successFrame()]));
+    expect(resumed.status).toBe("succeeded");
+  });
+
+  // Task B2 / L3 §5.4 test 8b(ii) — the honest other half. stop()'s releaseOwnerLease is wrapped
+  // in `try { … } catch {}`, so when its CAS loses the release is swallowed and the lease is left
+  // on disk. The property that must survive is NOT "always released" but "never permanently
+  // refused": refused for at most one TTL, eligible after it.
+  //
+  // The CAS is made to lose for real rather than mocked. `updateOwnerRecordWithPrecondition` is
+  // never exported (three references, all inside fileStore.ts), so the test supersedes the record
+  // on disk between the loop's return and stop() — which is the state a run is genuinely in when
+  // another process took it over while it was stopping. That gap is why this case drives
+  // runLoopFromState with its own heartbeat instead of resumeLoop: resumeLoop's `finally` runs
+  // stop() with no gap a test can reach into. The wiring below is otherwise resumeLoop's own.
+  it("stays refused until the TTL expires when the lease release loses its CAS", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    const ownerRecord = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as OwnerRecord;
+    const leaseLoss = createLeaseLossSignal();
+    const heartbeat = startLeaseHeartbeat({
+      runDir,
+      ownerRecord,
+      onLeaseLost: (error) => {
+        leaseLoss.lost = error as RunLeaseLostError;
+      },
+    });
+
+    const stopRequested = createStopRequestSignal();
+    stopRequested.requested = true;
+
+    let affirmed: OwnerRecord;
+    try {
+      const stopped = await runLoopFromState(
+        contract,
+        runDir,
+        new ScriptedAdapter([successFrame()]),
+        planningRunState(contract),
+        heartbeat,
+        leaseLoss,
+        { stopRequested },
+      );
+      expect(stopped.status).toBe("planning");
+      expect(await readEventTypes(runDir)).toEqual(["stop_requested"]);
+
+      affirmed = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as OwnerRecord;
+      // Premise: the loop's top-of-loop affirmNow really did take a live lease, so there is
+      // something for the release below to fail to clear.
+      expect(affirmed.leaseAffirmedAt).not.toBeNull();
+
+      // The supersession. Only the epoch moves; leaseAffirmedAt keeps the value the heartbeat
+      // itself wrote, so what refuses below is the real lease this run took, not a fabricated one.
+      await writeFile(
+        join(runDir, "owner-record.json"),
+        JSON.stringify({ ...affirmed, currentOwnerEpoch: affirmed.currentOwnerEpoch + 1 }, null, 2),
+      );
+    } finally {
+      // Exactly what resumeLoop's finally does.
+      await heartbeat.stop();
+    }
+
+    const after = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as OwnerRecord;
+    // The swallow, observed: the CAS lost, so the lease is still on disk untouched.
+    expect(after.currentOwnerEpoch).toBe(affirmed.currentOwnerEpoch + 1);
+    expect(after.leaseAffirmedAt).toBe(affirmed.leaseAffirmedAt);
+
+    const affirmedAtMs = Date.parse(after.leaseAffirmedAt as string);
+
+    // Inside the TTL the next sweep is refused — this is the cost the swallow imposes, and it is
+    // asserted rather than glossed over.
+    await expect(checkRunLease(runDir, "pid:next-sweep:1", affirmedAtMs + LEASE_TTL_MS - 1_000))
+      .rejects.toThrow(RunLeaseHeldError);
+
+    // Past the TTL it is eligible again — the run is never permanently refused, which is the
+    // property L1 §12 requirement 4/17 leaves standing when a release fails.
+    const gate = await checkRunLease(runDir, "pid:next-sweep:1", affirmedAtMs + LEASE_TTL_MS + 1_000);
+    expect(gate.kind).toBe("expired");
   });
 
   // §8. The rotation is performed by the test writing the file directly. No production path
