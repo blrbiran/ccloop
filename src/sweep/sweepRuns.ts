@@ -135,8 +135,17 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
   // and no contract has been read at this point. Both numbers are required: §12's whole argument
   // is that choosing `--adapter claude` is an INFORMED and BOUNDED approval of this sweep, and
   // without N the "informed" half does not hold.
+  //
+  // The count is named for what it counts. A bare "eligible" reads as "these N runs will run",
+  // while the filter covers ONE of evaluateResumeEligibility's eight criteria (isObservedEligible
+  // above) — an operator can approve `--adapter claude` on a count of 17 and have all 17 refused
+  // at the gate, which empties the "informed" half just as surely as dropping N would. The
+  // qualification is the same one `ccloop ls` prints over the same field (CONSISTENCY_NOTICE in
+  // ../registry/renderRuns.ts), stated in the same terms so the two read-only surfaces agree.
   options.stderr(
-    `sweep: ${candidates.length} eligible run(s) under ${options.root}, will attempt at most ${options.maxRuns}, adapter=${options.adapterName}`,
+    `sweep: ${candidates.length} run(s) under ${options.root} observed eligibleForContinuation=true ` +
+      `(an observed field, not a decision that the run may be resumed), ` +
+      `will attempt at most ${options.maxRuns}, adapter=${options.adapterName}`,
   );
 
   const adapter = options.createAdapter();
@@ -187,8 +196,9 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
         // sequential for-await gives that either way.
         //
         // `detail` is a String(error) and a SyntaxError message can contain newlines, which would
-        // split one note into what looks like several output lines. Folded only here — §8's
-        // `errored` line has the same problem, predates this wave, and is deliberately left alone.
+        // split one note into what looks like several output lines. The three-column report line
+        // below folds for the same reason and by the same rule — it is this wave's own output, not
+        // something inherited, and §8's "one line per attempted run" is its whole contract.
         //
         // Deliberately NOT wrapped in try/catch: `options.stderr` throwing is a programming error
         // in the caller, and swallowing it here would hide it (Rule 12).
@@ -220,7 +230,11 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
     // sweep losing the lease gate lands here too, and that is expected, not an error.
     tally[report.outcome] += 1;
     const sink = report.outcome === "error" ? options.stderr : options.stdout;
-    sink(`${candidate.path}\t${report.outcome}\t${report.detail}`);
+    // §8 is "one line per attempted run", and `detail` is a String(error): a ZodError out of
+    // loadContract runs to a dozen lines. Unfolded, one run becomes that many output lines, all
+    // but the first without a path column — and a cron job parsing the report by line reads one
+    // run as a dozen ownerless records. Folded on the same rule as the note line above.
+    sink(`${candidate.path}\t${report.outcome}\t${report.detail.replace(/\r?\n/g, " ")}`);
   }
 
   // C1's summary added `adopted` and `refused`, which are not mutually exclusive: a run that

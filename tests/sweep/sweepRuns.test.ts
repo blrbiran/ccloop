@@ -347,9 +347,14 @@ describe("sweepRuns", () => {
     expect(exitCode).toBe(0);
     // Both events happened, and the banner was first.
     expect(order.filter((entry) => entry === "createAdapter")).toEqual(["createAdapter"]);
-    // Literal updated by task C3, which owns the banner's format; the ORDERING this test pins is
+    // Literal updated by task C3, which owns the banner's format, and again by the GATE-C fix wave
+    // when the count gained its observed-only qualification; the ORDERING this test pins is
     // unchanged and still asserted by the two lines around this one.
-    expect(order[0]).toBe(`stderr:sweep: 1 eligible run(s) under ${ROOT}, will attempt at most 100, adapter=scripted`);
+    expect(order[0]).toBe(
+      `stderr:sweep: 1 run(s) under ${ROOT} observed eligibleForContinuation=true ` +
+        `(an observed field, not a decision that the run may be resumed), ` +
+        `will attempt at most 100, adapter=scripted`,
+    );
     expect(order[1]).toBe("createAdapter");
   });
 
@@ -383,7 +388,11 @@ describe("sweepRuns", () => {
     const exitCode = await sweepRuns(h.options, h.deps);
 
     expect(exitCode).toBe(0);
-    expect(order[0]).toBe(`stderr:sweep: 3 eligible run(s) under ${ROOT}, will attempt at most 2, adapter=claude`);
+    expect(order[0]).toBe(
+      `stderr:sweep: 3 run(s) under ${ROOT} observed eligibleForContinuation=true ` +
+        `(an observed field, not a decision that the run may be resumed), ` +
+        `will attempt at most 2, adapter=claude`,
+    );
     // The adapter was constructed exactly once, and after the banner — without this half the
     // assertion above would also hold for a sweep that built the adapter first.
     expect(order.filter((entry) => entry === "createAdapter")).toEqual(["createAdapter"]);
@@ -482,6 +491,48 @@ describe("sweepRuns", () => {
     // fourth column, would still satisfy the equalities above if they were substring checks.
     for (const reported of [...h.stdoutLines.slice(0, -1), ...h.stderrLines.slice(1)]) {
       expect(reported.split("\t").length).toBe(3);
+    }
+  });
+
+  // Not on the plan's list; added by the GATE-C fix wave. §8's "one line per attempted run" is
+  // the entire report contract (there is no --json), and `detail` is a String(error): a ZodError
+  // out of loadContract is a dozen lines. Unfolded, one run becomes a dozen output lines whose
+  // tail carries no path column, and a cron job parsing the report by line reads them as a dozen
+  // ownerless records. Both sinks are exercised because the fold is one expression shared by
+  // them: a fold applied only on the `error` branch would still pass a stderr-only test.
+  it("folds a multi-line detail so one attempted run stays one report line", async () => {
+    const multilineRefusal = "run status succeeded is not resumable\n  (reported by criterion 3)";
+    const multilineError = "SyntaxError: Unexpected end of JSON input\n    at JSON.parse (<anonymous>)\n    at loadContract";
+    // Preconditions, asserted rather than assumed: both details really do contain the newlines
+    // the folding exists for, one bound for stdout and one for stderr. Without these the
+    // assertions below would pass on strings that never needed folding at all.
+    expect(multilineRefusal).toContain("\n");
+    expect(multilineError).toContain("\n");
+
+    const rows: ScanRow[] = [runRow(`${ROOT}/run-1`, ELIGIBLE), runRow(`${ROOT}/run-2`, ELIGIBLE)];
+    const h = harness(rows, (runDir, _adapter, resumeOptions) => {
+      if (runDir === `${ROOT}/run-1`) return Promise.reject(new ResumeNotEligibleError(multilineRefusal));
+      resumeOptions?.onAdopted?.();
+      return Promise.reject(new Error(multilineError));
+    });
+
+    const exitCode = await sweepRuns(h.options, h.deps);
+
+    expect(exitCode).toBe(0);
+    expect(h.stdoutLines).toEqual([
+      `${ROOT}/run-1\trefused\trun status succeeded is not resumable   (reported by criterion 3)`,
+      "2 attempted, 0 succeeded, 1 refused, 1 errored (quota 1/100)",
+    ]);
+    expect(h.stderrLines.slice(1)).toEqual([
+      `${ROOT}/run-2\terror\tSyntaxError: Unexpected end of JSON input     at JSON.parse (<anonymous>)     at loadContract`,
+    ]);
+    // The property behind the two literals above, stated as itself: two attempted runs produced
+    // exactly two report lines, each one line and three columns. A report line that split would
+    // still be findable by a substring check; it cannot survive this.
+    const reported = [...h.stdoutLines.slice(0, -1), ...h.stderrLines.slice(1)];
+    expect(reported).toHaveLength(2);
+    for (const entry of reported) {
+      expect([entry.includes("\n"), entry.split("\t").length]).toEqual([false, 3]);
     }
   });
 
@@ -599,7 +650,9 @@ describe("sweepRuns", () => {
     // ordering promise (report line on stdout vs note on stderr) that §4.3 withdrew, and nothing
     // here asserts anything about that.
     expect(h.stderrLines).toEqual([
-      `sweep: 1 eligible run(s) under ${ROOT}, will attempt at most 100, adapter=scripted`,
+      `sweep: 1 run(s) under ${ROOT} observed eligibleForContinuation=true ` +
+        `(an observed field, not a decision that the run may be resumed), ` +
+        `will attempt at most 100, adapter=scripted`,
       `note  ${ROOT}/run-1  reconciliation_write_abandoned  ${abandonDetail}`,
       `${ROOT}/run-1\terror\t${throwMessage}`,
     ]);

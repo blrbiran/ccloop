@@ -526,7 +526,9 @@ describe("sweep write surface", () => {
       ]);
       // Exactly one run passed the filter — i.e. the non-eligible run was never a candidate.
       expect(stderrLines).toEqual([
-        `sweep: 1 eligible run(s) under ${scanRoot}, will attempt at most 5, adapter=scripted`,
+        `sweep: 1 run(s) under ${scanRoot} observed eligibleForContinuation=true ` +
+          `(an observed field, not a decision that the run may be resumed), ` +
+          `will attempt at most 5, adapter=scripted`,
       ]);
 
       // ---- the write surface of the gate-refused run ------------------------------------------
@@ -571,6 +573,72 @@ describe("sweep write surface", () => {
       const nonEligibleAfter = await snapshotTree(nonEligibleRun);
       expect(Object.keys(nonEligibleAfter).sort()).toEqual(seededFiles);
       expect(nonEligibleAfter).toEqual(nonEligibleBefore);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Not on the plan's list; added by the GATE-C fix wave, and the only test in the tree that
+  // enters the PRODUCTION resumeLoop from a sweep. `cannot read run artifacts:` is a cross-module
+  // string contract: resumeLoop.ts writes it, sweepRuns.ts' classifyThrow routes on it, and §4.4's
+  // whole "fail loudly" promise is cashed by that routing — get the two sides out of step and a
+  // run whose artifacts could not be read is filed as an ordinary refusal, printed to STDOUT with
+  // exit 0, and cron never alerts. Every other sweep test injects a stand-in `resume` whose
+  // message is a literal in the test file, so none of them can tell the two sides apart; the two
+  // indirect guards elsewhere (cli.test.ts, fileStore.test.ts) both match WITHOUT the colon and
+  // survive any edit to what follows it. Nothing here restates either literal: the expected
+  // report line is DERIVED from the detail resumeLoop itself wrote to events.jsonl, so it is red
+  // if either side moves.
+  it("routes a real unreadable-artifacts refusal out of resumeLoop to stderr as one error line", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-fixwave-readfail-"));
+    try {
+      const scanRoot = join(tempRoot, "scan-root");
+      const runDir = join(scanRoot, "run-unreadable-contract");
+      // repoPath is never dereferenced: the resume dies in the artifact-read Promise.all, which is
+      // upstream of cleanupResidualWorktrees.
+      await seedGateRefusedRun(runDir, createContract(join(tempRoot, "repo-that-is-never-touched")));
+      // The one difference from the gate-refused fixture: loop-contract.json is well-formed JSON
+      // that does not satisfy loopContractSchema, so loadContract — the fifth read in resumeLoop's
+      // Promise.all — throws a ZodError. This is the read-side failure §4.4 is about, produced by
+      // production code rather than by a stand-in.
+      await writeFile(join(runDir, "loop-contract.json"), JSON.stringify({ notAContract: true }, null, 2));
+
+      const stdoutLines: string[] = [];
+      const stderrLines: string[] = [];
+      const exitCode = await sweepRuns({
+        root: scanRoot,
+        adapterName: "scripted",
+        // No frame: the run never adopts, so the adapter must never be asked for one.
+        createAdapter: () => new ScriptedAdapter([]),
+        maxRuns: 5,
+        stopRequested: { requested: false },
+        stdout: (line) => stdoutLines.push(line),
+        stderr: (line) => stderrLines.push(line),
+      });
+
+      // resumeLoop really was entered and really did refuse on the read: the event it appends
+      // before throwing carries the same detail as the error it throws.
+      const deniedLines = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type: string; detail: string })
+        .filter((event) => event.type === "resume_denied");
+      expect(deniedLines).toHaveLength(1);
+      const detail = deniedLines[0].detail;
+      // Preconditions, asserted rather than assumed. (1) A ZodError's message is many lines, so
+      // the report line below is genuinely exercising the fold rather than folding nothing; if a
+      // future zod made it one line this fails loudly instead of going quietly vacuous. (2) The
+      // sweep did not silently skip the run.
+      expect(detail).toContain("\n");
+      expect(await readEventTypes(runDir)).toEqual(["fixture_seed", "resume_requested", "resume_denied"]);
+
+      expect(exitCode).toBe(0);
+      // The binding assertion: outcome `error`, on stderr, ONE line, three columns, and its detail
+      // is exactly what resumeLoop wrote, folded. Change the literal on either side — including
+      // only what follows the colon — and this run is classified `refused` and printed on stdout
+      // instead, taking both of these assertions with it.
+      expect(stderrLines.slice(1)).toEqual([`${runDir}\terror\t${detail.replace(/\r?\n/g, " ")}`]);
+      expect(stdoutLines).toEqual(["1 attempted, 0 succeeded, 0 refused, 1 errored (quota 0/5)"]);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
@@ -749,7 +817,9 @@ describe("sweep write surface", () => {
         "1 attempted, 1 succeeded, 0 refused, 0 errored (quota 1/5)",
       ]);
       expect(stderrLines).toEqual([
-        `sweep: 1 eligible run(s) under ${scanRoot}, will attempt at most 5, adapter=scripted`,
+        `sweep: 1 run(s) under ${scanRoot} observed eligibleForContinuation=true ` +
+          `(an observed field, not a decision that the run may be resumed), ` +
+          `will attempt at most 5, adapter=scripted`,
       ]);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
