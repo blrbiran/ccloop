@@ -35,6 +35,23 @@ export class RunLeaseUnverifiableError extends Error {
   }
 }
 
+// Sibling of RunLeaseLostError and RunLeaseUnverifiableError, deliberately NOT a subclass of
+// either — and they must not be given a common base class either: this error says "this process's
+// own heartbeat has stopped", which is neither "someone else owns this run" nor "this run's
+// ownership could not be read". The entire safety of L3 §5.3's option (a) rests on
+// isLeaseStopError (src/controller/runLoop.ts) NOT matching it: that predicate's branch persists
+// the terminal "cancelled" status, and no path in this codebase leads out of a terminal status,
+// so one stop signal would end the run permanently. A subclass would make that predicate start
+// matching without a single character of it changing, and no test name would hint at the cause.
+export class RunHeartbeatStoppedError extends Error {
+  readonly stopReason = "heartbeat_stopped";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "RunHeartbeatStoppedError";
+  }
+}
+
 // §5: a total function on a validated record. `null`, an absent field and an unparseable
 // timestamp all answer "not fresh" — but only as a defensive default. The rule that
 // governs a malformed record is parseOwnerRecordForLease's refusal, not this `false`.

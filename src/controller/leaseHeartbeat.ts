@@ -4,6 +4,7 @@ import {
   LEASE_VERIFY_READ_ATTEMPTS,
   LEASE_VERIFY_RETRY_DELAY_MS,
   parseOwnerRecordForLease,
+  RunHeartbeatStoppedError,
   RunLeaseLostError,
   RunLeaseUnverifiableError,
 } from "../ownership/lease.js";
@@ -190,11 +191,33 @@ export function startLeaseHeartbeat(options: {
   // does, while the stored one is derived from `result` but maps both outcomes to a plain
   // resolution, so the shared queue itself never becomes a rejected promise.
   //
-  // Takes no position on `stopped` or `superseded` — it only serializes. Refusal is Task 5's
-  // job; duplicating it here would just be a second, weaker copy of a decision that already
-  // has one home.
+  // Task B1 / L3 §5.3 supersedes the note that stood here ("takes no position on `stopped` or
+  // `superseded` — it only serializes; refusal is Task 5's job"). It still takes no position on
+  // `superseded`: that remains assertHeld's one decision. It DOES refuse on `stopped`, and that
+  // is not a second, weaker copy of assertHeld's refusal, because assertHeld never reads
+  // `stopped` at all — it answers "is this run still ours" from the persisted owner record,
+  // while `stopped` answers "does this process still intend to act", which is pure in-process
+  // state with no other home.
+  //
+  // The check runs at the head of the queued continuation, so it is evaluated BEFORE `fn` and
+  // never after `fn` settles. That ordering is load-bearing, not a style choice: `fn` at the one
+  // production call site (persistBoundaryAnalysis, runLoop.ts) is the read -> evaluate -> CAS
+  // transfer span that publishes reconciliation-record.json transactionally, and a refusal
+  // raised after it would abandon a COMPLETED publish onto the non-terminal return path B1 adds
+  // in runLoopFromState's outer catch. `stopped` is only ever set, never cleared, so checking
+  // here also covers a call that was made before stop() and only reaches the head afterwards.
   const runExclusive = <T>(fn: () => Promise<T>): Promise<T> => {
-    const result = queue.then(fn, fn);
+    const refuseIfStopped = async (): Promise<T> => {
+      if (stopped) {
+        throw new RunHeartbeatStoppedError(
+          `run heartbeat has stopped: refusing an exclusive owner-record operation for ${expected.currentProcessInstanceId} at epoch ${expected.currentOwnerEpoch}`,
+        );
+      }
+
+      return await fn();
+    };
+
+    const result = queue.then(refuseIfStopped, refuseIfStopped);
     queue = result.then(
       () => undefined,
       () => undefined,

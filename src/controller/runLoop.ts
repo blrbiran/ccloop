@@ -20,7 +20,7 @@ import { applyOwnerEpochTransfer, evaluateOwnership } from "../ownership/ownerCo
 import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
 import type { LeaseHeartbeat } from "./leaseHeartbeat.js";
-import { RunLeaseLostError, RunLeaseUnverifiableError } from "../ownership/lease.js";
+import { RunHeartbeatStoppedError, RunLeaseLostError, RunLeaseUnverifiableError } from "../ownership/lease.js";
 import type {
   AttemptContext,
   AttemptPlan,
@@ -1010,11 +1010,23 @@ export function createLeaseLossSignal(): LeaseLossSignal {
   return { lost: null };
 }
 
+// Task B2 / L3 §5.4: the caller-owned slot a stop request lands in, shaped exactly like
+// LeaseLossSignal above and read at the same phase boundary, for the same reason — the loop
+// checks a place it chose to look rather than being called back into wherever a signal handler
+// happens to fire. This layer provides the SLOT only: the signal handler that sets it lives in
+// cli.ts, not here and not in sweepRuns.ts.
+export type StopRequestSignal = { requested: boolean };
+
+export function createStopRequestSignal(): StopRequestSignal {
+  return { requested: false };
+}
+
 // A8 §4.3/§5.4: the seventh parameter is an OBJECT, not a scalar, so later layers (B2, C1) add
 // KEYS here rather than further positional parameters. The parameter count stops growing at
 // seven.
 export type RunLoopFromStateOptions = {
   onReconciliationWriteAbandoned?: (detail: string) => void;
+  stopRequested?: StopRequestSignal;
 };
 
 export async function runLoopFromState(
@@ -1048,6 +1060,34 @@ export async function runLoopFromState(
     // state a new owner might be reading. Launch no further attempt.
     if (leaseLoss.lost !== null) {
       return await persistTerminalState(runDir, state, "cancelled", "lease_lost");
+    }
+
+    // Task B2 / L3 §5.4: the same phase boundary, one checkpoint later. Ordered AFTER the lease
+    // check on purpose — a lost lease keeps routing exactly where it always did, so this adds a
+    // refusal and changes none.
+    //
+    // Fitted to this checkpoint ONLY, not to the second `leaseLoss.lost !== null` further down.
+    // Two reasons, and the first is why the two would contradict each other: this one sits above
+    // `const attempt = state.attemptsUsed + 1` just below, so stopping here spends no attempt,
+    // while the other sits inside an attempt that has already been counted — and the writeRunState
+    // a few lines above has just persisted `state`, so loop-state.json and the returned value are
+    // byte-identical, which is what makes a stop cost the run nothing. The second reason is that
+    // the finer granularity buys nothing anyway: reaching the other checkpoint means execute has
+    // already run and already been paid for.
+    //
+    // Deliberately NOT persistTerminalState: a stop means "this process is done acting", not
+    // "this run is over", and nothing in this codebase leads back out of a terminal status. The
+    // event is the only record that a human asked for this, and nothing reads it — registry
+    // observes three files and evaluateResumeEligibility does not read the event stream — so the
+    // next sweep cannot tell this apart from an OOM kill. That is accepted here, not overlooked:
+    // both want the same handling, and distinguishing them needs a new observed disk field.
+    if (options?.stopRequested?.requested === true) {
+      await appendEvent(runDir, {
+        type: "stop_requested",
+        at: new Date().toISOString(),
+        detail: `stop requested at a phase boundary before attempt ${state.attemptsUsed + 1}`,
+      });
+      return state;
     }
 
     const attempt = state.attemptsUsed + 1;
@@ -1432,6 +1472,30 @@ export async function runLoopFromState(
 
       return state;
     } catch (error) {
+      // Task B1 / L3 §5.3, option (a): a stopped heartbeat abandons the attempt in place exactly
+      // as a refused lease does — no cleanup, no boundary write, no phase usage — but it must NOT
+      // terminate the run. Deliberately its OWN branch, ordered ahead of isLeaseStopError rather
+      // than folded into it: that branch persists "cancelled", and nothing in this codebase leads
+      // back out of a terminal status (resume, sweep and runLoop all refuse one), so routing a
+      // stop signal there would end the run permanently on a signal that means only "this process
+      // is done acting". It is also ahead of the generic failure handling below, which would
+      // otherwise transition to "failed" — a stop is not an attempt failure.
+      //
+      // The writeRunState is not redundant with the one at the top of the loop. §5.4's stop point
+      // sits there, where the returned state is byte-identical to disk; this branch fires
+      // mid-attempt, where `state` may have been advanced by applyPhaseUsage since that write.
+      // Without it the returned state and the persisted one disagree and the claim that this is
+      // structurally the same stop as §5.4's is false.
+      if (error instanceof RunHeartbeatStoppedError) {
+        await appendEvent(runDir, {
+          type: "heartbeat_stopped",
+          at: new Date().toISOString(),
+          detail: String(error),
+        });
+        await writeRunState(runDir, state);
+        return state;
+      }
+
       // §8.1: the side effect was skipped and the attempt is abandoned IN PLACE. No further
       // side effect of this attempt is attempted, including its worktree cleanup — cleanup
       // is itself a side effect on a worktree the new owner may already be reading, and

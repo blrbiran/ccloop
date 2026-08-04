@@ -1286,6 +1286,12 @@ git commit -m "test(runLoop): pin the finalize order re-ruling with two producti
 - [ ] **Step 7: 变异实验（三次）。**
   1. `runExclusive` 退回不拒绝 → **测试 7 必红**
   2. 把 `RunHeartbeatStoppedError` 加进 `isLeaseStopError` → **7b 的 (i) 与 (iii) 必红**
+
+     **Amended 2026-08-04：本条判据的前提在方案 (a) 的排序下为假——只把 `RunHeartbeatStoppedError` 加进 `isLeaseStopError`、别的都不动，是行为惰性的，全套件全绿。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。原因是本任务自己定的排序：专属分支 `error instanceof RunHeartbeatStoppedError` 排在 `isLeaseStopError` 分支**之前**并 `return`，所以这个错误根本到不了谓词，谓词匹配不匹配它都不改变任何一条可观测行为。B1 独立核验实测：只给谓词加 `|| error instanceof RunHeartbeatStoppedError`、不动分支排序、不动别处，全套件 **29 files / 487 tests 全绿**。三点更正：
+
+     - **(i) 这条判据的实际可执行形状是「协同注入」，不是单点注入**：必须**同时**让专属分支失效**并**给谓词加宽，才构成「方案 (a) 未被采用、错误被路由进 `isLeaseStopError`」那个反事实，(i) 与 (iii) 也才会红。B1 就是这样执行的，原始输出见 `.superpowers/sdd/2026-08-02-sweep-and-transactional-continuation/task-B1-report.md` 的变异二。
+     - **(ii) 「纯谓词加宽」这一半今天没有任何合法的行为测试能杀掉它。** 在不导出谓词（本文档禁止为测试导出模块私有符号）、不改分支排序的前提下，唯一能让谓词被求值到该错误的形状是让 `assertHeld` 抛出它——而那正是**硬约束第二半明令禁止**的事；何况那条路的两个结局（`cancelled` 与 `blocked_waiting_human`）都不在 `RESUMABLE_STATUSES` 内，构造它等于构造一个本任务定义为非法的实现。
+     - **(iii) 这是方案 (a) 的结构后果，不是实施疏漏。** 排序本身就是 (a) 的安全性来源，而它同时使谓词那一半失去可观测性。因此**硬约束第一半目前只有「子类化」那半边有可失败的断言**（即 Step 4 的 `lease > RunHeartbeatStoppedError is a sibling …` 那条，变异三实测可红），**「谓词加宽」那半边靠 `isLeaseStopError` 与新类上方的两条注释承载，没有测试守着。**
   3. 把 `RunHeartbeatStoppedError` 改成 `RunLeaseLostError` 的子类 → **instanceof 那条必红**
   各走三步判据，六份原始输出。
 - [ ] **Step 8: 全套件 + typecheck + build，未过滤贴出。**
