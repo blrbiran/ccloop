@@ -95,6 +95,14 @@ export type ResumeLoopOptions = {
   // stop request is not a reason to refuse a resume — it is a reason for the loop this resume
   // starts to return at its first phase boundary.
   stopRequested?: StopRequestSignal;
+  // Task C1 / L3 §6: fired exactly once, after the `resume_adopted` event has been appended and
+  // before runLoopFromState is entered — i.e. at the instant all four refusals are behind us and
+  // this process has adopted the run. sweepRuns counts its --max-runs quota here rather than at
+  // this function's return, because a throw out of runLoopFromState's pre-try head (writeRunState
+  // / affirmNow) would otherwise refund a run whose paid attempts had already happened. Called
+  // before the heartbeat exists, so a callback that throws leaves nothing started to stop; it
+  // does abort this resume after the adoption event, which is the caller's own risk to take.
+  onAdopted?: () => void;
 };
 
 export async function resumeLoop(
@@ -166,6 +174,8 @@ export async function resumeLoop(
     at: new Date().toISOString(),
     detail: `epoch ${ownerRecord.currentOwnerEpoch}: ${ownerTransfer.priorProcessInstanceId} -> ${buildProcessInstanceId()}`,
   });
+
+  options?.onAdopted?.();
 
   // §6.0: started only now — after the CAS claim has succeeded, so the record on disk names
   // this process — and never before, so it can never affirm a lease this process does not

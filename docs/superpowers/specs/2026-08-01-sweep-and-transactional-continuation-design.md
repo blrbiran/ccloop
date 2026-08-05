@@ -1555,6 +1555,12 @@ grep -nF 'export function scanRootFailureDetail(' src/registry/renderRuns.ts
 
   **横幅必须同时显示 eligible 总数与配额 N**（第二轮评审）：§12 的整个论证是「操作者选 `--adapter claude` 即构成对该次 sweep 的**知情且有界**批准」，而知情的前提是横幅里有 N。第一轮的横幅里没有 N，论证悬空。
 
+  **Amended 2026-08-05：上面这个横幅字面量里裸用的 "eligible" 会让 §12「知情批准」的知情半边落空，已按人的裁定改成带限定的措辞。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。理由：sweep 的过滤器建在 **L2 观测**上——`owner-transfer.json` 的 `eligibleForContinuation` 观测为 literal true（`src/sweep/sweepRuns.ts` 的 `isObservedEligible`），而 `reconciliation-record.json` 根本不在 L2 的 `OBSERVED_FILES` 里，**所以它只覆盖 `evaluateResumeEligibility` 八条判据里的第 1 条**（守卫实测：`rtk proxy "bash -c 'cd <worktree> && grep -cF \"return { ok: false\" src/controller/resumeLoop.ts'"` → **8**）。于是一次「17 eligible」的横幅完全可以对应 17 个全部被门拒的 run：操作者据此批准 `--adapter claude`，批准的那一刻「知情」就是假的——**这与横幅里少写一个 N 是同一种失效，只是发生在另一个数字上**（本条与紧邻上一段是同一条论证的两半）。同仓库同为只读表面的 `ccloop ls` 在**同一个字段**上一直带着这句限定（`src/registry/renderRuns.ts` 的 `CONSISTENCY_NOTICE`：「eligibleForContinuation is an observed field, not a decision that the run may be resumed」），横幅照它的口气写，使两个只读表面对同一字段说同一句话。**读作**：横幅仍**必须**同时显示候选集大小与配额 N（这一条一个字不改），但那个计数**必须被命名为它所计的东西**；「保证 / 一定 / 能续跑」一类措辞不得出现（GATE-B 已钉死「非终态 ≠ 可被 resume 捡起」）。落地字面量逐字为：
+
+  **`sweep: <eligible> run(s) under <root> observed eligibleForContinuation=true (an observed field, not a decision that the run may be resumed), will attempt at most <N>, adapter=<name>`**
+
+  与之配套的计划勘误在 `docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md` 的 `### Task C3` 同一条（同样标 `Amended 2026-08-05`）。
+
 **sweep 从不静默吞任何一种结果**（Rule 12）。意外错误按 §7 不改退出码，但写到 stderr 以便被 cron 的「有 stderr 即告警」捞住。
 
 ## 9. 模块边界
@@ -1568,6 +1574,10 @@ grep -nF 'export function scanRootFailureDetail(' src/registry/renderRuns.ts
 | `src/controller/leaseHeartbeat.ts` | `runExclusive` 拒绝 + 其上方注释 |
 | `src/persistence/fileStore.ts` | 三文件事务、**marker 原子写（temp + rename）**、**三份 pending 原子写（temp + rename，§4.0.3a 人已裁定）**、marker 驱动 finalize、`cleanupOwnerTransferStagingWithoutMarker` 从 4 扩到 **10** 个 `safeUnlink`、finalize try 首与 catch 尾各从 2 扩到 3 个对称 unlink、**`readPersistedSuccessfulTransferArtifacts` 的裸 catch 收窄为「非 ENOENT-of-`owner-transfer.json` 一律 fail-closed」＋ ENOENT 归因（二选一：按 `error.path`，或把那次读移出 `Promise.all` 单独 try）**（§4.3 处置一）、**`writeBoundaryArtifacts` 在放弃 reconciliation 写时追加一条 `reconciliation_write_abandoned` 事件（同模块内调 `appendEvent`，`RunEvent.type` 是裸 `string`，不改任何类型定义；**那次 `appendEvent` 按 `leaseHeartbeat.ts:58`–`:63` 的 `appendLeaseEvent` 同形 `try{}catch{}` swallow ＋ 同口气注释**，第六波）**（§4.3 第四轮人裁）、**`writeBoundaryArtifacts` 加第三个可选参数 `options?: { onReconciliationWriteAbandoned?: (detail: string) => void }`，返回类型仍是 `Promise<void>`，回调在放弃那次写的同一个同步块内调用且*排在 `appendEvent` 之前*（`appendEvent` 是裸 `appendFile`、可以 reject）**（§4.3 第五波人裁） |
 | `src/ownership/lease.ts` | `RunHeartbeatStoppedError`（**并列、不继承既有两个**，见 §5.3 的硬约束） |
+
+**Amended 2026-08-05：上表 `src/sweep/sweepRuns.ts` 那一行末尾的「回调的实现定死为一次数组 push，不做 I/O」已被人裁推翻——回调改为在其中*当场* `options.stderr(...)`，折行也在回调里当场做。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。**理由不是口味，是缓冲会丢告警**：把 `note` 收进数组、等整个 for-await 循环结束才统一冲出，等于把这条事件的可见性押在「进程一定活到循环结束」上。一次 `--max-runs 50` 的 sweep 可以跑数小时；若第 3 个 run 触发 `reconciliation_write_abandoned`、进程在第 40 个 run 时被 SIGKILL / OOM / 机器重启，**缓冲数组随进程消失，stderr 上一个字都没有**，而 cron 的「有 stderr 即告警」**永不触发**——这条事件的**全部**价值就是那次告警（§8：可见性由 stderr 独家兑现，退出码不受影响）。**且缓冲没有换来任何本文档要求的性质**：唯一被要求的行序是「同一次 sweep 内各条 `note` 行之间保持 run 的遍历顺序」，而 sweep 是顺序 `for await`，**当场打印同样满足它**。所以那两句要求的是一个零收益、带一条不可见失效模式的形状。**读作**：上表该行末尾改为「**回调的实现定死为当场 `options.stderr(...)`（含单行折叠），不得抛出**」。**本行其余部分不变、且仍然成立**：一次调用产生一行，不去重、不聚合；**回调仍然不得抛出**，且**仍然刻意不包 try/catch**——`options.stderr` 抛出是调用方的编程错误，吞掉它违反 Rule 12。**变的只有「落点是数组」这一件事，改为「落点是 stderr」。**
+
+  与之配对的计划勘误在 `docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md` 的 `### Task C3` 里，同一处推翻分记两条（`reconciliation_write_abandoned` 的「落点」一节，以及 Step 6 括号里的同一句），均标 `Amended 2026-08-04`；本文档 §8 横幅那一处的 `Amended 2026-08-05` 与计划 `### Task C3` 的同名勘误是另一族，两族互不相干。
 
 **`isLeaseStopError` 的谓词与签名不改**（§5.3 选了方案 (a)）；只改 `runExclusive` 上方那条注释。
 

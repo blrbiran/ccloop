@@ -1562,6 +1562,18 @@ grep -rnF 'succeeded" ? 0 : 2' src/
 # 计划阶段实测 2 行，都在 src/cli.ts（resume 分支与 run 分支各一处）。sweep 分支必须在这两处之前返回。
 ```
 
+**Amended 2026-08-04：本节反复写的边界「必须在两处 `? 0 : 2` 映射之前返回」指错了位置——真正的边界是 `src/cli.ts` 的 `main` 里 `const adapter = await loadAdapter(parsed);` 那一行，它更早、且无条件。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。同一句话在本节出现四处（上表 `2` 那一行、上面这个 `grep` 块的注释、下方陷阱清单第二条、Step 4；Step 10 的评审重点同源）。`sweep` 变体带 `adapter` / `adapterConfigPath`，会被 `loadAdapter` 原本的参数类型 `Exclude<ParsedArgs, { command: "ls" }>` 收进去且类型检查通过，于是「在两处映射之前、却在 `loadAdapter` 之后返回」是一个**满足本文档字面、却在扫描与横幅之前就构造了 adapter** 的合法落点——直接违反本节陷阱清单第四条（配置先读、adapter 由 sweep 在领养时才构造）与 §8/C3 的横幅顺序。**读作：sweep 分支必须在 `loadAdapter` 那一行之前返回；「在两处 `? 0 : 2` 之前」是它的推论，不是判据。** C2 落地后实测（未过滤）：
+
+```
+$ rtk proxy "grep -rnF 'const adapter = await loadAdapter(parsed);' src/"
+src/cli.ts:241:    const adapter = await loadAdapter(parsed);
+$ rtk proxy "grep -rnF 'succeeded\" ? 0 : 2' src/"
+src/cli.ts:244:      return finalState.status === "succeeded" ? 0 : 2;
+src/cli.ts:248:    return finalState.status === "succeeded" ? 0 : 2;
+```
+
+映射仍是 2 处、都在 `src/cli.ts`，且两处（244、248）都晚于 `loadAdapter` 的调用（241）——本条更正的是**判据指向哪一行**，不是那个「2」。
+
 **`scanRootFailureDetail` 是判据本身，不要重新发明**：§7 的「root 不存在或不可读 → exit 1」与 §8 的「扫描 issue 行 → 记录、不中断」在**根目录自身不可读**时重叠；`cli.ts` 的 `ls` 分支已经用这个符号区分了两者，sweep 分支照抄同一判据（实际调用在 `sweepRuns` 内，C1 已实现；C2 只需把它的返回值映射成退出码）。
 
 **逃生口（§5.4，否则装了处理器反而让 sweep 杀不掉）：第二次收到停机信号立即 `exit(130)`。**
@@ -1630,6 +1642,10 @@ git commit -m "feat(cli): add the sweep command with a required --max-runs and a
 - **启动横幅**（stderr，**扫描之后、`createAdapter()` 之前**）：
   `sweep: <eligible> eligible run(s) under <root>, will attempt at most <N>, adapter=<name>`
   **横幅必须同时显示 eligible 总数与配额 N**——§12 的整个论证是「操作者选 `--adapter claude` 即构成对该次 sweep 的**知情且有界**批准」，**少了 N，「知情」就不成立**。
+
+  **Amended 2026-08-05：上面这个横幅字面量里裸用的 "eligible" 会把「知情」的另一半掏空，已按人的裁定改成带限定的措辞。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。理由与本节 `interrupted` 那条 `Amended 2026-08-04` 同源，只是落在横幅上：sweep 的过滤器只观测 `owner-transfer.json` 的 `eligibleForContinuation`（`src/sweep/sweepRuns.ts` 的 `isObservedEligible`），**它只覆盖 `evaluateResumeEligibility` 八条判据里的第 1 条**（守卫实测：`rtk proxy "bash -c 'cd <worktree> && grep -cF \"return { ok: false\" src/controller/resumeLoop.ts'"` → **8**）。于是一次「17 eligible」的横幅可以对应 17 个全部被门拒的 run，操作者据此批准 `--adapter claude`，§12 要求的「知情」在批准的那一刻就是假的——**这与少写一个 N 是同一种失效，只是发生在另一个数字上**。同仓库同为只读的 `ccloop ls` 在**同一个字段**上一直带着这句限定（`src/registry/renderRuns.ts` 的 `CONSISTENCY_NOTICE`：「eligibleForContinuation is an observed field, not a decision that the run may be resumed」），本横幅照它的口气写，使两个只读表面对同一字段说同一句话。**读作**：横幅仍**必须**同时显示候选集大小与配额 N（这一条一个字不改），但那个计数**必须被命名为它所计的东西**，且不得出现「保证 / 一定 / 能续跑」一类措辞（与 `Amended 2026-08-04` 那条同一条线）。GATE-C 修复波落地的字面量逐字为：
+
+  `sweep: <eligible> run(s) under <root> observed eligibleForContinuation=true (an observed field, not a decision that the run may be resumed), will attempt at most <N>, adapter=<name>`
 - **每个尝试过的 run 一行**（stdout），制表对齐三列 `path | outcome | detail`。
 - **`outcome` 取值域（八个）**：`succeeded` / `failed` / `exhausted` / `blocked_waiting_human` / **`cancelled`** / `interrupted` / `refused` / `error`。
   - **`cancelled` 不归入 `failed`**：两者对操作者意味着不同的下一步（`failed` 是 run 自身失败，`cancelled` 是所有权/信号原因中止）。`detail` 必须携带 `stopReason`。
@@ -1651,6 +1667,8 @@ git commit -m "feat(cli): add the sweep command with a required --max-runs and a
 | 意料之外的抛错 | 记录**完整 message**，继续下一个 | **stderr**（outcome `error`） |
 | **`reconciliation_write_abandoned`** | **一条独立的备注行**：`note  <path>  reconciliation_write_abandoned  <detail>`。**该 run 自己的 `outcome` 一个字节不变**，**退出码不变**，**汇总行不变** | **stderr** |
 
+**Amended 2026-08-04：上表 `interrupted` 那一行要求「明确标注该 run 仍可续跑」——这句话今天不能被担保，已按人的裁定改成只断言已知的。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。GATE-B 已经钉死「**非终态 ≠ 可被 resume 捡起**」：`evaluateResumeEligibility` 有**八条**判据（守卫实测：`rtk proxy "grep -cF 'return { ok: false' src/controller/resumeLoop.ts"` → **8**），而 sweep 的过滤器只建在 **L2 观测**上（`owner-transfer.json` 的 `eligibleForContinuation` 观测为 literal true）——**它只覆盖八条里的第 1 条**，判据 5–8 在本层从未被求值，本计划也没有任何步骤去建立它们。**读作**：该行仍记为 `interrupted`，`detail` 说明它未达终态，并**明确不对「它能否被续跑」作任何断言**。C3 落地的措辞逐字为 `status=<status>, stopReason=<stopReason>, non-terminal — this sweep makes no claim that it can be resumed`。**「保证 / 一定 / 仍可续跑」这一类措辞不得出现在代码、注释、报告或 stdout/stderr 的任何一处**——C1 已在 `src/sweep/sweepRuns.ts` 的 `isObservedEligible` 与 `tests/sweep/sweepRuns.test.ts` 的文件头守住了同一条线。
+
 **`cannot read run artifacts:` 前缀路由（§4.4 的路由改判）：**
 
 判据是 `error instanceof ResumeNotEligibleError && error.message.startsWith("cannot read run artifacts:")` → outcome `error` → stderr。
@@ -1661,6 +1679,26 @@ grep -rnF 'cannot read run artifacts' src/ tests/
 #   tests/cli/cli.test.ts 一行（既有断言，说明这个前缀已经是被依赖的契约）。
 #   src/ 内只有 resumeLoop.ts 一处产生它 —— 前缀唯一。
 ```
+
+**Amended 2026-08-04：上面这个 `grep` 块的「计划阶段实测 3 行」今天已经腐坏——组 C 开工时实测是 22 行。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。**但「`src/` 内只有 `resumeLoop.ts` 一处产生它 —— 前缀唯一」这半句仍然成立**，腐坏的只有总数与 `tests/` 侧的分布。C3 落地时两次实测（未过滤）：
+
+```
+# 组 C 开工时（分支 HEAD c14f792，本任务的编辑尚未落地）
+$ rtk proxy "grep -rnF 'cannot read run artifacts' src/ tests/"
+# 22 行：src/controller/resumeLoop.ts 2（第 144 行 resume_denied 的 detail、第 145 行 throw，同一个 catch）
+#        tests/cli/cli.test.ts 1
+#        tests/persistence/fileStore.test.ts 19
+
+# C3 落地之后（本任务自己新增 4 行：sweep 的判据 1 行 ＋ 测试 12c 的 fixture 与前置断言 3 行）
+$ rtk proxy "bash -c 'grep -rnF \"cannot read run artifacts\" src/ tests/ | wc -l'"   # → 26
+$ rtk proxy "bash -c 'grep -rnF \"cannot read run artifacts\" src/ | wc -l'"          # → 3
+$ rtk proxy "bash -c 'grep -rnF \"cannot read run artifacts\" tests/ | wc -l'"        # → 23
+$ rtk proxy "grep -cF 'cannot read run artifacts' tests/persistence/fileStore.test.ts" # → 19
+```
+
+新增的那 19 行全部在**组 A** 的 `tests/persistence/fileStore.test.ts` 里——组 A 是在本计划写完之后才落地的：17 行是崩溃矩阵的期望字面（第 2816–2828、2842–2845 行，同属 `fileStore > refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives` 这**一条**测试的两个 `expect.soft`），另 2 行是 `observeResume`（第 3702–3703 行）把 message 映射成矩阵标签的 `startsWith`。
+
+**因此下方「`resumeLoop.ts` 那两处与 sweep 的判据必须同笔改动」漏了第三处**：`tests/persistence/fileStore.test.ts` 的 `observeResume` 里的 `error.message.startsWith("cannot read run artifacts")`——它**不带冒号**，与 sweep 判据的 `startsWith("cannot read run artifacts:")` 形式不同，因此只改冒号之后的部分时它会**静默存活**——以及被它喂养的那 17 行矩阵期望字面。同笔改动的集合在组 A 落地之后是**三处**，不是两处。
 
 **代价，明写**：这条路由把「读侧任何失败」整体归为 `error`，不区分具体原因——**比按类型路由粗**。**本层接受**：§8 那一行要的性质是「有 stderr 即告警」，而 detail 里带完整 message（含原错误的 `String(error)`），诊断信息一点没少。
 **⚠️ 这使前缀字面量成为一条被依赖的契约**，`resumeLoop.ts` 那两处与 sweep 的判据**必须同笔改动**；测试 12c 钉这一点。
@@ -1677,6 +1715,10 @@ grep -rnF 'cannot read run artifacts' src/ tests/
 - **退出码不受影响。** 退出码钉的是「sweep 有没有干成它的活」，这条事件既不阻止扫描完成、也不改变任何 run 的合法终局。**可见性由 stderr 独家兑现——而 cron 的「有 stderr 即告警」现在会为它响，这正是人裁要的东西。**
 - **`ccloop run` / `ccloop resume` 两条 CLI 路径不传回调**，行为与第四轮一致（只进 `events.jsonl`）。**这不是遗漏**：那两条是前台命令，操作者本来就在看着；stderr 路由要解决的是无人值守的 sweep。
 - **回调的实现定死为一次数组 push**（把 `{ path, detail }` 推进本次 sweep 的备注数组），**不做 I/O、不格式化、不得抛出**。它若抛出会一路逃到 `runLoopFromState`，把一次保护性放弃升级成 attempt 失败。**本层刻意不给它包 try/catch**——包了会静默吞掉一个编程错误，违反 Rule 12。
+
+  **Amended 2026-08-04：「一次数组 push」＋「不做 I/O、不格式化」这两句已被人裁推翻——回调改为*当场* `options.stderr(...)`，折行也在回调里当场做。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。**理由不是口味，是缓冲会丢告警**：把 note 收进数组、等整个 for-await 循环结束才统一冲出，等于把这条事件的可见性押在「进程一定活到循环结束」上。一次 `--max-runs 50` 的 sweep 可以跑数小时；若第 3 个 run 触发 `reconciliation_write_abandoned`、进程在第 40 个 run 时被 SIGKILL / OOM / 机器重启，**缓冲数组随进程消失，stderr 上一个字都没有**，cron 的「有 stderr 即告警」**永不触发**——而这条事件的**全部**价值就是那次告警（见本节「退出码不受影响」一条：「可见性由 stderr 独家兑现」）。**且缓冲没有换来任何本节要求的性质**：本节唯一要求的行序是「同一次 sweep 内，各条 `note` 行之间保持 run 的遍历顺序」，而 sweep 是顺序 `for await`，**当场打印同样满足它**。所以那两句要求的是一个零收益、带一条不可见失效模式的形状。
+
+  **本条其余部分不变，并且仍然成立**：一次调用产生一行、不去重、不聚合；**回调仍然不得抛出**，且**仍然刻意不包 try/catch**——`options.stderr` 抛出是调用方的编程错误，吞掉它同样违反 Rule 12。**变的只有「落点是数组」这一件事，改为「落点是 stderr」。**
 
 **测试要求：**
 
@@ -1715,8 +1757,45 @@ grep -rnF 'cannot read run artifacts' src/ tests/
   `sweepRuns > prints a reconciliation_write_abandoned note on stderr without changing the run outcome`
   `sweepRuns > keeps the abandonment note on stderr even when the run throws afterwards`
 - [ ] **Step 6: 跑确认失败并贴输出 → 实现 `note` 行（含单行折叠、遍历顺序、回调=一次数组 push）→ 再跑确认通过并贴输出。**
+
+  **Amended 2026-08-04：本步括号里的「回调=一次数组 push」与上面「落点」一节那一句是同一处，已同样被人裁推翻——读作「回调=当场 `options.stderr(...)`（含单行折叠）」。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。完整理由见上面那条 `*Amended 2026-08-04*`（缓冲不换来任何本节要求的性质，却引入一条 SIGKILL 下静默丢失告警的失效模式）。「单行折叠」与「遍历顺序」两项不变。
 - [ ] **Step 7: 变异实验（四次）。**
   1. 前缀字面量改掉而不同步改判据 → **12c 必红**
+
+     **Amended 2026-08-04：本条判据为假——把 `resumeLoop.ts` 那两处前缀字面量改掉，12c 实测*存活*。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。**原因是结构性的、与 12c 写得强不强无关**：12c 按本节测试要求的明文规定，注入的是**替身 `resume`**，它抛出的 `ResumeNotEligibleError` 的 message 是 `tests/sweep/sweepRuns.test.ts` 里的**字面量**；生产的 `resumeLoop` 在这条测试里**根本没有被进入**。因此 `resumeLoop.ts` 的字面量与 12c 之间**没有任何数据通路**，改前者不可能让后者变红。C3 落地时实测（未过滤，裸 `it` 名，注入 `cannot read run artifacts: ` → `cannot load run artifacts: `）：
+
+     ```
+     # 注入前
+      Test Files  1 passed (1)
+           Tests  1 passed | 11 skipped (12)
+     # 注入后（仍然绿 —— 变异存活）
+      Test Files  1 passed (1)
+           Tests  1 passed | 11 skipped (12)
+     ```
+
+     **该变异实际杀掉的是另外两条**（同一次注入下实测）：`tests/cli/cli.test.ts > parseArgs resume > prints the refusal reason to stderr when resume is refused (spec §9)` 1 条，以及 `tests/persistence/fileStore.test.ts > fileStore > refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives` 1 条（该条内部两个 `expect.soft` 分别有 13 行与 4 行矩阵期望分歧，共 17 行）。
+
+     **人裁：本条改为变异 `src/sweep/sweepRuns.ts` 的 `classifyThrow` 里那个 `startsWith("cannot read run artifacts:")` 字面量**（**不是** `resumeLoop.ts` 的），它落在本任务自己的 Files 名单内。C3 落地时实测三步（未过滤，裸 `it` 名）：
+
+     ```
+     # 注入前
+      Test Files  1 passed (1)
+           Tests  1 passed | 11 skipped (12)
+     # 注入后（startsWith("cannot read run artifacts:") → startsWith("cannot load run artifacts:")）
+      × sweepRuns > routes a cannot-read-run-artifacts refusal to stderr as an error, not to stdout as a refusal
+        AssertionError: expected [] to deeply equal [ Array(1) ]
+        - "/fake/root/run-1	error	cannot read run artifacts: Error: EACCES: permission denied, open 'owner-transfer.json'"
+        + （空）
+      Test Files  1 failed (1)
+           Tests  1 failed | 11 skipped (12)
+     # 还原后
+      Test Files  1 passed (1)
+           Tests  1 passed | 11 skipped (12)
+     ```
+
+     红在 `expect(h.stderrLines.slice(1))` 那一句上：run-1 从 stderr／`error` 掉回 stdout／`refused`。
+
+     **这条替代变异钉住的是哪一层，写明以免被读得过强**：它钉的是「**C3 确实消费了那个前缀字面量**」——sweep 的路由真的由该前缀决定，不是恒真也不是恒假。它**不**钉「`resumeLoop.ts` 与 sweep 两侧的字面量相等」这一**跨模块**层；那一层今天由 `tests/cli/cli.test.ts` 与 `tests/persistence/fileStore.test.ts` 承重——上面那次对 `resumeLoop.ts` 的注入把它们**双双打红**，即是该层有护栏的证据。
   2. `note` 路由进 `error` 那一格 → **12d(i) 的 (2)(3) 必红**
   3. 退回「不路由」→ **12d(i) 的 (1) 必红**
   4. 记录时机改成「`resume` 正常返回后才记」→ **12d(ii) 必红**
