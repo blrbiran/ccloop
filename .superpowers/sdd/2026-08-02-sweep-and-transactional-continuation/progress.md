@@ -1142,3 +1142,589 @@ tests/validation/evidence.test.ts builds tsxBin from process.cwd(), so 9
 run-scenario CLI cases fail with spawn ENOENT — a shape NOT on the allowed-flake
 list) applies to the next worktree too. Run `npm ci` inside it first. That
 node_modules died with this worktree.
+
+================================================================================
+GROUP C OPENS. 2026-08-04. §6/§7/§8, the sweep trigger layer. C1-C4 + GATE-C.
+================================================================================
+
+Worktree .claude/worktrees/l3-group-c-sweep, branch feat/l3-group-c-sweep, based
+explicitly on 2713c20 (git worktree add … HEAD, NOT EnterWorktree's default).
+`npm ci` was run inside it immediately — pre-empting environment trap 5, which
+group B discovered the hard way. Not pushed; local-only, per the human.
+
+HARD PRECONDITION SATISFIED, RE-DERIVED RATHER THAN COPIED: $A4 = e5bf650,
+$B = bafa6a6. Both were re-derived independently by the C1 implementer with
+acceptance 7's own command and matched the controller's derivation. The two
+group-A merges that disclaim gate status were confirmed to carry no verdict.
+
+*** A PRE-FLIGHT CONFLICT SCAN WAS RUN BEFORE THE FIRST IMPLEMENTER WAS
+DISPATCHED, AND IT PAID FOR ITSELF. *** Groups A and B each shipped a round of
+rework because a plan criterion's premise turned out to be false MID-
+implementation. This time the plan was scanned first: 7 conflicts needing a
+ruling, 13 checked and cleared. Report: group-c-preflight-scan.md.
+
+HUMAN RULINGS (4):
+  1. GATE-A open item 5 (the dead twin shouldPreserveExistingSuccessfulRecon-
+     ciliation) had been triaged "to group C" but NO task's Files list named
+     fileStore.ts — it had no home. RULED: add it to C1's Files with a deletion
+     step. Landed in 2b7d3b1.
+  2. GATE-B condition 1 ("the wiring and the ownership-guard ruling must be ONE
+     commit") has NO SUBJECT under C2's shape: registerStopHandlers takes only
+     the signal, never the heartbeat, so both stop() calls stay in `finally` and
+     B1's branch stays unreachable. RULED: C2 adds a step that RECORDS the
+     still-unreachable finding (no code, no Files expansion); condition 1 defers
+     to L5 with its trigger written down.
+  3. C3's route table mandates printing "该 run 仍可续跑". GATE-B condition 2
+     already established that non-terminal ≠ resumable, and the scan confirmed
+     the sweep filter covers only criterion 1 of eight. RULED: errata in place —
+     C3 asserts only what is known ("not terminated; the next sweep re-evaluates
+     it"), original wording kept.
+  4. TWO PLAN OBSERVATIONS HAVE ROTTED. (a) C3 says `cannot read run artifacts`
+     was "measured 3 lines at plan time"; TODAY IT IS 22 — src/ is still 2 (so
+     "the prefix is unique" survives) but 19 new lines live in group A's
+     fileStore.test.ts crash matrix, so C3's mutation 1 would red a whole block
+     of group A's matrix, and the plan's "those two sites must change together"
+     misses a third. (b) C2 says three times "must return before the two `? 0 : 2`
+     mappings", but loadAdapter sits EARLIER and UNCONDITIONALLY, so a placement
+     that satisfies the plan's letter can construct the adapter before the banner
+     prints — violating C1 and C3. RULED: errata in place for both, each landed
+     by the task that owns the section (C2's by C2, C3's by C3).
+
+CONTROLLER RULINGS (2), both under the Rule 7 lineage group A used three times
+("a component and its coverage are one thing"):
+  5. Open item 4 requires group C to make its OWN confirmation and forbids
+     inheriting B1's or B2's — but no step in the whole of group C asks for it.
+     Added to C1 as a named pre-code confirmation, and it will be a GATE-C review
+     focus.
+  6. C4's test 14b needs a contract/adapter fixture the named test file has never
+     had, which collides with "Test only / copy the file's existing shapes".
+     RULED: "Test only" is the hard constraint and is satisfied by building the
+     fixture INSIDE that file; "copy the existing shapes" is a shape hint, not a
+     limit. If it cannot be done without touching a second file, C4 stops and
+     reports rather than expanding its own Files list.
+
+--------------------------------------------------------------------------------
+Task C1: implemented (commits 2713c20..2b7d3b1, two commits), DONE_WITH_CONCERNS.
+Task C1: review 1 — spec ✅, quality APPROVED, 0 Critical, 0 Important, 3 Minor.
+--------------------------------------------------------------------------------
+
+One independent reviewer, most capable model, did not implement. Re-derived
+itself: guard 1 = 8; guard 2 single hit; `git diff -- src/registry/` 0 lines;
+`git diff -- src/controller/runLoop.ts` 0 LINES (so stop(), isLeaseStopError,
+B1's branch and its ordering, B2's slot and both onReconciliationWriteAbandoned
+forwards are structurally untouchable by this diff); the fileStore deletion is
+exactly 12 lines and touches only the dead twin, with transferRepresentsPublished-
+Winner and both its call sites byte-identical; the dead name has zero hits across
+src/, tests/ and docs/; all three mutations red BY THE PREDICTED MECHANISM.
+
+CONCERN 1 WAS THE ONE WORTH ESCALATING, AND THE REVIEWER CLOSED IT WITH NEW
+EVIDENCE RATHER THAN AN OPINION. The implementer honestly reported that C1 does
+not add a route to persistBoundaryAnalysis but DOES make one existing route be
+travelled N times per process, and refused to decide whether open item 4's
+"bound" covers arrival COUNT. The reviewer traced it: the failure mode is
+transferRepresentsPublishedWinner's third conjunct comparing
+currentProcessInstanceId, which resumeLoop overwrites on every successful resume.
+Every such comparison in the repo is WITHIN one runDir; there is NO cross-run
+comparison anywhere. buildProcessInstanceId is a process constant, so one sweep
+writes the SAME id into N runs — but no predicate ever compares run A's id
+against run B's record, and sweep is strictly sequential with heartbeat.stop() in
+resumeLoop's finally. *** Per-run exposure is unchanged: one adoption = one
+overwrite, byte-identical to running `ccloop resume` N times by hand. What sweep
+changes is the RATE at which one human approval covers distinct runs. THE RULING
+DOES NOT REOPEN. *** Recorded for GATE-C as "exposure ×N per invocation,
+mechanism unchanged" — not as a trigger.
+
+Task C1: minor (deferred): C1-M1 *** the one C3 must not inherit blindly. ***
+  In sweepRuns' catch, `refused += 1` is not mutually exclusive with `adopted`,
+  so a run that was adopted and then threw is counted BOTH as adopted and as not
+  started ("1 adopted, 1 not started, of 3 eligible"). The FORMAT belongs to C3
+  but the COUNTING SEMANTICS are set here. C3's brief must carry this.
+Task C1: minor (deferred): C1-M2 — the banner-ordering test pins the banner's
+  FULL literal text while the brief says the banner's format belongs to C3, and
+  12b(a) in the same file uses toContain. A one-word change in C3 reds a test
+  whose subject is ordering, not wording.
+Task C1: minor (deferred): C1-M3 — the `rootFailure → stderr + return 1` path is
+  this layer's ONLY non-zero exit and has NO test. The plan's four required tests
+  do not ask for one, so this is not a violation; if a later edit turns it into
+  `return 0`, §7's whole error contract fails silently and nothing reds.
+
+TWO "CANNOT VERIFY FROM DIFF" ITEMS WERE RESOLVED BY THE CONTROLLER, AND ONE IS A
+REAL GAP -> FIX ROUND 1: the report's first full-suite fence was ABRIDGED by the
+implementer (self-declared: cli.test.ts debug blocks and slow-test lines dropped).
+This repo's iron rule is that a verification run is never filtered — grep and
+tail are equally guilty — and group A had a round formally cited for dropping a
+60-line file list. The reviewer therefore could not verify that fence at all.
+Fix round 1 requires an unabridged re-run, labelled as a 2026-08-04 re-run rather
+than back-dated, with the abridged fence kept and annotated in place. The second
+item (mutation fences 2 and 3 record output but not their `$` command lines — the
+same family as GATE-A open item 6) travels with it, to be closed BEFORE this gate
+rather than after it. NO .ts FILE MAY BE TOUCHED IN THAT ROUND.
+
+Task C1: fix round 1/5 (2 addressed, 0 open — F-1 the abridged full-suite fence,
+  F-2 five fences missing their command lines; NO COMMIT, report file only, no
+  .ts file touched).
+
+  *** ENVIRONMENT TRAP 6, FOUND IN THIS ROUND AND WORTH MORE THAN THE ROUND ***
+  A SUBAGENT'S BASH CWD IS RESET BETWEEN CALLS. The implementer's first re-run of
+  the full suite silently executed IN THE MAIN REPO, not the worktree: `RUN v2.1.9
+  /Users/biran/code/skills/loop/ccloop`, 29 files / 490 tests — green, plausible,
+  and WITHOUT ANY OF THIS TASK'S TESTS. The cross-check that catches it is the
+  arithmetic: main is 29/490, this branch is 30/497, and the difference is exactly
+  this task's 1 file / 7 cases. THE ACCEPTANCE CRITERION FOR ANY VERIFICATION RUN
+  IS NOW THE `RUN` PATH ON VITEST'S FIRST LINE. Pin the directory inside the
+  command itself (`rtk proxy "bash -c 'cd <worktree> && …'"`). C2/C3/C4 briefs
+  must carry this as trap 6; the scoped re-reviewer was warned and used the pinned
+  form, and its own re-run printed the worktree path.
+
+  THE IMPLEMENTER DISCLOSED THREE THINGS ITSELF, INCLUDING REPEATING THE VERY
+  DEFECT THE ROUND EXISTED TO FIX: while adding the missing fences it omitted two
+  lines from one of them, caught it, completed it, and wrote it into its own
+  concerns. That is the behaviour this process is trying to produce.
+
+  SCOPED RE-REVIEW: both ADDRESSED. It re-ran the full suite itself with a pinned
+  cwd (RUN path = the worktree, 30 files / 497 tests, EXIT=0) and re-ran the one
+  fence it trusted least, byte-identical including marker_grep_exit=1 and the
+  shasum. *** IT WAS ASKED EXPLICITLY WHETHER ANY EVIDENCE WAS FABRICATED OR
+  BACK-DATED AND ANSWERED: NONE. *** All 2026-08-04 re-runs carry new timestamps,
+  pinned cwd and a self-證 RUN path.
+
+Task C1: minor (deferred): C1-M4 — the report says the wrong-repo run was
+  "disclosed in full"; it is a PARAPHRASE, not a pasted terminal block. Not
+  fabrication (it never poses as real output) but the wording overstates it. Same
+  family as group A's false sentence about `git rev-parse --short`.
+Task C1: minor (deferred): C1-M5 — §5's three PRE-implementation red fences were
+  abridged (source-context frames and the [1/1] separator are missing) and CANNOT
+  be re-run: the intermediate state they pinned no longer exists now that quota
+  and the stop check are implemented. The implementer did NOT fabricate a
+  replacement, and the judging information (× line, `1 failed | N skipped`, the
+  AssertionError's expected/actual) is verbatim intact. FOR GATE-C's EVIDENCE LANE
+  TO TRIAGE: is that sufficient, or must the intermediate state be reconstructed
+  and re-run? The controller does not rule it either way — the three mutation
+  experiments cover neighbouring ground with complete fences, but whether they
+  cover the SAME assertions is exactly what the gate should check rather than
+  assume.
+
+Task C1: complete (commits 2713c20..2b7d3b1, review clean after 1 fix round).
+  Landed: src/sweep/sweepRuns.ts (scan → root-failure → filter → lexicographic
+  sort → quota truncation → sequential resume, quota counted at onAdopted, exit
+  code as the return value); onAdopted?: () => void added to the EXISTING
+  ResumeLoopOptions; the dead twin shouldPreserveExistingSuccessfulReconciliation
+  deleted (12 lines, nothing else in fileStore.ts touched). 30 files / 497 tests
+  exit 0, typecheck 0, build 0, src/registry/ and src/controller/runLoop.ts both
+  zero-diff.
+
+--------------------------------------------------------------------------------
+Task C2: implemented (commits 2b7d3b1..c14f792, two commits), DONE_WITH_CONCERNS.
+Task C2: review 1 — spec ✅, quality APPROVED, 0 Critical, 0 Important, 3 Minor.
+--------------------------------------------------------------------------------
+
+No fix round: nothing entered the loop. One independent reviewer, most capable
+model, which did its verification with a PINNED cwd and validated every run by
+vitest's RUN path — trap 6 was carried into the dispatch and it held.
+
+WHAT THE REVIEWER CONSTRUCTED RATHER THAN READ (the two load-bearing concerns):
+  - THE SPLIT OF loadAdapter IS LOad-BEARING, NOT DECORATION. The implementer
+    extracted a zero-I/O buildAdapter and NARROWED the parameter type from
+    Exclude<…,{command:"ls"}> to Extract<…,{command:"run"|"resume"}>, so that
+    moving the sweep branch below loadAdapter becomes a COMPILE ERROR. The
+    reviewer built that counterfactual in a scratchpad copy: with the narrowed
+    signature tsc fails TS2345 (EXIT 2); with only the signature reverted and the
+    move kept, EXIT 0. So the human-ruled boundary is now enforced by the type
+    checker rather than by a comment. Zero side effects: loadAdapter is unexported
+    with one call site; buildAdapter has two.
+  - THE TEST THE IMPLEMENTER FLAGGED AS UNMUTATED CAN FAIL. `parses --root …` was
+    added outside the plan's list and never had its own kill. The reviewer mutated
+    `maxRuns: Number(maxRunsRaw)` into a cast: 1 passed → 1 failed, red on
+    `- "maxRuns": 3 / + "maxRuns": "3"`, the predicted mechanism.
+  - The listener-leak assertion can also fail (emptying the unregister function
+    reds it on listenerCount 1 vs 0), and two preconditions block the "nothing was
+    ever registered" fake green.
+
+B1's BRANCH IS STILL UNREACHABLE — CONFIRMED BY C2 ITSELF AND RE-DERIVED BY THE
+REVIEWER, not inherited: `.stop()` has three hits in src/, one of them a comment,
+so the two production call sites are unchanged and both sit in the `finally`
+after runLoopFromState; `stopped = true` appears only inside stop();
+registerStopHandlers receives the slot and an injected exit, and its closure
+cannot reach a heartbeat. GATE-B condition 1 is NOT triggered; it stays deferred
+to L5 with its trigger recorded.
+
+THE PLAN ERRATUM C2 OWED (human ruling 4b) LANDED: 12 insertions, 0 deletions,
+inside ### Task C2 only, same marker shape as the nine existing errata, no
+future-fix advice. The reviewer counted the four places the wrong boundary was
+repeated and confirmed the erratum names them all.
+
+Task C2: minor (deferred): C2-M1 — the report claims coverage of "--max-runs as
+  the last token with no value" but only the fully-absent case is tested. A benign
+  refactor of the pairing loop (`?? "1"`) would silently start a sweep with
+  maxRuns=1 and all eight new tests stay green.
+Task C2: minor (deferred): C2-M2 — C2 only JSON.parses the adapter config without
+  validating its shape, and createAdapter() is invoked after the banner and
+  outside the per-run try. `--adapter-config` pointing at `{}` prints the banner,
+  then throws a TypeError out of the scripted adapter → exit 1, a square the exit
+  table's wording does not cover. Same shape as the pre-existing run/resume paths.
+Task C2: minor (deferred): C2-M3 — the exit table's "bad argument" square has no
+  `it` under `main sweep` (e.g. `--adapter bogus` → exit 1 is untested).
+Task C2: minor (deferred, FOR THE GATE TO RULE): C2-M4 — this change invalidates
+  three line-number citations in docs/superpowers/specs/2026-08-01-…-design.md
+  (:131/:135/:130 are now 244/248/241). The implementer did NOT touch them: they
+  are outside the Files list and this repo's stance is not to rewrite historical
+  documents. But unlike B2-M4's 2026-07-27 documents, this is the CURRENT L3
+  spec, so the precedent is not obviously the same. GATE-C should rule.
+
+--------------------------------------------------------------------------------
+Task C3: implemented (commit 96f5c09, c14f792..96f5c09), DONE_WITH_CONCERNS.
+Task C3: review 1 — spec ✅, quality APPROVED WITH IMPORTANT (1 Important,
+         3 Minor, 0 Critical). -> fix round 1.
+--------------------------------------------------------------------------------
+
+*** THE FIFTH FALSE PREMISE IN THE PLAN, AND THE FIRST ONE THE IMPLEMENTER
+CAUGHT BEFORE THE REVIEWER DID. *** C3's Step 7 mutation 1 (change the
+`cannot read run artifacts` prefix in resumeLoop.ts) CANNOT kill test 12c. The
+implementer measured the survival, refused to swap in a mutation of its own
+choosing, and escalated — exactly the behaviour the previous four cases were
+supposed to teach.
+
+  VERIFIED INDEPENDENTLY BY THE REVIEWER, who was given the mutation-injection
+  exemption for this purpose: pre-injection 12c `1 passed | 11 skipped`;
+  post-injection STILL `1 passed | 11 skipped` (survives); the collateral kills
+  are exactly `cli.test.ts` 1 case and group A's `fileStore.test.ts` 1 case.
+  The structural reason holds up: 12c injects a STUB `resume` and its message is
+  a literal in the test file, so production resumeLoop is never entered — there
+  is NO DATA PATH from the mutated literal to 12c's judgement.
+
+  THE REVIEWER THEN ANSWERED THE HARDER QUESTION THE DISPATCH ASKED, AND FOUND
+  WHAT THE IMPLEMENTER HAD NOT: a legal alternative EXISTS for the layer that
+  matters. Mutating the literal in sweepRuns.ts's own classifyThrow reds 12c
+  (`1 failed | 11 skipped`) on `stderrLines.slice(1)`, because run-1 falls back
+  from stderr/`error` to stdout/`refused` — the predicted mechanism, inside C3's
+  own Files list, naming 12c. It also established what NO mutation can pin
+  today: the CROSS-MODULE equality of the two literals, since resumeLoop.ts's
+  literal is outside 12c's reachable data flow. That equality is in fact carried
+  by cli.test.ts and fileStore.test.ts — the reviewer's injection reddening both
+  IS the evidence.
+
+  *** HUMAN RULING: replace Step 7's mutation 1 with the reviewer's alternative,
+  and errata the plan in place explaining why the original cannot kill 12c,
+  which two cases it actually kills, and which LAYER the replacement pins. ***
+  Dispatched as fix round 1. The implementer must re-run all three steps itself
+  rather than copy the reviewer's numbers.
+
+THE IMPORTANT, WHICH NO TEST COULD HAVE CAUGHT: C3 buffered the `note` lines
+into an array and flushed them after the sweep loop, where C1 had written them
+to stderr as they occurred. Failure scenario: a multi-hour `--max-runs 50` sweep
+whose 3rd run abandons a reconciliation write and whose process is SIGKILLed at
+run 40 — the buffer dies with the process and STDERR IS EMPTY, so a cron rule of
+"alert if stderr is non-empty" never fires, while C1's immediate write had
+already alerted. The plan only requires that notes keep their traversal order,
+which sequential immediate printing satisfies, SO THE BUFFERING BOUGHT NOTHING.
+All four existing tests are blind to the difference (12d(i) asserts the final
+array, 12d(ii) uses toContain). In the fix round the implementer must also state
+plainly whether ANY existing assertion can now distinguish immediate from
+buffered — and if not, say so rather than claim the gap is closed.
+
+WHAT THE IMPLEMENTER CAUGHT IN ITSELF, RECORDED BECAUSE THIS IS THE BEHAVIOUR
+THE PROCESS EXISTS TO PRODUCE: (a) it added `|| error instanceof
+RunLeaseHeldError` and then noticed the conjunct carried NO assertion — deleting
+it would SURVIVE — so it re-pointed an existing test's run-7 at that error and
+measured the kill (the reviewer re-ran it: `1 failed | 11 skipped`, run-7 falls
+from stdout/`refused` to stderr/`errored`); (b) it ran the suite once through
+`| tail -60`, declared that run void, and re-ran unfiltered.
+
+C1-M1 WAS SOLVED, NOT INHERITED: every summary cell is now derived from the
+report lines' `outcome`, and `tally[report.outcome] += 1` executes exactly once
+per attempted run on both the try and catch paths, so double counting is
+structurally impossible. C1's quota semantics (adopted/onAdopted/break) are
+byte-unchanged; only C1's report-only `refused` counter was replaced. The old
+contradictory line was reproduced verbatim in a red run first:
+`sweep: 7 adopted, 2 not started, of 8 eligible` (7+2=9>8).
+
+Task C3: minor (deferred): C3-M1 — the summary line's `attempted` and its three
+  outcome cells are not addable: failed/exhausted/blocked_waiting_human/
+  cancelled/interrupted fall into no cell at all. This is the plan's own mandated
+  format, not a task defect, but it is quieter than the C1 line it replaced.
+Task C3: minor (deferred): C3-M2 — `tally` carries five write-only cells (Rule 2
+  would call them surplus). The reviewer judged them acceptable: the
+  Record<Outcome, number> shape is what makes "exactly one cell per attempted
+  run" a TYPE-LEVEL property, and collapsing to three variables would lose the
+  exhaustiveness check over the Outcome domain. Recorded, not to be "cleaned up".
+Task C3: minor (folded into fix round 1): C3-M3 — report §3.3's arithmetic
+  contradicts §3.2 and the measurement (17+4=21 vs 13+4=17). The plan erratum's
+  19/17/2 split is correct; only the report prose is wrong.
+
+Task C3: fix round 1/5 (3 addressed — the human-ruled mutation swap, the note
+  immediacy Important, the report's arithmetic; commit 96f5c09..cad6236).
+  The replacement mutation was re-run BY THE IMPLEMENTER rather than copied:
+  12c goes 1 passed -> 1 failed | 11 skipped, red at sweepRuns.test.ts's
+  `expect(h.stderrLines.slice(1)).toEqual([...])` because run-1 falls back from
+  stderr/error to stdout/refused. Revert proven with the injected string itself,
+  not a generic marker.
+
+  *** A CONTROLLER ERROR, RECORDED BECAUSE IT IS EXACTLY WHAT THE PROCESS
+  FORBIDS. *** The plan's own text fixes the callback's implementation as "a
+  single array push, no I/O, no formatting". The note-immediacy fix contradicts
+  that, and the rule is that a fix contradicting plan text goes to the human
+  BEFORE it is dispatched. The controller dispatched it without noticing. The
+  implementer implemented the ruling but did NOT quietly errata the two
+  sentences — its erratum authorisation covered only Step 7 — and reported the
+  inconsistency instead. That is the correct behaviour on its side; the process
+  failure was upstream.
+
+  HUMAN RULINGS ON THE TWO ITEMS THE ROUND SURFACED:
+    (a) KEEP the immediate write and errata those two sentences in place. The
+        buffering bought none of the properties the plan asks for and introduced
+        an invisible alert loss.
+    (b) CLOSE THE COVERAGE GAP. The implementer established, by checking each
+        assertion, that NOTHING today distinguishes immediate from buffered —
+        reverting to buffering leaves the whole suite green, so the Important's
+        own fix was unguarded. Ruled: change 12d(ii)'s two toContain into one
+        toEqual([banner, note, errorLine]) — order WITHIN one stderr stream, not
+        the withdrawn cross-stream promise — and prove it can red with a mutation
+        that restores buffering.
+  Dispatched as fix round 2.
+
+  DISCLOSED BY THE IMPLEMENTER, AND KEPT IN THE REPORT ON PURPOSE: its first
+  draft of the round's section carried a FABRICATED commit hash (3a72e0d),
+  written before the commit existed and corrected from `git log` immediately
+  after committing. Same family as the earlier fabricated grep output. The
+  self-report stays in the artefact.
+
+Task C3: fix round 2/5 (2 addressed, 0 open — the plan erratum for the callback
+  shape, and the coverage gap; commit cad6236..1564cba, tests + plan only, ZERO
+  production code).
+Task C3: complete (commits c14f792..1564cba, review clean after 2 fix rounds).
+
+  THE SCOPED RE-REVIEW RE-RAN BOTH LOAD-BEARING MUTATIONS ITSELF rather than
+  reading the fences. The replacement mutation: 12c 1 passed -> 1 failed, red at
+  `stderrLines.slice(1)` with `expected [] to deeply equal [ Array(1) ]`, i.e.
+  run-1's line leaves stderr entirely — and it re-derived WHY (readFailure stays
+  a ResumeNotEligibleError, so it takes the second arm to refused/stdout). The
+  buffering mutation: 12d(ii) red at the new toEqual with three elements on both
+  sides and the diff a PURE TRANSPOSITION of the note and error lines, so the
+  assertion really does fail for ORDER and not for content — and 12d(i) survives
+  the same injection, as the implementer said.
+  It also verified the honest self-report: under the buffering injection exactly
+  ONE assertion in the whole file reds. Every other 12d assertion is blind to the
+  difference. The implementer said so plainly and did not claim to have closed
+  it; the re-reviewer confirmed nothing was missed.
+  Plan errata: three insertions inside ### Task C3, ZERO deletions, same marker
+  shape as the ten existing errata, no future-fix advice, and the re-reviewer
+  re-derived the mechanism by injecting the OLD mutation itself (12c survives;
+  cli.test.ts and fileStore.test.ts each red) rather than trusting the wording.
+
+Task C3: minor (deferred): C3-M4 — §3.1's prediction table still carries the
+  "17 + 4" arithmetic that §3.3 corrected to 13 + 4 = 17. Same typo family, one
+  place further up, documentation only.
+Task C3: minor (deferred): C3-M5 — the immediate-vs-buffered distinction hangs
+  on ONE assertion, and that assertion only works while 12d(ii)'s stub still
+  throws after the note (two stderr lines are needed before order means
+  anything). Remove that throw later and the distinction vanishes silently with
+  the suite still green.
+
+--------------------------------------------------------------------------------
+Task C4: implemented (commit 4a24a94, 1564cba..4a24a94), DONE_WITH_CONCERNS.
+Task C4: review 1 — spec ✅, quality APPROVED, 0 Critical, 0 Important, 2 Minor.
+Task C4: complete (commits 1564cba..4a24a94, review clean, 0 fix rounds).
+--------------------------------------------------------------------------------
+
+Test-only, +519/-1 in tests/registry/zeroWrite.test.ts, `git diff --name-only
+-- src/` EMPTY. Guards re-counted by the reviewer: 8 / single hit / src/registry
+untouched.
+
+*** C4's TESTS FOUND A PRODUCTION PROPERTY NOBODY HAD RECORDED. *** resumeLoop
+reads five artifacts CONCURRENTLY in one Promise.all, and only readOwnerRecord
+runs recoverInterruptedOwnerTransfer first; readOwnerTransferRecord,
+readReconciliationRecord and readRunState are bare reads racing finalize's
+rename. The implementer hit it while writing 14b, restructured the test to avoid
+the nondeterminism, DID NOT TOUCH PRODUCTION CODE, and escalated.
+
+  THE REVIEWER CONSTRUCTED IT RATHER THAN REASONED ABOUT IT, and corrected the
+  implementer's wording in the process:
+    - Real: with a marker plus three pendings staged and reconciliation-record
+      .json never published, a real sweep produces `cannot read run artifacts:
+      … ENOENT`.
+    - CORRECTION: sweep classifies it as `error`, NOT `refused` — classifyThrow's
+      prefix arm wins — so the line goes to stderr while the exit code stays 0.
+    - *** IT IS A RETRYABLE REFUSAL, NOT A LOST RUN, AND THIS WAS MEASURED. ***
+      Promise.all's rejection does not cancel the readOwnerRecord chain: 300ms
+      after sweep #1 returned, the marker was gone, epoch had rotated to 2 and the
+      reconciliation record was published; sweep #2 then reached `succeeded`.
+      cli.ts only calls process.exit on a DOUBLE SIGINT, so the pending fs work
+      drains normally. Cost = one wasted sweep slot plus a misleading `error`
+      line that reports a healthy run as a failure. NOT data loss.
+    - It does NOT conflict with group A's transaction invariants: recovery still
+      goes marker-first through finalizePendingOwnerTransfer with
+      isValidFinalizeOrder validating the full permutation before any read, write
+      or unlink. This is resumeLoop's READ-SIDE ordering, a sibling of L2 §7.1's
+      registry-side protection which resume never got.
+  CARRIED TO GATE-C AS AN INDEPENDENT DEFECT ITEM FOR HUMAN RULING. It did not
+  block C4, which is Test-only and correctly refused to fix it.
+
+THE REVIEWER CLOSED THE IMPLEMENTER'S OWN WORRY ABOUT THE 7 UNVERIFIED TEMP PATH
+LITERALS: it compared all 11 against fileStore.ts's constants and
+getOwnerTransferPaths field by field — byte-identical, and items 2-11 are exactly
+the ten fields cleanupOwnerTransferStagingWithoutMarker destructures and unlinks.
+It also hit each of the three preconditions with its own probe: all four reds
+landed on the predicted assertion by the predicted mechanism, including the
+expired-lease one reddening inside checkRunLease with `expected 'expired' to be
+'no_lease'`. The negative assertion's vacuous-pass risk is genuinely blocked by
+a positive control.
+
+Task C4: minor (deferred): C4-M1 — 14b asserts the marker and three pendings are
+  reclaimed but not that finalize's own six temp paths leave no residue; a
+  success path that forgot to unlink .owner-record.publish.tmp keeps 14b green.
+  The plan's clause (ii) only asked for the marker and the pendings.
+Task C4: minor (deferred): C4-M2 — four historical SDD documents cite
+  zeroWrite.test.ts:92 and :187, now shifted by the added imports. Same family as
+  B2-M4 and C2-M4; GATE-C should rule on all of them together rather than
+  one at a time.
+
+================================================================================
+GATE-C REVIEW. 2026-08-05. Two independent reviewers, disjoint lanes.
+================================================================================
+
+Range 2713c20..4a24a94 at review time, eight commits (C1 x2, C2 x2, C3 x3, C4 x1).
+Both reviewers fresh, most capable model, NEITHER having worked on C1-C4.
+  Lane 1 — production code, whole-branch coherence, risk grading: PASS WITH
+           CONDITIONS, 0 Critical, 2 Important, 3 Minor.
+  Lane 2 — full mutation/evidence rescan and deferred-minor triage: PASS WITH
+           CONDITIONS, 0 Critical, 1 Important.
+
+WHAT LANE 1 ESTABLISHED AGAINST SOURCE (not from reports):
+  - Acceptance 7 criterion (3): `git log --diff-filter=A -- src/sweep/sweepRuns.ts`
+    is exactly one line, 525cdcc, dated AFTER both $A4 and $B. Order respected.
+  - ZERO WRITE SURFACE, proven by structure rather than comment: sweepRuns.ts
+    imports no fs module at all — no node:fs, writeFile, appendFile, mkdir,
+    rename or unlink. Its only path to disk is resumeLoop.
+  - Pipeline order is source order; truncation is a `break` ON THE SORTED ARRAY,
+    so it cannot precede the sort; onAdopted fires after resume_adopted and
+    before the heartbeat starts, with all four refusal paths throwing earlier.
+  - Guards counted: 8 / single hit / src/registry zero / src/controller/runLoop.ts
+    ZERO LINES across the whole branch — so B1's branch and its ordering, B2's
+    slot and both onReconciliationWriteAbandoned forwards were structurally
+    untouchable by group C.
+  - C2's type narrowing re-verified by BUILDING BOTH COUNTERFACTUALS: moving the
+    sweep branch below loadAdapter fails TS2345 (exit 2); reverting only the
+    signature and keeping the move compiles (exit 0).
+
+WHAT LANE 2 ESTABLISHED BY RE-RUNNING: 16 injections across 14 mutation designs;
+14 kills with all three steps, named nonzero counts, red on the claimed assertion
+BY THE CLAIMED MECHANISM; the other 2 are deliberate, honestly-recorded
+SURVIVALS (C2's first attempt at mutation 3, C3's original mutation 1). It re-ran
+three by hand including both of C3's fix-round mutations, and reproduced the
+buffering kill as a PURE TRANSPOSITION — three identical strings on both sides,
+only note and error swapped, so the assertion really does fail for ORDER.
+It also re-derived that group B's two carried debts remain unreachable after
+group C lands (.stop() still exactly two production call sites, both in a
+finally; runLoop.ts zero-diff).
+
+*** LANE 2's IMPORTANT WAS THE CONTROLLER'S OWN FAILURE, AND IT IS RECORDED AS
+SUCH. *** C2's implementer explicitly asked for a ruling (the `--max-runs`
+illegal values are enumerated in ONE `it` while the plan says one `it` per
+square, no synthesis). The task reviewer expressed a view in its reply, but THE
+CONTROLLER NEITHER RECORDED IT IN THIS LEDGER NOR PUT IT TO THE HUMAN — so a
+question that was properly escalated went unanswered across the whole branch.
+Lane 2 named this "a false close occurring on SPEC COMPLIANCE". Human ruling:
+COMPLIANT — "not a positive integer" is ONE square of the exit-code table, the
+six values are an enumeration within it, and each iteration clears the spy and
+asserts the specific message. Recorded here, which is the half that was missing.
+Lane 2 also found five more escalated-but-unrecorded concerns; they are logged
+below as C2-M5, C2-M6, C3-M6 and two doc items.
+
+HUMAN RULINGS AT THE GATE (4):
+  1. I-1: FOLD the report line's detail to one line AND correct the false
+     rationale in the comment. The unfolded detail let an 11-line ZodError from
+     loadContract turn one run into ten ownerless cron records, breaking §8's
+     "one line per attempted run" — the contract the plan calls total — while the
+     note line five lines above had folded all along. The comment claimed the
+     flaw "predates this wave"; the three-column line IS this wave's own output.
+  2. I-2: give the banner an OBSERVED-ONLY qualifier. The filter covers only
+     criterion 1 of evaluateResumeEligibility's eight, and `ccloop ls` already
+     disclaims exactly this field, so a bare "17 eligible run(s)" would hollow
+     out the informed half of §12's informed approval. Plan errata + test sync.
+  3. C2's six-values-in-one-`it`: COMPLIANT, and recorded (see above).
+  4. THE MOST FRAGILE PREMISE GETS A GATE INSTEAD OF A RULE. Lane 1 found that
+     `cannot read run artifacts:` is a CROSS-MODULE contract carrying all of
+     §4.4's "fail loudly", yet nothing pinned the two literals' equality — and
+     worse, both indirect guards use startsWith WITHOUT the colon, so changing
+     anything after the colon breaks sweep's routing while both guards SURVIVE.
+     Ruled: add an end-to-end case that does not stub resume, with a new test
+     name authorised.
+
+GATE-C FIX WAVE (c3bd049 + 5a7f5c7), one implementer, six items, then ONE scoped
+re-review. The re-review reproduced both load-bearing kills on its own
+injections: the fold mutation reds the new test at sweepRuns.test.ts:522; the
+colon-only mutation reds the new end-to-end case at zeroWrite.test.ts:640 —
+*** AND BOTH INDIRECT GUARDS SURVIVE THAT SAME INJECTION (cli.test.ts 1 passed,
+fileStore.test.ts 1 passed), which is precisely why the new case was needed. ***
+It also verified the banner literal was pinned in FIVE places, not one, and that
+all five were synced.
+
+*** THE FIX WAVE CARRIED ITS OWN DEFECT. THAT IS FIFTEEN WAVES IN A ROW, AND
+AGAIN NOT FOUND BY WHOEVER WROTE IT. *** Removing "eligible run(s)" from the
+banner made three `not.toContain("eligible run(s)")` assertions in cli.test.ts
+STRUCTURALLY UNFAILABLE — they were live guards proving no banner is printed on
+the three refusal paths, and a regression that printed one would now sail
+through. Human ruled: FIX BEFORE MERGE, with one more scoped re-review. The same
+round syncs the current L3 design spec, which still pins the old banner literal.
+
+RESIDUAL ROUND (2a3cf64) AND THE FINAL SPEC SYNC (b9afbf3), each followed by its
+own scoped re-review, both ADDRESSED.
+  The three emptied guards are demonstrably failable again. The implementer ran
+  TWO injections rather than one, and the second is what proves the point: with
+  the banner moved to the top of parseArgs's sweep branch, ALL THREE red, each
+  carrying its own refusal message in `received` — so they are red for the guard's
+  own reason, not because the refusal stopped happening. Under the realistic
+  regression shape only the third reds, and the reason was verified along the
+  code rather than accepted: parseArgs throws at :84 and :96 inside its own sweep
+  branch, while main only reaches its sweep branch at :218, so the other two
+  unwind before the injection point exists. The re-reviewer reproduced both.
+  The new needle `observed eligibleForContinuation=true` was checked to occur
+  EXACTLY ONCE in src/ and to be immune to collision with `ccloop ls`'s notice.
+  The spec sync's annotation survived being checked against the live callback:
+  one stderr call per invocation, no dedup, no aggregation, cannot throw,
+  deliberately un-try/caught — only the sink changed. Its anchor was resolved
+  BLIND by the re-reviewer following the annotation's own description, landing on
+  the single occurrence of that table row in the whole document.
+
+*** TWO STANDING RULES THIS GROUP ADDS, BOTH PAID FOR IN DEFECTS ***
+  1. WHEN YOU CHANGE AN OUTPUT LITERAL, THE POSITIVE ASSERTIONS RED BY THEMSELVES
+     BUT EVERY `not.toContain` / `not.toEqual` SITE SILENTLY GOES VACUOUS. Re-scan
+     the negative family in the same commit. This is the exact root cause of the
+     fifteenth self-defecting fix wave, and it was the implementer who named it.
+  2. A VERIFICATION RUN IS ONLY VALID IF VITEST'S FIRST LINE SHOWS THE EXPECTED
+     `RUN` PATH. A subagent's bash cwd resets between calls; a full suite silently
+     executed in the MAIN REPO looks entirely normal (29 files/490 tests, all
+     green) while running none of the branch's own tests. The arithmetic
+     cross-check (branch total minus main total = this task's cases) is what
+     caught it.
+
+STILL OPEN, NAMED SO IT CANNOT BE INHERITED AS CLOSED:
+  - The `resumeLoop` concurrent bare reads (C4's discovery): five artifacts read
+    in one Promise.all with only readOwnerRecord preceded by recovery. Measured
+    consequence: ONE retryable refusal plus a healthy run reported as `error` on
+    stderr — a false alarm, i.e. an operability defect, not data loss. CARRIED TO
+    L5 with the grading evidence attached.
+  - The same-family spec sentences at spec:692 and spec:751 (and their copy at
+    plan:1004) still cite "a single array push" as a PREMISE. Their CONCLUSIONS
+    still hold — spec:751's argument survives an injected stderr sink — so only
+    the supporting wording is stale. Named for L5; the controller did not widen
+    the round to take them.
+  - Group B's two carried debts (the predicate-widening half has no test; B1's
+    branch writeRunState has no CAS) were re-derived as STILL UNREACHABLE after
+    group C lands, and travel to L5 unchanged.
+
+FINAL VERIFICATION AT THE GATE, run by the controller, unfiltered, pinned cwd,
+ECC_GATEGUARD=off DISABLE_OMC=1, at b9afbf3:
+  RUN path = the worktree (verified on vitest's first line, per standing rule 2)
+  Test Files 30 passed (30) / Tests 514 passed (514), TEST_EXIT=0, 18.35s
+  TYPECHECK_EXIT=0; BUILD_EXIT=0
+  Guard 1 `return { ok: false` = 8
+  Guard 2 `currentOwnerEpoch + 1` single hit, src/ownership/ownerController.ts:166
+  Guard 3 `git diff --name-only 2713c20..b9afbf3 -- src/registry/` EMPTY
+  Guard 4 `… -- src/controller/runLoop.ts` EMPTY across the whole branch — so
+    group A's and B's invariants in that file were structurally untouchable
+  Neither allowed flake appeared; no failure outside the list; no rerun.
+
+VERDICT: GATE-C PASSES. Zero Critical across the whole branch. Both Importants
+from lane 1 were fixed before the gate; lane 2's Important was a CONTROLLER
+bookkeeping failure and is now ruled and recorded. L3's three groups are complete.
