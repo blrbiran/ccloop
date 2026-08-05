@@ -1555,6 +1555,12 @@ grep -nF 'export function scanRootFailureDetail(' src/registry/renderRuns.ts
 
   **横幅必须同时显示 eligible 总数与配额 N**（第二轮评审）：§12 的整个论证是「操作者选 `--adapter claude` 即构成对该次 sweep 的**知情且有界**批准」，而知情的前提是横幅里有 N。第一轮的横幅里没有 N，论证悬空。
 
+  **Amended 2026-08-05：上面这个横幅字面量里裸用的 "eligible" 会让 §12「知情批准」的知情半边落空，已按人的裁定改成带限定的措辞。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。理由：sweep 的过滤器建在 **L2 观测**上——`owner-transfer.json` 的 `eligibleForContinuation` 观测为 literal true（`src/sweep/sweepRuns.ts` 的 `isObservedEligible`），而 `reconciliation-record.json` 根本不在 L2 的 `OBSERVED_FILES` 里，**所以它只覆盖 `evaluateResumeEligibility` 八条判据里的第 1 条**（守卫实测：`rtk proxy "bash -c 'cd <worktree> && grep -cF \"return { ok: false\" src/controller/resumeLoop.ts'"` → **8**）。于是一次「17 eligible」的横幅完全可以对应 17 个全部被门拒的 run：操作者据此批准 `--adapter claude`，批准的那一刻「知情」就是假的——**这与横幅里少写一个 N 是同一种失效，只是发生在另一个数字上**（本条与紧邻上一段是同一条论证的两半）。同仓库同为只读表面的 `ccloop ls` 在**同一个字段**上一直带着这句限定（`src/registry/renderRuns.ts` 的 `CONSISTENCY_NOTICE`：「eligibleForContinuation is an observed field, not a decision that the run may be resumed」），横幅照它的口气写，使两个只读表面对同一字段说同一句话。**读作**：横幅仍**必须**同时显示候选集大小与配额 N（这一条一个字不改），但那个计数**必须被命名为它所计的东西**；「保证 / 一定 / 能续跑」一类措辞不得出现（GATE-B 已钉死「非终态 ≠ 可被 resume 捡起」）。落地字面量逐字为：
+
+  **`sweep: <eligible> run(s) under <root> observed eligibleForContinuation=true (an observed field, not a decision that the run may be resumed), will attempt at most <N>, adapter=<name>`**
+
+  与之配套的计划勘误在 `docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md` 的 `### Task C3` 同一条（同样标 `Amended 2026-08-05`）。
+
 **sweep 从不静默吞任何一种结果**（Rule 12）。意外错误按 §7 不改退出码，但写到 stderr 以便被 cron 的「有 stderr 即告警」捞住。
 
 ## 9. 模块边界

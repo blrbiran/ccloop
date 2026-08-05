@@ -309,7 +309,12 @@ describe("main sweep", () => {
       ).resolves.toBe(1);
       expect(errorSpy).toHaveBeenCalledWith("missing required flags");
       // §8's first line: a sweep that never started never scanned, so no banner was printed.
-      expect(errorSpy.mock.calls.flat().join("\n")).not.toContain("eligible run(s)");
+      // The needle must be a fragment the banner ACTUALLY contains, or this guard cannot fail.
+      // `observed eligibleForContinuation=true` is that fragment and is unique to the banner
+      // (`grep -rnF` finds it at exactly one site in src/: the stderr call in sweepRuns.ts). It
+      // has to be kept in step with the banner's wording — the GATE-C fix wave reworded the
+      // banner and left the old needle `eligible run(s)` behind, which zeroed all three of these.
+      expect(errorSpy.mock.calls.flat().join("\n")).not.toContain("observed eligibleForContinuation=true");
     } finally {
       errorSpy.mockRestore();
     }
@@ -329,7 +334,8 @@ describe("main sweep", () => {
         // The reason matters: without it this test would pass for any refusal at all — including
         // one that never recognised `sweep` as a command.
         expect(errorSpy).toHaveBeenCalledWith("--max-runs must be a positive integer");
-        expect(errorSpy.mock.calls.flat().join("\n")).not.toContain("eligible run(s)");
+        // Same needle, same reason, as the banner guard above.
+        expect(errorSpy.mock.calls.flat().join("\n")).not.toContain("observed eligibleForContinuation=true");
       }
     } finally {
       errorSpy.mockRestore();
@@ -347,7 +353,8 @@ describe("main sweep", () => {
         main(["sweep", "--root", root, "--adapter", "scripted", "--adapter-config", missingConfigPath, "--max-runs", "1"]),
       ).resolves.toBe(1);
       expect(errorSpy.mock.calls.flat().join("\n")).toContain("ENOENT");
-      expect(errorSpy.mock.calls.flat().join("\n")).not.toContain("eligible run(s)");
+      // Same needle, same reason, as the banner guard above.
+      expect(errorSpy.mock.calls.flat().join("\n")).not.toContain("observed eligibleForContinuation=true");
     } finally {
       errorSpy.mockRestore();
     }
