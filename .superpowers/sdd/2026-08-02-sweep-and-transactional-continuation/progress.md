@@ -1728,3 +1728,48 @@ ECC_GATEGUARD=off DISABLE_OMC=1, at b9afbf3:
 VERDICT: GATE-C PASSES. Zero Critical across the whole branch. Both Importants
 from lane 1 were fixed before the gate; lane 2's Important was a CONTROLLER
 bookkeeping failure and is now ruled and recorded. L3's three groups are complete.
+
+--------------------------------------------------------------------------------
+GATE-C MERGED. 2026-08-05. *** THE GATE IS 81f3819. L3 IS COMPLETE. ***
+--------------------------------------------------------------------------------
+
+Artefacts landed first (cf03278), then the merge, on the human's instruction —
+the same order group B used.
+
+  cf03278  docs(sdd): land group C's ledger entries, task reports and GATE-C
+           evidence — eight files via `git add -f`
+  81f3819  GATE-C PASSED: L3 group C (C1-C4), two independent reviewers,
+           0 Critical  <-- THE GATE, a real --no-ff merge, verdict in the SUBJECT
+
+ACCEPTANCE 7's LOCATOR RE-RUN AFTER THE MERGE, not assumed: `git log --merges
+--format='%h %cd %s' --date=iso --reverse` now lists SIXTEEN merges, and the last
+three are the three L3 gates in order — e5bf650 (A), bafa6a6 (B), 81f3819 (C) —
+each with its verdict in the subject. The two group-A merges that disclaim gate
+status still read as disclaimers. $A4, $B and the group-C gate are unambiguous.
+
+VERIFICATION AFTER THE MERGE, on main, run by the controller, unfiltered, because
+the merged tree had never been run as such (the gate verification ran on the
+branch tip b9afbf3):
+  Test Files 30 passed (30) / Tests 514 passed (514), TEST_EXIT=0, 17.49s
+  TYPECHECK_EXIT=0; BUILD_EXIT=0
+  Neither allowed flake appeared; no failure outside the list; no rerun.
+
+L3's ARC, FOR WHOEVER PICKS THIS UP: three groups, fifteen tasks, three gates,
+six independent gate reviewers plus one per task, and FIVE places where the plan
+itself was measured to be false. Every one of those five was closed by a human
+ruling plus an in-place erratum — never by an implementer quietly changing the
+criterion. The fifth was caught by an IMPLEMENTER rather than a reviewer, which
+is the first time that has happened here.
+
+STILL NOT DONE, EACH NEEDING ITS OWN HUMAN INSTRUCTION:
+  1. NO PUSH. This session has never run `git push`. Check with
+     `git ls-remote origin refs/heads/main` rather than trusting any prose — the
+     remote has been advanced from outside this session three times already.
+  2. The branch feat/l3-group-c-sweep (b9afbf3) and the worktree
+     .claude/worktrees/l3-group-c-sweep are BOTH STILL PRESENT. Deleting them
+     needs separate authorisation, and the worktree's untracked artefacts must be
+     enumerated and copied out first — group B's clean-up found one that existed
+     nowhere else.
+  3. L5, which now inherits: the resumeLoop concurrent bare reads; the two spec
+     sentences still citing "a single array push" as a premise; group B's two
+     debts; and the deferred-minor list triaged at this gate.
