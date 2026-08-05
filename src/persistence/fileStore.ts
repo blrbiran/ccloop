@@ -466,9 +466,13 @@ export async function writeBoundaryArtifacts(
       //   3. The precedent is this repository's own, in the same function (appendEvent) for the
       //      same reason, so this is conformance rather than a new shape.
       // The callback deliberately does NOT get this treatment: its body is inside this layer's
-      // control (a single array push, no I/O), so a throw from it is a programming error and must
-      // be loud. appendFile's I/O is nobody's to fix — a throw from it is an environment fact, and
-      // converting it into a failed attempt only hides a small error behind a larger one.
+      // control — a single synchronous call into a sink the caller injected (sweepRuns passes
+      // SweepOptions.stderr), touching no filesystem and awaiting nothing — so a throw from it is
+      // a programming error in the caller and must be loud. appendFile's I/O is nobody's to fix —
+      // a throw from it is an environment fact, and converting it into a failed attempt only hides
+      // a small error behind a larger one. The asymmetry turns on who can fix it, not on whether
+      // the callback performs I/O: it writes a note line to stderr on the spot, and that is the
+      // point (a buffered note dies with the process on a SIGKILL mid-sweep).
       // Ordered BEFORE appendEvent on purpose — and stated honestly: with the swallow below in
       // place, that ordering has NO killing mutation, because swapping the two lines is an
       // equivalent mutation (a swallowed appendEvent cannot stop the callback that follows it
