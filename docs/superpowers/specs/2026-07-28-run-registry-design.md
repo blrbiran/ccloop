@@ -57,6 +57,13 @@ This layer does **not**:
 6. discharge any of the three debts bequeathed to L5 (§13);
 7. modify L1 or L1b code, including the lease gate and the write paths.
 
+*Amended (k) — item 6's "three debts" is stale. The 2026-07-29 debt-attribution
+ruling (`docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md:246`,
+`:248`) reattributed debt 1 to L3 (it was misdescribed as unowned reconciliation
+synthesis; the real defect is cross-file transactional) and debt 3 to L3, and
+states explicitly: "L5 继承清单现在只剩 1 笔（债 2），不是 4 笔." §13 below still
+lists three items under L5; that ruling was never executed there.*
+
 Item 3 is the boundary against §17 item 2's literal wording ("scheduler /
 unattended execution"). That wording spans two separable capabilities —
 *discovery* and *triggering*. This spec takes discovery only. Triggering is
@@ -469,6 +476,15 @@ Debts 1–3 are bequeathed to L5 and are unchanged by this layer. This layer doe
 not make any of them more reachable — a direct consequence of choosing discovery
 over triggering: a read-only scanner adds no caller to any of the affected paths.
 Debt 4 is new, and is recorded by this layer rather than taken by it.
+
+*Amended (l) — "Debts 1–3 are bequeathed to L5" is stale. The 2026-07-29
+debt-attribution ruling (`docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md:246`,
+`:248`) moved debt 1 to L3 (reattributed from "unowned reconciliation synthesis"
+to a cross-file transactional defect) and debt 3 to L3. Neither item 1 nor item
+3 below carries an `Amended` note reflecting that move — item 3 has an inline
+sentence pointing at "the deferred queue layer," but it does not correct this
+paragraph's "bequeathed to L5" framing. "L5 继承清单现在只剩 1 笔（债 2），
+不是 4 笔" per that ruling — the three-item list below was never renumbered.*
 
 1. **Reconciliation synthesis is unowned.** Consequence of the L1b ruling that
    the `writeBoundaryArtifacts` call is guarded unconditionally

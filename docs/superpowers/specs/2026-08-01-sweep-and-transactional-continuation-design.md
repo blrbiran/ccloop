@@ -1028,6 +1028,8 @@ grep -nF -A14 'export async function writeBoundaryArtifacts(' src/persistence/fi
 
 **正确的理由**：本层之后，赢家路径**根本不再调用**这个函数（`reconciliationRecord` 传 `undefined`），输家路径的调用形态与今天逐字节相同。**两侧都不需要改它的代码**，所以结论「代码零改动」仍然成立，只是靠的是另一条依据。（**若将来有人改回 §4.3 否决过的方案 (b)，即赢家继续补写 reconciliation，本段理由要跟着改回早退论证。**）
 
+**Amended（计划阶段裁定三，落在此处）：上面那条「理由已过时」的注只否定了理由，没有否定「代码零改动」这个断言本身——断言本身也已被推翻。** `docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md:225`–`:229`（裁定三）逐字：「§4.6『……代码零改动』这句话为假，予以推翻」「裁定：改 §4.6 那句话，不去为了保住『零改动』而把整块判定上移」。今天代码已按裁定二落地：`preserveSuccessfulReconciliationIfNeeded`（`src/persistence/fileStore.ts:392`–`:395`）返回类型是判别式联合 `Promise<ReconciliationWriteDecision>`；计划记录的改动前形态是 `Promise<ReconciliationRecord>`（`plan:231`）。函数确实改了，「代码零改动」在今天不成立。
+
 ```bash
 grep -nF -A4 'async function preserveSuccessfulReconciliationIfNeeded(' src/persistence/fileStore.ts
 ```
@@ -2321,7 +2323,7 @@ grep -rnF 'writeOwnerTransferArtifacts' tests/                                # 
 
 **`--max-runs` 的完整落地面（第二轮评审：第一轮只在本节写了它，定义 CLI 形状的五节一次都没提，导致这条治理要求实际上不可实施）**：§6 调用式与流水线、§7 退出码表（缺失/非法 → exit 1）、§8 横幅与报告汇总行、§9 模块表、§10 测试 12b。
 
-**本节不界的东西，明写出来**：`--max-runs` 界的是**付费调用**，不界事件追加。一次 sweep 扫到 M 个永久被拒的 run 仍会产生 M 次 `resumeLoop` 调用与 2M～3M 行事件（无退避、无上限、无标记，理由与代价见 §6），**这一笔具名传给 L5**（§13）。
+**本节不界的东西，明写出来**：`--max-runs` 界的是**付费调用**，不界事件追加。**⚠️ 就地更正：「界的是付费调用」这半句与本节上方「N 不等于付费调用次数（第四轮更正）」矛盾，按那条更正，`--max-runs N` 本身界的是进入 `runLoopFromState` 的 run 数，付费调用的真实上界是 `N × maxAttempts`，不是 N。「不界事件追加」这半句不受此更正影响，今天仍然成立，是本处交给 L5 的实质内容。** 一次 sweep 扫到 M 个永久被拒的 run 仍会产生 M 次 `resumeLoop` 调用与 2M～3M 行事件（无退避、无上限、无标记，理由与代价见 §6），**这一笔具名传给 L5**（§13）。
 
 ## 13. 继承债与不做的事
 
