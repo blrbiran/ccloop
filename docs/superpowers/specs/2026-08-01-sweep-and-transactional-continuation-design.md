@@ -1028,7 +1028,7 @@ grep -nF -A14 'export async function writeBoundaryArtifacts(' src/persistence/fi
 
 **正确的理由**：本层之后，赢家路径**根本不再调用**这个函数（`reconciliationRecord` 传 `undefined`），输家路径的调用形态与今天逐字节相同。**两侧都不需要改它的代码**，所以结论「代码零改动」仍然成立，只是靠的是另一条依据。（**若将来有人改回 §4.3 否决过的方案 (b)，即赢家继续补写 reconciliation，本段理由要跟着改回早退论证。**）
 
-**Amended（计划阶段裁定三，落在此处）：上面那条「理由已过时」的注只否定了理由，没有否定「代码零改动」这个断言本身——断言本身也已被推翻。** `docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md:225`–`:229`（裁定三）逐字：「§4.6『……代码零改动』这句话为假，予以推翻」「裁定：改 §4.6 那句话，不去为了保住『零改动』而把整块判定上移」。今天代码已按裁定二落地：`preserveSuccessfulReconciliationIfNeeded`（`src/persistence/fileStore.ts:392`–`:395`）返回类型是判别式联合 `Promise<ReconciliationWriteDecision>`；计划记录的改动前形态是 `Promise<ReconciliationRecord>`（`plan:231`）。函数确实改了，「代码零改动」在今天不成立。
+**Amended 2026-08-06：上面那条「理由已过时」的注只否定了理由，没有否定「代码零改动」这个断言本身——断言本身也已被推翻（计划阶段裁定三，落在此处）。** `docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md:225`–`:229`（裁定三）逐字：「§4.6『……代码零改动』这句话为假，予以推翻」「裁定：改 §4.6 那句话，不去为了保住『零改动』而把整块判定上移」。今天代码已按裁定二落地：`preserveSuccessfulReconciliationIfNeeded`（`src/persistence/fileStore.ts:392`–`:395`）返回类型是判别式联合 `Promise<ReconciliationWriteDecision>`；计划记录的改动前形态是 `Promise<ReconciliationRecord>`（`plan:231`）。函数确实改了，「代码零改动」在今天不成立。
 
 ```bash
 grep -nF -A4 'async function preserveSuccessfulReconciliationIfNeeded(' src/persistence/fileStore.ts

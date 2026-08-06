@@ -29,6 +29,12 @@ implementation defect. Index:
   changed the code underneath them. Amended 2026-07-30 by that branch. The
   original rows are annotated in place, not rewritten: they record why §8.1's
   ruling exists, and that ruling still stands.
+- **(k)** §2 item 6 — **"discharge any of the three debts bequeathed to L5" is
+  stale, and unlike (a)–(i) this is not a document defect.** It was accurate on
+  2026-07-28; the 2026-07-29 debt-attribution ruling then reattributed debts 1
+  and 3 to L3, leaving only debt 2 for L5. Amended 2026-08-06.
+- **(l)** §13 — the same "Debts 1–3 are bequeathed to L5" claim, restated where
+  the inherited-debts section opens. Amended 2026-08-06, same ruling as (k).
 
 Layer position: L2 in the ownership-and-coordination stack. Parent design:
 `2026-07-22-ownership-and-reconciliation-boundaries-design.md` §17 item 2.
@@ -57,7 +63,7 @@ This layer does **not**:
 6. discharge any of the three debts bequeathed to L5 (§13);
 7. modify L1 or L1b code, including the lease gate and the write paths.
 
-*Amended (k) — item 6's "three debts" is stale. The 2026-07-29 debt-attribution
+*Amended 2026-08-06 (k) — item 6's "three debts" is stale. The 2026-07-29 debt-attribution
 ruling (`docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md:246`,
 `:248`) reattributed debt 1 to L3 (it was misdescribed as unowned reconciliation
 synthesis; the real defect is cross-file transactional) and debt 3 to L3, and
@@ -477,7 +483,7 @@ not make any of them more reachable — a direct consequence of choosing discove
 over triggering: a read-only scanner adds no caller to any of the affected paths.
 Debt 4 is new, and is recorded by this layer rather than taken by it.
 
-*Amended (l) — "Debts 1–3 are bequeathed to L5" is stale. The 2026-07-29
+*Amended 2026-08-06 (l) — "Debts 1–3 are bequeathed to L5" is stale. The 2026-07-29
 debt-attribution ruling (`docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md:246`,
 `:248`) moved debt 1 to L3 (reattributed from "unowned reconciliation synthesis"
 to a cross-file transactional defect) and debt 3 to L3. Neither item 1 nor item
