@@ -572,7 +572,23 @@ Task 3: complete (commits ce934c4..6a714b1, review clean; 4 minor deferred 见�
   三个任务各一名独立评审员、各一轮修复环、各一次 scoped 再评审；
   整分支评审一名（opus，未参与过任何一条）＋ 最终 scoped 再评审一名。**全程无实施者自证。**
 
-  **门尚未开** —— 合并需人明确下指令，结论写在 merge 的主题行（本仓库铁律）。
+  *** **门已开：`e42e062`** —— 人于 2026-08-07 逐字下令「1. 合并 / 2. 工作区产物入库 / 3. 下一步先收口」。 ***
+  合并是 `--no-ff` merge，结论在主题行
+  （`GATE-PKG3 PASSED: doc errata round (T1-T3), independent review per task, whole-branch review, 0 Critical`），
+  `git log --merges --format='%h %cd %s'` 能枚举到它（本仓库验收判据只看 merge 的主题行）。
+  产物入库在 `8190efb`（15 份 `.md` 强制入库；**`review-package-*.txt` 有意不入库** ——
+  它们是可从 git 区间重生成的评审 diff，本仓库既有立场是评审 diff 不 tracked）。
+
+  **合并前 main 状态自查**：本地 `4f3b790` = 合并基点，`git ls-remote` 远端 `9cda341`
+  （落后本会话那一笔，未 push），**没有会话外推进**。
+
+  **合并后在 main 上复跑（控制器亲跑，未过滤）**：
+    RUN 路径 = `/Users/biran/code/skills/loop/ccloop`
+    Test Files 30 passed (30) / Tests 514 passed (514) / **TEST_EXIT=0** / 17.63s
+  **不继承分支的绿。**
+
+  **分支 `docs/pkg3-errata` 保留，未删** —— 删分支需单独授权（本仓库铁律）。
+  **未 push** —— 本会话从未跑过 `git push`。
 
   **合并前终验（控制器亲跑，未过滤，`rtk proxy` 单条命令）：**
     RUN 路径 = `/Users/biran/code/skills/loop/ccloop`（vitest 首行）
