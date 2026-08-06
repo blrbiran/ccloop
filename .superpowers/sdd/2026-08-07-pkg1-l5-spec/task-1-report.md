@@ -115,17 +115,24 @@ dad8a14 2026-08-02 feat(fileStore): make reconciliation-record.json the third fi
 **五份门报告（`.md`）全部为 0**；唯一非零的是一份测试 diff，不是门报告。**brief 此项属实。**
 
 **命令 13** —— `grep -rn 'writeOwnerTransferRecord' src/ tests/`
-→ `src/` **仅 1 行**（`fileStore.ts:689` 定义，零生产调用者，仍 `export`）；
-**`tests/` 共 22 处调用**（fileStore.test.ts 15、runLoop.integration.test.ts 2、zeroWrite.test.ts 3、import 2）。
+→ `src/` **仅 1 行**（`fileStore.ts:689` 定义，零生产调用者，仍 `export`）。
+`tests/` 一侧的计数**须先给判别式**（修复环 1 重跑，原「22」在两个判别式下都不成立）：
+`grep -ro 'writeOwnerTransferRecord' tests/ | wc -l` → **23**（符号出现）；
+`grep -ro 'writeOwnerTransferRecord(' tests/ | wc -l` → **21**（调用点）；
+差额 2 = 两处 import（`fileStore.test.ts:23`、`zeroWrite.test.ts:22`）。**即 23 = 2 import + 21 调用。**
 
 --------------------------------------------------------------------------------
 ## 3. 我的 concern
 --------------------------------------------------------------------------------
 
 **C1（brief 任务 E 的一句前提不准确，已原样上报，未自行改判据）**
+> ⚠️ **Amended 2026-08-07（修复环 1）**：本条原写「22 处调用」，**该数字错误**，
+> 在两个判别式下都不成立 —— 符号出现 **23**、调用点 **21**、差额 2 为两处 import。
+> 详见下方「修复环 1」I2。**本条结论（全是 fixture、无一断言那条约束）经复核仍为真。**
+
 brief 逐字写「今天该函数**零生产调用者、仍 `export`、无任何测试或 lint 钉住它**」。
-前两项实测属实；**第三项「无任何测试」不准确** —— `tests/` 里有 **22 处**调用（命令 13）。
-准确的说法是：**这 22 处全部是把它当 fixture 用于构造场景，没有任何一处断言 §10 第 3 条那条约束本身**
+前两项实测属实；**第三项「无任何测试」不准确** —— `tests/` 里有 **21 处**调用（命令 13，判别式见修复环 I2）。
+准确的说法是：**这 21 处调用全部是把它当 fixture 用于构造场景，没有任何一处断言 §10 第 3 条那条约束本身**
 （「生产不得走这个函数」）。「无测试」与「无测试钉住那条约束」是两回事。
 我在 spec §6.1 按**后者**写，并显式标注了这一区分，**没有沿用 brief 的措辞**。
 这不影响任务 E 的结论（RISK-1 依然成立，且成立得更精确）。
@@ -183,3 +190,89 @@ CLAUDE.md Rule 6 的每任务 12,000 token 预算**已被突破**。主因是一
    其依据是**两份委任状的逐字原文 ＋ `cleanupStatus` 的源码实测**，
    **不是对扫描员 2 报告 §4 的逐条复核** —— 那一步我因预算已破而跳过了。
    **若评审员要验 §3.2 的完备性，这是我证据链最薄的一处，请优先撞这里。**
+
+--------------------------------------------------------------------------------
+## 5. 修复环 1/5 —— 处置
+--------------------------------------------------------------------------------
+
+评审结论 0 Critical / 2 Important / 5 Minor，判可合入。本轮按控制器指定**只修三条**
+（I1 / I2 / M4），**其余 4 条 Minor 一字未动**，留给整分支评审分诊。
+`src/` 与 `tests/` 仍一字未动。提交为**另起一笔**，未 amend `fbeb6fd`。
+
+### I1（Important）—— 闭合清单语气 → 默认拒绝　**已修，且按建议改了语气本身**
+
+**我先独立复核了前提，全部成立**：
+- `grep -c 'stash\|backup\|validation-runs'` 对首版 spec → **0**（三类确实读不出禁止）。
+- 扫描员 2 §4.3 的 6 条约束我**逐条回原文重验**，引文逐字准确：
+  - `docs/superpowers/plans/2026-07-17-evidence-first-v1-validation.md:19`
+    `Never delete prior run directories, retained worktrees, stashes, or evidence. Every retry gets a new run ID.`
+  - `docs/superpowers/specs/2026-07-21-docs-and-backlog-truth-alignment-design.md:54`
+    在 `This pass does not include:` 清单内：``deletion or mutation of `.validation-runs/`, backup branches, or stashes;``
+  - `docs/superpowers/specs/2026-07-19-a04-branch-assessment-and-merge-readiness-design.md:55/:57`
+    `preserved real-run evidence ... must not be cleaned or rewritten;`、
+    `backup branch backup/evidence-first-v1-before-memory-history-cleanup and retained stashes must not be deleted or published;`
+  - `2026-07-21-...-stale-boundaries-design.md:231` `- silently clean up retained evidence or workspaces;`
+
+**修法（采纳了「同时改掉闭合语气本身」这条建议，没有只补三类）**：
+1. §3.2 重构为 §3.2.1 + §3.2.2，新增承重规则 **INV-4：L5 只允许删除 §4.2 明确授权的那一个面，
+   其余一切默认保留**。理由写进正文：**保留清单漏一项 = 数据丢失，授权清单漏一项 = GC 少干活，
+   两种错误代价不对称**，故把完备性压在只有一个面的授权侧，而不是压在会漏的保留侧。
+2. §3.2.2 补入第 5–7 条（三类既有保留物），并**明写它是下界非穷举**，
+   逐字标注**我的检索面未覆盖 `tests/` / `validation/` / `reference/`**，也未穷举 `docs/`。
+3. §4.5 同样去掉清单语气，改成「问『§4.2 授权了吗』，不是『§4.5 提到了吗』；
+   **§4.5 没提到不构成授权**」。
+
+⚠️ **我没有写下「已覆盖全部」这类断言**，§3.2.2 末段逐字写着
+「第 5–7 条只把下界抬高了，没有把它变成上界」。
+
+### I2（Important）—— 计数错误，两处同错　**已修**
+
+独立重跑，两个判别式：
+```
+grep -ro 'writeOwnerTransferRecord' tests/ | wc -l    → 23
+grep -ro 'writeOwnerTransferRecord(' tests/ | wc -l   → 21
+```
+差额 2 为两处 import（`tests/persistence/fileStore.test.ts:23`、`tests/registry/zeroWrite.test.ts:22`）。
+**控制器所报数字全部复现，我原写的「22」在两个判别式下都不成立。**
+
+修法：spec §6.1 改为**先给判别式再给数字**（23 = 2 import + 21 调用），正文取 **21 处调用**，
+并就地加一条 `Amended 2026-08-07` 记明坏的只是数字、RISK-1 结论未变。
+**报告 C1 那处也已就地勘误**（见 §3 C1 顶部）。
+
+### M4（Minor，控制器折入）—— INV-1「今天零强制」搬进 spec　**已修**
+
+复核前提：`grep -n '零强制\|没有任何机制强制'` 对首版 spec → **exit 1，零命中**，属实。
+
+修法：在 §1.3 末尾就地补入一段，逐字写明 INV-1 **今天没有任何机制强制**、
+**与 §6.1 那条注释完全同型**、**本文无法宣称自己免疫于它所批评的问题**，
+并给出诚实表述「本 spec 是约束的载体，不是约束的执行机制」。
+`grep -c '没有任何机制强制'` → **1**，缺口已具名。
+
+### 我自己在修复正文里发现并修掉的一处缺陷
+
+本仓库记录「十六波修复十六次自带缺陷，没有一次是作者自己发现的」。本轮自查发现一处并已修：
+§3.2.2 第 6 条我最初把含反引号的原文嵌进反引号内
+（``` `deletion or mutation of `.validation-runs/`, ...` ```），**嵌套反引号会破坏 Markdown 渲染**。
+已改为块引用。**这不是事实错误，是渲染缺陷** —— 但按本仓库标准，引文渲染坏了就等于引文不可核。
+
+### 一致性自查（改完之后跑的）
+
+- `grep -n '四类'` → 仅 1 处，位于 §3.2 解释「首版曾写成四类」的历史陈述，**是有意保留的**。
+- `grep -n '22 处\|22处' <spec>` → **仅 1 处**（`:467`），位于 I2 的勘误注内，**是有意保留的历史陈述**。
+  ⚠️ 本条最初写成「仅 1 处」而未限定检索面 —— 加上本报告后全仓共 **3 处**
+  （spec `:467`、报告 `:129` 勘误注、本行自身）。**这是我在自查里写下的第二个无限定断言，
+  已就地限定检索面。**（本仓库铁律：下全称/计数断言前先确认 grep 面覆盖断言范围。）
+- `grep -c 'TBD'` → 0。
+- `git status --porcelain -- src/ tests/` → 空。
+
+### 我不同意 / 需要控制器注意的
+
+**无不同意项** —— 三条判定我都独立复核，前提全部成立，未发现判错。
+
+但有两点请注意：
+1. **I1 修完之后，spec 的完备性依赖点转移了。** 原来依赖「§3.2 那张表是否列全」，
+   现在依赖「**§4.2 那个授权面是否描述准确**」。这是**有意的**收窄（一个面比一张开放清单可穷举），
+   但它意味着**下一轮评审应该去撞 §4.2，而不是继续撞 §3.2**。
+2. **INV-4 是本轮新增的不变式，它没有进 §8.2 的验收表。** 我没有动 §8.2，
+   因为控制器只授权修三条、且 §8.2 属于未被点名的部分。
+   **这是一个我知道存在、但本轮有意未修的缺口，明写在此**，请控制器决定是否在后续轮次补。
