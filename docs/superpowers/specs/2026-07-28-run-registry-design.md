@@ -4,6 +4,18 @@ Status: approved 2026-07-28. Amended 2026-07-28 in eight places (a)–(h) after 
 adversarial review against the code; every amendment is a document defect, not an
 implementation defect. Index:
 
+**Amended 2026-08-06 — note on the Status line above**: three things in it are
+stale; the line above is left as-is. **Date**: "Amended 2026-07-28" no longer
+bounds this Index — (j) is dated 2026-07-30, and (k)/(l) are dated 2026-08-06.
+**Count**: "in eight places (a)–(h)" is stale — the Index below now runs to
+(l), twelve entries, not eight. **Qualifier**: "every amendment is a document
+defect, not an implementation defect" no longer holds without exception — (j)
+and (k) each say explicitly, in their own entries, "unlike (a)–(i) this is not
+a document defect"; (l) shares (k)'s ruling and is the same in kind. The Index
+below is itself the authoritative, continuously-maintained list (see (i) and
+(j)'s own provenance notes); this note exists only so the summary line above
+it is not read as still accurate.
+
 - **(a)** §4 — the recognition rationale was factually wrong; `owner-record.json`
   is not written by `initializeRunFiles`. Marker set also gained a fifth entry.
 - **(b)** §6.2 / §6 — overstated versioning precedent; `eligibleForContinuation`
