@@ -875,6 +875,8 @@ grep -nF -A5 'const appendLeaseEvent = async' src/controller/leaseHeartbeat.ts
 
 **为什么 `appendEvent` 吞而回调不吞（两者危险同构、处置相反，理由必须写进注释）**：差别在**谁能修好它**。回调的实现**在本层控制范围内**（§9 定死为一次数组 push，不做 I/O），所以它抛出只可能是**编程错误**，必须显眼地炸出来；`appendFile` 的 I/O **不在**任何人的控制范围内，它抛出是**环境事实**，把它炸成 attempt failed 只是用一个更大的错误盖住一个更小的。
 
+**Amended 2026-08-05：上段括号里「§9 定死为一次数组 push，不做 I/O」在今天为假 —— §9 那一行已被人裁改成「当场 `options.stderr(...)`（含单行折叠），不得抛出」**（见 `docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md` §9 模块表 `src/sweep/sweepRuns.ts` 那一行下方的 `Amended 2026-08-05`）。这纠正的是*本计划*的缺陷，不是实现的缺陷，**且上段的结论一个字不改**：`appendEvent` 吞、回调不吞，这个不对称的处置仍然成立。**读作**：回调之所以仍在**本层控制范围内**，今天的理由不再是「它不做 I/O」（它今天当场写 stderr），而是**它的落点 `options.stderr` 是调用方注入的槽**（`SweepOptions.stderr`），回调体本身只有一次同步调用 —— 不碰文件系统、不 await。**因此它抛出仍然只可能是编程错误，必须显眼地炸出来**；而 `appendFile` 的 I/O 不在任何人的控制范围内，它抛出是**环境事实**。**上段论点的支点是「谁能修好它」，不是「回调做不做 I/O」** —— 支点没动，只有描述它的那半句要按今天的措辞重述。**本段末句「理由必须写进注释」仍然有效**：落地的那段注释在 `src/persistence/fileStore.ts` 的 `writeBoundaryArtifacts` 内，已按本条同步。
+
 **测试要求（§10 测试 6f，三条子用例，缺一不可，各自独立的 `it`）：**
 
 - **(i) 放行方向**：fixture 目录**只有** `owner-record.json`（可读、完整），**没有** `owner-transfer.json`；以 `eligibleForContinuation: false` 的 reconciliation 直接调导出的 `writeBoundaryArtifacts`。断言 `reconciliation-record.json` **被写下**、内容是传入的那份。
@@ -1002,6 +1004,8 @@ git commit -m "feat(fileStore): fail closed on unreadable transfer artifacts, ab
 | `resumeLoop` | 纯透传。**既有 14 处调用点全部传 2 个实参，零改动** |
 
 **回调不得抛出，且本层刻意不给它包 try/catch。** 它若抛出会从 `writeBoundaryArtifacts` 一路逃到 `runLoopFromState`，把一次保护性放弃升级成 attempt 失败——正是人裁明令禁止的那件事。**包一层 `try{}catch{}` 会静默吞掉它，违反 Rule 12。** 本层的处置是把「不得抛出」定成**回调的契约**，并把 sweep 侧的实现定死为**一次数组 push**（不做 I/O、不格式化），使违约成为一个**显眼的编程错误**而不是一条被吞的异常。
+
+**Amended 2026-08-05：上段「把 sweep 侧的实现定死为一次数组 push（不做 I/O、不格式化）」已被人裁推翻 —— 定死的是「当场 `options.stderr(...)`，含 `\r?\n` 单行折叠」。** 这纠正的是*本计划*的缺陷，不是实现的缺陷。**上段其余部分逐字不变、且仍然成立**：「不得抛出」仍是回调的契约，回调抛出仍会一路逃到 `runLoopFromState` 把一次保护性放弃升级成 attempt 失败，本层仍然**刻意不包 try/catch**（包了就是静默吞掉一个编程错误，违反 Rule 12）。**读作**：「……并把 sweep 侧的实现定死为**当场 `options.stderr(...)`（含单行折叠），不做文件 I/O、不 await**」。**「不格式化」这一句今天不能照留**：折行本身就是格式化，且人裁明令它在回调里当场做。完整理由见本计划 `### Task C3`「落点」一节的 `Amended 2026-08-04`；spec 侧同一处见 `docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md` §4.3「回调不得抛出」那段下方的 `Amended 2026-08-05`。
 
 **两个调用点都要改（§9 点名）：** `persistBoundaryAnalysis` 的两个调用点里，**其中一个今天只传 3 个实参**，要写成 `(runDir, state, heartbeat, undefined, cb)`。锚点：
 
@@ -1733,6 +1737,14 @@ $ rtk proxy "grep -cF 'cannot read run artifacts' tests/persistence/fileStore.te
   **变异二：退回「不路由」（回调传了但 sweep 不打印）→ (1) 必须红。**
 - **测试 12d(ii) — 一次后续抛出不得吞掉这条备注**（这是**否决上行方案的那条理由的护栏**）：替身**先触发 `onAdopted`、再触发 `onReconciliationWriteAbandoned`、再抛出**。断言 stderr **同时**有那条 `note` 行**和**该 run 的 `error` 行。
   **变异：把备注的落盘时机从「回调当场记入 sweep 的数组」改成「`resume` 正常返回后才记」→ 本条必须红**（抛出路径上永远走不到那一步）。**这个变异正是上行方案的失效形状，用一行生产改动表达出来。**
+
+  **Amended 2026-08-05：本条变异的基线「回调当场记入 sweep 的数组」今天不存在 —— 回调当场做的是一次 `options.stderr(...)`，落点是 stderr 不是数组。** 这纠正的是*本计划*的缺陷，不是实现的缺陷。**⚠️ 本条不是描述，是一条会被照着执行的指令**：谁按字面复现它，会先去构造一个今天根本不存在的基线，**变异于是钉不住任何东西，而执行者会以为自己走完了三步判据**。**这条变异要钉的性质没有变**（记录必须在**回调当场**离开 sweep，而不是等 `resume` 返回之后才记），**变的只是它的落点**。今天该怎么做这条变异，逐字写出来：
+
+  - **变异动作**（只动生产代码 `src/sweep/sweepRuns.ts`，一处）：把 `onReconciliationWriteAbandoned` 回调体里那次当场的 `options.stderr(...)` 改成把该行 push 进一个声明在 `await resume(...)` **之外**的局部数组，并在 **`await resume(...)` 正常返回之后**才把数组里的行逐条 `options.stderr(...)` 出去。
+  - **期望**：上面 Step 5 的第二条测试（裸 `it` 名 `keeps the abandonment note on stderr even when the run throws afterwards`，即 12d(ii)）**必须红** —— 该用例的替身 `resume` 在触发回调之后 reject，冲出那一步永远走不到，`note` 行整条消失。
+  - **实测（写本条勘误时当场跑过，未过滤）**：变异后 `npx vitest run tests/sweep/sweepRuns.test.ts` → `Tests  1 failed | 12 passed (13)`，唯一失败的就是 12d(ii)，失败形态是 `expect(h.stderrLines).toEqual([...])` 只收到 2 行，缺的正是 `note  <path>  reconciliation_write_abandoned  <detail>` 那一行。**12d(i) 保持绿是正确的、不是漏杀**：正常返回路径上那次冲出照样发生，本条变异钉的本来就只有抛出路径。
+
+  **「这个变异正是上行方案的失效形状」这句不变、且仍然成立。** 落点改写的完整理由见本节上面「落点」一条的 `Amended 2026-08-04`。
 - **⚠️ 12d(i) 与 (ii) 钉的是终态**（`sweepRuns` 返回之后 stderr / stdout 的最终文本与 `outcome` 列的最终取值），**不是「回调在第几个 `await` 之后被调用」**。把替身的执行顺序换掉（例如让它先抛出再触发回调），这两条的断言仍然各自成立或各自失败。
   **（12d 的另两条子用例 (iii)(iv) 是*过程*断言且刻意如此，它们在 A7/A8，不在本任务。不要把它们弱化成终态断言——那恰好放掉排序这唯一的护栏。）**
 
@@ -2004,6 +2016,8 @@ git commit -m "test(sweep): pin the exact write surface of a gate-refused run an
 | `SweepOptions` / `SweepDeps` / `sweepRuns(options, deps?)` | C1 | C2（`main` 调用）、C3（格式）、C4（真实 `resume`） | ✅ |
 | `createAdapter: () => RuntimeAdapter` | C1 | C2（闭包由 `main` 构造） | ✅ |
 | `registerStopHandlers(signal, options?): () => void` | C2 | C2 测试 13b | ✅ |
+
+**Amended 2026-08-05：上表 `writeBoundaryArtifacts(runDir, artifacts, options?)` 第三参那一行「使用处」格里的「C3（回调=数组 push）」已被人裁推翻 —— C3 侧的回调是**当场 `options.stderr(...)`**，不是数组 push。读作「C3（回调=当场写 stderr）」。** 这纠正的是*本计划*的缺陷，不是实现的缺陷。**该行的 `✅` 与它的判据不变、且仍然成立**：这一行核对的是**回调签名**在三处是否逐字相同（`(detail: string) => void`），而签名与回调体把记录落到哪里**一个字都不相干** —— 被推翻的是括号里那句对**回调体**的描述，不是这一行的一致性结论。**特意点明**：不要因为这句括号被推翻就去改那个 `✅`，那会把一条成立的一致性结论误标成不一致。完整理由见本计划 `### Task C3`「落点」一节的 `Amended 2026-08-04`。
 
 **发现并就地修掉的一处不一致**：spec §5.4 写「信号作为**第七个位置参数**」、§4.3/§9 写「**不新增位置参数**，搭同一个可选参数对象」。本计划采用的形状（第七个位置参数**是一个对象**，B2/C1 往里加**键**）**同时满足两种读法**，已在 A8 的 Interfaces 里就地写明。
 

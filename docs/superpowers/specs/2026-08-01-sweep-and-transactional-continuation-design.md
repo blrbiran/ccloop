@@ -206,7 +206,7 @@ grep -nF -A4 'async function finalizePendingOwnerTransfer(' src/persistence/file
 
 #### 4.0.4 对裁决记录「更窄」判断的回应（第二轮更正：初稿伪造了论证结构）
 
-**第一轮修订在这里写错了**，且错法是本仓库最忌讳的一种：它写「裁决记录的『这条路比裁决时判断的更窄』有**两条**依据：(a) `newOwnerEpoch` 的排序主张；(b) `assertHeld` 是写者」，然后宣布 §4.1 驳倒了 (a)。**(a) 是本 spec 自己造出来再打倒的——裁决记录从未把它列为「更窄」的依据。** §16 第 11 行还把这个伪结构固化进了修订索引，会被 L5 继承。
+**第一轮修订在这里写错了**，且错法是本仓库最忌讳的一种：它写「裁决记录的『这条路比裁决时判断的更窄』有**两条**依据：(a) `newOwnerEpoch` 的排序主张；(b) `assertHeld` 是写者」，然后宣布 §4.1 驳倒了 (a)。**(a) 是本 spec 自己造出来再打倒的——裁决记录从未把它列为「更窄」的依据。** §16 第 11b 行还把这个伪结构固化进了修订索引——该行已在第二轮就地更正，并自带「不要把这一行当成『已修好』继承下去」的警告，今天不存在会被 L5 无察觉继承的风险。
 
 对着裁决记录原文重读，**那两段是两件事**：
 
@@ -670,6 +670,8 @@ grep -nF 'export async function resumeLoop(' src/controller/resumeLoop.ts
 2. **语义错位**：`RunState` 是 run 的**状态**，而这条事件按人裁**不改变 run 的终态**。把它塞进 `RunState` 就是在状态对象里挂一条与状态无关的通知，下一位读者会误以为它是终态的一部分。
 3. **（决定性）(a) 在最需要它的那条路径上会把消息丢掉。** §6 已实测：`runLoopFromState` 的 `while (true)` 顶端两个 `await`（`:974` `writeRunState`、`:977` `affirmNow`）**不在任何 try 内**，可以在若干次 attempt 之后直接抛出、逃出 `resumeLoop`。**一旦抛出，返回值不存在，(a) 携带的那条信息随之蒸发**——而那正是「这个 run 出了事」最需要 stderr 的时刻。(b) 的回调在事件发生的**当场**就把记录写进了 sweep 自己的数组里，后续无论 run 正常返回还是抛出，记录都已在 sweep 手上。
 
+   **Amended 2026-08-05：本条最后一句的落脚点「记录写进了 sweep 自己的数组里 / 记录都已在 sweep 手上」在今天为假 —— 回调当场做的是一次 `options.stderr(...)`，记录当场就*离开了本进程*，从来没有停在 sweep 手上。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。**⚠️ 结论不动**：本条是「为什么选 (b) 不选 (a)」那条决定性论证，**(b) 仍然是被选中的方案，选型与本条前半段（(a) 在 `runLoopFromState` 顶端抛出时消息蒸发）一个字不改** —— 腐的只是论据的**落脚点**。**读作**：(b) 今天之所以仍然对，是因为回调在事件发生的当场就把记录**写出了本进程**（stderr），因此后续无论 run 正常返回还是抛出，那条记录**都已经落在 stderr 上、cron 的「有 stderr 即告警」已经能为它响**。**这不是同义改写，两种说法的强度不同**：「已在 sweep 手上」把可见性押在「进程活到循环结束、数组被冲出」上，而**今天的形状根本不押这一注** —— 一次 `--max-runs 50` 的 sweep 在第 40 个 run 被 SIGKILL 时，「在 sweep 手上」的记录会随进程一起消失，已经写出去的记录不会。**即今天的落脚点比原句更强，不是更弱。** 落点改写的完整理由见本文档 §9 模块表 `src/sweep/sweepRuns.ts` 那一行下方的 `Amended 2026-08-05`；实现见 `src/sweep/sweepRuns.ts` 的 `onReconciliationWriteAbandoned`。
+
 **第三步：通道逐层定死（四层，每一层都只是「新增一个可选项」，零破坏性改动）。**
 
 | 层 | 今天 | 改成 | 该层的失败语义 |
@@ -679,6 +681,8 @@ grep -nF 'export async function resumeLoop(' src/controller/resumeLoop.ts
 | `runLoop.runLoopFromState` | `(contract, runDir, adapter, initialLoopState, heartbeat?, leaseLoss?)`（`:953`–`:960`） | **不新增位置参数**：搭 §5.4 已经要加的那个可选参数对象（`stopRequested` 走的同一个），加一个键 `onReconciliationWriteAbandoned?` | 纯透传 |
 | `controller.resumeLoop` | `(runDir, adapter)`（`:87`） | **不新增位置参数**：§9 已定的可选参数对象从 `{ stopRequested?, onAdopted? }` 扩为 `{ stopRequested?, onAdopted?, onReconciliationWriteAbandoned? }` | 纯透传。既有 14 处调用点全部传 2 个实参，零改动 |
 | `sweep.sweepRuns` | — | 为**当前这个 run** 传一个闭包，把 `{ path, detail }` push 进本次 sweep 的备注数组 | 见下面的「回调不得抛出」 |
+
+**Amended 2026-08-05：上表 `sweep.sweepRuns` 那一行「改成」格里的「把 `{ path, detail }` push 进本次 sweep 的备注数组」已被人裁推翻 —— 回调改为在其中*当场* `options.stderr(...)`，落点不是 sweep 的数组而是 stderr。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。**读作**：该格改为「为**当前这个 run** 传一个闭包，把 `note  <path>  reconciliation_write_abandoned  <detail>` **当场写到 stderr**（`detail` 的 `\r?\n` 在回调里当场折成空格）」。**该行右侧「见下面的『回调不得抛出』」不变、且仍然成立**：回调仍然不得抛出，本层仍然刻意不包 try/catch。完整理由见本文档 §9 模块表 `src/sweep/sweepRuns.ts` 那一行下方的 `Amended 2026-08-05`。
 
 **`writeBoundaryArtifacts` 的既有调用点全部安全**（可选参数，两参调用照旧合法）：
 
@@ -690,6 +694,8 @@ grep -cF 'writeBoundaryArtifacts(runDir, {' tests/persistence/fileStore.test.ts
 ```
 
 **回调不得抛出，且本层刻意不给它包 try/catch。** 它若抛出，会从 `writeBoundaryArtifacts` 一路逃到 `runLoopFromState`，把一次保护性放弃升级成 attempt 失败——**正是人裁明令禁止的那件事**。包一层 `try{}catch{}` 会静默吞掉它，违反 Rule 12。**本层的处置是把「不得抛出」定成回调的契约，并把 sweep 侧的实现定死为一次数组 push（不做 I/O、不格式化）**，使违约成为一个显眼的编程错误而不是一条被吞的异常。
+
+**Amended 2026-08-05：上段「把 sweep 侧的实现定死为一次数组 push（不做 I/O、不格式化）」已被人裁推翻 —— 定死的是「当场 `options.stderr(...)`，含 `\r?\n` 单行折叠」。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。**上段其余部分逐字不变、且仍然成立**：「不得抛出」仍是**回调的契约**，回调抛出仍会从 `writeBoundaryArtifacts` 一路逃到 `runLoopFromState` 把一次保护性放弃升级成 attempt 失败，本层仍然**刻意不给它包 try/catch**（包了就是静默吞掉一个编程错误，违反 Rule 12）。**读作**：「……并把 sweep 侧的实现定死为**当场 `options.stderr(...)`（含单行折叠），不做文件 I/O、不 await**」。**注意「不格式化」这一句今天不能照留**：折行本身就是格式化，且人裁明令它在回调里当场做。完整理由见本文档 §9 模块表 `src/sweep/sweepRuns.ts` 那一行下方的 `Amended 2026-08-05`（缓冲不换来本文档要求的任何性质，却引入一条 SIGKILL 下静默丢失告警的失效模式）。
 
 ##### ⚠️ 同一个放弃块里的 `appendEvent` 今天会把这条放弃升级成 attempt failed —— 必须 swallow（第六波，Critical）
 
@@ -749,6 +755,8 @@ sed -n '62,62p' src/controller/leaseHeartbeat.ts
 3. **Rule 11「符合既有约定」**——判例就在**同一个仓库、同一个函数（`appendEvent`）、同一条理由**，不是从别处类比来的。
 
 **⚠️ 为什么 `appendEvent` 吞、而回调不吞（两者危险同构，处置却相反 —— 理由第六波补写）**：`writeBoundaryArtifacts` 在本层新增的写/追加动作恰好只有这两个。差别在**谁能修好它**：回调的实现**在本层的控制范围内**（§9 已把它定死为一次数组 push，不做 I/O），所以它抛出只可能是**编程错误**，必须显眼地炸出来；`appendFile` 的 I/O **不在**任何人的控制范围内，它抛出是**环境事实**，把它炸成 attempt failed 只是用一个更大的错误盖住一个更小的。**第五波把两者一个判成待修缺陷、一个判成契约而没写理由，这一段是补的那个理由。**
+
+**Amended 2026-08-05：上段括号里「§9 已把它定死为一次数组 push，不做 I/O」在今天为假 —— §9 那一行已被人裁改成「当场 `options.stderr(...)`（含单行折叠），不得抛出」**（见本文档 §9 模块表 `src/sweep/sweepRuns.ts` 那一行下方的 `Amended 2026-08-05`）。这纠正的是*本文档*的缺陷，不是实现的缺陷，**且上段的结论一个字不改**：`appendEvent` 吞、回调不吞，这个不对称的处置仍然成立。**读作**：回调之所以仍在**本层的控制范围内**，今天的理由不再是「它不做 I/O」（它今天当场写 stderr），而是**它的落点 `options.stderr` 是调用方注入的槽**（`SweepOptions.stderr`），回调体本身只有一次同步调用 —— 不碰文件系统、不 await。**因此它抛出仍然只可能是调用方的编程错误，必须显眼地炸出来。** 而 `appendFile` 的 I/O 不在任何人的控制范围内，它抛出是**环境事实**。**上段论点的支点是「谁能修好它」，而不是「回调做不做 I/O」**——支点没动，只有描述它的那半句要按 §9 今天的措辞重述。（源码里同形的那段注释在 `src/persistence/fileStore.ts` 的 `writeBoundaryArtifacts` 内，已同步。）
 
 **第四步：它落在 sweep 报告的哪一格 —— 写死。**
 
@@ -1020,6 +1028,8 @@ grep -nF -A14 'export async function writeBoundaryArtifacts(' src/persistence/fi
 
 **正确的理由**：本层之后，赢家路径**根本不再调用**这个函数（`reconciliationRecord` 传 `undefined`），输家路径的调用形态与今天逐字节相同。**两侧都不需要改它的代码**，所以结论「代码零改动」仍然成立，只是靠的是另一条依据。（**若将来有人改回 §4.3 否决过的方案 (b)，即赢家继续补写 reconciliation，本段理由要跟着改回早退论证。**）
 
+**Amended 2026-08-06：上面那条「理由已过时」的注只否定了理由，没有否定「代码零改动」这个断言本身——断言本身也已被推翻（计划阶段裁定三，落在此处）。** `docs/superpowers/plans/2026-08-02-sweep-and-transactional-continuation.md:225`–`:229`（裁定三）逐字：「§4.6『……代码零改动』这句话为假，予以推翻」「裁定：改 §4.6 那句话，不去为了保住『零改动』而把整块判定上移」。今天代码已按裁定二落地：`preserveSuccessfulReconciliationIfNeeded`（`src/persistence/fileStore.ts:392`–`:395`）返回类型是判别式联合 `Promise<ReconciliationWriteDecision>`；计划记录的改动前形态是 `Promise<ReconciliationRecord>`（`plan:231`）。函数确实改了，「代码零改动」在今天不成立。
+
 ```bash
 grep -nF -A4 'async function preserveSuccessfulReconciliationIfNeeded(' src/persistence/fileStore.ts
 ```
@@ -1141,6 +1151,8 @@ grep -nF -A3 'await heartbeat.assertHeld();' src/controller/runLoop.ts
 ```
 
 **因此一次并发 `stop()` 完全可以在 `writeBoundaryArtifacts` 飞行中 `releaseOwnerLease`。** 改动 A 不覆盖这一段，本层也不覆盖它（覆盖它要么把 artifact 写搬进 span——L1b 刚刚明确否决过——要么另设一层守卫）。**§13 据此把债 3 记为「exclusive span 部分关闭」，span 外那段具名传给 L5。**
+
+**Amended 2026-08-05：上一句对债 3 的归类已被 §19 的 G10 更正。** 债 3 记为**本层关闭**（裁决记录对债 3 要的是显式表态，不是全域关闭，本层已按可接受方式表了态，按裁定它是关闭的）；span 外那段（`writeBoundaryArtifacts` 与其前置 `assertHeld`）是**本轮新发现、从未被任何裁决记录处理过的独立事实，归属应当重新裁**，不是「债 3 的未关闭部分」。完整论证见 §13「债 3 的归类更正」与 §19 的 G10。
 
 ### 5.3 改动 A — `runExclusive` 拒绝
 
@@ -2004,6 +2016,14 @@ grep -rnF 'writeOwnerTransferArtifacts' tests/                                # 
      **变异二：退回第四轮的「不路由」（回调传了但 sweep 不打印）→ (1) 必须红。**
    - **(ii) 一次后续抛出不得吞掉这条备注**（这一条是**否决上行方案的那条理由的护栏**，§4.3）：替身**先触发 `onAdopted`、再触发 `onReconciliationWriteAbandoned`、再抛出**（即 §6 已实测的那条「k 次付费调用已发生、第 k+1 轮循环顶端 `writeRunState` 撞 ENOSPC」时序）。断言：stderr **同时**有那条 `note` 行**和**该 run 的 `error` 行。
      **变异：把备注的落盘时机从「回调当场记入 sweep 的数组」改成「`resumeLoop` 正常返回后才记」→ 本条必须红**（抛出路径上永远走不到那一步）。**这个变异正是上行方案 (a) 的失效形状**，用一行生产改动表达出来。
+
+     **Amended 2026-08-05：本条变异的基线「回调当场记入 sweep 的数组」今天不存在 —— 回调当场做的是一次 `options.stderr(...)`，落点是 stderr 不是数组。** 这纠正的是*本文档*的缺陷，不是实现的缺陷。**⚠️ 本条不是描述，是一条会被照着执行的指令**：谁按字面复现它，会先去构造一个今天根本不存在的基线，**变异于是钉不住任何东西，而执行者会以为自己走完了三步判据**。**这条变异要钉的性质没有变**（记录必须在**回调当场**离开 sweep，而不是等 `resume` 返回之后才记），**变的只是它的落点**。今天该怎么做这条变异，逐字写出来：
+
+     - **变异动作**（只动生产代码 `src/sweep/sweepRuns.ts`，一处）：把 `onReconciliationWriteAbandoned` 回调体里那次当场的 `options.stderr(...)` 改成把该行 push 进一个声明在 `await resume(...)` **之外**的局部数组，并在 **`await resume(...)` 正常返回之后**才把数组里的行逐条 `options.stderr(...)` 出去。
+     - **期望**：测试 **12d(ii)**（裸 `it` 名 `keeps the abandonment note on stderr even when the run throws afterwards`）**必须红** —— 该用例的替身 `resume` 在触发回调之后 reject，冲出那一步永远走不到，`note` 行整条消失。
+     - **实测（写本条勘误时当场跑过，未过滤）**：变异后 `npx vitest run tests/sweep/sweepRuns.test.ts` → `Tests  1 failed | 12 passed (13)`，唯一失败的就是 12d(ii)，失败形态是 `expect(h.stderrLines).toEqual([...])` 只收到 2 行，缺的正是 `note  <path>  reconciliation_write_abandoned  <detail>` 那一行。**12d(i) 保持绿是正确的、不是漏杀**：正常返回路径上那次冲出照样发生，本条变异钉的本来就只有抛出路径。
+
+     **「这个变异正是上行方案 (a) 的失效形状」这句不变、且仍然成立。** 落点改写的完整理由见本文档 §9 模块表 `src/sweep/sweepRuns.ts` 那一行下方的 `Amended 2026-08-05`。
    - **(iii) 产生侧确实调了回调**（`fileStore` 层，直接调导出的 `writeBoundaryArtifacts`，驱动入口同测试 6f）：复用 **6f 子用例 (ii) 的 fixture**（目录有 `owner-transfer.json`、**没有** `owner-record.json`，以 `eligibleForContinuation: false` 的 reconciliation 调用），第三参传一个记录用的回调。断言：**回调恰好被调用 1 次**、参数含那次读失败的 `String(error)`，**且 `writeBoundaryArtifacts` 正常 resolve（不抛）**。
      **变异：只 `appendEvent`、不调回调 → 本条必须红。**
      **⚠️ 顺带钉住 `events.jsonl` 写不进去时的行为**：再加一条子断言——**mock `appendEvent` 抛出时，(a) `writeBoundaryArtifacts` 仍然正常 resolve，(b) 回调仍然已被调用过。**
@@ -2303,7 +2323,7 @@ grep -rnF 'writeOwnerTransferArtifacts' tests/                                # 
 
 **`--max-runs` 的完整落地面（第二轮评审：第一轮只在本节写了它，定义 CLI 形状的五节一次都没提，导致这条治理要求实际上不可实施）**：§6 调用式与流水线、§7 退出码表（缺失/非法 → exit 1）、§8 横幅与报告汇总行、§9 模块表、§10 测试 12b。
 
-**本节不界的东西，明写出来**：`--max-runs` 界的是**付费调用**，不界事件追加。一次 sweep 扫到 M 个永久被拒的 run 仍会产生 M 次 `resumeLoop` 调用与 2M～3M 行事件（无退避、无上限、无标记，理由与代价见 §6），**这一笔具名传给 L5**（§13）。
+**本节不界的东西，明写出来**：`--max-runs` 界的是**付费调用**，不界事件追加。**⚠️ 就地更正：「界的是付费调用」这半句与本节上方「N 不等于付费调用次数（第四轮更正）」矛盾，按那条更正，`--max-runs N` 本身界的是进入 `runLoopFromState` 的 run 数，付费调用的真实上界是 `N × maxAttempts`，不是 N。「不界事件追加」这半句不受此更正影响，今天仍然成立，是本处交给 L5 的实质内容。** 一次 sweep 扫到 M 个永久被拒的 run 仍会产生 M 次 `resumeLoop` 调用与 2M～3M 行事件（无退避、无上限、无标记，理由与代价见 §6），**这一笔具名传给 L5**（§13）。
 
 ## 13. 继承债与不做的事
 
@@ -2700,7 +2720,7 @@ catch 那个「两个 `safeUnlink` 都可能替换正在传播的错误」的错
 
 ## 16. 第一轮修订索引（2026-08-01，三个独立评审员）
 
-初稿的 Critical 级缺陷，逐条对应本文修订处。**本表的第 11 行在第二轮被判定为错误结论，已就地更正（见下面表内注）；其余各行仍然有效。**
+初稿的 Critical 级缺陷，逐条对应本文修订处。**本表的第 11b 行在第二轮被判定为错误结论，已就地更正（见下面表内注）；其余各行（含第 11 行）仍然有效。**
 
 | # | 初稿缺陷 | 修订处 |
 |---|---|---|
@@ -2730,7 +2750,7 @@ catch 那个「两个 `safeUnlink` 都可能替换正在传播的错误」的错
 
 | # | 级别 | 缺陷摘要 | 修订处 |
 |---|---|---|---|
-| F1 | Critical | §4.0 伪造裁决记录的论证结构：把「更窄」说成有两条依据、其中 (a) 被驳倒；实际「更窄」只有一条依据且成立，(a) 是另一条独立否决 | §4.0.4、§16 第 11/11b 行 |
+| F1 | Critical | §4.0 伪造裁决记录的论证结构：把「更窄」说成有两条依据、其中 (a) 被驳倒；实际「更窄」只有一条依据且成立，(a) 是另一条独立否决 | §4.0.4、§16 第 11b 行 |
 | F2 | — | S-3 被命中过一次的过程与解除方式未记录 | §4.0.3 |
 | F3 | Minor | 「裁决记录原文」与「本层就地定义的触发条件」版式未分 | §4.0.1 / §4.0.2 拆节 |
 | F4 | Minor | §4 节首把两处拼接冠以「原文」 | §4 节首（改写为「两处合起来」，各附定位命令） |

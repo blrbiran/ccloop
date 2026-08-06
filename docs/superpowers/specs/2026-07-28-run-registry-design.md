@@ -4,6 +4,18 @@ Status: approved 2026-07-28. Amended 2026-07-28 in eight places (a)–(h) after 
 adversarial review against the code; every amendment is a document defect, not an
 implementation defect. Index:
 
+**Amended 2026-08-06 — note on the Status line above**: three things in it are
+stale; the line above is left as-is. **Date**: "Amended 2026-07-28" no longer
+bounds this Index — (j) is dated 2026-07-30, and (k)/(l) are dated 2026-08-06.
+**Count**: "in eight places (a)–(h)" is stale — the Index below now runs to
+(l), twelve entries, not eight. **Qualifier**: "every amendment is a document
+defect, not an implementation defect" no longer holds without exception — (j)
+and (k) each say explicitly, in their own entries, "unlike (a)–(i) this is not
+a document defect"; (l) shares (k)'s ruling and is the same in kind. The Index
+below is itself the authoritative, continuously-maintained list (see (i) and
+(j)'s own provenance notes); this note exists only so the summary line above
+it is not read as still accurate.
+
 - **(a)** §4 — the recognition rationale was factually wrong; `owner-record.json`
   is not written by `initializeRunFiles`. Marker set also gained a fifth entry.
 - **(b)** §6.2 / §6 — overstated versioning precedent; `eligibleForContinuation`
@@ -29,6 +41,12 @@ implementation defect. Index:
   changed the code underneath them. Amended 2026-07-30 by that branch. The
   original rows are annotated in place, not rewritten: they record why §8.1's
   ruling exists, and that ruling still stands.
+- **(k)** §2 item 6 — **"discharge any of the three debts bequeathed to L5" is
+  stale, and unlike (a)–(i) this is not a document defect.** It was accurate on
+  2026-07-28; the 2026-07-29 debt-attribution ruling then reattributed debts 1
+  and 3 to L3, leaving only debt 2 for L5. Amended 2026-08-06.
+- **(l)** §13 — the same "Debts 1–3 are bequeathed to L5" claim, restated where
+  the inherited-debts section opens. Amended 2026-08-06, same ruling as (k).
 
 Layer position: L2 in the ownership-and-coordination stack. Parent design:
 `2026-07-22-ownership-and-reconciliation-boundaries-design.md` §17 item 2.
@@ -56,6 +74,13 @@ This layer does **not**:
 5. change how runs are created, or change `--run-dir` semantics;
 6. discharge any of the three debts bequeathed to L5 (§13);
 7. modify L1 or L1b code, including the lease gate and the write paths.
+
+*Amended 2026-08-06 (k) — item 6's "three debts" is stale. The 2026-07-29 debt-attribution
+ruling (`docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md:246`,
+`:248`) reattributed debt 1 to L3 (it was misdescribed as unowned reconciliation
+synthesis; the real defect is cross-file transactional) and debt 3 to L3, and
+states explicitly: "L5 继承清单现在只剩 1 笔（债 2），不是 4 笔." §13 below still
+lists three items under L5; that ruling was never executed there.*
 
 Item 3 is the boundary against §17 item 2's literal wording ("scheduler /
 unattended execution"). That wording spans two separable capabilities —
@@ -469,6 +494,15 @@ Debts 1–3 are bequeathed to L5 and are unchanged by this layer. This layer doe
 not make any of them more reachable — a direct consequence of choosing discovery
 over triggering: a read-only scanner adds no caller to any of the affected paths.
 Debt 4 is new, and is recorded by this layer rather than taken by it.
+
+*Amended 2026-08-06 (l) — "Debts 1–3 are bequeathed to L5" is stale. The 2026-07-29
+debt-attribution ruling (`docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md:246`,
+`:248`) moved debt 1 to L3 (reattributed from "unowned reconciliation synthesis"
+to a cross-file transactional defect) and debt 3 to L3. Neither item 1 nor item
+3 below carries an `Amended` note reflecting that move — item 3 has an inline
+sentence pointing at "the deferred queue layer," but it does not correct this
+paragraph's "bequeathed to L5" framing. "L5 继承清单现在只剩 1 笔（债 2），
+不是 4 笔" per that ruling — the three-item list below was never renumbered.*
 
 1. **Reconciliation synthesis is unowned.** Consequence of the L1b ruling that
    the `writeBoundaryArtifacts` call is guarded unconditionally
