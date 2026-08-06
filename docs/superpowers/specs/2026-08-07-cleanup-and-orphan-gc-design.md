@@ -65,6 +65,17 @@ L5 判定「这个 run 的 owner 已经不在了」时，**允许的动作只有
 L5 实现落地时必须带一条测试，断言 L5 的 GC 路径不产生对 owner-record 租约字段的写。
 ⚠️ 仅靠代码评审兜住这一条是不够的，理由见 §6。
 
+*** **INV-1 今天零强制 —— 明写在此，不藏在报告里。** ***
+在 L5 实现落地之前，INV-1 **没有任何机制强制**：没有测试会因为违反它而变红，没有 lint 钉住它，
+它今天的全部存在形式就是本节这段文字。
+
+**这使 INV-1 与 §6.1 那条注释完全同型** —— 即本文自己在 §6.2 记为 RISK-1 的那个形状：
+约束写在文本里，靠后来者读到并遵守。**本文因此无法宣称自己免疫于它所批评的问题。**
+
+诚实的表述是：**本 spec 是约束的载体，不是约束的执行机制。** INV-1 从「一段文字」变成
+「一条会变红的测试」发生在 §8.2 落地的那一刻，**在此之前它是一条未兑现的防线**。
+读者不应把本节读成「这条已经安全了」。
+
 ### 1.4 与 §13 第 3 笔的耦合 —— 两者必须一起决策
 
 上一轮四份扫描与两条评审车道**都没点出这条耦合**，在此记明：
@@ -163,18 +174,53 @@ grep -rn 'workspace_cleanup_failed' src/
 L5 的每一次处置都必须归到 `retained` 或 `removed` 两个值之一，且 `retained` 必须可解释
 —— 是「按规则保留」还是「想删但删失败了」，两者的事件必须能被区分。
 
-### 3.2 什么该保留
+### 3.2 什么该保留 —— 默认拒绝，而不是一张闭合清单
 
-按 §2 两份委任状，以下四类**默认保留**，L5 不得因为「看起来没人要了」就删：
+⚠️ **本节的清单是下界，不是完备清单。** 起初本节写成「以下四类默认保留」，
+那是一个**闭合语气**：它暗示清单之外的东西可以删。这个形状本身就是缺陷 ——
+本仓库随后实测到至少三类既有保留物**不在**那份清单里，而它们各自被文档逐字禁止删除（见 §3.2.2）。
+**清单会漏，语气不能漏**，故本节的承重规则是 INV-4，而不是清单本身。
+
+#### 3.2.1 INV-4（承重规则）
+
+> **INV-4：L5 只允许删除本 spec §4.2 明确授权的那一个面。其余一切默认保留。**
+> **不在授权清单上 ≠ 可以删；不在保留清单上，也 ≠ 可以删。**
+
+采用默认拒绝的理由很直接：**保留清单的遗漏会造成数据丢失，授权清单的遗漏只会让 GC 少干活。**
+两种错误的代价不对称，故把完备性要求压在**授权**一侧（§4.2 只有一个面，可以穷举），
+而不是压在**保留**一侧（§3.2.2 已证明会漏）。
+
+#### 3.2.2 已知的保留物（下界，非穷举）
+
+下列各项**已确认被既有文档逐字禁止删除**。列出它们是为了给 INV-4 提供具体例证，
+**不是为了定义 INV-4 的边界**：
 
 1. **证据类**（evidence）—— 07-22 §17.3 与 07-21 §13 都直接点名。
    `events.jsonl`、`boundary-analysis.json`、`reconciliation-record.json` 属于此类。
+   另见 07-21 §10.2 逐字禁止 reconciliation `silently clean up retained evidence or workspaces;`
+   （`grep -n` 实测 `231:- silently clean up retained evidence or workspaces;`）。
 2. **被 stale 检测识别出来的执行面** —— 07-21 §13 的禁令直接覆盖，见 §4.1 INV-2。
 3. **被 superseded 的 owner 的记录** —— 它是「谁在什么时候失去了所有权」的唯一证据；
    删掉它等于把一次 supersession 变成无法复盘的事件。
 4. **清理失败留下的工作区** —— 已经由 `cleanupStatus: "retained"` ＋
    `workspace_cleanup_failed` 表达；L5 **不得**把它当成「上次没删干净、这次补删」的输入
    而无条件重试删除，理由见 §4.2。
+5. **既往 run 目录、retained worktrees、stashes、evidence** ——
+   `docs/superpowers/plans/2026-07-17-evidence-first-v1-validation.md` 逐字：
+   > Never delete prior run directories, retained worktrees, stashes, or evidence. Every retry gets a new run ID.
+6. **`.validation-runs/`、backup 分支、stashes** ——
+   `docs/superpowers/specs/2026-07-21-docs-and-backlog-truth-alignment-design.md` 在
+   「This pass does not include:」清单内逐字列出：
+   > deletion or mutation of `.validation-runs/`, backup branches, or stashes;
+7. **具名的 backup 分支与 retained stashes、以及 `.validation-runs/` 下的真实运行证据** ——
+   `docs/superpowers/specs/2026-07-19-a04-branch-assessment-and-merge-readiness-design.md` 逐字：
+   > preserved real-run evidence lives only under `.worktrees/evidence-first-v1/.validation-runs/` and must not be cleaned or rewritten;
+   > backup branch `backup/evidence-first-v1-before-memory-history-cleanup` and retained stashes must not be deleted or published;
+
+第 5–7 条是本 spec 首版**漏掉**的三类。⚠️ **不要把补上它们读成「清单现已完备」** ——
+本文作者的检索面**未覆盖** `tests/`、`validation/`、`reference/` 三个目录，
+也未穷举 `docs/` 下的全部计划与报告。**第 5–7 条只把下界抬高了，没有把它变成上界。**
+正因如此，承重的是 INV-4 而不是这张表。
 
 ### 3.3 保留多久、谁来判
 
@@ -264,9 +310,17 @@ INV-3b 是本条里最容易被违反的一条：把 L5 的 GC 挂在 reconcilia
 
 ### 4.5 非本 spec 授权的删除面
 
-以下**不在**本 spec 授权范围内，L5 不得删：§3.2 的四类保留面、任何 run 目录本身、
-任何 `worktrees/` 下的条目（它归 run 生命周期，不归 GC）。
-要动它们需要一次新的人裁，不由 L5 自行扩权。
+**按 INV-4（§3.2.1），本 spec 的授权面就是 §4.2 那一个面，其余一切不在授权范围内。**
+本节**不是**一张「禁止删除清单」—— 写成清单就会重蹈 §3.2 的覆辙，让读者以为清单之外可删。
+
+⚠️ **正确的读法是**：想删某个东西时，问「§4.2 明确授权了它吗？」——
+**答案不是「是」，就不许删。**「§4.5 没提到它」**不构成**授权。
+
+举例（同样是下界，非穷举）：§3.2.2 列出的各项、任何 run 目录本身、
+任何 `worktrees/` 下的条目（它归 run 生命周期，不归 GC）、`.validation-runs/`、
+backup 分支与 stashes。
+
+要扩大 §4.2 的授权面需要一次新的人裁，**不由 L5 实现者自行扩权**。
 
 ## 5. 今天的残留面（2026-08-07 实测，不是文档里的旧数字）
 
@@ -388,16 +442,31 @@ grep -rc 'writeOwnerTransferRecord' $(find .superpowers/sdd -iname '*gate*' -typ
 该函数今天**零生产调用者**、仍 `export`：
 
 ```bash
-grep -rn 'writeOwnerTransferRecord' src/ tests/
+grep -rn 'writeOwnerTransferRecord' src/
 # src/persistence/fileStore.ts:689:export async function writeOwnerTransferRecord(...)
 # （src/ 内仅此一行 —— 定义，无任何生产调用点）
-# tests/ 内 22 处调用，分布于 tests/persistence/fileStore.test.ts、
-# tests/controller/runLoop.integration.test.ts、tests/registry/zeroWrite.test.ts
 ```
 
-⚠️ **这里要说准**：该函数**并非无测试触及** —— `tests/` 里有 22 处调用。
-但这 22 处**全部是把它当 fixture 用来构造场景**，**没有任何一处断言 §10 第 3 条那条约束本身**
+`tests/` 一侧的计数**必须先给判别式再给数字**（本仓库规矩：报不出可重数的计数就不要报数字）：
+
+```bash
+grep -ro 'writeOwnerTransferRecord' tests/ | wc -l    # 符号出现次数
+# 实测输出：23
+grep -ro 'writeOwnerTransferRecord(' tests/ | wc -l   # 调用点（带左括号）
+# 实测输出：21
+```
+
+差额 2 恰是两处 import（`tests/persistence/fileStore.test.ts:23` 的具名导入项、
+`tests/registry/zeroWrite.test.ts:22` 的 `import { … } from …` 行）。
+即 **23 = 2 处 import + 21 处调用**。
+
+⚠️ **这里要说准**：该函数**并非无测试触及** —— `tests/` 里有 **21 处调用**。
+但这 21 处**全部是把它当 fixture 用来构造场景**，**没有任何一处断言 §10 第 3 条那条约束本身**
 （即「生产不得走这个函数」）。**「无测试」与「无测试钉住那条约束」是两回事，本节取后者。**
+
+> **Amended 2026-08-07：** 本节首版把这个数字写成「22 处调用」，**在两个判别式下都不成立**
+> （符号出现 23，调用点 21）。**坏的只是数字** —— 「全是 fixture、无一断言那条约束」经复核仍为真，
+> 故 RISK-1 的结论未变。本次同时补上了判别式口径，因为不附判别式的计数无法被重推。
 
 ### 6.2 这对 L5 意味着什么
 
