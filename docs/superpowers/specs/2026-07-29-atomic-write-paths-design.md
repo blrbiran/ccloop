@@ -286,6 +286,27 @@ prior run data`），不会静默失效——评审员实测确认了这一点�
    `recoverInterruptedOwnerTransfer` 经 `cleanupOwnerTransferStagingWithoutMarker` 只清
    `getOwnerTransferPaths` 的**四个固定名**——而临时名按 §4.1 的要求本就必须不在那四个之内。
 
+   > **Amended 2026-08-07：** 上句「**四个固定名**」在本文写下时为真，今天是**十个**。
+   > **在本注落盘之前**，本文最后一次被碰是 `2e30d1c`（2026-08-01），而该集合在 2026-08-02 被扩了两次：
+   > 4 → 7（`0f940ea`，marker 与两份 pending 改走 temp+rename）→ 10（`dad8a14`，
+   > `reconciliation-record.json` 成为转移事务的第三个文件）。重推：
+   >
+   > ```bash
+   > awk '/^async function cleanupOwnerTransferStagingWithoutMarker/,/^}/' src/persistence/fileStore.ts \
+   >   | grep -c "await safeUnlink"
+   > # 实测输出：10
+   > git log --format='%h %ad %s' --date=short -1 0f940ea
+   > # 0f940ea 2026-08-02 feat(fileStore): publish the transaction marker and both pendings by temp+rename
+   > git log --format='%h %ad %s' --date=short -1 dad8a14
+   > # dad8a14 2026-08-02 feat(fileStore): make reconciliation-record.json the third file of the owner-transfer transaction
+   > ```
+   >
+   > **坏的只是数字，本条的结论不变**：临时名由 `buildAtomicTempPath` 生成，带一个进程戳
+   > （`ATOMIC_TEMP_PROCESS_STAMP` = `${process.pid}.${Math.trunc(performance.timeOrigin)}`）
+   > 与一个自增序号，因此**不可能**落在任何固定名集合里 —— 集合是四个还是十个都够不着它。
+   > 本条其余部分（含下段的定性）未作改动。参见
+   > [`2026-08-07-cleanup-and-orphan-gc-design.md`](2026-08-07-cleanup-and-orphan-gc-design.md) §5.1 与 §4.2。
+
    **定性要准确：这是无界垃圾，不是故障。** 未发现任何功能性破坏：临时名不在 `RUN_MARKER_FILES`
    （`scanRuns.ts:30-36`，五个具名文件）里，所以它不会把一个目录误认成 run；L2 只读
    `OBSERVED_FILES` 的三个文件，不会读到它；`ensureFreshRunDir` 也不会因它而拒绝初始化。
