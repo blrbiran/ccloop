@@ -1,22 +1,92 @@
-# ccloop Handoff — **L3 已发布；L5 输入盘点已完成；包 3（文档勘误）已开门合入 main；包 1 与包 2 授权在手、尚未开工**
+# ccloop Handoff — **L3 已发布；包 3 已合入；包 1（L5 spec）任务 1 已收口、0 Critical、尚未开门；包 2 授权在手、未开工**
 
 ---
 
 # HANDOFF EXECUTIVE SUMMARY（下一位 agent 读这 9 行就能开工）
 
-1. **一律自查，别信任何文字**：`git log --merges --format='%h %cd %s'` 最后一笔应是 `GATE-PKG3 PASSED`（门 `e42e062`，固定锚点）；**本会话从未 `git push`，远端落后** —— 跑 `git ls-remote origin refs/heads/main`。**本文不写死 HEAD、提交笔数与测试数**（提交本文就会改变前两者）。
-2. **两份唯一可信进度源**（都已入库）：`.superpowers/sdd/2026-08-05-l5-input-scan/progress.md`（L5 输入清单 ＋ 四条人裁 ＋ 三个工作包）与 `.superpowers/sdd/2026-08-05-pkg3-doc-errata/progress.md`（包 3 全部裁决与教训）。**先读它们再决定从哪开始。**
-3. **包 3 已完成并合入，不要重做**；**包 1、包 2 授权在手、一行代码都还没写**。
-4. **下一步 = 包 1（写 L5 spec 本职）**。起点由**人裁 3** 定死为 `docs/superpowers/specs/2026-07-29-atomic-write-paths-design.md` **§10 第 4 条**，**不从零 brainstorm**；委任状**同时授权 `retained` 与 `cleaned up`**，不许只想着删。
-5. **spec 第一节必须写进 P1**：`releaseOwnerLease` 全仓只有 `stop()` 一个调用者 ⇒ **L5 的 GC 一旦自己回收租约，第 3 笔立刻升级为数据丢失 —— L5 的正常工作方式恰好会触发它。**
-6. **包 2 已获准写 `tests/`**（人裁 4），用于给两条数据丢失路径补实跑注入；**边界在 L5 台账**（只含补测试，不含为了让测试变绿而改判据）。
-7. **三条待办已议定方向，但人明令「先不改」** —— 不要自作主张去动：stderr 契约拆进包 1/包 2、`spec:2322` 维持不改、10 条 minor 并进包 1 的开工前扫描。详见下一节。
-8. **⚠️ 落盘协议（写进每一份 brief）**：先 `Write` 只有小节标题的骨架并立刻落盘，之后每次 `Edit` 只填一节。**上一会话 12 名 agent 死了 6 名，全部发生在准备落盘时**，该协议两次救场。
-9. **铁律不软化**：不接受实施者自证；**验证跑绝不过滤输出**（`grep` 与 `tail` 同罪）；**下「没有任何一处」之前先确认 grep 面覆盖你断言的范围** —— 这一条在包 3 一轮内栽了 **6 次**，控制器自己占 2 次。
+1. **一律自查，别信本文**：`git log --merges --format='%h %cd %s'` 最后一笔应是 `GATE-PKG3 PASSED`（门 `e42e062`，固定锚点）——**包 1 尚未开门**，它之后 main 上是一串普通提交。**本文不写死 HEAD、提交笔数与测试数**（提交本文就会改变前两者）；远端状态一律现跑 `git ls-remote origin refs/heads/main`（历史上已被会话外推进过五次，任何「远端落后」的文字都可能已腐坏）。
+2. **三份唯一可信进度源**（都已入库）：包 1 = `.superpowers/sdd/2026-08-07-pkg1-l5-spec/progress.md`（**先读它**）；L5 输入清单与人裁 1–5 = `2026-08-05-l5-input-scan/progress.md`；包 3 = `2026-08-05-pkg3-doc-errata/progress.md`。
+3. **包 3 已合入、包 1 任务 1 已 complete（0 Critical），都不要重做**；**包 2 授权在手（人裁 4 准写 `tests/`）、一行代码都还没写**。
+4. **包 1 的产物**：新建 `docs/superpowers/specs/2026-08-07-cleanup-and-orphan-gc-design.md` ＋ 给 `2026-07-29-atomic-write-paths-design.md` §10 第 4 条一条就地勘误。**`src/` 与 `tests/` 一字未动**（人裁 6：包 1 只写 `docs/`）。
+5. **下一步 = 包 1 的整分支评审**（范围 `30cbdd5..HEAD`，派一名**未参与过本轮任何一条**的评审员）→ **人下令才开门**。**合并与删分支都要人单独授权。**
+6. **⚠️ 人裁 8：三条已同意、但人明令「先不改」** —— ① **N1**（§4.2 授权面外延未封口，**是 I1 修法的承重支点**，升级为整分支评审必撞项）；② **INV-4 未进 §8.2**（**须先修 N1，否则会把外延未定的判据固化进验收表**）；③ **C4 文档债**（`2026-07-26-…-design.md:45` 的 `remains unwritten` 后半已假）。**方向已定，动手时机未到 —— 不要自作主张去动，也不要重开方向讨论。**
+7. **6 条 deferred minor 随分支带走**：M1/M2/M3/M5（任务评审）＋ N1/N2（scoped 再评审新增）。逐条在包 1 台账。
+8. **⚠️ 落盘协议（写进每一份 brief）**：先 `Write` 只有小节标题的骨架并立刻落盘，之后每次 `Edit` 只填一节、**结论一节最先写**。上一会话 12 名 agent 死了 6 名，全部发生在准备落盘时。
+9. **铁律不软化**：不接受实施者自证；**验证跑绝不过滤输出**（`grep` 与 `tail` 同罪）；下全称否定前先确认 grep 面覆盖你断言的范围；*** **一条被转义弄坏或被过滤的探针，永远不能证明「不存在」** ***（本轮控制器第 3 次记账就栽在这里）。
 
 ---
 
-# 【最新】2026-08-07：包 3 已开门合入 —— 本节取代下方**一切**状态描述
+# 【最新】2026-08-07 晚：包 1 任务 1 已收口，尚未开门 —— 本节取代下方**一切**状态描述
+
+> 下方所有小节都停在更早的视角。**凡描述「现在该做什么 / 现在在哪一笔 / 还剩什么没做」的句子，一律以本节为准**；其余（陷阱、教训、铁律）照读。就地注解、不改原件。
+>
+> **具体作废紧随其后那节的这几句**：「下一步是包 1（写 L5 spec 本职）」——**包 1 的 spec 已写完、评审完、修复完、再评审完**；「包 1、包 2 授权在手、一行代码都还没写」——**包 1 已落盘七笔提交**；「三条待办已议定方向但先不改」那一节讲的是**人裁 5** 的三条，**与本节人裁 8 的三条不是同一批，两批都仍然「先不改」**。
+
+## 一句话
+
+**包 1 的 L5 spec 已走完「实施者 → 独立评审员 → 修复环 → scoped 再评审」全套工序，0 Critical，任务 1 记 complete；下一步是整分支评审，然后等人下令开门。**
+
+## 先跑这些，以输出为准（本文不写死 HEAD）
+
+```bash
+cd /Users/biran/code/skills/loop/ccloop
+git log --merges --format='%h %cd %s'          # 最后一笔仍是 GATE-PKG3；包 1 未开门
+git ls-remote origin refs/heads/main           # 一律现跑，别信任何「远端落后/已同步」的文字
+git status --short; git worktree list; git branch
+export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy "npm test -- --run"
+```
+
+**包 1 的 STEP 0 基线**（控制器亲跑、未过滤、`RUN` 路径已核）：30 files / 514 tests / `TEST_EXIT=0`、`TYPECHECK_EXIT=0`、`BUILD_EXIT=0`。与 GATE-C、L5 盘点 STEP 0、包 3 STEP 0、包 3 合并后复跑**五处一致**。**不继承任何先前的绿。**
+
+## 唯一可信进度源
+
+**`.superpowers/sdd/2026-08-07-pkg1-l5-spec/progress.md`** —— 人裁 6/7/8、两份开工前扫描的全部裁断、任务 1 的实施/评审/修复/再评审逐条结论、6 条 deferred minor、3 条 open 项，**全在里面**。同目录另有 6 份报告（两份扫描、实施者报告、评审报告、再评审报告），**都已 `git add -f` 入库，不要重新推导**。
+
+⚠️ **`.superpowers/sdd/.gitignore` 是 `*`** —— 该目录下一切产物只能靠 `git add -f` 入库。包 3 曾差点因此全灭。**开工第一笔就入库。**
+
+## 包 1 做了什么（**不要重做**）
+
+| 阶段 | 结论 |
+|---|---|
+| STEP 1 开工前扫描 | 两名只读扫描员。**关闭 F-M4**（其前提「两个同形文件」为假：L1 的 plan 从无修订总账）；**分母重推为 12 不是 10**；查出 **§10 第 4 条「四个固定名」今天是十个**；查出**第二份 L5 委任状** |
+| STEP 3 任务 1 | 实施者写 spec ＋ 一条就地勘误。评审：**0 Critical / 2 Important / 5 Minor**。修复环 1/5 修 I1＋I2＋控制器折入的 M4。scoped 再评审：**三条全 ADDRESSED、无新破坏** |
+
+**新 spec 的承重内容**（细节看文件本身，此处只给索引）：INV-1（L5 的 GC **不得**回收租约，来自 P1）／INV-4（**L5 只允许删 §4.2 明确授权的那一个面，其余一切默认保留**）／§7 继承项指针节（只放指针不放内容）／RISK-1（靠人评审兜住、事后无法证明兑现的防线）。
+
+## 本轮查明、下一位必须知道的四条事实
+
+1. *** **L5 受两份委任状约束，不是一份。** *** `2026-07-22-ownership-and-reconciliation-boundaries-design.md` §17 item 3（`retained` **与** `cleaned up`）＋ **`2026-07-21-stop-no-progress-stale-boundaries-design.md` §15 item 3 + §13**（`:297` 不许把 "stale" 当删除许可；`:299` 后续 cleanup 设计必须**显式消费** stale/reconciliation 输出）。**第二份九份报告全都没提过。**
+2. **§10 第 4 条那句「定性要准确：这是无界垃圾，不是故障」「不要把它上报成缺陷」今天仍然成立** —— 两名 agent 独立找过功能性破坏路径，都没找到。**不许偷偷把它升级成缺陷来给自己找立项理由。**
+3. **分层表的 `deletion` 授权只能证到「只有 L5 被显式标注为 deletion」**，**不能证**「只有 L5 可能删东西」（现成反例：`git worktree remove --force`）。**不许写成无限定全称断言。**
+4. **一条未验的破坏线索，原样交出**：若有经 `buildAtomicTempPath` 的写目标位于 `<runDir>/worktrees/` 下，残留会让 `ensureFreshRunDir` 抛错。**评审员未枚举调用点、明写不据此下结论。若成立，会动摇第 2 条那个定性 —— 也就是整份 spec 的立项前提。** 这条要进整分支评审的必撞清单。
+
+## 本轮换来的教训（比缺陷本身值钱）
+
+1. *** **一条被转义弄坏或被过滤的探针，永远不能证明「不存在」。** *** 控制器用 `rtk proxy "bash -c \"grep 'A\|B' …\""`，三层引号把交替模式弄坏、零输出，**差点据此判一条修复没做**。**拿到零输出时，先验命令本身。** 下一位再评审员的对策已实证：**脚本先落盘，再 `rtk proxy zsh <script>` 跑。**
+2. **rtk 默认改写会把命令输出折叠成 `[N more lines]`** —— 做验证性检索**必须直接走 `rtk proxy`**，否则你拿到的是被过滤过的证据。这是「验证跑绝不过滤」第一次在**检索侧**被量化。
+3. *** **十六波修复十六次自带缺陷、无一由作者自己发现」的纪录，本轮被打破。** *** 实施者在修复正文里自查抓到并修掉两处自己的缺陷（含反引号嵌套破坏渲染 —— **引文渲染坏了等于引文不可核**）。
+4. **控制器本轮自曝错误 3 次**（把「10 条」聚合数写进 handoff 表／把扫描员的一句断言未重推就搬进 brief／坏探针）。**三次都不是自己发现的第一时间就修的**，逐条在包 1 台账。
+
+## 环境陷阱（前八条见下方各节，全部仍然有效）
+
+9. **`git show "$c:path"` 在 zsh 下会被当成参数修饰符 `:s`**，静默产出全 0 的假计数、**退出码 0**。一律 `bash -c` 包一层。
+10. **多层引号嵌套的 `grep` 交替模式会被静默弄坏**（见教训 1）。**对策：脚本落盘后跑，不要在命令行里嵌三层引号。**
+
+## 建议调用的 skills（接手整分支评审 / 包 2）
+
+| skill | 何时 | 注意 |
+|---|---|---|
+| `superpowers:requesting-code-review` | **立刻**（包 1 的整分支评审） | 范围 `30cbdd5..HEAD`。提示词必写：不接受实施者自证、findings 带可构造场景、**锚点用符号名不用行号**、**不许用收窄的搜索面支撑全称否定**、**必撞 N1 与上面那条 `<runDir>/worktrees/` 线索** |
+| `superpowers:subagent-driven-development` | 包 2 的实施阶段 | 每任务「实施者 → 独立评审员 → 有 Critical/Important 进修复环 → scoped 再评审 → 台账记 complete」 |
+| `superpowers:verification-before-completion` | 声称「通过/完成」之前 | 复跑全套件 ＋ typecheck ＋ build，`rtk proxy`，**未过滤**，并核 vitest 首行 `RUN` 路径 |
+| `superpowers:systematic-debugging` | 撞到不在 flake 名单内的失败 | 名单只有 (B) 与 (F) 两条 |
+| `superpowers:using-git-worktrees` | 包 2 开工前 | 包 1/包 3 都**没开** worktree（纯文档，理由逐条在台账）；**包 2 要动 `src/`+`tests/`，该决策必须重判，不许继承** |
+| `superpowers:finishing-a-development-branch` | 每道门之后 | **门必须是 merge、结论在主题行**；**合并与删分支都要人单独授权** |
+| ~~`superpowers:brainstorming`~~ | — | **包 1 的设计阶段已过，且人裁 3 逐字明令「不从零 brainstorm」。** 不要重跑 |
+
+---
+
+# 【已被上方 2026-08-07 晚那节取代，保留作历史】2026-08-07：包 3 已开门合入
 
 > 下方所有小节都停在更早的视角。**凡描述「现在该做什么 / 现在在哪一笔 / 还剩什么没做」的句子，一律以本节为准**；其余（陷阱、教训、铁律）照读。就地注解、不改原件。
 >
@@ -32,6 +102,8 @@
 cd /Users/biran/code/skills/loop/ccloop
 git log --merges --format='%h %cd %s' --date=iso --reverse   # 最后一笔是 GATE-PKG3
 git ls-remote origin refs/heads/main    # ⚠️ 本会话从未 push，远端落后
+# ⚠️ Amended 2026-08-07：上面这句「远端落后」写下之后已腐坏 —— 包 1 的 STEP 0 实测远端与本地一致
+# （第 5 次会话外推送）。**一律以本命令的现跑输出为准，不要读上面那句结论。**
 git status --short; git worktree list; git branch
 export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy "npm test -- --run"
 ```
@@ -48,6 +120,7 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy "npm test -- --run"
 ## ⚠️ 三件必须先读的事
 
 1. **⚠️ 未 push。** 本会话从未跑过 `git push`，远端落后若干笔。**一律 `git ls-remote` 自查。**
+   > **Amended 2026-08-07：本条的「远端落后」已腐坏。** 包 1 的 STEP 0 实测 `git ls-remote origin refs/heads/main` 与本地 HEAD **一致**（`git reflog show refs/remotes/origin/main` 显示 2026-08-07 00:12:44 有一次 `update by push`，是**第 5 次会话外推送**）。**「一律自查」那半句仍然有效，且正是它救的场。**
 2. **⚠️ 分支 `docs/pkg3-errata` 保留未删**（已完全并入 `main`，删除需单独授权）。
 3. **⚠️ 人裁 4 已落**：**包 2 获准写 `tests/`**，用于给两条数据丢失路径补实跑注入。**边界写在 L5 台账里**：只含补测试，**不含为了让测试变绿而改判据**；变异仍走三步判据。
 
@@ -234,6 +307,7 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy "npm test -- --run"
 ## 明确没做的三件事（不是遗漏，是边界）
 
 1. **没有 push。** 本会话从未跑过 `git push`；远端落后本地若干笔。**接手时一律 `git ls-remote` 自查，不要相信任何文字描述。**
+   > **Amended 2026-08-07：同上，「远端落后」这半句已腐坏**（远端已被会话外推进过五次；包 1 STEP 0 实测两端一致）。**后半句「不要相信任何文字描述」仍然有效。**
 2. **没有进 L5。**
 3. 三组的分支与 worktree **都已按授权清理**（各自删前都验过 `--is-ancestor` 且枚举过未入库产物）。
 
