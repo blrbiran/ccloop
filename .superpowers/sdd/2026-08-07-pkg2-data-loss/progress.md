@@ -123,6 +123,43 @@
   理由是其规范半边归包 1 spec、而包 1 spec 正被人裁 9 冻着。
   ⇒ **本轮包 2 只做三条：债 2 → 第 4 笔 → 第 1 笔。**
 
+--------------------------------------------------------------------------------
+5. 控制器对扫描员 1 的独立复核（不接受扫描员自证）
+--------------------------------------------------------------------------------
+
+扫描员 1 交付 `scan-1-report.md`（DONE，四条全判「仍成立」）。
+**控制器只挑了他四条里唯一那条全称否定复核**（G2-null 那条）—— 其余三条**未复核，如实记明**。
+
+**复核方法**：脚本落盘后 `rtk proxy zsh` 跑，两条 sanity 探针（`tests/` 下 30 个 `.ts`；
+`buildProcessInstanceId` 在 `src/runtime/processIdentity.ts` 的定义处必命中），
+**四个互不依赖的口径**：符号名 `parsePid` ／ 符号名 `buildProcessInstanceId` ／
+字面量 `pid:`（与符号名无关的独立面）／ `processIdentity.test.ts` 全文。
+
+*** **结论：他的结论不腐坏，但措辞比证据宽，且宽的方向危险。** ***
+
+  **成立的那半**：`parsePid` 在 `tests/` **零命中**（它是 `fileStore.ts` 的模块私有函数，
+  三处命中全在 `src/`：注释一处、定义一处、调用一处）⇒ **G2-null 那条防线确实没有测试钉住。**
+
+  ⚠️ **不成立的那半 —— 他写的是「全仓未见任何针对**该形式**的测试断言」，这句为假。**
+  控制器亲验两处逐字断言了 `pid:<pid>:<start time>` 形式：
+    `tests/runtime/processIdentity.test.ts`  `expect(id).toMatch(/^pid:\d+:\d+$/)`
+    `tests/persistence/fileStore.test.ts` 的 `puts this process's id and start time at fixed
+      positions in the temp file name` —— `buildProcessInstanceId().split(":")` 取两段，
+      `expect(startTime).toMatch(/^\d+$/)`，再拿两段拼进临时文件名的正则
+  且该测试**自带一段注释解释它为什么故意跨模块断言**（「Asserting across the two modules is what
+  makes either side changing the pid or start-time components a test failure rather than a silent
+  divergence」）。
+
+*** **为什么这个宽度危险**：读者按他的措辞会以为「该形式无人断言、可以随便改」，
+而实际改动 `processIdentity.ts` 的输出格式**会让上述两条测试变红**。**误读方向是「以为安全」。** ***
+
+**收紧后的准确说法（包 2 实施 brief 必须用这一版）**：
+  「**没有测试钉住 `parsePid` 与该形式的不匹配**（即 G2-null 防线本身）」——
+  **不是**「没有测试断言该形式」。
+
+**控制器没做的**：没有复核他的债 2（15 调用点 / 4 个由 lease-loss 到达）、第 4 笔、第 1 笔三条。
+**它们目前是单方证词**，需在包 2 实施前由实施者或评审员再撞一次。
+
 **下一步（未执行）**：worktree 决策重判（包 2 要动 `src/`+`tests/`，**不许继承包 1/包 3 的「不开」**）
 → 开工前冲突扫描（两名只读、错开分工；输入含 10 条 deferred minor ＋ G2-null ＋ 三条路径）
 → 逐任务走 SDD（实施者 → 独立评审员 → 修复环 → 换人 scoped 再评审）。
