@@ -233,10 +233,54 @@
 `tryRecoverStaleOwnerTransferLock` 里的活进程早返回）会连带弄红别处一批既有测试，名单在
 `task-A9-report.md`；**那批是噪声，不是本测试的护栏** —— 唯一算数的证据是该具名测试单跑变红」。
 
-**下一步（未执行）**：worktree 决策重判（包 2 要动 `src/`+`tests/`，**不许继承包 1/包 3 的「不开」**）
-→ 开工前冲突扫描（两名只读、错开分工；输入含 10 条 deferred minor ＋ G2-null ＋ 三条路径）
-→ 逐任务走 SDD（实施者 → 独立评审员 → 修复环 → 换人 scoped 再评审）。
+--------------------------------------------------------------------------------
+7. worktree 决策（人裁 12）＋ 新工作区基线
+--------------------------------------------------------------------------------
+
+*** **人裁 12：开 worktree ＋ 新分支。该决策已重判，未继承包 1／包 3 的「不开」**
+（那两轮是纯文档；包 2 动 `src/`+`tests/`）。 ***
+
+  `.worktrees/pkg2-data-loss`，分支 `feat/pkg2-data-loss`，**基点显式写 HEAD**（`ddb604a`）。
+  ⚠️ *** **为什么必须显式写基点**：harness 的 `EnterWorktree` 默认基点是 `origin/<default-branch>`
+  （当时 = `ebd19cb`），照默认走会**丢掉本轮四笔台账提交**。 *** 这正是 handoff 那句
+  「先 `git worktree add <path> -b <branch> HEAD` 显式指定基点，再用 `EnterWorktree` 的 `path` 接管」
+  的由来 —— **本轮实测证实了它，别改成默认。**
+  `.worktrees/` 已核为 gitignored（`.gitignore:19`）。**建完立刻 `npm ci`**（陷阱 5）。
+
+**新工作区基线（控制器亲跑、未过滤、`RUN` 路径已核为 worktree 内）**：
+  `RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-data-loss`
+  ` Test Files  1 failed | 29 passed (30)` ／ `      Tests  1 failed | 513 passed (514)`
+  `TEST_EXIT=1` ／ `TYPECHECK_EXIT=0` ／ `BUILD_EXIT=0`
+
+*** **唯一的红是允许出现的 flake (B)，不构成新缺陷。** *** 逐字比对（不比行号）：
+  `tests/validation/evidence.test.ts > run-scenario CLI > records env names only and tracks
+   descendants rooted at the spawned pid` —— `Error: Test timed out in 5000ms`
+  与 handoff 对 (B) 的记载（全套件并行负载下 5000ms 超时、隔离连过两次）**逐字对上**。
+  **且它不是陷阱 5 那种 `spawn ENOENT` 假失败**（那会是九条一起红）⇒ **`npm ci` 的对策已生效。**
+
+**§2 那条名单外失败本轮通过**（`✓ … persists phase usage evidence … 1035ms`）⇒ **累计 1/5 红。**
+  **仍不得据此说它消失** —— 「本次没跑出来」不构成任何 flake 已消失的证据（本仓库既有立场）。
+
+**下一步（未执行，交接给下一会话）—— 前置全部就绪，可直接派实施者**：
+
+  ✅ 已就绪：worktree ＋ 分支 ＋ `npm ci` ＋ 新工作区基线（§7）；两份开工前扫描（§5/§6）；
+     人裁 10/11/12/13 全部落账。
+  ⬜ **任务 1 = 债 2**（`persistTerminalState` 往已不拥有的 run 写）。**扫描员判「补」不是「改」**
+     （未找到既有实跑注入测试）—— **但那是单方证词，实施者要自己再撞一次。**
+  ⬜ **任务 2 = 第 4 笔**。**人裁 13 已扩权**，可改那一条具名判据；
+     **实施者必须在报告里正面处理 §4 待人裁 3 下面列的两句，不许绕过。**
+  ⬜ **任务 3 = 第 1 笔**。规模最大（P-READ 不经锁协议，牵动 L1/L2「读不许写」契约）。
+
+  **每任务**：实施者 → **换人**独立评审员 → 有 Critical/Important 进修复环 → **换人** scoped 再评审
+  → 本台账记 `Task <N>: complete`。**不接受实施者自证。**
+  **每份 brief 必写**：落盘协议 ／ 脚本先落盘再 `rtk proxy zsh` 跑 ＋ 必命中 sanity 探针 ／
+  验证跑绝不过滤 ／ 锚点用符号名不用行号 ／ 不许用收窄搜索面支撑全称否定 ／
+  变异走三步判据（注入前绿 / 注入后红 / 还原后绿）且单跑块显示具名测试的**非零**计数。
+  **每份 brief 还要带**：§2 那条名单外 flake 的完整测试名（见到它按 §2 比对，不要重新调查）＋
+  允许出现的 flake 只有 (B) 与 (F) ＋ §5 收紧后的 G2-null 措辞 ＋ §6 末尾那条「task-A9 名单是噪声」。
+
 **开门、合并、删分支、push 四件各需人单独授权。**
 
-**Rule 6 记账**：本任务（开工自查 ＋ STEP 0 ＋ 名单外失败定性）已接近单任务 100k 预算，**就地收口交接**，
-未派任何 subagent。
+**Rule 6 记账**：本会话已用去可观预算（开工自查 ＋ STEP 0 ＋ 名单外失败定性 ＋ 两名扫描员 ＋
+控制器两次独立复核 ＋ worktree 与基线）。**就地收口交接，实施阶段留给下一会话开**，
+以免实施者的报告与修复环挤在预算尾巴上。
