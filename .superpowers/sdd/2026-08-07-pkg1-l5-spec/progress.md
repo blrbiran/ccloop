@@ -605,3 +605,60 @@ Rule 6 破预算要明写／**人裁 8 三条可评估、可报新证据，不�
 **待办**：两份报告齐 → 控制器逐条独立复核（不信评审员的文字）→
 有 Critical/Important 开修复环 2（N1 大概率进）→ 换人 scoped 再评审 → 台账记账 →
 **停下等人下令开门。合并、删分支、push 四件都要人单独授权。**
+
+--------------------------------------------------------------------------------
+Lane 2 已交付（`review-branch-lane2.md`，479 行）。控制器复核当场证伪其一条承重理由。
+--------------------------------------------------------------------------------
+
+**Lane 2 判词**：破坏线索**不成立**；总判词**可开门**；0 Critical / 2 Important / 2 Minor；
+自报 8 条未完成；**明写预算超支约 3.5×**（12,000 → 40–45k），理由是铁律 2（绝不过滤）与 Rule 6 直接冲突，
+**他选择服从铁律 2 并明写，未用 `tail` 压预算 —— 正面样本**。
+他另**自曝一次真实坏探针**（全仓 `grep -rn` 跑满 120s、输出第 137 行截断），**未据此下任何结论**，
+改按目录收窄重跑并加一条必命中 sanity 探针证明新检索面是活的 —— **正面样本，正是本轮要的行为。**
+
+*** 控制器独立复核，三条理由中第 3 条被证伪。 ***
+
+他写：「`ensureFreshRunDir` 对 runDir 根**只查三个精确文件名**；原子 temp 恒 `.` 开头 `.tmp` 结尾，
+**名字层面就不可能相等**。」
+
+控制器把整个函数体原样打出（`awk`，未过滤）—— **它有五个 guard，不是三个**：
+
+    src/persistence/fileStore.ts:49  ensureFreshRunDir
+      :52-56  三个精确文件名（loop-contract.json / loop-state.json / events.jsonl），pathExists
+      :64     if (await directoryHasEntries(join(runDir, "attempts")))  -> throw
+      :68     if (await directoryHasEntries(join(runDir, "worktrees"))) -> throw
+    src/persistence/fileStore.ts:37  directoryHasEntries
+      return (await readdir(path)).length > 0;   // ENOENT -> false，其余 rethrow
+
+*** **`readdir(path).length > 0` 与名字完全无关。`worktrees/` 下多出任何一个条目就抛，
+包括一个 `.foo.<stamp>.1.tmp`。** ***
+
+⇒ **那条破坏线索的后半句（「残留会让 `ensureFreshRunDir` 抛错」）在 `worktrees/` 这个位置上是成立的。**
+他用「名字层面不可能相等」把它否掉 —— **那条推理只对 runDir 根成立，对 `worktrees/` 与 `attempts/` 恰好不成立。**
+
+**为什么退回而不是记 Minor**：他的判词现在**只剩一条腿** —— 真正承重的是理由 2
+（`writeJsonFileAtomically` 的 5 个 `src/` 调用点全是 `join(runDir, <字面量>)` ⇒ `dirname` 恒 = `runDir`）。
+**控制器独立重推理由 1 与理由 2，两条均复核通过**：调用点 `fileStore.ts:77`/`:82`/`:446`/`:497-498`/`:673`，
+`buildAtomicTempPath` 在 `src/` 的真调用者只有 `:645` 一处。
+**但理由 3 若留在报告里，会把「`worktrees/` 下的残留无害」这个假命题固化给下一轮划授权面的人** ——
+*** 这正是本仓库反复栽的形状：一条读窄了的探针被当成结构性证明。 ***
+
+**已退回，要求三件事**：① 改写 guard 面描述、判词支撑改为只靠理由 2；② 重答判词（明告他证据优先于面子）；
+③ **补答一个被这条证伪逼出来的新问题**：既然 `worktrees/` 下任意条目都会让 `ensureFreshRunDir` 抛，
+**「谁会往 `<runDir>/worktrees/` 里写东西」这个面有多大？** 已知 `worktreeManager.ts:18-19` 与
+`resumeLoop.ts:74-81`；**特别追问 `runLoop.ts` 经 `sh -lc` 跑的用户自带命令**。
+这条直接决定 L5 spec §4.2 的授权面该不该覆盖 `worktrees/`。**预算不够就明写「未答」，不许猜。**
+
+*** 控制器记账（本轮第 4 次，对称记在此，不藏）***：控制器第一版探针用
+`awk '/interface ReconciliationRecord/,/^}/'` 打那个类型，**得到空输出**，差点据此说 Lane 2 引错。
+改 `grep -rn` 重跑，实为 `src/runtime/types.ts:106: export type ReconciliationRecord = {`
+—— **是 `type` 不是 `interface`**，Lane 2 引的 `:107-108` 完全属实。
+**又一次印证：一条被写坏的探针永远不能证明「不存在」。这已是本轮第 4 次同形。**
+
+**控制器已抽核、暂无异议的部分（不要求 Lane 2 重做）**：
+  `RUN_MARKER_FILES` 实测 **5 项**（`scanRuns.ts:30`）；`OBSERVED_FILES` 在 `observeFields.ts:5`；
+  `sweepRuns.ts:100` 那句「`reconciliation-record.json` 不在 L2 的 `OBSERVED_FILES` 内」**逐字属实**；
+  `ReconciliationRecord.staleSuspicionBasis` / `.staleConfirmed` 属实。
+  ⇒ **他的 I-1（INV-3 的消费入口没指名、spec 所指入口今天不通）在事实面站得住。**
+  I-2 是人裁 8 第 1 条 N1 的**代码面实例化**（`.validation-runs/runs/A-01/` 既是真 run 目录又在禁删清单下）
+  —— **与 Lane 1 的文本面必撞项对上了，两条车道独立撞到同一处。**
