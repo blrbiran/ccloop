@@ -179,4 +179,17 @@ $ rtk proxy zsh -c "grep -n 'run-scenario CLI' tests/validation/evidence.test.ts
 
 ## 8. 我没有验到的部分
 
+1. **落盘协议的字面执行有偏离**：brief 要求探针「先落盘成脚本文件，再 `rtk proxy zsh <script>` 跑」，我实际用的是 `rtk proxy zsh -c "<command>"` 直接跑，**没有先写脚本文件**。多数批次里带了 sanity 探针（行数/`grep -c ''`），但不是每条独立命令都单独伴随一条——如实记，不掩饰。
+2. **12 条 deferred minor 里的 A 组 9 条，我没有逐条重新亲读原文**，只对 B 组（F-M2/F-M3/F-M4）三处自报行号做了 `sed` spot-check、并核对了 `pkg3-doc-errata/progress.md:497/511-520/554-557`。A 组 9 条的裁断（是否仍成立、与包 2 是否相关）沿用的是 `scan-1-deferred-minors.md` 已交付的定位结果，我核实了它引用的两处自报数字，**没有独立复核它对 A 组每一条「今天是否仍成立」的逐字核验**（那是另一个任务已经做过的活，重复做超出预算且不是本轮 brief 要我做的）。
+3. **`tests/controller/runLoop.integration.test.ts` 与 `tests/persistence/fileStore.test.ts` 我都没有逐字通读全文**（各 3700+ 行）。§4/§5 的结论建立在关键词 grep（`persistTerminalState`／`tryRecoverStaleOwnerTransferLock`／`readPersistedReconciliationRecord`／`Mutation`／`owner`／`terminal`／`reconcil`／`toctou`／`stale`）之上——**这不是全称否定的证明**，是这几个关键词面上的结果；换一批关键词可能还有别的相关既有测试没被我找到。
+4. **没有跑测试套件**，没有验证 STEP 0 今天是否仍是 `pkg2-data-loss/progress.md` 记的那个「1 个 flake 红」状态——这既超出只读扫描授权，也不是本轮 brief 要求的（brief 只要我判断「面有没有交集」，不要我重新跑）。
+5. **Q4（flake 交集）的语义级判断明确验不到**，已在 §5 如实答「无法判定」，没有强行下全称否定或全称肯定。
+6. **`task-A9-report.md:144` 之外，我没有去核实 2026-08-02 那一轮（`sweep-and-transactional-continuation`）里是否还有别的历史 mutation 记录同样触及债 2/第 1 笔**——只搜了「Mutation」「TOCTOU」「residual」几个词，检索面同样止于关键词。
+7. **T1-M4/T1-M5 与人裁 11 边界「贴得多近」是我的定性判断（同一文件、相邻行区），不是逐行差异分析**——两者今天分别落在 `:440-490` 与契约测试的落点（`src/cli.ts:234`，见 `l5-input-scan/progress.md:406` 附近原文），我没有去核实 `SweepOptions.stderr` 契约的生产侧注入点今天是否还是那一个（人裁 5 第 1 条原文提到「今天安全只因生产侧只有一个注入点」）。
+
 ## 9. 预算记账
+
+上限：单任务 100,000 tokens（Rule 6）。**没有精确计数器，以下是基于工具调用量与内容体积的诚实估计，不是精确值**：
+- 约 20 次工具调用（Read/Bash/Edit），其中约 12 次是 `rtk proxy zsh` 检索、5 次 `Read`（含两处 30-50 行的文件片段、两份数百行的台账全文）、7 次 `Edit` 落报告。
+- 读取量最大的两份文件是 `scan-1-deferred-minors.md`（283 行全文）与 `2026-08-07-pkg2-data-loss/progress.md`（133 行全文），另有 `l5-input-scan/progress.md` 的两段大跨度节选（约 90 行）。
+- **估计总量落在 40,000–60,000 tokens 区间，未破 100,000 上限**，但这是估计不是精确记账——如实标注不确定性，不假装精确。

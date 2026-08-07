@@ -112,6 +112,21 @@
   (iii) **人裁把它并入 flake 名单**（需人明令，因为它落在人裁 4「不含为了让测试变绿而改判据」的边界上）。
 
 **待人裁 2**：§3 的 (b) —— `SweepOptions.stderr` 契约的测试半边，包 2 现在做还是等包 1 修复环 2 之后做。
+  ⇒ **人裁 11 已答：等包 1 修复环 2 之后。本轮不做。**
+
+*** **待人裁 3（新，承重，控制器已亲验，见 §6）—— 第 4 笔与人裁 4 的授权边界正面相撞。** ***
+  **事实**：`runLoop.integration.test.ts` 的 `reads owner-transfer.json for the published-winner
+  check and finalizes none of the winner's transaction inside the publish window` **故意**把
+  「第 4 笔的残余 TOCTOU 未关闭」钉成既有判据，其注释块自陈是一次 **Human ruling** 的产物。
+  **人裁 4 的边界逐字**：「授权的是补测试，**不含为了让测试变绿而改判据**」。
+  **⇒ 要真修第 4 笔，就必须动这条判据；不动它，第 4 笔只能补测试、不能修。二选一，必须人裁。**
+  三个选项（控制器不替人选，也不预判哪个对）：
+    (i) **本轮第 4 笔只补测试、不改判据**：把残余 TOCTOU 的现状用新测试钉得更死，**修留到以后**。
+        —— 与人裁 4 的字面边界完全相容，代价是第 4 笔这一条**本轮不算修掉**。
+    (ii) **人裁扩权**：明令允许包 2 改这一条判据（**等于重开 2026-08-02 那次 Human ruling**），
+        第 4 笔真修。**必须人明令**，控制器不得推定。
+    (iii) **本轮把第 4 笔整条移出包 2**，只做债 2 与第 1 笔。
+  ⚠️ **无论选哪个，都不许由实施者自行决定** —— 这正是「不许实施者自改判据」那条铁律的适用场景。
 
 *** **人裁 10。2026-08-07。人选「记录挂账，继续开工」。** ***
   那条名单外失败：**按已具名、已测量、根因未证挂在本台账 §2，不入 flake 名单，不单开根因轮。**
@@ -159,6 +174,47 @@
 
 **控制器没做的**：没有复核他的债 2（15 调用点 / 4 个由 lease-loss 到达）、第 4 笔、第 1 笔三条。
 **它们目前是单方证词**，需在包 2 实施前由实施者或评审员再撞一次。
+
+--------------------------------------------------------------------------------
+6. 扫描员 2 交付 ＋ 控制器对其承重项的独立复核
+--------------------------------------------------------------------------------
+
+`scan-2-report.md`（DONE）。五条摘要：
+  1. deferred minor 的**可重推基数他重推为 12**（称 handoff 的「6」已被其自身作废、「10」是压缩漏计）；
+     其中仅 **T1-M4／T1-M5**（`src/persistence/fileStore.ts` 的注释）与包 2 冲突、须转入包 2。
+     ⚠️ **控制器未复核这个数**。本仓库对聚合数已栽过多次（控制器自己的口径 10/12/28 无一可重推）。
+     **在有人拿出可重数的判别式之前，不许把「12」当定论传下去。**
+  2. 人裁 4 边界逐字确认；**并查出一处真实相撞候选**（见下，控制器已亲验）。
+  3. 债 2、第 1 笔今天像是「**补**」（未找到既有实跑注入测试）；**第 4 笔像是「改」**。
+  4. 与那条名单外 flake：**文件级交集已证实**（同在 `runLoop.integration.test.ts`）；
+     **语义级交互他答「无法判定」，没有硬下全称否定** —— **记正面样本。**
+  5. `evidence.test.ts` 的 `tsxBin`/`process.cwd()` 环境陷阱今天仍成立，9 处引用全在 `run-scenario CLI` 块内。
+
+**他自报的偏离（如实上报，记正面样本）**：落盘协议**字面执行有偏离**（用 `rtk proxy zsh -c` 直跑，
+未先落盘脚本文件）；A 组 9 条 deferred minor 未逐条亲读；两个 3700+ 行测试文件未逐字通读，
+结论止于关键词检索面。
+
+*** **控制器亲验其承重项，成立，且比他说的更硬。** ***
+  `tests/controller/runLoop.integration.test.ts` 的
+  `reads owner-transfer.json for the published-winner check and finalizes none of the winner's
+   transaction inside the publish window` —— 其上方注释块**逐字**：
+    「It does NOT pin "the winner was not overwritten". It cannot: … so the loser **does** go on to
+      write its downgraded record, **which is exactly the shape of the residual TOCTOU this layer
+      leaves open (§13, 4th entry)**. … **Do not read assertion (a) as more than it is.**」
+    「⚠️ **No terminal-state assertion, deliberately.** … Asserting it as correct behaviour would
+      **write a damaged trajectory into the suite**.」
+    「**Human ruling**; the plan carries the matching in-place amendment note
+      (Amended 2026-08-02 (d), §Task A9).」
+
+*** **⇒ 这条测试的当前形状本身就是一次先前人裁的产物，且它故意把第 4 笔的残余 TOCTOU 钉成「未关闭」。** ***
+**含义**：包 2 一旦真去关闭第 4 笔的残余 TOCTOU，「loser 照样写下降级记录」就不再成立，
+**这条测试的注释与断言都得改** —— 而人裁 4 的边界逐字是「授权的是**补测试**，
+**不含为了让测试变绿而改判据**」。**两者直接相撞，且改它等于推翻先前那次人裁。**
+⇒ **进 §4 待人裁 3。控制器不替人选。**
+
+**顺带留给实施者（不要重新发现）**：同一注释块记着「Mutation 2（移除
+`tryRecoverStaleOwnerTransferLock` 里的活进程早返回）会连带弄红别处一批既有测试，名单在
+`task-A9-report.md`；**那批是噪声，不是本测试的护栏** —— 唯一算数的证据是该具名测试单跑变红」。
 
 **下一步（未执行）**：worktree 决策重判（包 2 要动 `src/`+`tests/`，**不许继承包 1/包 3 的「不开」**）
 → 开工前冲突扫描（两名只读、错开分工；输入含 10 条 deferred minor ＋ G2-null ＋ 三条路径）
