@@ -359,3 +359,265 @@ BUILD_EXIT=0
    `/private/tmp/claude-501/-Users-biran-code-skills-loop-ccloop/2260b5ef-b9b1-4d2c-82d3-115c0f027dc9/scratchpad/`
    （`run-full.sh` / `run-named.sh` / `full1-*.log` / `full2-*.log` / `n1-*.log` / `struct-*.log` / `tsc-shape1.log`）。
    ⚠️ scratchpad 是会话级目录，**评审员不要依赖它还在，请以现跑为准**。
+
+---
+---
+
+# 修复环 1 报告（fix round 1 of 5）
+
+FIX_BASE `f49f4b9` → HEAD `66e9696`（1 笔提交）。评审裁定 Spec ✅ / Quality NOT APPROVED，
+0 Critical、**1 Important**、4 Minor。**只做 Important-1，4 条 Minor 按令不动。**
+
+## F1. 结论
+
+**Important-1 成立，我不争辩。** 评审员的根因诊断是对的：`importedNames` 与 `namespaceImportedModules`
+都写成 `/import\s+…/`，而 JS/TS 里 `import` 后面、`{` 或 `*` 前面的空白是**可选的**，
+于是 `import{writeRunState as W}from"…"` 与 `import*as ns from "…"` **对两条正则完全不可见** ——
+不是匹配错，是根本没看见。后果正如他所说：**`TSC_EXIT=0` 且结构测试保持绿，而守卫已被绕过**。
+
+**这使我写进 `ownedRunStateWriter.ts` 源码的那句「a test reads runLoop.ts's source and fails if that
+import specifier reappears」成为一句失实的断言。** 那正是 F-1 的形状 ——
+**把一条没有执行力的完整性主张当成有执行力的写进源码** —— 只不过上升了一层。
+这是我这次交付物里最严重的一处，评审员定为 Important 而不是 Minor 是恰当的。
+
+**我选的修法：修机制，不弱化句子。** 评审员给了两条路（改口径 / 换真解析），
+并明确指出 `typescript` 已经是 devDependency，`ts.createSourceFile` 不引入任何工具链。
+我走后者，理由是本仓库对 D-1 定的标准就是**对排版不敏感**（旧探针正是被一个双空格打败的）；
+只改口径等于把同一个弱点从调用点搬到 import 语句再承认一次，**没有清掉那道杠**。
+
+**改了三处，全部具名**：
+
+1. `tests/controller/ownedRunStateWriter.structure.test.ts` —— 两条正则**整体退役**，
+   改为 `ts.createSourceFile(...)` 解析后遍历 `ImportDeclaration` 节点：
+   具名 import 取 `(element.propertyName ?? element.name).text`（**即导出方拼写的名字，不是本地绑定名**，
+   别名因此仍被抓住）；namespace import 取 `moduleSpecifier.text`。
+   **无新依赖**：`package.json` 一行未动，devDependencies 仍是 `@types/node` / `tsx` / `typescript` / `vitest` 四项；
+   `tsconfig.json` 的 `include` 本来就含 `tests/**/*.ts`，所以 `tsc` 与 `npm run build` 都已覆盖这个文件。
+2. `src/controller/ownedRunStateWriter.ts` 的 (ii') 句改为
+   「…cannot call writeRunState without first naming it in a **static import declaration**, and a test
+   **PARSES** runLoop.ts and fails if that import specifier reappears **in any spelling**」。
+3. 同处新增 *** `SECOND ERRATUM, S4 fix round 1` ***：**逐字保留那句失实的旧措辞**，写明它为什么假、
+   谁量到的、修法是什么。**不静默覆盖自己曾经下过的论断** —— 这是本仓库的既有纪律，
+   我上一轮对别人的论断守住了，这一轮对自己的也要守。
+
+**没做的事**：4 条 Minor 一律未修；`package.json` 未动；option (c) 未碰；
+既有判据零改动（`git diff --numstat 8ae495f..HEAD` 下 `tests/` 两项仍是 `125 0` 与 `131 0`，**零删除行**）。
+
+## F2. 三步变异证据（修好的机制）
+
+驱动脚本落盘后经 `rtk proxy zsh` 跑：`fix1-drive.sh` ＋ `fix1-mutate.mjs`（不嵌套引号）。
+每个 case 都从**同一份 pristine 备份**重铺 `runLoop.ts`，跑完立刻还原，并当场记 `git diff` 字节数。
+单跑块用**文件选择器**而不是 `-t`，所以计数是 `Test Files 1 passed (1) / Tests 1 passed (1)` —— **非零**。
+
+### 步骤 1 —— 变异前绿
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-s4
+ ✓ tests/controller/ownedRunStateWriter.structure.test.ts (1 test) 38ms
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+STRUCT_EXIT=0
+```
+```
+TSC_EXIT=0
+```
+
+### 步骤 2 —— 变异后红（**两条必需 case 逐字**）
+
+**case `D_nospace_full`（Important-1 场景 A，无空格具名 import）**
+注入 `import{writeRunState as MUT_W}from"../persistence/fileStore.js";` ＋ 把 `#7` 写点改成 `await MUT_W(runDir, state);`
+
+```
+TSC_EXIT=0
+```
+```
+ FAIL  tests/controller/ownedRunStateWriter.structure.test.ts > runLoop.ts run-state write chokepoint > does not import writeRunState, so no rewrite of a call site inside runLoop.ts can reach it
+AssertionError: expected [ 'execFile', 'promisify', …(43) ] to not include 'writeRunState'
+ ❯ tests/controller/ownedRunStateWriter.structure.test.ts:113:26
+    113|     expect(imported).not.toContain("writeRunState");
+       |                          ^
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+STRUCT_EXIT=1
+```
+
+*** 红在断言 `expect(imported).not.toContain("writeRunState")`，类型 `AssertionError`，耗时 28ms（超时阈值 5000ms）。
+不是异常、不是超时。 *** 注意 `TSC_EXIT=0` —— 编译器这一关照样放行，**所以红的确实是新机制，不是 tsc**。
+
+**case `D_ns_nospace`（Important-1 场景 B，无空格 namespace import）**
+注入 `import*as MUT_NS from "../persistence/fileStore.js";` ＋ `await MUT_NS.writeRunState(runDir, state);`
+
+```
+TSC_EXIT=0
+```
+```
+ FAIL  tests/controller/ownedRunStateWriter.structure.test.ts > runLoop.ts run-state write chokepoint > does not import writeRunState, …
+AssertionError: expected [ '../persistence/fileStore.js' ] to deeply equal []
+
+- Expected
++ Received
+
+- Array []
++ Array [
++   "../persistence/fileStore.js",
++ ]
+
+ ❯ tests/controller/ownedRunStateWriter.structure.test.ts:123:95
+    123|     expect(namespaceImportedModules(source).filter((module) => module.…
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+STRUCT_EXIT=1
+```
+
+*** 红在断言 `expect(namespaceImportedModules(source).filter(…)).toEqual([])`，`AssertionError`，38ms。 ***
+
+**三条对照 case（证明修复没有把原来挡得住的放过去，也顺带量了 Minor-1 的形状）**
+
+| case | 注入 | 结果 |
+|---|---|---|
+| `B_alias` | `import { writeRunState as MUT_W } from "…"`（有空格） | **红**，`AssertionError: expected [ …(43) ] to not include 'writeRunState'`，`:113`，30ms，`STRUCT_EXIT=1` |
+| `B_namespace` | `import * as MUT_NS from "…"`（有空格） | **红**，`AssertionError: expected [ '../persistence/fileStore.js' ] to deeply equal []`，`:123`，46ms，`STRUCT_EXIT=1` |
+| `B_nospacefrom` | `… } from"…"`（Minor-1 的形状） | **红**，`AssertionError: … …(43) … to not include 'writeRunState'`，`:113`，30ms，`STRUCT_EXIT=1` |
+
+### 步骤 3 —— 还原后绿
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-s4
+ ✓ tests/controller/ownedRunStateWriter.structure.test.ts (1 test) 44ms
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+STRUCT_EXIT=0
+```
+```
+TSC_EXIT=0
+```
+
+**还原证明**（每个 case 结束当场记一次 ＋ 全部跑完再记一次）：
+
+```
+GITDIFF_RAW_BYTES[D_nospace_full]=0
+GITDIFF_RAW_BYTES[D_ns_nospace]=0
+GITDIFF_RAW_BYTES[B_alias]=0
+GITDIFF_RAW_BYTES[B_namespace]=0
+GITDIFF_RAW_BYTES[B_nospacefrom]=0
+
+GIT_DIFF_RAW_BYTES[src/controller/runLoop.ts]=0
+GIT_DIFF_RAW_BYTES[runLoop.ts + runLoop.integration.test.ts]=0
+MARKER[MUT_W]=0  MARKER[MUT_NS]=0  MARKER[MUTANT_S4]=0  MARKER[MUTANT_NS]=0
+SANITY_HIT[createOwnedRunStateWriter]=2 个文件   SANITY_HIT[ts.createSourceFile]=1 个文件
+SANITY_MISS[zzq-nonsense-token]=0
+```
+
+⚠️ **一处口径必须写明**：`git diff` 经 Claude Code 的 rtk 钩子改写时**会吞掉原始输出**
+（空 diff 也打印 1 字节）。上表的 0 字节是用 **`rtk proxy git diff`（绕开改写）** 现测的。
+**下一位核这条时请照样走 `rtk proxy`，不要用被改写的 `git diff`。**
+
+## F3. 覆盖测试 ＋ tsc ＋ build（未过滤）
+
+命令（脚本落盘 `fix1-verify.sh`，经 `rtk proxy zsh` 跑，环境 `ECC_GATEGUARD=off DISABLE_OMC=1`）：
+
+- `npx vitest --run tests/controller/ownedRunStateWriter.structure.test.ts tests/controller/runLoop.integration.test.ts`
+- `npx vitest --run`
+- `npx tsc --noEmit -p tsconfig.json`
+- `npm run build`
+
+**两个具名文件**：
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-s4
+ ✓ tests/controller/ownedRunStateWriter.structure.test.ts (1 test) 38ms
+ ✓ tests/controller/runLoop.integration.test.ts (59 tests) 10454ms
+ Test Files  2 passed (2)
+      Tests  60 passed (60)
+COVERING_EXIT=0
+```
+
+**全套件**（`fix1-full-test.log`，全文已读，`RUN` 首行已核为本 worktree）：
+
+```
+ Test Files  31 passed (31)
+      Tests  520 passed (520)
+   Duration  17.69s
+TEST_EXIT=0
+```
+
+**全日志零 `FAIL` 行。** 允许名单里的 flake (B)、(F) 与人裁 10 那条本轮**又都通过** ——
+按既有口径只记「本轮未复现」，**不作为它们无害的证据**。
+
+```
+TSC_EXIT=0
+BUILD_EXIT=0
+```
+
+## F4. 更新后的形状表（11 条全列，含评审员补的 5 条）
+
+「修复后」一列区分三种来源：**本轮实跑**、**评审员实跑且本次修复不触及**、**仍然敞开**。
+**没有一格因为这次修复而变得更乐观地表述。**
+
+| # | 形状 | 修复前（评审员实测） | **修复后** | 依据 |
+|---|---|---|---|---|
+| 1 | `void writeRunState(…)`，无 import | 挡住（`TS2304`） | **挡住** | 机制 A（tsc）。本次未改动 tsc 这一段，评审员实测在案，**本轮未复跑** |
+| 2 | `return writeRunState(…)`，无 import | 挡住（`TS2304`） | **挡住** | 同上，**本轮未复跑** |
+| 3 | 别名 import（有空格）＋ 别名调用 | 挡住 | **仍挡住** | **本轮实跑** `B_alias`：红在 `:113`，`STRUCT_EXIT=1` |
+| 4 | `await  writeRunState(` 双空格，无 import | 挡住（`TS2304`） | **挡住** | 机制 A，**本轮未复跑** |
+| 5 | `await` 换行，无 import | 挡住（`TS2304`） | **挡住** | 机制 A，**本轮未复跑** |
+| 6 | `Promise.all([writeRunState(…)])`，无 import | 挡住（`TS2304`） | **挡住** | 机制 A，**本轮未复跑** |
+| 7 | 直接 `writeFile(join(runDir,"loop-state.json"),…)` | **仍然敞开** | *** **仍然敞开** *** | 本次修复只换了解析方式，管不到「不提这个名字」的写法。**本轮未复跑**，结论沿用我与评审员各自的实测 |
+| 8 | `import * as ns …`（**有空格**）＋ `ns.writeRunState(…)` | 挡住 | **仍挡住** | **本轮实跑** `B_namespace`：红在 `:123`，`STRUCT_EXIT=1` |
+| 8b | `import*as ns …`（**无空格**） | *** 敞开 *** | *** **已挡住** *** | **本轮实跑** `D_ns_nospace`：`TSC_EXIT=0` 但 `STRUCT_EXIT=1`，红在 `:123` |
+| 9 | 动态 `await import("…/fileStore.js")` | **仍然敞开** | *** **仍然敞开** *** | 解析只访问 `ImportDeclaration` 节点，动态 import 是 `CallExpression`，**根本不在遍历面上**。**本轮未复跑** |
+| 10 | 第三个模块 import 它，`runLoop.ts` 调那个模块 | **仍然敞开** | *** **仍然敞开** *** | 机制只读一个文件的 import 清单。**本轮未复跑** |
+| 11 | `import{writeRunState as W}from"…"`（无空格） | *** 敞开 *** | *** **已挡住** *** | **本轮实跑** `D_nospace_full`：`TSC_EXIT=0` 但 `STRUCT_EXIT=1`，红在 `:113` |
+| — | `… } from"…"`（Minor-1 的形状） | 挡住，但**靠运气**（名单被吃成 42） | **挡住，且名单正确** | **本轮实跑** `B_nospacefrom`：红在 `:113`，操作数 `…(43)`，与其它红 case 一致 |
+
+**边界的准确表述（修复后）**：机制现在覆盖 **`runLoop.ts` 里任何拼法的静态 import 声明**。
+仍然敞开的是 **#7 / #9 / #10** —— 共同点是**都不通过 `runLoop.ts` 的静态 import 清单**。
+评审员原话「boundary is wider than the report states」，那句**当时是对的**；
+本轮把「排版」这条从边界里去掉了，**但 #7/#9/#10 三条一个都没关掉，仍按敞开记。**
+唯一的对冲仍是评审员量到的那条：这四种结构性敞开的形状，在 `#7` 那一个写点上都会被新增的行为回归测试
+红在 `expect(persisted.status).toBe("planning")` 上；**其余八个写点没有这样的测试。**
+
+## F5. 勘误句现在是否为真
+
+**(ii') 现在为真** —— 但只在它自己写明的范围内为真，这一点已写进句子本身：
+它现在说的是「without first naming it in a **static import declaration**」＋「a test **PARSES** runLoop.ts
+and fails if that import specifier reappears **in any spelling**」。
+`in any spelling` 由本轮 5 个 case 实测支撑（无空格具名／无空格 namespace／有空格别名／有空格 namespace／`from"…"`），
+`static import declaration` 这个限定词把 #9（动态 import）明确排除在承诺之外。
+
+同一注释块里另有两段承重文字，请评审员一并核：
+- *** `SECOND ERRATUM, S4 fix round 1` ***：逐字保留失实旧措辞 ＋ 说明为何假、修法为何。
+- `HONEST LIMIT`：由原来只点名 `writeFile` 一条，**扩写为三条**（`writeFile` ／ 动态 `import()` ／ 第三个模块），
+  与 F4 表严格一致。
+
+## F6. 我的修复顺带 moot 掉了哪些 Minor（按令说明，未去修它们）
+
+| Minor | 是否被 moot | 依据 |
+|---|---|---|
+| **Minor-1**（惰性正则吃掉相邻 import，名单被吃成 42） | *** **已 moot** *** | 正则整体退役。本轮 `B_nospacefrom` 实测操作数为 `…(43)`，与其它红 case 一致（评审员当时量到 42）。**我没有单独去"修" Minor-1，它是随正则一起消失的** |
+| **Minor-3**（namespace 检查按路径子串 `fileStore` 划定范围） | **未 moot** | 解析器给的是精确的 module specifier，但**筛选口径仍是子串**，barrel 重导出仍不覆盖。⚠️ **我在测试注释里补了一句写明这个已知限制**（因为旧注释读起来像「namespace 这条已彻底关死」，而那句现在会被人当承诺）。**这是补口径，不是修 Minor-3；如果控制器认为连这句都超范围，删掉即可，不影响任何断言。** |
+| **Minor-2**（反空转锚点用 `appendEvent` 这个外来符号） | **未 moot，也未动** | 锚点原样保留 |
+| **Minor-4**（勘误随代码搬走，原址只剩指针） | **未 moot，也未动** | 属控制器裁量 |
+
+## F7. 预算
+
+*** **读不到 harness 实测数字，因此不给数字，也不给估计。** *** 请控制器从 harness 侧入账。
+本轮可测的非 token 量：单跑块 **8 次**（1 绿基线 ＋ 5 变异 ＋ 1 还原 ＋ 1 双文件覆盖跑）、
+全套件 **1 次**、`tsc` **8 次**、`npm run build` **1 次**、注入并还原的变异 **5 个**。
+
+## F8. 我自己发现的、必须上报的两件
+
+1. *** **`progress.md` 在我的工作区里处于已修改状态（`M`，+90 −1 行），不是我改的。** ***
+   我全程未碰它（brief §2.8 明令台账由控制器写）。我**未 stage、未提交、未还原**它，原样留在工作区。
+   **提交时只 `git add` 了我自己的两个文件**，`git status` 现仍显示它是 modified。
+   若这不是控制器有意为之，请立刻查。
+2. **本轮我没有再犯上一轮那次过滤验证输出的错**：所有验证跑全文 tee 并 `cat` 全量，
+   未对任何验证输出用 `grep` / `tail` / `head`；对日志的取值一律读全文。
+   （上一轮 §8 缺陷 2 已挂账，不重复。）
+
+## F9. 与评审意见的分歧
+
+**无分歧。** Important-1 的诊断、复现步骤、严重度定级我全部接受，且自己重新撞了一遍。
+评审员在 §8 建议的「更好的做法：用 `ts.createSourceFile` 一次退掉 Important-1 / Minor-1 / Minor-3」，
+我采纳了前两条；**Minor-3 并没有被退掉**（筛选口径仍是子串），这一点我在 F6 里如实纠正了他的预期，
+**没有顺着他的措辞把范围说大。**
