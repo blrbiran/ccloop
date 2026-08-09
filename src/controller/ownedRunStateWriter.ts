@@ -76,15 +76,29 @@ async function observeOwnership(runDir: string): Promise<OwnershipObservation> {
 //         `grep -c 'await writeRunState(' src/controller/runLoop.ts` in 7 of 7 attempts with
 //         ordinary rewrites (void / return / aliased import / double space / newline after await /
 //         Promise.all / a direct writeFile), and nothing in the repository ran that probe. The
-//         argument is now "runLoop.ts cannot call writeRunState without first importing it, and a
-//         test reads runLoop.ts's source and fails if that import specifier reappears"
-//         (tests/controller/ownedRunStateWriter.structure.test.ts). That is an enforced check,
-//         not an assertion of completeness with nothing behind it.
+//         argument is now "runLoop.ts cannot call writeRunState without first naming it in a static
+//         import declaration, and a test PARSES runLoop.ts and fails if that import specifier
+//         reappears in any spelling" (tests/controller/ownedRunStateWriter.structure.test.ts).
+//         That is an enforced check, not an assertion of completeness with nothing behind it.
+//   *** SECOND ERRATUM, S4 fix round 1 — also named, also not a silent edit. Sentence (ii') above
+//   first read "…and a test reads runLoop.ts's source and fails if that import specifier
+//   reappears", and that was FALSE AS WRITTEN. The test matched /import\s+…/ with a regex, and
+//   JS/TS makes the whitespace after `import` optional before `{` and before `*`, so
+//   `import{writeRunState as W}from"…"` and `import*as ns from "…"` were invisible to it: an
+//   independent reviewer measured both at TSC_EXIT=0 with the structure test still GREEN while the
+//   guard was bypassed. That is the F-1 defect class one layer up — a completeness claim asserted
+//   in source as enforced when it was not — so the mechanism was repaired rather than the sentence
+//   weakened: the test now parses with ts.createSourceFile and walks ImportDeclaration nodes, which
+//   is formatting-insensitive by construction. `typescript` was already a devDependency, so no
+//   toolchain was added. The false wording is quoted here rather than deleted because this
+//   repository does not silently overwrite an argument it once made. ***
 //   HONEST LIMIT, stated here rather than in the report only: this does NOT stop runLoop.ts from
-//   writing loop-state.json through some OTHER module — a direct
-//   `writeFile(join(runDir, "loop-state.json"), …)` bypasses the guard and the test alike. That
-//   path is STILL OPEN. Closing it needs the type-level invariant (option (c)), which changes
-//   existing test expectations in tests/persistence/fileStore.test.ts and was not authorised. ***
+//   writing loop-state.json through some OTHER module. Three paths are STILL OPEN and were each
+//   measured open, not assumed: a direct `writeFile(join(runDir, "loop-state.json"), …)`, which
+//   never names writeRunState; a dynamic `await import("…/fileStore.js")`, which is not a static
+//   import declaration; and a third module that imports writeRunState and is called from here.
+//   Closing them needs the type-level invariant (option (c)), which changes existing test
+//   expectations in tests/persistence/fileStore.test.ts and was not authorised. ***
 //
 // That structure is the point, and it is a correction of how the first version of this guard
 // argued for its own completeness. That version sat inside persistTerminalState and justified its
