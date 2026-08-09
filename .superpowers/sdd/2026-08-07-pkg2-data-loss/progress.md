@@ -543,3 +543,75 @@ finalize => 同意」。** ***
 
   **控制器没做的（如实记）**：没有实跑阶段 1 的变更去验上述判定 —— 上述全部是**读代码的机械论证**，
   **实施者必须自己再撞一次**，尤其是 zeroWrite 那条全树快照。**这条判定不构成实施者的免验理由。**
+
+--------------------------------------------------------------------------------
+14. 任务 3 阶段 1 —— S2 工作区、实施、独立评审、修复环 1
+--------------------------------------------------------------------------------
+
+**S2 工作区（人裁 12 的延续，人裁 20 批准按控制器顺序执行）**：
+  `git worktree add .worktrees/pkg2-data-loss -b feat/pkg2-data-loss HEAD` —— **基点显式写 HEAD**
+  （`EnterWorktree` 默认基点是 `origin/main`，当时 = `077919c`，照默认走会丢掉本地领先的两笔）。
+  `npm ci` ⇒ `CI_EXIT=0`。**工作区基线（控制器亲跑、未过滤、`RUN` 首行已核为 worktree）**：
+  ` Test Files  1 failed | 29 passed (30)` ／ `      Tests  1 failed | 516 passed (517)`
+  **唯一的红是允许出现的 flake (B)**（`records env names only and tracks descendants rooted at the
+  spawned pid` / `Test timed out in 5000ms`，逐字对上；不是陷阱 5 那种 `spawn ENOENT` 九连红
+  ⇒ `npm ci` 已生效）；`TSC_EXIT=0` ／ `BUILD_EXIT=0`。
+  **人裁 10 那条名单外失败本轮又通过 ⇒ 累计 1/8 红**（仍不构成它消失的证据）。
+
+*** **⚠️ 一条差点毁掉锚点的操作，控制器自曝**：控制器一度把本节写进**主仓库**的台账副本。
+`main` 一旦领先，`feat/pkg2-data-loss` 就再也无法 `--ff-only` 合并，只能造一笔**非门 merge**，
+而那会毁掉「`git log --merges` 末笔 = GATE-PKG3」这个**唯一锚点**。已 `git checkout --` 还原
+（`main` 干净、停在 `1535f50`），本节改写进 worktree 副本。 ***
+  ⇒ **下一位：包 2 期间一切台账写入只进 worktree 副本，主仓库不得领先。**
+
+**Task 3 (阶段 1): dispatched** —— BASE `2d7ff84`，brief `task-3-impl-brief.md`（已 `git add -f` 入库），
+  实施者 sonnet 档。**brief 里写死的硬边界**：只做阶段 1（不碰 `parsePid` ／
+  `tryRecoverStaleOwnerTransferLock` 判活 ／ 取锁原语 ／ `readOwnerRecordWithoutRecovery` ／
+  `registry/` ／ `leaseGate` ／ `leaseHeartbeat` ／ 任何 spec）；**本轮不给任何改判据的例外**
+  （人裁 13/14/17 的例外各自只对其具名的那一条，明写不得援引）；三步判据；落盘协议；探针纪律；
+  控制器的 S1 判定**只供参考、不供免验**。
+
+**实施者交付**（`2d7ff84..be4c344`，DONE）：`recoverInterruptedOwnerTransfer` 的 `!lockHeld` 分支改成
+  「取锁 → 持锁 finalize → `finally` 释放」，取锁失败**只在取锁这一步**宽 catch 并 `return`；
+  新增一条并发判据（用 `fileStore.test.ts` 既有的 `vi.doMock("node:fs/promises", …)` seam 强制交错，
+  **生产代码未为测试改动**）。自报 518 tests 全绿、三个退出码全 0。
+
+*** **⚠️ 预算：实施者自报「约 100k 的 60–80%」，harness 实测 195,610 tokens ≈ 196k。** ***
+  **自报低估约 2.5–3.3 倍，且已破单任务 100k 约 2 倍。** 本仓库既有立场是「先报预算」记正面样本 ——
+  **但这一轮证明「自报的估计数」本身不可信**。⇒ **下一份 brief 应要求「给得出实数就给实数，
+  给不出就明说拿不到」，不要再收估计当结论。**
+
+**独立评审员**（换人，opus 档，未参与实施；报告 `review-task-3.md`，commit `7ff426d`）：
+  *** **规范符合 ✅ ／ 质量不通过 ／ 0 Critical / 3 Important / 3 Minor。** ***
+  改动面严格等于阶段 1（3 文件、`tests/` **零删除行**、`src/` 唯一删除行是旧探锁条件），七处禁区逐条核过未碰。
+  三条 Important：
+  1. 新判据里 `expect(ownerFromB.currentOwnerEpoch).toBe(1)` 钉的是**偶然的微任务顺序**而非不变式；
+     其上方承重注释「held by the same gates」**今天为假** —— 评审员**只在测试侧**加一次合法的 100ms
+     重调度（生产代码一字未动）就让它在**正确行为**上变红（`expected 2 to be 1`）。
+  2. *** **「finalize 抛时走 `finally` 释放」这条设计细节全仓零判据** *** —— `release` 移出 `finally`，
+     518 条全绿。
+  3. 新判据对**真回归**的唯一鉴别力是**一次 5 秒超时**，而非任何断言。
+  ⚠️ 评审员四次变异全部从 `be4c344` 出发、`git checkout --` 还原，`git diff --stat` 零输出、
+  `MUTATION` 零命中、两条 sanity 探针已验活。**「允许为验证做临时变异并证明还原」这条 brief 修正
+  （§9 记的那个 brief 设计缺陷）本轮兑现，记正面样本。**
+
+*** **控制器独立复核评审员的承重条（不接受评审员自证）** ***：
+  取第 2 条（它决定修复内容）。变异 = 把 `await lock.release()` 移出 `finally`（加 `// MUTATION`），
+  跑最锋利的两张面 `fileStore.test.ts`（77 条，含新判据）＋ `zeroWrite.test.ts`（5 条全树快照）
+  ⇒ ` Tests  82 passed (82)`、`MUTANT_EXIT=0`。*** **成立：该设计细节确实零覆盖。** ***
+  还原：`git checkout -- src/persistence/fileStore.ts` ⇒ `git diff` 空、`git status --porcelain` 空、
+  `grep -c MUTATION` = 0、sanity grep（`lock.release()`）命中 4、复跑 82/82 绿。
+
+*** **⚠️ 控制器本轮自曝错误 2 次** ***：
+  1. **第三次栽在同一形状上**：第一次还原证明用了**被 rtk 默认改写**的 `git diff --stat | wc -l`，
+     返回 `1`（rtk 折叠后打的 `ok` 行），**差点被读成「还有残留」**。
+     **验证性命令必须走 `rtk proxy` 取原始输出。** 台账既有记载已有两次同形（`grep -v` 被拦；
+     删除前的 `find` 清点被折叠成假零输出）——**该形状在本仓库已稳定复现，不是个别疏忽。**
+  2. **差点毁掉门锚点**（见本节开头那条）。
+
+**修复环 1/5：dispatched**（resume 原实施者 `a5377014faebeb1ba`，FIX_BASE `7ff426d`）。
+  3 条 Important 进环，**3 条 Minor 一律 deferred、不进环**。
+
+**⚠️ Rule 6 预算通报（不静默）**：实施者 195.6k ＋ 评审员 162.6k ＋ 控制器本轮
+  ⇒ **单会话 300k 已明显突破，单任务 100k 亦破。人裁 16 只对任务 2 有效，不外推到任务 3。**
+  **控制器已向人 surface，等人裁是否继续。**
