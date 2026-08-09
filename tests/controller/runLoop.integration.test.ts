@@ -1303,11 +1303,21 @@ describe("runLoop", () => {
 
     const finalState = await runLoopFromState(contract, runDir, adapter, state, undefined, leaseLoss);
 
-    // The exact (not `toContain`) list carries both halves at once: the stop is still reported
-    // (`loop_cancelled`, written only by persistTerminalState) AND the guard fired
-    // (`terminal_write_abandoned`, written only by the guard). It also rules out any adapter call
-    // having slipped through above the checkpoint.
-    expect(await readEventTypes(runDir)).toEqual(["loop_cancelled", "terminal_write_abandoned"]);
+    // The exact (not `toContain`) list carries three things at once. `run_state_write_abandoned`
+    // is the top-of-loop write being refused — that write sits ABOVE the lease-loss checkpoint and
+    // used to mutate the other owner's file (review finding F-2). `loop_cancelled` is the stop
+    // still being reported (written only by persistTerminalState). `terminal_write_abandoned` is
+    // the terminal write being refused (written only by the guard). The list also rules out any
+    // adapter call having slipped through above the checkpoint.
+    //
+    // Two distinct abandonment types rather than one repeated: the guard latches one event of each
+    // kind per runLoopFromState invocation, so this also pins that the terminal refusal stays
+    // visible even though a non-terminal refusal happened first.
+    expect(await readEventTypes(runDir)).toEqual([
+      "run_state_write_abandoned",
+      "loop_cancelled",
+      "terminal_write_abandoned",
+    ]);
 
     // Reporting half: unchanged by the fix. This process tells its caller why it stopped.
     expect(finalState.status).toBe("cancelled");
@@ -1366,6 +1376,145 @@ describe("runLoop", () => {
       runState: { ...persisted, status: "cancelled" },
     });
     expect(controlResult).toEqual({ ok: false, reason: "run status cancelled is not resumable" });
+  });
+
+  // Package 2 / debt 2, review finding F-1 (Critical). The FIRST version of the ownership guard
+  // sat inside persistTerminalState and justified its coverage with "persistTerminalState is the
+  // only writer of a terminal loop-state.json". That was false: "failed" is terminal
+  // (src/state/stateMachine.ts, `failed: []`) and runLoopFromState's outer catch transitions to it
+  // and calls writeRunState directly, entirely outside persistTerminalState. So a terminal status
+  // still landed in a run owned by someone else, with exactly the debt-2 consequence.
+  //
+  // This test reaches that branch specifically — a plain adapter failure, NOT a lease error, so
+  // isLeaseStopError does not match and control falls through to the generic failure handling at
+  // the bottom of the catch. It would pass against the first version of the guard, which is the
+  // point: it is the regression the first version's own reasoning hid.
+  it("refuses to write a terminal failed status into a run a different owner holds when the attempt fails for a non-lease reason", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+    const state: RunState = { ...makeRunState("planning"), currentAttempt: 0, attemptsUsed: 0 };
+
+    await initializeRunFiles(runDir, contract, state);
+    const persistedStateBefore = await readFile(join(runDir, "loop-state.json"), "utf8");
+
+    await writeOwnerRecord(runDir, {
+      runId: "task-1",
+      logicalSessionId: "task-1:t0",
+      currentOwnerEpoch: 2,
+      currentProcessInstanceId: "pid:999999:1234567890",
+      lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+      ownerStatus: "current",
+      supersededByEpoch: null,
+      leaseAffirmedAt: "2026-07-25T00:00:00.000Z",
+    });
+
+    const adapter: RuntimeAdapter = {
+      // A plain failure, deliberately not a lease error: this is what routes to the outer catch's
+      // generic `transitionRunState(state, "failed", …)` + writeRunState pair.
+      async plan() {
+        throw new Error("test-injected: adapter failure that is not a lease error");
+      },
+      async execute() {
+        throw new Error("execute should not run");
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoopFromState(contract, runDir, adapter, state);
+
+    // Reporting half, unchanged: this process still reports that its own attempt failed.
+    expect(finalState.status).toBe("failed");
+
+    // The requirement: the other owner's run status was NOT written. Without the fix this reads
+    // "failed", which is terminal and unresumable exactly as "cancelled" is.
+    const persisted = await readRunState(runDir);
+    expect(persisted.status).toBe("planning");
+    expect(await readFile(join(runDir, "loop-state.json"), "utf8")).toBe(persistedStateBefore);
+    expect(await readEventTypes(runDir)).toContain("terminal_write_abandoned");
+
+    // Proved with the production gate rather than by eyeballing the status, and with a control
+    // that feeds the same gate the status the unguarded code would have persisted.
+    const ownerRecord = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as OwnerRecord;
+    const ownerTransfer: OwnerTransferRecord = {
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      priorProcessInstanceId: "pid:100:1",
+      newProcessInstanceId: "pid:999999:1234567890",
+      transferredAt: "2026-07-25T00:00:00.000Z",
+      reason: "owner lost",
+      eligibleForContinuation: true,
+    };
+    const reconciliation: ReconciliationRecord = {
+      staleSuspicionBasis: [],
+      staleConfirmed: true,
+      ownershipVerdict: "OWNER_LOST",
+      lastTrustedBoundary: "execute",
+      conflictingEvidence: [],
+      takeoverPermission: { allowed: true, reason: "ok" },
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      eligibleForContinuation: true,
+    };
+
+    expect(evaluateResumeEligibility({ ownerRecord, ownerTransfer, reconciliation, runState: persisted }))
+      .toEqual({ ok: true });
+    expect(evaluateResumeEligibility({
+      ownerRecord,
+      ownerTransfer,
+      reconciliation,
+      runState: { ...persisted, status: "failed" },
+    })).toEqual({ ok: false, reason: "run status failed is not resumable" });
+  });
+
+  // Package 2 / debt 2, review finding F-3/F-4. The guard fails OPEN when it cannot read the owner
+  // record — a record it could not parse has identified nobody, least of all a different owner,
+  // and refusing there would turn a stop into a crash. What F-3 caught is that the first version
+  // failed open with no trace at all, which is the silent failure this repository already has a
+  // stated position against (fileStore.ts, writeBoundaryArtifacts).
+  //
+  // This pins BOTH halves: the write proceeds AND the fail-open is recorded. Asserting only the
+  // event would pass against a guard that refused the write; asserting only the write would pass
+  // against the silent version.
+  it("records ownership_unverified and still writes when the owner record is present but unreadable", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+    const state: RunState = { ...makeRunState("planning"), currentAttempt: 0, attemptsUsed: 0 };
+
+    await initializeRunFiles(runDir, contract, state);
+    await writeFile(join(runDir, "owner-record.json"), "{ not json");
+
+    const leaseLoss = createLeaseLossSignal();
+    leaseLoss.lost = new RunLeaseLostError("test-injected: this process's own lease died");
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        throw new Error("plan should not run: the lease-loss checkpoint sits above any attempt");
+      },
+      async execute() {
+        throw new Error("execute should not run");
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoopFromState(contract, runDir, adapter, state, undefined, leaseLoss);
+
+    // Fail-open: the write happened. An unreadable record must not strand a run that may well be
+    // this process's own, and must not convert a stop into a crash.
+    expect(finalState.status).toBe("cancelled");
+    expect((await readRunState(runDir)).status).toBe("cancelled");
+
+    // Not silent: exactly one record of the fail-open, and no false accusation of a foreign owner.
+    const eventTypes = await readEventTypes(runDir);
+    expect(eventTypes).toContain("ownership_unverified");
+    expect(eventTypes).not.toContain("terminal_write_abandoned");
+    expect(eventTypes).not.toContain("run_state_write_abandoned");
+    expect(eventTypes.filter((type) => type === "ownership_unverified")).toHaveLength(1);
   });
 
   // Task B2 / L3 §5.4 test 8. runLoopFromState is driven directly because runLoop() takes no
