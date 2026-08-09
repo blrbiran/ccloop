@@ -944,27 +944,28 @@ async function persistBoundaryAnalysis(
 // Reads RAW, for leaseGate's §7.1 reason: readOwnerRecord runs recoverInterruptedOwnerTransfer
 // first, and a refusal to write must not trigger crash recovery as its side effect.
 //
-// The ENOENT / non-ENOENT split is leaseGate's, verbatim in intent: no record at all names no
-// other owner, so there is nobody to protect and the write proceeds. Any other read failure, and
-// any record too malformed to yield an id, is not "nobody owns this" and must not be read as
-// permission — it propagates, exactly as it does out of the gate.
+// Deliberately UNLIKE leaseGate on unreadable input, and this is the one place the two must
+// diverge. The gate reads before the run starts, so refusing on an unreadable record costs a
+// startup; this reads while a run is stopping, where the same refusal would propagate out of
+// runLoopFromState and convert a stop into a crash. A record that cannot be read has not
+// identified anyone, least of all a DIFFERENT owner, so it is no basis for a refusal — and the
+// unreadable case already has an owner: leaseHeartbeat answers it with lease_unverifiable, which
+// is the designed handling and which this must not pre-empt. The guard therefore only ever ADDS a
+// refusal, and only on a positively identified foreign id.
 async function foreignOwnerOf(runDir: string): Promise<string | null> {
-  let raw: unknown;
+  let ownerProcessInstanceId: string;
 
   try {
-    raw = await readOwnerRecordWithoutRecovery(runDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-
-    throw error;
+    ownerProcessInstanceId = parseOwnerRecordForLease(
+      await readOwnerRecordWithoutRecovery(runDir),
+    ).currentProcessInstanceId;
+  } catch {
+    // Absent, unreadable, or too malformed to yield an id — see above. No identified owner.
+    return null;
   }
 
   // §5.1: opaque, compared only for string equality — the same comparison the gate makes, so a
   // legacy or recycled id can only add refusals here too.
-  const ownerProcessInstanceId = parseOwnerRecordForLease(raw).currentProcessInstanceId;
-
   return ownerProcessInstanceId === buildProcessInstanceId() ? null : ownerProcessInstanceId;
 }
 
