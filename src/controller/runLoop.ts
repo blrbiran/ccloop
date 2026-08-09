@@ -6,6 +6,7 @@ import {
   OwnerTransferLockBusyError,
   OwnerTransferPreconditionError,
   readOwnerRecord,
+  readOwnerRecordWithoutRecovery,
   writeAttemptArtifacts,
   writeBoundaryArtifacts,
   writeOwnerRecord,
@@ -20,7 +21,12 @@ import { applyOwnerEpochTransfer, evaluateOwnership } from "../ownership/ownerCo
 import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
 import type { LeaseHeartbeat } from "./leaseHeartbeat.js";
-import { RunHeartbeatStoppedError, RunLeaseLostError, RunLeaseUnverifiableError } from "../ownership/lease.js";
+import {
+  parseOwnerRecordForLease,
+  RunHeartbeatStoppedError,
+  RunLeaseLostError,
+  RunLeaseUnverifiableError,
+} from "../ownership/lease.js";
 import type {
   AttemptContext,
   AttemptPlan,
@@ -928,12 +934,77 @@ async function persistBoundaryAnalysis(
   }
 }
 
+// Package 2 / debt 2. Answers ONE question: does owner-record.json on disk name a process other
+// than this one? That is deliberately NOT checkRunLease's question and this must not be rewritten
+// to call it. The gate asks "is a LIVE lease held by someone else", because taking over a run
+// whose lease has lapsed is legitimate; this asks "am I the owner", and a lapsed lease does not
+// promote a non-owner into one. Ownership changes hands only through the epoch transfer, so a
+// record naming someone else refuses here whether their lease is fresh, stale, or absent.
+//
+// Reads RAW, for leaseGate's §7.1 reason: readOwnerRecord runs recoverInterruptedOwnerTransfer
+// first, and a refusal to write must not trigger crash recovery as its side effect.
+//
+// The ENOENT / non-ENOENT split is leaseGate's, verbatim in intent: no record at all names no
+// other owner, so there is nobody to protect and the write proceeds. Any other read failure, and
+// any record too malformed to yield an id, is not "nobody owns this" and must not be read as
+// permission — it propagates, exactly as it does out of the gate.
+async function foreignOwnerOf(runDir: string): Promise<string | null> {
+  let raw: unknown;
+
+  try {
+    raw = await readOwnerRecordWithoutRecovery(runDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+
+    throw error;
+  }
+
+  // §5.1: opaque, compared only for string equality — the same comparison the gate makes, so a
+  // legacy or recycled id can only add refusals here too.
+  const ownerProcessInstanceId = parseOwnerRecordForLease(raw).currentProcessInstanceId;
+
+  return ownerProcessInstanceId === buildProcessInstanceId() ? null : ownerProcessInstanceId;
+}
+
+// Package 2 / debt 2: the ownership guard sits HERE, in the one writer, rather than at the four
+// lease-loss call sites that motivated it. This function is the only writer of a terminal
+// loop-state.json and of a `loop_<terminal>` event, and "cancelled" is a dead end (stateMachine
+// `cancelled: []`, absent from resumeLoop's RESUMABLE_STATUSES) — so one check here covers all
+// fifteen call sites and cannot be forgotten by the sixteenth.
+//
+// It sits at the TOP, above transitionRunState: a run this process does not own is not this
+// process's to re-decide, and computing a transition that may itself be illegal (the caller at the
+// isTerminalRunStatus branch relies on never reaching an illegal one) is not a prerequisite for
+// declining to write.
+//
+// The refusal returns `state` UNCHANGED, which is the point of the whole guard: the real owner's
+// run stays exactly as resumable as it was. It is not silent — the abandonment is appended to
+// events.jsonl, following writeBoundaryArtifacts' stance (fileStore.ts) that a protective
+// abandonment with no outlet at all "would be a genuine silent failure". Unlike that call site
+// this one has no operator callback, so events.jsonl is the SOLE outlet and the append is
+// deliberately NOT swallowed: swallowing it would leave the abandonment with no record anywhere.
+// A throw from it is loud and, unlike the swallow's motivating case there, cannot be upgraded into
+// a failed attempt — every one of the four lease-loss call sites either sits outside the attempt
+// try or already sits inside its catch, so this throw leaves runLoopFromState without a write.
 async function persistTerminalState(
   runDir: string,
   state: RunState,
   decision: TerminalDecision,
   reason: string,
 ): Promise<RunState> {
+  const foreignOwner = await foreignOwnerOf(runDir);
+
+  if (foreignOwner !== null) {
+    await appendEvent(runDir, {
+      type: "terminal_write_abandoned",
+      at: new Date().toISOString(),
+      detail: `refused to write terminal status ${decision} (${reason}) into a run owned by ${foreignOwner}, not by ${buildProcessInstanceId()}`,
+    });
+    return state;
+  }
+
   const terminalState = transitionRunState(state, decision, reason);
   await appendTransitionEvent(runDir, terminalState, `loop_${decision}`, reason);
   await writeRunState(runDir, terminalState);

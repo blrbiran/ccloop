@@ -1236,28 +1236,34 @@ describe("runLoop", () => {
     expect(await pathExists(join(runDir, "boundary-analysis.json"))).toBe(false);
   });
 
-  // Package 2 / Task 1 (debt 2): persistTerminalState (src/controller/runLoop.ts, module-private,
-  // not exported) has no ownership guard. Its body is exactly
-  // `transitionRunState` + `appendTransitionEvent` + `writeRunState` — it never reads
-  // owner-record.json, so it cannot tell whether the process calling it still owns the run. It is
-  // reached here through the FIRST `leaseLoss.lost !== null` checkpoint at the top of the loop
-  // (runLoop.ts:1061-1062) — the same branch runLoop() itself takes in production the moment its
-  // own heartbeat reports a RunLeaseLostError (runLoop.ts:976-986).
+  // Package 2 / Task 2 (debt 2, fixed): persistTerminalState (src/controller/runLoop.ts,
+  // module-private, not exported) now reads owner-record.json before it writes anything, and
+  // refuses when that record names a process other than this one. Task 1 pinned the defect with
+  // this same scenario and the opposite expectations; the scenario is unchanged and only the
+  // expectations are flipped, so the two versions are directly comparable.
   //
-  // The injection makes the "no longer owns it" half of the debt concrete rather than asserted:
-  // owner-record.json on disk already names a DIFFERENT, live, current, non-superseded owner at a
-  // newer epoch before this call is made. persistTerminalState is never told that and writes
-  // "cancelled" anyway. The control assertion at the end (same ownerRecord/ownerTransfer/
-  // reconciliation, only runState.status flipped back to a resumable value) proves that this
-  // write — and nothing else — is what turns an otherwise cleanly resumable, currently-owned run
-  // into a permanent dead end for its real owner.
-  it("writes an unresumable cancelled status into a run a different, current owner already holds when this process's own lease is lost", async () => {
+  // Reached through the FIRST `leaseLoss.lost !== null` checkpoint at the top of the loop
+  // (runLoopFromState) — the same branch runLoop() itself takes in production the moment its own
+  // heartbeat reports a RunLeaseLostError. owner-record.json on disk already names a DIFFERENT,
+  // live, current, non-superseded owner at a newer epoch before that checkpoint is reached.
+  //
+  // The requirement being pinned is not "no cancelled event". It is that the OTHER owner's run
+  // survives this process's exit as a resumable run, proved with the production gate
+  // (evaluateResumeEligibility) rather than by reading the status back and calling it good — and
+  // the control at the end feeds that same gate the status the unguarded code used to write, to
+  // show the gate is not answering `ok` for some reason unrelated to the write that did not
+  // happen.
+  it("refuses to write a terminal status into a run a different, current owner already holds when this process's own lease is lost, leaving that run resumable", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const contract = createContract(repoPath);
     const state: RunState = { ...makeRunState("planning"), currentAttempt: 0, attemptsUsed: 0 };
 
     await initializeRunFiles(runDir, contract, state);
+    // Written by initializeRunFiles through the same writeJsonFileAtomically that writeRunState
+    // uses (src/persistence/fileStore.ts), so the comparison at the end is a byte comparison and
+    // not a comparison of two serializers.
+    const persistedStateBeforeLoss = await readFile(join(runDir, "loop-state.json"), "utf8");
 
     // Ownership has already changed hands: a different process instance is the CURRENT, live
     // owner at epoch 2 (ownerStatus "current", not superseded). The `state` above belongs to the
@@ -1292,20 +1298,26 @@ describe("runLoop", () => {
 
     const finalState = await runLoopFromState(contract, runDir, adapter, state, undefined, leaseLoss);
 
-    // persistTerminalState fired: it is the only writer of a `loop_<terminal>` event, and the
-    // exact (not `toContain`) event list also rules out any adapter call having slipped through
+    // The guard fired and persistTerminalState did not. The exact (not `toContain`) list carries
+    // both halves in one assertion: `terminal_write_abandoned` is written only by the guard, and
+    // the absence of `loop_cancelled` is decisive because persistTerminalState is the only writer
+    // of a `loop_<terminal>` event. It also rules out any adapter call having slipped through
     // above the checkpoint.
-    expect(await readEventTypes(runDir)).toEqual(["loop_cancelled"]);
-    expect(finalState.status).toBe("cancelled");
+    expect(await readEventTypes(runDir)).toEqual(["terminal_write_abandoned"]);
+    expect(finalState.status).toBe("planning");
     const persisted = await readRunState(runDir);
-    expect(persisted.status).toBe("cancelled");
+    expect(persisted.status).toBe("planning");
     expect(persisted).toEqual(finalState);
 
-    // "cancelled" is a dead end: no legal transition leads out of it (src/state/stateMachine.ts,
-    // `cancelled: []`) and it is absent from RESUMABLE_STATUSES (src/controller/resumeLoop.ts).
-    // Proved here with the actual gate function against the SAME ownerRecord written above, plus
-    // an ownerTransfer/reconciliation pair constructed to satisfy every other criterion — so the
-    // only thing the gate can be refusing on is the run status this test just caused.
+    // Stronger than "the status is not cancelled": loop-state.json is byte-identical to what stood
+    // there before this process ever reached the checkpoint. The top-of-loop writeRunState runs
+    // above the lease-loss check and is therefore included in what this pins — the real owner's
+    // file is not merely still resumable, it is unmodified.
+    expect(await readFile(join(runDir, "loop-state.json"), "utf8")).toBe(persistedStateBeforeLoss);
+
+    // The requirement itself, via the production gate: the other owner can still resume. Fed the
+    // SAME ownerRecord written above plus an ownerTransfer/reconciliation pair satisfying every
+    // other criterion, so the run status is the only variable left in the verdict.
     const ownerTransfer: OwnerTransferRecord = {
       priorOwnerEpoch: 1,
       newOwnerEpoch: 2,
@@ -1328,19 +1340,21 @@ describe("runLoop", () => {
     };
 
     const result = evaluateResumeEligibility({ ownerRecord, ownerTransfer, reconciliation, runState: persisted });
-    expect(result).toEqual({ ok: false, reason: "run status cancelled is not resumable" });
+    expect(result).toEqual({ ok: true });
 
-    // Control: identical input except runState.status flipped back to a resumable value. Every
-    // other criterion was already satisfied, so this alone flips the verdict — isolating
-    // persistTerminalState's write as the sole cause of the loss, not an artifact of how the
-    // owner/transfer/reconciliation fixtures above happen to be shaped.
+    // Control: identical input except runState.status forced to the value the unguarded code used
+    // to persist here. "cancelled" is a dead end — no legal transition leads out of it
+    // (src/state/stateMachine.ts, `cancelled: []`) and it is absent from RESUMABLE_STATUSES
+    // (src/controller/resumeLoop.ts) — so this alone flips the verdict. That is what makes the
+    // `ok: true` above an assertion about the write that did not happen, rather than an artifact
+    // of how the owner/transfer/reconciliation fixtures happen to be shaped.
     const controlResult = evaluateResumeEligibility({
       ownerRecord,
       ownerTransfer,
       reconciliation,
-      runState: { ...persisted, status: "executing" },
+      runState: { ...persisted, status: "cancelled" },
     });
-    expect(controlResult).toEqual({ ok: true });
+    expect(controlResult).toEqual({ ok: false, reason: "run status cancelled is not resumable" });
   });
 
   // Task B2 / L3 §5.4 test 8. runLoopFromState is driven directly because runLoop() takes no
