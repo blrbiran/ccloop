@@ -5,17 +5,17 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStopRequestSignal, parseChangedPathsFromGitStatus, runLoop, runLoopFromState } from "../../src/controller/runLoop.js";
+import { createLeaseLossSignal, createStopRequestSignal, parseChangedPathsFromGitStatus, runLoop, runLoopFromState } from "../../src/controller/runLoop.js";
 import { initializeRunFiles, writeOwnerRecord } from "../../src/persistence/fileStore.js";
-import { RunHeartbeatStoppedError } from "../../src/ownership/lease.js";
+import { RunHeartbeatStoppedError, RunLeaseLostError } from "../../src/ownership/lease.js";
 import type { LeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
-import { resumeLoop } from "../../src/controller/resumeLoop.js";
+import { evaluateResumeEligibility, resumeLoop } from "../../src/controller/resumeLoop.js";
 import { SubprocessClaudeAdapter } from "../../src/runtime/claude/subprocessClaudeAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
 import { evaluateRunBoundary } from "../../src/stop/stopController.js";
-import type { AttemptContext, RuntimeAdapter } from "../../src/runtime/types.js";
+import type { AttemptContext, OwnerRecord, OwnerTransferRecord, ReconciliationRecord, RuntimeAdapter } from "../../src/runtime/types.js";
 import type { RunState } from "../../src/state/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -1234,6 +1234,113 @@ describe("runLoop", () => {
     // either — the refusal escapes before it, which is what keeps a published reconciliation
     // record out of this branch's reach.
     expect(await pathExists(join(runDir, "boundary-analysis.json"))).toBe(false);
+  });
+
+  // Package 2 / Task 1 (debt 2): persistTerminalState (src/controller/runLoop.ts, module-private,
+  // not exported) has no ownership guard. Its body is exactly
+  // `transitionRunState` + `appendTransitionEvent` + `writeRunState` — it never reads
+  // owner-record.json, so it cannot tell whether the process calling it still owns the run. It is
+  // reached here through the FIRST `leaseLoss.lost !== null` checkpoint at the top of the loop
+  // (runLoop.ts:1061-1062) — the same branch runLoop() itself takes in production the moment its
+  // own heartbeat reports a RunLeaseLostError (runLoop.ts:976-986).
+  //
+  // The injection makes the "no longer owns it" half of the debt concrete rather than asserted:
+  // owner-record.json on disk already names a DIFFERENT, live, current, non-superseded owner at a
+  // newer epoch before this call is made. persistTerminalState is never told that and writes
+  // "cancelled" anyway. The control assertion at the end (same ownerRecord/ownerTransfer/
+  // reconciliation, only runState.status flipped back to a resumable value) proves that this
+  // write — and nothing else — is what turns an otherwise cleanly resumable, currently-owned run
+  // into a permanent dead end for its real owner.
+  it("writes an unresumable cancelled status into a run a different, current owner already holds when this process's own lease is lost", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+    const state: RunState = { ...makeRunState("planning"), currentAttempt: 0, attemptsUsed: 0 };
+
+    await initializeRunFiles(runDir, contract, state);
+
+    // Ownership has already changed hands: a different process instance is the CURRENT, live
+    // owner at epoch 2 (ownerStatus "current", not superseded). The `state` above belongs to the
+    // process about to discover its own lease died — it is not this owner.
+    const newOwnerProcessInstanceId = "pid:999999:1234567890";
+    const ownerRecord: OwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1:t0",
+      currentOwnerEpoch: 2,
+      currentProcessInstanceId: newOwnerProcessInstanceId,
+      lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+      ownerStatus: "current",
+      supersededByEpoch: null,
+      leaseAffirmedAt: "2026-07-25T00:00:00.000Z",
+    };
+    await writeOwnerRecord(runDir, ownerRecord);
+
+    const leaseLoss = createLeaseLossSignal();
+    leaseLoss.lost = new RunLeaseLostError("test-injected: this process's own lease died");
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        throw new Error("plan should not run: the lease-loss checkpoint sits above any attempt");
+      },
+      async execute() {
+        throw new Error("execute should not run");
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoopFromState(contract, runDir, adapter, state, undefined, leaseLoss);
+
+    // persistTerminalState fired: it is the only writer of a `loop_<terminal>` event, and the
+    // exact (not `toContain`) event list also rules out any adapter call having slipped through
+    // above the checkpoint.
+    expect(await readEventTypes(runDir)).toEqual(["loop_cancelled"]);
+    expect(finalState.status).toBe("cancelled");
+    const persisted = await readRunState(runDir);
+    expect(persisted.status).toBe("cancelled");
+    expect(persisted).toEqual(finalState);
+
+    // "cancelled" is a dead end: no legal transition leads out of it (src/state/stateMachine.ts,
+    // `cancelled: []`) and it is absent from RESUMABLE_STATUSES (src/controller/resumeLoop.ts).
+    // Proved here with the actual gate function against the SAME ownerRecord written above, plus
+    // an ownerTransfer/reconciliation pair constructed to satisfy every other criterion — so the
+    // only thing the gate can be refusing on is the run status this test just caused.
+    const ownerTransfer: OwnerTransferRecord = {
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      priorProcessInstanceId: "pid:100:1",
+      newProcessInstanceId: newOwnerProcessInstanceId,
+      transferredAt: "2026-07-25T00:00:00.000Z",
+      reason: "owner lost",
+      eligibleForContinuation: true,
+    };
+    const reconciliation: ReconciliationRecord = {
+      staleSuspicionBasis: [],
+      staleConfirmed: true,
+      ownershipVerdict: "OWNER_LOST",
+      lastTrustedBoundary: "execute",
+      conflictingEvidence: [],
+      takeoverPermission: { allowed: true, reason: "ok" },
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      eligibleForContinuation: true,
+    };
+
+    const result = evaluateResumeEligibility({ ownerRecord, ownerTransfer, reconciliation, runState: persisted });
+    expect(result).toEqual({ ok: false, reason: "run status cancelled is not resumable" });
+
+    // Control: identical input except runState.status flipped back to a resumable value. Every
+    // other criterion was already satisfied, so this alone flips the verdict — isolating
+    // persistTerminalState's write as the sole cause of the loss, not an artifact of how the
+    // owner/transfer/reconciliation fixtures above happen to be shaped.
+    const controlResult = evaluateResumeEligibility({
+      ownerRecord,
+      ownerTransfer,
+      reconciliation,
+      runState: { ...persisted, status: "executing" },
+    });
+    expect(controlResult).toEqual({ ok: true });
   });
 
   // Task B2 / L3 §5.4 test 8. runLoopFromState is driven directly because runLoop() takes no
