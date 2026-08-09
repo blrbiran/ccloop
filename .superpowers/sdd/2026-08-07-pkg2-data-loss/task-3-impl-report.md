@@ -323,8 +323,10 @@ Rule 6 要求「若接近预算，当场明写，不许静默超支」，而我�
 ### 结论（最先写）
 
 **DONE。** 3 条 Important 全部处理；3 条 Minor 按控制器指示原样 deferred，未动。
-commit 范围：`be4c344..<本环 commit>`（HEAD 修复环 1 之前是 `7ff426d`，即评审员报告落盘那次提交；
-本环的代码 + 测试改动落在其之上）。全量验证 30 files / 518 tests 全绿，
+**commit hash `4bc5392`**（parent `1cfba42`，控制器自己在此之前先提交了一次台账 §14；再之前是
+评审员报告落盘的 `7ff426d`）。本环只有一个提交，改了 `tests/persistence/fileStore.test.ts` ＋
+本报告本身；`src/` 零改动（`git diff --stat -- src` 本环全程零输出，生产代码未动，符合评审员
+「生产代码本身我不要求改」的定性）。全量验证 30 files / 518 tests 全绿，
 `TEST_EXIT=0 / TSC_EXIT=0 / BUILD_EXIT=0`，**没有任何既有判据变红**。
 
 **每条 Important 用哪条判据钉住**（点名测试名，详见下文「验证证据」一节）：
