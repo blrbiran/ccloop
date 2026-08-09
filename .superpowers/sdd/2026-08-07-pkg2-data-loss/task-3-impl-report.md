@@ -9,7 +9,9 @@
 - `src/persistence/fileStore.ts`（`recoverInterruptedOwnerTransfer` 的 `!lockHeld` 分支，形状按 §3.3）
 - `tests/persistence/fileStore.test.ts`（新增一条并发判据 + 一个局部 `createDeferred` 辅助函数）
 - 本报告文件本身（`git add -f`，该目录 `.gitignore` 为 `*`）
-提交 hash 见 §9 末尾（提交在本报告落盘之后执行，故先占位，commit 后回填）。
+提交 hash 见 §9 末尾（**commit hash `e97ff05`**（parent `2d7ff84`），"fix(fileStore): make
+recoverInterruptedOwnerTransfer's unlocked branch acquire the lock before finalizing (task 3 /
+phase 1)"，`3 files changed, 472 insertions(+), 1 deletion(-)`，`git status` 确认工作树干净。
 
 ## 2. 改了什么
 
