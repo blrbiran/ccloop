@@ -46,6 +46,24 @@ function createContract(repoPath: string): LoopContract {
 }
 
 // Seed an eligible, interrupted run dir at attemptsUsed=N, status "executing".
+//
+// Package 2 / debt 2, human ruling 17. The owner ids below are THIS process's, not a literal
+// "pid:100", and that is load-bearing rather than cosmetic. Every caller of this helper drives
+// runLoopFromState directly, which in production is only ever reached AFTER resumeLoop has
+// completed the owner transfer and written its own id into owner-record.json. Seeding a foreign
+// id therefore modelled a trajectory production cannot produce — a process running a loop it
+// never claimed — and the ownership guard correctly refused its writes. Asserting that refusal as
+// expected behaviour would have written the damaged trajectory into the suite; the fixture is
+// fixed instead.
+//
+// priorProcessInstanceId stays "pid:100": the run really was lost by a previous owner, and that is
+// exactly the shape resumeLoop produces — prior = the dead owner, new = this process. The two
+// `newProcessInstanceId`/`currentProcessInstanceId` values must move together because fileStore
+// compares them for equality when deciding whether a transfer is already committed.
+//
+// The sibling helpers of the same name in resumeLoop.integration.test.ts and cli.test.ts are
+// deliberately NOT changed: those drive resumeLoop/sweep, whose whole job is to take a run over
+// from a foreign owner, so a foreign id is correct there.
 async function seedEligibleRun(runDir: string, contract: LoopContract, attemptsUsed = 1) {
   await mkdir(join(runDir, "attempts"), { recursive: true });
   await writeFile(join(runDir, "loop-contract.json"), JSON.stringify(contract, null, 2));
@@ -58,12 +76,12 @@ async function seedEligibleRun(runDir: string, contract: LoopContract, attemptsU
   }));
   await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
     runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 2,
-    currentProcessInstanceId: "pid:100", lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+    currentProcessInstanceId: buildProcessInstanceId(), lastAffirmedAt: "2026-07-25T00:00:00.000Z",
     ownerStatus: "current", supersededByEpoch: null,
   }));
   await writeFile(join(runDir, "owner-transfer.json"), JSON.stringify({
     priorOwnerEpoch: 1, newOwnerEpoch: 2, priorProcessInstanceId: "pid:100",
-    newProcessInstanceId: "pid:100", transferredAt: "2026-07-25T00:00:00.000Z",
+    newProcessInstanceId: buildProcessInstanceId(), transferredAt: "2026-07-25T00:00:00.000Z",
     reason: "owner lost", eligibleForContinuation: true,
   }));
   await writeFile(join(runDir, "reconciliation-record.json"), JSON.stringify({

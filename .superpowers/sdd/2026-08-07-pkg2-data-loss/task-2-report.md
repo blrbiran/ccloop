@@ -672,3 +672,101 @@ stays refused until the TTL expires when the lease release loses its CAS`（红�
 「盘上记录指认我」，而心跳的 `expected` 记录本身就来自播种的 `pid:100`，无法证明所有权）。
 
 **因此本轮全套件为 `1 failed | 516 passed (517)`，唯一的红就是这一条，等裁后即可收口。**
+
+---
+
+# 修复环 3 —— 人裁 17：根治夹具（本节为追加，上文原文未改动）
+
+## 17. 人裁 17：改 helper，不加期望清单
+
+**裁决**：`seedEligibleRun` 硬编码 `currentProcessInstanceId: "pid:100"` 本就不该播一个异己 owner ——
+生产路径先经 `resumeLoop` 完成所有权转移。把 `run_state_write_abandoned` 加进期望清单，
+等于**把一个生产中不会发生的轨迹钉成「正确行为」**，正是本仓库那句
+「Asserting it as correct behaviour would write a damaged trajectory into the suite」反对的事。
+**根治夹具，不掩盖差距。** ⇒ §16 列的处置 (i) 被否决，采纳 (ii)。
+
+### 17.1 helper 改法（一句话 ＋ 两处必须同时动的理由）
+
+`tests/controller/leaseLifecycle.integration.test.ts` 的 `seedEligibleRun`：
+`owner-record.json` 的 `currentProcessInstanceId` 与 `owner-transfer.json` 的 `newProcessInstanceId`
+都改成 `buildProcessInstanceId()`；`priorProcessInstanceId` **保持 `"pid:100"`**。
+
+**为什么两处必须一起动**（不是顺手多改）：`fileStore.ts` 有一条既有判定
+`ownerRecord.currentProcessInstanceId === ownerTransferRecord.newProcessInstanceId`
+（用于判断转移是否已提交）。只改 owner-record 会让这条等式失衡，等于制造第二个夹具缺陷。
+**保留 prior = `"pid:100"` 也是有意的**：这个 run 确实是被前一任属主丢掉的，
+`prior = 死掉的属主 / new = 本进程` 正是 `resumeLoop` 真实产出的形状。
+
+### 17.2 *** 范围裁剪：只改了 3 个同名 helper 中的 1 个 ***
+
+`grep -rn "seedEligibleRun" tests/` 显示**三个互不相干的同名 file-local 函数**：
+
+| 文件 | 驱动的入口 | 是否改 | 理由 |
+|---|---|---|---|
+| `leaseLifecycle.integration.test.ts` | **直接驱动 `runLoopFromState`** | ✅ **改** | 生产中只有在 `resumeLoop` 转移完所有权之后才会走到这里，夹具必须模拟「本进程已拥有」 |
+| `resumeLoop.integration.test.ts` | `resumeLoop()` | ❌ 不改 | `resumeLoop` 的**职责就是从异己/已死属主手里接管**，播异己 id 在那里是**正确**的 |
+| `cli.test.ts` | sweep | ❌ 不改 | 同上，sweep 接管废弃 run |
+
+*** **把改动外推到另外两个会直接摧毁那些测试的立意。** *** 已用探针确认两者未被触碰：
+`git diff --stat -- tests/controller/resumeLoop.integration.test.ts tests/cli/cli.test.ts` **零输出**，
+且 `resumeLoop.integration.test.ts` 里 `pid:100` 仍有 4 处。
+
+### 17.3 调用点数目更正：是 **3** 条，不是 4 条
+
+人裁说「4 条用它的测试」。我数得 `leaseLifecycle` 的 helper **只有 3 个调用点**
+（`grep -n "seedEligibleRun"` ⇒ 定义 1 行 ＋ 调用 3 行）。**如实更正，不照抄。**
+（若把定义行也算进去就是 4 行，可能是口径差异 —— 与 §13.3 的 9/10 同型，一并记。）
+
+### 17.4 三条测试的结果：**全绿，零新红**
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-data-loss
+ ✓ tests/controller/leaseLifecycle.integration.test.ts (27 tests) 6231ms
+ Test Files  1 passed (1)
+      Tests  27 passed (27)
+VITEST_EXIT=0
+```
+- 用 helper 的 3 条：**全过**。
+- 原本红的 `stays refused until the TTL expires when the lease release loses its CAS`：**回到绿**。
+- **本轮没有任何测试因改夹具而变红** ⇒ **无需 (a)/(b) 裁定**，也**没有触碰任何测试断言**。
+  本轮 `git diff --stat -- src` **零输出** —— 一行生产代码都没动，纯夹具修正。
+
+### 17.5 人裁第 4 点的核验：归因是否完整
+
+要求「那条测试应当回到不再出现 `run_state_write_abandoned` 的状态」。
+```
+$ grep -c 'run_state_write_abandoned' tests/controller/leaseLifecycle.integration.test.ts
+0
+```
+*** **0 命中** ⇒ 该事件在整个 `leaseLifecycle` 套件里既不出现于断言、也不再由运行产生
+（27 条全绿即证明没有任何一条在运行时撞上它）。**归因完整**：
+红的根因确实是夹具播了异己 owner，而不是守卫在生产可达路径上误伤。 ***
+
+### 17.6 验收探针复跑（人裁指定，确认本轮没破坏它）
+
+```
+$ grep -c 'await writeRunState(' src/controller/runLoop.ts
+1
+```
+*** 仍为 **1**。 *** 本轮未动 `src/`，收口属性完好。
+
+### 17.7 本轮最终验证（未过滤）
+
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-data-loss
+ Test Files  30 passed (30)
+      Tests  517 passed (517)
+VITEST_EXIT=0
+
+TSC_EXIT=0
+BUILD_EXIT=0
+```
+*** **零红收口。** *** 517 = 修复环 2 之前的 515 ＋ F-1/F-3 两条新测试。
+本轮连允许的 flake (B) 与人裁 10 那条名单外的都绿。
+`RUN` 首行路径已核为 worktree（`…/.worktrees/pkg2-data-loss`），不是仓库根。
+
+### 17.8 §16 的状态更新
+
+§16 记的「一条既有判据被挡住，等裁」**至此关闭**：按人裁 17 改夹具而非改判据，
+该测试的断言 `toEqual(["stop_requested"])` **一字未动**，现在自然为真。
+**人裁 4 没有被再次破例** —— 本轮动的是夹具（人裁 17 授权），不是任何测试的判据。
