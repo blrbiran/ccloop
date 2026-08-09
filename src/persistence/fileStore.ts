@@ -1018,7 +1018,25 @@ async function recoverInterruptedOwnerTransfer(runDir: string, options?: { lockH
     return;
   }
 
-  if (!options?.lockHeld && await pathExists(paths.lockPath) && !(await tryRecoverStaleOwnerTransferLock(runDir))) {
+  if (!options?.lockHeld) {
+    let lock: { release: () => Promise<void> };
+
+    try {
+      lock = await acquireOwnerTransferLock(runDir);
+    } catch {
+      // Could not acquire: another process holds a live lock (OwnerTransferLockBusyError), or the
+      // acquire attempt hit a non-EEXIST errno (e.g. EACCES/ENOSPC). Either way, this read must not
+      // surface a new failure mode: readOwnerRecord's caller expects the read to succeed even when
+      // recovery can't run right now, same as today's "busy -> skip recovery" behaviour.
+      return;
+    }
+
+    try {
+      await finalizePendingOwnerTransfer(runDir);
+    } finally {
+      await lock.release();
+    }
+
     return;
   }
 

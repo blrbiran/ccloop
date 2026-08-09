@@ -2897,6 +2897,150 @@ describe("claimOwnerRecordWithPrecondition", () => {
   });
 });
 
+// Task 3 / phase 1 (2026-08-09): recoverInterruptedOwnerTransfer's unlocked branch used to be
+// "probe the lock -> maybe delete it -> finalize without holding it" (G0). Two readOwnerRecord
+// calls racing on the same marker could both reach finalizePendingOwnerTransfer unsynchronized,
+// each writing the transaction's three fixed temp names, producing a torn or hybrid publish.
+// Phase 1 changed the branch to "acquire the lock -> finalize while holding it -> release", so
+// the second reader must now observe a busy lock and return without writing, instead of racing.
+//
+// Node is single-threaded, so this cannot be a genuine OS-level race between two processes; the
+// interleaving has to be forced deterministically, or the assertion would only be checking
+// whatever order the two promises happened to settle in (self-fulfilling). This uses the same
+// vi.doMock("node:fs/promises", ...) + dynamic import seam the crash-gap matrix above already
+// uses for fault injection (see crashOwnerTransferAtStep) — here it is used to pause reader A
+// immediately after it has written real, complete lock-file content (so reader B's later
+// open(lockPath, "wx") gets a genuine EEXIST from the OS, never a zero-length-lock-window read),
+// and to hold A there until reader B's own failed-acquire attempt has actually happened. No
+// production code is touched; the seam only observes/delays real fs calls the production code
+// already makes.
+describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racing the same marker", () => {
+  it(
+    "lets exactly one of two concurrent readOwnerRecord calls finalize the transaction; the other returns without writing",
+    async () => {
+      const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+      const initialOwnerRecord = {
+        runId: "task-1",
+        logicalSessionId: "task-1/session-1",
+        currentOwnerEpoch: 1,
+        currentProcessInstanceId: "pid:12345",
+        lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+        ownerStatus: "current" as const,
+        supersededByEpoch: null,
+        leaseAffirmedAt: null,
+      };
+      const transfer = applyOwnerEpochTransfer(
+        initialOwnerRecord,
+        "pid:67890",
+        "2026-07-22T10:05:00.000Z",
+        "owner lost after reconciliation",
+      );
+
+      await writeOwnerRecord(runDir, initialOwnerRecord);
+      await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(transfer.transferRecord, null, 2));
+      await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(transfer.nextOwnerRecord, null, 2));
+      await writeFile(
+        join(runDir, ".owner-transfer.transaction.json"),
+        JSON.stringify({ version: 1, stagedAt: transfer.transferRecord.transferredAt, finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
+      );
+      // Deliberately no lock file: this is the unlocked (G0) shape both readers start from.
+
+      let aOpenedLock = false;
+      const aLockWritten = createDeferred<void>();
+      const bAttemptedAcquire = createDeferred<void>();
+
+      vi.resetModules();
+      vi.doMock("node:fs/promises", async () => {
+        const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+        return {
+          ...actual,
+          open: async (...args: Parameters<typeof actual.open>) => {
+            const handle = await actual.open(...args);
+
+            if (!aOpenedLock && String(args[0]).endsWith(".owner-transfer.lock")) {
+              aOpenedLock = true;
+              const originalWriteFile = handle.writeFile.bind(handle);
+              // Patches only this one FileHandle instance (reader A's), not the module or any
+              // other test. Runs the real write first so the lock file has full, valid JSON
+              // content on disk before reader B ever gets a chance to look at it -- otherwise B
+              // could observe the (unrelated, already-known) zero-length lock window instead of
+              // the busy-lock path this test targets.
+              handle.writeFile = (async (...writeArgs: Parameters<typeof originalWriteFile>) => {
+                const result = await originalWriteFile(...writeArgs);
+                aLockWritten.resolve();
+                await bAttemptedAcquire.promise;
+                return result;
+              }) as typeof handle.writeFile;
+            }
+
+            return handle;
+          },
+          readFile: async (...args: Parameters<typeof actual.readFile>) => {
+            const result = await actual.readFile(...args);
+
+            if (String(args[0]).endsWith(".owner-transfer.lock")) {
+              // Reader B only ever reads the lock file from inside tryRecoverStaleOwnerTransferLock,
+              // which runs exactly when its own open(lockPath, "wx") lost the EEXIST race -- i.e.
+              // this fires once B's failed-acquire attempt has actually happened.
+              bAttemptedAcquire.resolve();
+            }
+
+            return result;
+          },
+        };
+      });
+
+      try {
+        const fileStore = await import("../../src/persistence/fileStore.js");
+
+        const aPromise = fileStore.readOwnerRecord(runDir);
+        await aLockWritten.promise;
+        const bPromise = fileStore.readOwnerRecord(runDir);
+
+        const [ownerFromA, ownerFromB] = await Promise.all([aPromise, bPromise]);
+
+        // Reader A is the one paused-then-released by the gates above, so it is deterministically
+        // the one that finalizes; reader B is deterministically forced to attempt its acquire
+        // while A's lock is still held with real content, so it deterministically loses.
+        expect(ownerFromA.currentOwnerEpoch).toBe(2);
+        expect(ownerFromA.currentProcessInstanceId).toBe("pid:67890");
+        // Reader B's plain read observes whatever is on disk when it fell back after losing the
+        // acquire race -- which, held by the same gates, is still the pre-recovery record, proving
+        // B took the busy-return path rather than finalizing (or re-finalizing) anything itself.
+        expect(ownerFromB.currentOwnerEpoch).toBe(1);
+        expect(ownerFromB.currentProcessInstanceId).toBe("pid:12345");
+
+        // The transaction was published exactly once: no torn or duplicate publish from two
+        // finalizers racing on the fixed owner-transfer / owner-record temp names.
+        const publishedTransfer = JSON.parse(await readFile(join(runDir, "owner-transfer.json"), "utf8")) as {
+          priorOwnerEpoch: number;
+          newOwnerEpoch: number;
+          newProcessInstanceId: string;
+        };
+        expect(publishedTransfer).toMatchObject({ priorOwnerEpoch: 1, newOwnerEpoch: 2, newProcessInstanceId: "pid:67890" });
+
+        // No leftover marker, pendings, or lock: B never wrote, and A's lock was released.
+        await expect(readFile(join(runDir, ".owner-transfer.transaction.json"), "utf8")).rejects.toThrow();
+        await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).rejects.toThrow();
+        await expect(readFile(join(runDir, ".owner-record.pending.json"), "utf8")).rejects.toThrow();
+        await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();
+      } finally {
+        vi.doUnmock("node:fs/promises");
+        vi.resetModules();
+      }
+    },
+  );
+});
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("strict persisted-artifact readers", () => {
   it("reads a persisted run state", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
