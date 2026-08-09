@@ -1159,3 +1159,42 @@ finalize => 同意」。** ***
 
 **⇒ 按 SDD 工序，load-bearing 的 blocker 不许 park：控制器就地停住，交人裁。**
 **第 4 笔未收口，未合并。** 开门／合并／删分支／push 四件仍各需人单独授权。
+
+--------------------------------------------------------------------------------
+19.1 控制器查明的第二层后果 —— **比原 blocker 更重，但有一环未实测**
+--------------------------------------------------------------------------------
+
+控制器在给人建议前先查了一件设计员与实施者都没查的事：
+*** **`reconciliation-record.json` 缺席，在下游到底是不是一个已被处理的合法状态？** ***
+**答案：不是普遍安全。三处口径不一致。**
+
+  | 位置 | 缺席时行为 | 判定 |
+  |---|---|---|
+  | `readPersistedReconciliationRecord`（`fileStore.ts:314`） | `catch { return undefined }` | 安全 |
+  | `src/registry` | *** **零次读取** *** —— `sweepRuns.ts:100` 逐字「reconciliation-record.json is not in L2's OBSERVED_FILES at all」 | 安全 |
+  | *** **`readReconciliationRecord`（`fileStore.ts:1310`）** *** | *** **完全无守卫**的 `JSON.parse(await readFile(...))` *** | **危险** |
+
+  **那个无守卫读的唯一生产调用者是 `src/controller/resumeLoop.ts:139`**，位于 `:136-146` 的
+  `Promise.all` 内，其 catch 把**任何**读失败转成
+  `appendEvent({type:"resume_denied"})` ＋ `throw new ResumeNotEligibleError("cannot read run artifacts: …")`。
+
+*** **⇒ 推理结论：一个没写出 `reconciliation-record.json` 的 run 会变成永久不可 resume。**
+**那正是包 2 立项要关的数据丢失形状本身（债 2 修的就是「把 run 弄成不可 resume」）。** ***
+  ⇒ **选项「发新扩权、改护栏测试」= 把「锁忙 ⇒ run 不可 resume」批准成正确行为**，
+  **用一条同类的数据丢失换另一条，而且换亏了**：残余 TOCTOU 要撞纳秒窗口、只丢一份 reconciliation 记录；
+  这条只需持续锁争用、**丢的是整个 run**。
+  ⚠️ `fileStore.ts:412` 那句原话在此格外刺眼 —— 逐字「**That deletes a product of the normal path;
+  it does not add a refusal**」。**D2 在一条更窄的路上做了同一件事。**
+
+*** **⚠️ 控制器明确标记自己的举证边界**：上表三行与 resumeLoop 那段 catch **都是读代码直接证实的**；
+**未实测的是最后一环** —— 「锁忙放弃」这条路径是否真的会留下一个日后会被 resume、
+且 `reconciliation-record.json` 缺席的 run。**全套件对此零覆盖**
+（实施者只跑出一条红，正因为没有任何测试把「锁忙放弃」与「稍后 resume」串起来
+—— **这本身是一处值得具名的缺口**）。 ***
+  ⇒ **控制器拒绝拿自己的推理去请人下裁决**（与它要求所有 subagent 的标准同一条）。
+
+*** **人裁 36。2026-08-10。「同意，先花一笔小钱构造那条轨迹实测它，再裁。」** ***
+  ⇒ 派窄任务测量员（sonnet 档），**判据双向写死**：
+  在 HEAD 与在 BASE `2af4137` 各跑一次同一探针，**若两处结果相同则假说被证伪，且那是合格答案**；
+  构造不出来也要如实报。**明令不许往有趣的方向偏。** 探针文件用后即删并证明还原。
+  **两种结果导向相反的裁决**：证实 ⇒ D2 回炉（那个写不能不发生）；证伪 ⇒ 改护栏测试这条路变便宜。
