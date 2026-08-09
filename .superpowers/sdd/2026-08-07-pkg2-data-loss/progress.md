@@ -743,3 +743,90 @@ finalize => 同意」。** ***
 
 *** **新纪律（用户 2026-08-09 明令，对所有项目生效）：git commit message 一律用英文。** ***
   对话语言不变（中文）。**本会话此前的提交 message 是中文，已入库，不改历史。**
+
+--------------------------------------------------------------------------------
+16. S4 —— 人裁 29/30、S0 基线、S1 工作区、D-1 选型的事实基础
+--------------------------------------------------------------------------------
+
+**顺序**：按人裁 26，本会话**先 S4，后第 4 笔**。S4 = D-1 ＋ 最薄一格（`#7`）。
+
+*** **控制器开工自查（现跑，未信 handoff）** ***：
+  `git log --merges` 末笔 = `e42e062 GATE-PKG3 PASSED` <- **锚点未动，包 1／包 2 都未开门**
+  开工时 `git ls-remote origin refs/heads/main` = `776cde3`，本地 `main` = HEAD = `a047c48`，**ahead 1**。
+  ⚠️ *** **随后现测远端已变为 `a047c48`，与本地齐平。`git reflog show origin/main` 给出归因：
+  `a047c48 … @{2026-08-09 23:50:42 +0800}: update by push` —— 就在 S0 开跑前一分钟。
+  控制器全程未 push（人裁 24），故这一笔是人自己推的。* ** ***
+  ⇒ **这是 `origin/main` 的第 10 次移动，但性质与前九次不同：本次有据可查是人自己 push，不是会话外第三方。**
+  **下一位仍要现跑，不要信这句。**
+
+--------------------------------------------------------------------------------
+16.1 D-1 的机制选型 —— 控制器先核事实，再交人裁（人裁 29）
+--------------------------------------------------------------------------------
+
+台账 §10 对 D-1 只给了三个方向（搬 import ／ lint 规则 ／ 读源码的测试），**没给代价**。
+控制器开工前亲核四条事实，**三个方向的可行性由此才定得下来**：
+
+  1. **D-1 一行未动，确认**：`src/controller/runLoop.ts:14` **仍在 import `writeRunState`**；
+     `createOwnedRunStateWriter` 定义在 `runLoop.ts:1011`，**是模块私有函数、未导出**
+     （`src/`+`tests/` 全仓仅 `runLoop.ts` 内 4 处命中）。
+  2. *** **「lint 规则」这条路今天是空的** ***：`package.json` 的 devDependencies **完整枚举只有 4 项**
+     （`@types/node` / `tsx` / `typescript` / `vitest`），scripts 只有 build/dev/test/test:watch/typecheck，
+     **全仓无任何 linter**。⇒ 走 lint = 引入一整套新工具链，与 Rule 2 正面冲突。
+     ⚠️ **注意举证形状**：这里的证据是 devDependencies 的**完整枚举**（正面证据），
+     **不是**一条 `ls | grep lint` 的零输出（那属于「坏探针不能证明不存在」）。
+  3. *** **「把 `writeRunState` 收成模块私有」这条最硬的路，今天会撞一大片既有判据** ***：
+     `writeRunState` 由 `src/persistence/fileStore.ts:81` 导出；`src/` 侧**只有 `runLoop.ts` 真 import**
+     （`resumeLoop.ts:101`、`observeFields.ts:9` 两处命中**是注释**）；
+     **但 `tests/persistence/fileStore.test.ts` 直接 import 并大量直调**
+     （`:1802 :2746 :3275 :3288 :3314 :3326 :3383 :3395 :3415` 等），
+     `tests/controller/leaseLifecycle.integration.test.ts:196` 还包了一层。
+     ⇒ **本轮无任何改判据的授权**（人裁 13/14/17 的例外各自具名，明写不得援引）。
+  4. **最薄一格 `#7` 已定位**：`runLoop.ts:1594-1608`。`cleanupAttemptWorkspace` 抛 →
+     `transitionRunState(state,"failed")` → `appendTransitionEvent(…, "attempt_failed")` →
+     **`:1599 await writeOwnedRunState(runDir, state)`** → `assertHeld` → 兜底清理
+     （detail 逐字 `"cleanup after retry cleanup failure"`）→ `return state`。
+     *** **这就是 F-1 的第二个终态写点。** ***
+
+**控制器给人的三选一（附代价，控制器建议 (a)，不替人选）**：
+  (a) **抽出写入器成独立模块**（`runLoop.ts` 不再 import `writeRunState`）＋ **读源码的测试**钉住它。
+      机制中等：仍是文本级断言，但**搜索面从「全模块任意写法」收窄到 import 清单**。
+      代价小，**不动任何既有判据**。
+  (b) **只加读源码的测试、不搬模块** —— 等于把 grep 探针搬进测试跑起来，评审员那 7 种绕过写法大部分仍留在原值。
+  (c) **类型级不变量**（`writeRunState` 收签名、只认写入器铸的 token，靠已在 npm scripts 里的 `tsc` 挡）。
+      *** 机制最强（编译器） *** 但**必然改 `fileStore.test.ts` 一大片既有直调**，需单独人裁扩权。
+
+*** **人裁 29。2026-08-09。人逐字答复「D-1 走 (a)」。** ***
+  ⇒ **本轮 D-1 按 (a) 实施。(c) 不做、也不许实施者顺手做**（它要改既有判据，本轮无授权）。
+  ⚠️ **(c) 的形状最正确这一点原样留档**，供将来单独立项时取用，**不因本轮选了 (a) 而作废**。
+
+*** **人裁 30。2026-08-09。人逐字答复「预先放行」（S4 预算）。** ***
+  ⇒ **S4 不再为破 100k／300k 逐次停下来请示**；
+  **但记账不停**：一律以 **harness 实测**报数（人裁 28 后确立的纪律，不收 subagent 自报估计）。
+
+--------------------------------------------------------------------------------
+16.2 S0 基线（本仓库第 9 处）＋ S1 工作区
+--------------------------------------------------------------------------------
+
+**S0（控制器亲跑、未过滤、全文 tee 落盘 scratchpad `s0-test.log`）**：
+  `RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop`  <- 首行路径已核为仓库根
+  ` Test Files  30 passed (30)` ／ `      Tests  518 passed (518)`
+  `TEST_EXIT=0` ／ `TSC_EXIT=0` ／ `BUILD_EXIT=0`；HEAD `a047c48`
+  **第 9 处 STEP 0，绿。不继承任何先前的绿。**
+  按完整测试名比对：**人裁 10 那条名单外失败本轮通过**（`✓ persists phase usage evidence… 842ms`）；
+  flake (B) 本轮也通过（`✓ records env names only… 2753ms`）。
+
+**S1 工作区**：`git worktree add .worktrees/pkg2-s4 -b feat/pkg2-s4 HEAD` —— **基点显式写 HEAD**
+  （`EnterWorktree` 默认基点 `origin/main` 当时 = `776cde3`，照默认走会丢掉本地领先那一笔）。
+  `npm ci` 完成，`node_modules` 已核存在。
+  **工作区基线（亲跑、未过滤、tee 落盘 `s1-test.log`、`RUN` 首行已核为 worktree）**：
+  ` Test Files  1 failed | 29 passed (30)` ／ `      Tests  1 failed | 517 passed (518)`
+  `TSC_EXIT=0` ／ `BUILD_EXIT=0`。
+  **全日志 `^ FAIL ` 只有 1 条**（探针已验活：必命中 token = 1、无意义 token = 0），
+  逐字比对 = **允许出现的 flake (B)**（`records env names only and tracks descendants rooted at the
+  spawned pid` / `Test timed out in 5000ms`）。**不是陷阱 5 那种 `spawn ENOENT` 九连红 ⇒ `npm ci` 已生效。**
+  **人裁 10 那条本轮又通过 ⇒ 累计 1/10 红**（仍不构成它消失的证据）。
+
+*** **⚠️ 控制器本轮自曝 1 次**：跑 S1 时对脚本输出用了 `| tail -60`，**这与 `grep` 同罪**
+（本仓库「验证跑绝不过滤」的既有铁律）。被截掉的正是 `RUN` 首行、`npm ci` 退出码、基点三项。
+**补救**：完整日志已 tee 落盘，随后用**带 sanity 双探针的检索**把三项逐项取回核实，
+并用 `^ FAIL ` 全量列举替代计数。**记明不掩饰 —— 这是本仓库第四次栽在「过滤验证输出」这一形状上。** ***
