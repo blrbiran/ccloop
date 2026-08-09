@@ -40,6 +40,19 @@
 
 **任务 3 阶段 1 走完全套工序（实施者 → 换人独立评审 → 修复环 1 → 换人 scoped 再评审 → 控制器两次亲验），三条 Important 全 ADDRESSED、零新破坏、既有断言未被动，`Task 3 (阶段 1): complete`，已 `--ff-only` 并入 `main`，门锚点未动。第 4 笔已由人裁 19 纳入包 2 范围但一行未动；人裁 26 定下一会话「先 S4、后第 4 笔」。**
 
+## 先跑这些，以输出为准（**本文不写死 HEAD、笔数、测试数 —— 提交本文这个动作本身就会改变前两项**）
+
+```bash
+cd /Users/biran/code/skills/loop/ccloop
+git log --merges --format='%h %cd %s'   # 末笔必须仍是 GATE-PKG3（e42e062）；包 1、包 2 都未开门
+git ls-remote origin refs/heads/main    # 一律现跑：已被会话外推进九次，两个方向都腐坏过
+git status --short; git worktree list; git branch
+export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm test -- --run
+```
+
+⚠️ **`e42e062`（门）是已固定的历史锚点，可以放心引用；当前 HEAD、领先远端几笔、测试总数一律自查。**
+⚠️ **验证性命令必须走 `rtk proxy`** —— rtk 的默认改写会把输出折叠成假计数，上一会话第三次栽在这上面。
+
 ## 改了什么（唯一的生产改动）
 
 `src/persistence/fileStore.ts` 的 `recoverInterruptedOwnerTransfer`，**`!lockHeld` 那一个分支**：
@@ -84,6 +97,22 @@
 | **25** | Important-3：**维持 ADDRESSED**、残余按 deferred 走、**不重开修复环** |
 | **26** | 下一会话：**先 S4（D-1 ＋ 最薄一格），后第 4 笔** |
 | **27** | 更新本文件 |
+| **28** | 交接令：「**三条同意，结论记录下来，但是先不改**」⇒ **全部记录，本轮一律不动手** |
+
+⚠️ *** **人裁 28 是本仓库第四次出现同一句措辞**（人裁 5／8／9 逐字相同）。「三条」有两种读法：① 控制器收口时列的「交给下一位的三件」（S4 ／ 第 4 笔 ／ A·B·C 与包 1 修复环 2）；② 三个待裁点 A/B/C 本身。**两种读法操作后果相同：全部记录进本文与台账，本轮一律不动手。** 控制器按该共同后果执行，**并把歧义原样留在这里**。若下一位需要区分，**请问人，不要自己选一个。** ***
+
+## 建议调用的 skills（接手 S4 / 第 4 笔）
+
+| skill | 何时 | 注意 |
+|---|---|---|
+| `superpowers:subagent-driven-development` | S4 与第 4 笔的实施阶段 | 「实施者 → **换人**独立评审 → 修复环 → **换人** scoped 再评审 → 台账记 complete」。**不接受实施者自证** —— 上一会话实证：评审员实跑证伪了实施者钉住的承重细节，换来 3 条 Important |
+| `superpowers:requesting-code-review` | 每任务一次 | brief 必写：不接受实施者自证／findings 带可构造场景／锚点用符号名不用行号／不许用收窄搜索面支撑全称否定／落盘协议／***允许为验证做临时变异但必须证明还原***（这条上一会话兑现了，两名评审员共 9 次变异全部证明还原） |
+| `superpowers:receiving-code-review` | 拿到评审结论、准备处置时 | **评审员的结论同样要验。** 上一会话控制器亲验了两次（修复前 82/82 全绿证实缺口，修复后同一变异恰好三条断言变红证实已修） |
+| `superpowers:verification-before-completion` | 声称「通过/完成」之前 | 复跑全套件 ＋ typecheck ＋ build，`rtk proxy`，**未过滤**，核 vitest 首行 `RUN` 路径。⚠️ **探针本身要先验活**：用一个已知含 `FAIL` 的旧日志当对照，否则「零红」是未经验证的全称否定 |
+| `superpowers:systematic-debugging` | 撞到不在 flake 名单内的失败 | 名单只有 (B) 与 (F)；**另有人裁 10 那条已挂账、按完整测试名比对、不要重新调查** |
+| `superpowers:using-git-worktrees` | 开工前 | ⚠️ **`EnterWorktree` 默认基点是 `origin/<default-branch>`，会丢掉未推送的本地提交** —— 必须先 `git worktree add <path> -b <branch> HEAD` **显式指定基点**，再用 `path` 接管；**建完立刻 `npm ci`** |
+| `superpowers:finishing-a-development-branch` | 每道门之后 | **门必须是 merge、结论在主题行**；⚠️ **非门的合并一律 `--ff-only`**，否则毁掉唯一锚点。⚠️ **包 2 期间一切台账写入只进 worktree 副本，主仓库不得领先** —— 上一会话差点在这里翻车 |
+| ~~`superpowers:brainstorming`~~ | — | **阶段 1 方案已由设计员产出并经人裁 18 批准、且已实施完毕。不要重跑** |
 
 ---
 
