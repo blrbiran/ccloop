@@ -1,0 +1,384 @@
+574e275 test(runLoop): 人裁 14 —— 两条 winner reconciliation 测试的期望事件清单补入 terminal_write_abandoned
+eda3787 docs(sdd): 任务 2 报告 —— 守卫加在 persistTerminalState 内部，10 条变红逐条裁定
+87f3582 fix(runLoop): 守卫收窄为只扣下 writeRunState，保留本进程自身的停止上报
+a5498d0 fix(runLoop): 所有权守卫对读不出的 owner record 不再拒绝
+dbca902 fix(runLoop): 给 persistTerminalState 加所有权守卫，拒绝写入本进程已不拥有的 run
+ src/controller/runLoop.ts                    |  80 +++++++++++++++++++-
+ tests/controller/runLoop.integration.test.ts | 107 ++++++++++++++++++---------
+ 2 files changed, 151 insertions(+), 36 deletions(-)
+diff --git a/src/controller/runLoop.ts b/src/controller/runLoop.ts
+index cb8d4cc..a98d3c1 100644
+--- a/src/controller/runLoop.ts
++++ b/src/controller/runLoop.ts
+@@ -1,33 +1,39 @@
+ import { execFile } from "node:child_process";
+ import { promisify } from "node:util";
+ import {
+   appendEvent,
+   initializeRunFiles,
+   OwnerTransferLockBusyError,
+   OwnerTransferPreconditionError,
+   readOwnerRecord,
++  readOwnerRecordWithoutRecovery,
+   writeAttemptArtifacts,
+   writeBoundaryArtifacts,
+   writeOwnerRecord,
+   writeOwnerTransferArtifacts,
+   writeRunState,
+ } from "../persistence/fileStore.js";
+ import { evaluatePathPolicy } from "../policy/pathPolicy.js";
+ import { evaluateRunBoundary, evaluateStopDecision } from "../stop/stopController.js";
+ import { isTerminalRunStatus, transitionRunState } from "../state/stateMachine.js";
+ import type { LoopContract } from "../contract/schema.js";
+ import { applyOwnerEpochTransfer, evaluateOwnership } from "../ownership/ownerController.js";
+ import { checkRunLease } from "./leaseGate.js";
+ import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
+ import type { LeaseHeartbeat } from "./leaseHeartbeat.js";
+-import { RunHeartbeatStoppedError, RunLeaseLostError, RunLeaseUnverifiableError } from "../ownership/lease.js";
++import {
++  parseOwnerRecordForLease,
++  RunHeartbeatStoppedError,
++  RunLeaseLostError,
++  RunLeaseUnverifiableError,
++} from "../ownership/lease.js";
+ import type {
+   AttemptContext,
+   AttemptPlan,
+   ExecutionRecovery,
+   ExecutionResult,
+   OwnerRecord,
+   ReconciliationDraft,
+   ReconciliationRecord,
+   RuntimeAdapter,
+   VerificationResult,
+@@ -921,28 +927,100 @@ async function persistBoundaryAnalysis(
+               },
+               priorOwnerEpoch: ownerRecord.currentOwnerEpoch,
+               newOwnerEpoch: nextOwnerEpoch,
+               eligibleForContinuation,
+             }
+           : undefined,
+     }, { onReconciliationWriteAbandoned });
+   }
+ }
+ 
++// Package 2 / debt 2. Answers ONE question: does owner-record.json on disk name a process other
++// than this one? That is deliberately NOT checkRunLease's question and this must not be rewritten
++// to call it. The gate asks "is a LIVE lease held by someone else", because taking over a run
++// whose lease has lapsed is legitimate; this asks "am I the owner", and a lapsed lease does not
++// promote a non-owner into one. Ownership changes hands only through the epoch transfer, so a
++// record naming someone else refuses here whether their lease is fresh, stale, or absent.
++//
++// Reads RAW, for leaseGate's §7.1 reason: readOwnerRecord runs recoverInterruptedOwnerTransfer
++// first, and a refusal to write must not trigger crash recovery as its side effect.
++//
++// Deliberately UNLIKE leaseGate on unreadable input, and this is the one place the two must
++// diverge. The gate reads before the run starts, so refusing on an unreadable record costs a
++// startup; this reads while a run is stopping, where the same refusal would propagate out of
++// runLoopFromState and convert a stop into a crash. A record that cannot be read has not
++// identified anyone, least of all a DIFFERENT owner, so it is no basis for a refusal — and the
++// unreadable case already has an owner: leaseHeartbeat answers it with lease_unverifiable, which
++// is the designed handling and which this must not pre-empt. The guard therefore only ever ADDS a
++// refusal, and only on a positively identified foreign id.
++async function foreignOwnerOf(runDir: string): Promise<string | null> {
++  let ownerProcessInstanceId: string;
++
++  try {
++    ownerProcessInstanceId = parseOwnerRecordForLease(
++      await readOwnerRecordWithoutRecovery(runDir),
++    ).currentProcessInstanceId;
++  } catch {
++    // Absent, unreadable, or too malformed to yield an id — see above. No identified owner.
++    return null;
++  }
++
++  // §5.1: opaque, compared only for string equality — the same comparison the gate makes, so a
++  // legacy or recycled id can only add refusals here too.
++  return ownerProcessInstanceId === buildProcessInstanceId() ? null : ownerProcessInstanceId;
++}
++
++// Package 2 / debt 2: the ownership guard sits HERE, in the one writer, rather than at the four
++// lease-loss call sites that motivated it. This function is the only writer of a terminal
++// loop-state.json and of a `loop_<terminal>` event, and "cancelled" is a dead end (stateMachine
++// `cancelled: []`, absent from resumeLoop's RESUMABLE_STATUSES) — so one check here covers all
++// fifteen call sites and cannot be forgotten by the sixteenth.
++//
++// What it withholds is exactly ONE thing: writeRunState, the persisted run status. That narrowness
++// is the design, not laziness, and widening it is a regression rather than extra safety. The debt
++// is that loop-state.json becomes "cancelled" — a dead end (stateMachine `cancelled: []`, absent
++// from RESUMABLE_STATUSES), which is what strands the real owner. The returned RunState and the
++// `loop_<terminal>` event are not that: nothing resumes off either (runLoopFromState's §5.4 note
++// records that evaluateResumeEligibility does not read the event stream and the registry observes
++// three files), while BOTH are load-bearing for reporting why this process stopped. assertHeld
++// appends no event of its own by design, so this transition is the only thing that carries the
++// stop reason out to the caller and into the log; suppressing it leaves a run that stopped for a
++// lease reason naming nobody. So: this process still reports its own stop, and the other owner's
++// run status is left exactly as resumable as it was.
++//
++// The refusal is not silent. The abandonment is appended to events.jsonl, following
++// writeBoundaryArtifacts' stance (fileStore.ts) that a protective abandonment with no outlet at
++// all "would be a genuine silent failure". Unlike that call site this one has no operator
++// callback, so events.jsonl is the SOLE outlet and the append is deliberately NOT swallowed:
++// swallowing it would leave the abandonment with no record anywhere. A throw from it cannot be
++// upgraded into a failed attempt — every lease-loss call site either sits outside the attempt try
++// or already sits inside its catch — so it is loud and costs no write.
+ async function persistTerminalState(
+   runDir: string,
+   state: RunState,
+   decision: TerminalDecision,
+   reason: string,
+ ): Promise<RunState> {
+   const terminalState = transitionRunState(state, decision, reason);
+   await appendTransitionEvent(runDir, terminalState, `loop_${decision}`, reason);
++
++  const foreignOwner = await foreignOwnerOf(runDir);
++
++  if (foreignOwner !== null) {
++    await appendEvent(runDir, {
++      type: "terminal_write_abandoned",
++      at: new Date().toISOString(),
++      detail: `refused to write terminal status ${decision} (${reason}) into a run owned by ${foreignOwner}, not by ${buildProcessInstanceId()}`,
++    });
++    return terminalState;
++  }
++
+   await writeRunState(runDir, terminalState);
+   return terminalState;
+ }
+ 
+ export async function runLoop(contract: LoopContract, runDir: string, adapter: RuntimeAdapter): Promise<RunState> {
+   const state = transitionRunState(initialState(contract), "planning");
+   const ownerRecord = buildInitialOwnerRecord(contract, state);
+   await initializeRunFiles(runDir, contract, state);
+   // §7: as early as possible, but never before initializeRunFiles — the gate may append an
+   // event and events.jsonl does not exist yet.
+diff --git a/tests/controller/runLoop.integration.test.ts b/tests/controller/runLoop.integration.test.ts
+index 1acacb1..ab42965 100644
+--- a/tests/controller/runLoop.integration.test.ts
++++ b/tests/controller/runLoop.integration.test.ts
+@@ -1229,42 +1229,53 @@ describe("runLoop", () => {
+     // surviving is the observable of the call never happening. Accepted by the plan on the same
+     // grounds as L1 §12 requirement 9: the residual worktree is the next owner's to collect.
+     expect(await pathExists(observedWorktreePath)).toBe(true);
+ 
+     // The write persistBoundaryAnalysis performs AFTER runExclusive returns never happened
+     // either — the refusal escapes before it, which is what keeps a published reconciliation
+     // record out of this branch's reach.
+     expect(await pathExists(join(runDir, "boundary-analysis.json"))).toBe(false);
+   });
+ 
+-  // Package 2 / Task 1 (debt 2): persistTerminalState (src/controller/runLoop.ts, module-private,
+-  // not exported) has no ownership guard. Its body is exactly
+-  // `transitionRunState` + `appendTransitionEvent` + `writeRunState` — it never reads
+-  // owner-record.json, so it cannot tell whether the process calling it still owns the run. It is
+-  // reached here through the FIRST `leaseLoss.lost !== null` checkpoint at the top of the loop
+-  // (runLoop.ts:1061-1062) — the same branch runLoop() itself takes in production the moment its
+-  // own heartbeat reports a RunLeaseLostError (runLoop.ts:976-986).
++  // Package 2 / Task 2 (debt 2, fixed): persistTerminalState (src/controller/runLoop.ts,
++  // module-private, not exported) now reads owner-record.json before it writes anything, and
++  // refuses when that record names a process other than this one. Task 1 pinned the defect with
++  // this same scenario and the opposite expectations; the scenario is unchanged and only the
++  // expectations are flipped, so the two versions are directly comparable.
+   //
+-  // The injection makes the "no longer owns it" half of the debt concrete rather than asserted:
+-  // owner-record.json on disk already names a DIFFERENT, live, current, non-superseded owner at a
+-  // newer epoch before this call is made. persistTerminalState is never told that and writes
+-  // "cancelled" anyway. The control assertion at the end (same ownerRecord/ownerTransfer/
+-  // reconciliation, only runState.status flipped back to a resumable value) proves that this
+-  // write — and nothing else — is what turns an otherwise cleanly resumable, currently-owned run
+-  // into a permanent dead end for its real owner.
+-  it("writes an unresumable cancelled status into a run a different, current owner already holds when this process's own lease is lost", async () => {
++  // Reached through the FIRST `leaseLoss.lost !== null` checkpoint at the top of the loop
++  // (runLoopFromState) — the same branch runLoop() itself takes in production the moment its own
++  // heartbeat reports a RunLeaseLostError. owner-record.json on disk already names a DIFFERENT,
++  // live, current, non-superseded owner at a newer epoch before that checkpoint is reached.
++  //
++  // The requirement being pinned is not "nothing happens". It is the SPLIT, and the split is the
++  // whole fix: this process still reports its own stop (a cancelled/lease_lost return value and a
++  // loop_cancelled event — the only records of why it stopped, since assertHeld appends none),
++  // while the other owner's loop-state.json is left byte-identical and still resumable. A guard
++  // widened to suppress the reporting half too would pass a "not cancelled on disk" check and
++  // still be wrong, so the reporting half is asserted here as positively as the disk half.
++  //
++  // Resumability is proved with the production gate (evaluateResumeEligibility) rather than by
++  // reading the status back and calling it good, and the control at the end feeds that same gate
++  // the status the unguarded code used to persist — showing the gate is not answering `ok` for
++  // some reason unrelated to the write that did not happen.
++  it("refuses to write a terminal status into a run a different, current owner already holds when this process's own lease is lost, leaving that run resumable", async () => {
+     const repoPath = await createRepo();
+     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+     const contract = createContract(repoPath);
+     const state: RunState = { ...makeRunState("planning"), currentAttempt: 0, attemptsUsed: 0 };
+ 
+     await initializeRunFiles(runDir, contract, state);
++    // Written by initializeRunFiles through the same writeJsonFileAtomically that writeRunState
++    // uses (src/persistence/fileStore.ts), so the comparison at the end is a byte comparison and
++    // not a comparison of two serializers.
++    const persistedStateBeforeLoss = await readFile(join(runDir, "loop-state.json"), "utf8");
+ 
+     // Ownership has already changed hands: a different process instance is the CURRENT, live
+     // owner at epoch 2 (ownerStatus "current", not superseded). The `state` above belongs to the
+     // process about to discover its own lease died — it is not this owner.
+     const newOwnerProcessInstanceId = "pid:999999:1234567890";
+     const ownerRecord: OwnerRecord = {
+       runId: "task-1",
+       logicalSessionId: "task-1:t0",
+       currentOwnerEpoch: 2,
+       currentProcessInstanceId: newOwnerProcessInstanceId,
+@@ -1285,34 +1296,46 @@ describe("runLoop", () => {
+       async execute() {
+         throw new Error("execute should not run");
+       },
+       async verify() {
+         throw new Error("verify should not run");
+       },
+     };
+ 
+     const finalState = await runLoopFromState(contract, runDir, adapter, state, undefined, leaseLoss);
+ 
+-    // persistTerminalState fired: it is the only writer of a `loop_<terminal>` event, and the
+-    // exact (not `toContain`) event list also rules out any adapter call having slipped through
+-    // above the checkpoint.
+-    expect(await readEventTypes(runDir)).toEqual(["loop_cancelled"]);
++    // The exact (not `toContain`) list carries both halves at once: the stop is still reported
++    // (`loop_cancelled`, written only by persistTerminalState) AND the guard fired
++    // (`terminal_write_abandoned`, written only by the guard). It also rules out any adapter call
++    // having slipped through above the checkpoint.
++    expect(await readEventTypes(runDir)).toEqual(["loop_cancelled", "terminal_write_abandoned"]);
++
++    // Reporting half: unchanged by the fix. This process tells its caller why it stopped.
+     expect(finalState.status).toBe("cancelled");
+-    const persisted = await readRunState(runDir);
+-    expect(persisted.status).toBe("cancelled");
+-    expect(persisted).toEqual(finalState);
++    expect(finalState.stopReason).toBe("lease_lost");
+ 
+-    // "cancelled" is a dead end: no legal transition leads out of it (src/state/stateMachine.ts,
+-    // `cancelled: []`) and it is absent from RESUMABLE_STATUSES (src/controller/resumeLoop.ts).
+-    // Proved here with the actual gate function against the SAME ownerRecord written above, plus
+-    // an ownerTransfer/reconciliation pair constructed to satisfy every other criterion — so the
+-    // only thing the gate can be refusing on is the run status this test just caused.
++    // Disk half: the run belongs to someone else and its status is not this process's to write.
++    const persisted = await readRunState(runDir);
++    expect(persisted.status).toBe("planning");
++    // The divergence between the two IS the fix, so it is asserted rather than left implied — the
++    // unguarded code made these two equal, and that equality was the data loss.
++    expect(persisted).not.toEqual(finalState);
++
++    // Stronger than "the status is not cancelled": loop-state.json is byte-identical to what stood
++    // there before this process ever reached the checkpoint. The top-of-loop writeRunState runs
++    // above the lease-loss check and is therefore included in what this pins — the real owner's
++    // file is not merely still resumable, it is unmodified.
++    expect(await readFile(join(runDir, "loop-state.json"), "utf8")).toBe(persistedStateBeforeLoss);
++
++    // The requirement itself, via the production gate: the other owner can still resume. Fed the
++    // SAME ownerRecord written above plus an ownerTransfer/reconciliation pair satisfying every
++    // other criterion, so the run status is the only variable left in the verdict.
+     const ownerTransfer: OwnerTransferRecord = {
+       priorOwnerEpoch: 1,
+       newOwnerEpoch: 2,
+       priorProcessInstanceId: "pid:100:1",
+       newProcessInstanceId: newOwnerProcessInstanceId,
+       transferredAt: "2026-07-25T00:00:00.000Z",
+       reason: "owner lost",
+       eligibleForContinuation: true,
+     };
+     const reconciliation: ReconciliationRecord = {
+@@ -1321,33 +1344,35 @@ describe("runLoop", () => {
+       ownershipVerdict: "OWNER_LOST",
+       lastTrustedBoundary: "execute",
+       conflictingEvidence: [],
+       takeoverPermission: { allowed: true, reason: "ok" },
+       priorOwnerEpoch: 1,
+       newOwnerEpoch: 2,
+       eligibleForContinuation: true,
+     };
+ 
+     const result = evaluateResumeEligibility({ ownerRecord, ownerTransfer, reconciliation, runState: persisted });
+-    expect(result).toEqual({ ok: false, reason: "run status cancelled is not resumable" });
+-
+-    // Control: identical input except runState.status flipped back to a resumable value. Every
+-    // other criterion was already satisfied, so this alone flips the verdict — isolating
+-    // persistTerminalState's write as the sole cause of the loss, not an artifact of how the
+-    // owner/transfer/reconciliation fixtures above happen to be shaped.
++    expect(result).toEqual({ ok: true });
++
++    // Control: identical input except runState.status forced to the value the unguarded code used
++    // to persist here. "cancelled" is a dead end — no legal transition leads out of it
++    // (src/state/stateMachine.ts, `cancelled: []`) and it is absent from RESUMABLE_STATUSES
++    // (src/controller/resumeLoop.ts) — so this alone flips the verdict. That is what makes the
++    // `ok: true` above an assertion about the write that did not happen, rather than an artifact
++    // of how the owner/transfer/reconciliation fixtures happen to be shaped.
+     const controlResult = evaluateResumeEligibility({
+       ownerRecord,
+       ownerTransfer,
+       reconciliation,
+-      runState: { ...persisted, status: "executing" },
++      runState: { ...persisted, status: "cancelled" },
+     });
+-    expect(controlResult).toEqual({ ok: true });
++    expect(controlResult).toEqual({ ok: false, reason: "run status cancelled is not resumable" });
+   });
+ 
+   // Task B2 / L3 §5.4 test 8. runLoopFromState is driven directly because runLoop() takes no
+   // options object and the stop slot lives on one.
+   //
+   // The adapter script is load-bearing rather than incidental. The slot could have been fitted to
+   // EITHER of the two `leaseLoss.lost !== null` checkpoints, and an implementation that chose the
+   // other one — inside the attempt, on the retryable path after verification is rejected — also
+   // returns a non-terminal state here. What separates them is only that it returns having already
+   // spent an attempt, so frame 1 rejects verification specifically to give that implementation a
+@@ -2509,20 +2534,27 @@ describe("runLoop", () => {
+         // guard now reads (before this process would have written anything), so it concludes
+         // supersession here — earlier than the old post-terminal-cleanup guard used to. This
+         // is a genuine foreign takeover: this transfer is not performed by this process, its
+         // CAS fails against the other controller's record, and heartbeat.adopt is never
+         // reached — leaving the stale expectation and the refusal exactly as they were. Note
+         // the two sides of the detail below differ.
+         "lease_lost",
+         // Emitted by the outer catch's isLeaseStopError branch, since state.status was not yet
+         // terminal when the guard fired (this attempt never got as far as persistTerminalState).
+         "loop_cancelled",
++        // Package 2 / task 2, human ruling 14. persistTerminalState's ownership guard reads
++        // owner-record.json, finds pid:other-controller rather than this process, and declines to
++        // persist the terminal run status — recording the abandonment here rather than failing
++        // silently. The status this process reports (asserted above) is unchanged; what the guard
++        // withholds is the write to a run it no longer owns. This entry was added because the
++        // exhaustive list's premise changed, not because the list was wrong.
++        "terminal_write_abandoned",
+       ]);
+       await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
+       expect(await readEventDetails(runDir, "lease_lost")).toEqual([
+         `expected ${buildProcessInstanceId()} at epoch 1, observed pid:other-controller at epoch 2`,
+       ]);
+     } finally {
+       vi.doUnmock("../../src/persistence/fileStore.js");
+       vi.resetModules();
+     }
+   });
+@@ -2646,20 +2678,25 @@ describe("runLoop", () => {
+         // Task 5: same mechanism as the sibling test above — persistBoundaryAnalysis's own
+         // write guard now concludes supersession before this process would have written (or,
+         // here, synthesized) anything, earlier than the old post-terminal-cleanup guard used
+         // to. A genuine foreign takeover: this transfer is not performed by this process, its
+         // CAS fails against the other controller's record, and heartbeat.adopt is never
+         // reached.
+         "lease_lost",
+         // Emitted by the outer catch's isLeaseStopError branch, since state.status was not yet
+         // terminal when the guard fired.
+         "loop_cancelled",
++        // Package 2 / task 2, human ruling 14 — same mechanism as the sibling test above:
++        // persistTerminalState's ownership guard declines to persist the terminal run status into
++        // a run owned by pid:other-controller, and records that abandonment rather than failing
++        // silently.
++        "terminal_write_abandoned",
+       ]);
+       await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
+       expect(await readEventDetails(runDir, "lease_lost")).toEqual([
+         `expected ${buildProcessInstanceId()} at epoch 1, observed pid:other-controller at epoch 2`,
+       ]);
+     } finally {
+       vi.doUnmock("../../src/persistence/fileStore.js");
+       vi.resetModules();
+     }
+   });

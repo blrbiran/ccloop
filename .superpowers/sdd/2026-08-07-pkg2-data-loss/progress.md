@@ -333,6 +333,69 @@
 明写未静默 —— **记正面样本**；但也暴露一个可改的地方：**brief 强制先读的材料体量过大**，
 下一份 brief 应改为「指名到节」而不是「整份报告」。评审员约 55k–75k，未破。
 
+--------------------------------------------------------------------------------
+10. 任务 2（债 2 修法）—— 实施、评审、修复环、scoped 再评审，收口
+--------------------------------------------------------------------------------
+
+**结论：`Task 2: complete`（commits `b16d5a6..9cb5e00`，scoped 再评审四条全 ADDRESSED，6 条 deferred）。**
+**最终验证**：`Test Files 30 passed (30)` ／ `Tests 517 passed (517)` ／ `TSC_EXIT=0` ／ `BUILD_EXIT=0`，
+未过滤、`RUN` 首行已核为 worktree。517 = 515 ＋ F-1/F-3 两条新测试。
+
+**守卫最终形态**：`createOwnedRunStateWriter()` 在**写入层**，**9 处 `writeRunState` 全部经它**
+（不再是「守卫塞进 `persistTerminalState`」）。ENOENT ⇒ 放行不记事件；有记录但读不出 ⇒ 放行但记
+`ownership_unverified`；异己属主 ⇒ 拒绝并记 `run_state_write_abandoned`（**每次
+`runLoopFromState` latch 一次**，控制器批准，非人裁事项）。
+
+**评审 → 修复环的收获（本轮最值钱的部分）**：
+  独立评审员实跑证伪了实施者的承重前提 —— *** **`persistTerminalState` 不是终态
+  `loop-state.json` 的唯一写者** ***（Critical F-1，`evaluateResumeEligibility` 实测
+  `{ok:false,"run status failed is not resumable"}`）。**实施者随后自己又找出评审员没点名的第二个
+  终态写点**（重试清理失败分支）。⇒ 那句注释走**具名勘误**，未静默改掉。
+
+**人裁 15/16/17**（逐条只在其具名范围内有效，**一律不得外推**）：
+  **15** 守卫挡**全部 9 处**写（不变式是「不要改你不拥有的 run」，终态与否只是损害严重度）。
+  **16** 准许本任务继续超预算，**但记账不停**。
+  **17** 夹具根治：`leaseLifecycle` 的 `seedEligibleRun` 改播 `buildProcessInstanceId()`
+  （`currentProcessInstanceId` 与 `newProcessInstanceId` **必须一起改** —— `fileStore` 有既有判定
+  要求两者相等）。**理由**：把 `run_state_write_abandoned` 加进期望清单等于把一个**生产中不会发生**
+  的轨迹钉成「正确行为」。**改后零新红、无一条测试断言被动。**
+
+*** **⚠️ 控制器本轮自曝错误 1 次（转述走样，与本仓库既有形状同型）** ***：
+  控制器对人与对实施者都说过「**不再向 `runLoop.ts` import `writeRunState`**」——**这不是事实**，
+  那是实施者**提案**里的话、最终未做到，`writeRunState` **仍在 `runLoop.ts` 被 import**，
+  **实施者报告本身也没这么声称**。**是控制器把提案当成已实现并向下游传播。**
+  由 scoped 再评审员查出。**下一位：转述前先核原文。**
+
+*** **D-1（deferred，最重要的一条）—— 结构性保证 NOT ESTABLISHED。** ***
+  修法以 `grep -c 'await writeRunState(' src/controller/runLoop.ts` **= 1** 作验收探针。
+  **覆盖面事实成立**（再评审员独立验：该 grep = 1 且在 writer 内、`await writeOwnedRunState(` = 9），
+  **但它挡不住「新增绕过写点」**：再评审员在副本上试 **7 种平常写法**（`void` ／ `return` ／
+  别名 import ／ 双空格 ／ `await` 换行 ／ `Promise.all` ／ 直接 `writeFile`），
+  *** **7/7 计数都留在 1** ***；且**无 lint / CI / npm script / 测试在跑它**。
+  ⇒ *** **与 F-1 的根因同形：一个没有执行机制的完整性断言。** ***
+  **建议下轮给一个真不变量**：把 `writeRunState` 从该模块 import 移走 ／ lint 规则 ／ 读源码的测试。
+
+**其余 deferred**：
+  `Task 2: minor (deferred): D-2 9 处调用点全部忽略 writer 的布尔返回值 —— 写被拒后循环照常在异己
+   run 目录里跑 attempt、建 worktree、追加事件（窄度是既定设计，但 F-2 之后落差更显眼）`
+  `Task 2: minor (deferred): D-3 reportOnce 的 appendEvent 不吞异常，循环顶部那处在 attempt try 之外，
+   磁盘失败会把「拒绝」变成抛出`
+  `Task 2: minor (deferred): D-4 卫生 —— task-3-design.md 随任务 2 的修复 commit 7bd4c7f 入库`
+  `Task 2: minor (deferred): D-5 F-2 那条字节断言无鉴别力（MUTANT_C 下未红），真正钉住 F-2 的是事件断言`
+  `Task 2: minor (deferred): D-6 守卫读 / 他进程写之间的 TOCTOU（继承未验）`
+
+*** **⚠️ 最薄的一格，下一位必须知道**：9 处写点**再评审员只变异了 3 处**；
+`#7「重试清理失败 → failed」既没被变异、也没有任何具名回归测试钉住** —— 它正是 F-1 的
+**第二个**终态写点，**目前只靠 D-1 那条没有执行机制的结构性事实覆盖**。 ***
+
+*** **一处口径分歧，控制器不替人消解（记账供复核）** ***：再评审员指出**有且只有 1 处既有断言被改**
+（那条 `toEqual` 事件清单 2 元素 → 3 元素）。按「**既有 = 任务 2 之前**」口径**未破例**
+（该测试是任务 2 自己在 `dbca902` 建的）；按「**既有 = 本修复环之前**」口径**算破了**。
+**两种口径的操作后果不同，需要时请问人，不要自己选一个。**
+
+**预算记账**：任务 2 累计约 **205k–245k**，对 100k 上限**超约 2.1–2.5 倍**（人裁 16 准许）。
+三名 subagent 中**两名主动在花钱前先报预算**，记正面样本。scoped 再评审员约 62k，未破。
+
 **下一步（未执行，交接给下一会话）—— 前置全部就绪，可直接派实施者**：
 
   ✅ 已就绪：worktree ＋ 分支 ＋ `npm ci` ＋ 新工作区基线（§7）；两份开工前扫描（§5/§6）；

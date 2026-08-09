@@ -1,0 +1,898 @@
+9cb5e00 test(leaseLifecycle): 人裁 17 —— seedEligibleRun 播本进程 id，根治夹具而非加期望清单
+74cc887 test+docs(runLoop): 修复环 2 —— F-1/F-3 新增实跑注入，F-2 断言收紧，报告追加具名勘误
+7bd4c7f fix(runLoop): 所有权守卫改为写入层唯一收口，挡住全部 9 处 run-state 写（人裁 15）
+diff --git a/src/controller/runLoop.ts b/src/controller/runLoop.ts
+index a98d3c1..51db69b 100644
+--- a/src/controller/runLoop.ts
++++ b/src/controller/runLoop.ts
+@@ -937,91 +937,159 @@ async function persistBoundaryAnalysis(
+ // Package 2 / debt 2. Answers ONE question: does owner-record.json on disk name a process other
+ // than this one? That is deliberately NOT checkRunLease's question and this must not be rewritten
+ // to call it. The gate asks "is a LIVE lease held by someone else", because taking over a run
+ // whose lease has lapsed is legitimate; this asks "am I the owner", and a lapsed lease does not
+ // promote a non-owner into one. Ownership changes hands only through the epoch transfer, so a
+ // record naming someone else refuses here whether their lease is fresh, stale, or absent.
+ //
+ // Reads RAW, for leaseGate's §7.1 reason: readOwnerRecord runs recoverInterruptedOwnerTransfer
+ // first, and a refusal to write must not trigger crash recovery as its side effect.
+ //
+-// Deliberately UNLIKE leaseGate on unreadable input, and this is the one place the two must
+-// diverge. The gate reads before the run starts, so refusing on an unreadable record costs a
+-// startup; this reads while a run is stopping, where the same refusal would propagate out of
+-// runLoopFromState and convert a stop into a crash. A record that cannot be read has not
+-// identified anyone, least of all a DIFFERENT owner, so it is no basis for a refusal — and the
+-// unreadable case already has an owner: leaseHeartbeat answers it with lease_unverifiable, which
+-// is the designed handling and which this must not pre-empt. The guard therefore only ever ADDS a
+-// refusal, and only on a positively identified foreign id.
+-async function foreignOwnerOf(runDir: string): Promise<string | null> {
+-  let ownerProcessInstanceId: string;
++// The four answers are kept DISTINCT rather than collapsed to a boolean, because "no record" and
++// "a record I could not read" are not the same fact and must not be handled the same way. An
++// earlier version of this guard collapsed them and thereby failed open in silence (review finding
++// F-3); the caller below now reports the unreadable case.
++type OwnershipObservation =
++  | { kind: "unowned" }
++  | { kind: "self" }
++  | { kind: "unverified"; detail: string }
++  | { kind: "foreign"; ownerProcessInstanceId: string };
++
++async function observeOwnership(runDir: string): Promise<OwnershipObservation> {
++  let raw: unknown;
+ 
+   try {
+-    ownerProcessInstanceId = parseOwnerRecordForLease(
+-      await readOwnerRecordWithoutRecovery(runDir),
+-    ).currentProcessInstanceId;
+-  } catch {
+-    // Absent, unreadable, or too malformed to yield an id — see above. No identified owner.
+-    return null;
++    raw = await readOwnerRecordWithoutRecovery(runDir);
++  } catch (error) {
++    // ONLY ENOENT means "no record at all", i.e. nobody to protect. leaseGate draws the same line
++    // for the same reason, and it is the ordinary observation for a run driven through
++    // runLoopFromState directly.
++    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
++      return { kind: "unowned" };
++    }
++
++    return { kind: "unverified", detail: String(error) };
+   }
+ 
+-  // §5.1: opaque, compared only for string equality — the same comparison the gate makes, so a
+-  // legacy or recycled id can only add refusals here too.
+-  return ownerProcessInstanceId === buildProcessInstanceId() ? null : ownerProcessInstanceId;
++  try {
++    const ownerProcessInstanceId = parseOwnerRecordForLease(raw).currentProcessInstanceId;
++
++    // §5.1: opaque, compared only for string equality — the same comparison the gate makes, so a
++    // legacy or recycled id can only add refusals here.
++    return ownerProcessInstanceId === buildProcessInstanceId()
++      ? { kind: "self" }
++      : { kind: "foreign", ownerProcessInstanceId };
++  } catch (error) {
++    return { kind: "unverified", detail: String(error) };
++  }
+ }
+ 
+-// Package 2 / debt 2: the ownership guard sits HERE, in the one writer, rather than at the four
+-// lease-loss call sites that motivated it. This function is the only writer of a terminal
+-// loop-state.json and of a `loop_<terminal>` event, and "cancelled" is a dead end (stateMachine
+-// `cancelled: []`, absent from resumeLoop's RESUMABLE_STATUSES) — so one check here covers all
+-// fifteen call sites and cannot be forgotten by the sixteenth.
++// Package 2 / debt 2, review round 1. THE chokepoint: every loop-state.json write performed by
++// runLoopFromState and by persistTerminalState goes through here, and `writeRunState` is called
++// from exactly one place in this module — the line below.
++//
++// That structure is the point, and it is a correction of how the first version of this guard
++// argued for its own completeness. That version sat inside persistTerminalState and justified its
++// coverage with the claim "persistTerminalState is the only writer of a terminal loop-state.json".
++// The claim was FALSE (review finding F-1): the outer catch's failure branches transition to
++// "failed" — which is terminal, `failed: []` in legalTransitions — and call writeRunState
++// directly, so a terminal status still reached a run this process did not own. The completeness
++// argument is therefore no longer "I audited the call sites and they are covered"; it is "this
++// module cannot write a run state except through this function", which is a property a reader can
++// check with one grep instead of an audit that already went wrong once.
+ //
+-// What it withholds is exactly ONE thing: writeRunState, the persisted run status. That narrowness
+-// is the design, not laziness, and widening it is a regression rather than extra safety. The debt
+-// is that loop-state.json becomes "cancelled" — a dead end (stateMachine `cancelled: []`, absent
+-// from RESUMABLE_STATUSES), which is what strands the real owner. The returned RunState and the
+-// `loop_<terminal>` event are not that: nothing resumes off either (runLoopFromState's §5.4 note
+-// records that evaluateResumeEligibility does not read the event stream and the registry observes
+-// three files), while BOTH are load-bearing for reporting why this process stopped. assertHeld
+-// appends no event of its own by design, so this transition is the only thing that carries the
+-// stop reason out to the caller and into the log; suppressing it leaves a run that stopped for a
+-// lease reason naming nobody. So: this process still reports its own stop, and the other owner's
+-// run status is left exactly as resumable as it was.
++// Refusing NON-terminal writes too (review finding F-2) is deliberate and is what makes the rule
++// one rule. The invariant is "do not modify a run you do not own"; terminal vs non-terminal
++// describes how bad the damage is, not whether this process is allowed to do it.
+ //
+-// The refusal is not silent. The abandonment is appended to events.jsonl, following
+-// writeBoundaryArtifacts' stance (fileStore.ts) that a protective abandonment with no outlet at
+-// all "would be a genuine silent failure". Unlike that call site this one has no operator
+-// callback, so events.jsonl is the SOLE outlet and the append is deliberately NOT swallowed:
+-// swallowing it would leave the abandonment with no record anywhere. A throw from it cannot be
+-// upgraded into a failed attempt — every lease-loss call site either sits outside the attempt try
+-// or already sits inside its catch — so it is loud and costs no write.
++// Reporting is latched per writer instance — one event of each kind per runLoopFromState
++// invocation. Without a bound, a loop refused at every phase boundary would append an unbounded
++// number of identical lines to a run owned by someone else; with no event at all it would be the
++// silent failure writeBoundaryArtifacts warns about (fileStore.ts). One line is the smallest
++// record that is still a record.
++type OwnedRunStateWriter = (runDir: string, state: RunState) => Promise<boolean>;
++
++function createOwnedRunStateWriter(): OwnedRunStateWriter {
++  const reported = new Set<string>();
++
++  const reportOnce = async (runDir: string, type: string, detail: string): Promise<void> => {
++    if (reported.has(type)) {
++      return;
++    }
++
++    reported.add(type);
++    await appendEvent(runDir, { type, at: new Date().toISOString(), detail });
++  };
++
++  return async (runDir, state) => {
++    const ownership = await observeOwnership(runDir);
++
++    if (ownership.kind === "foreign") {
++      // Two event types rather than one, and NOT merely for readability: `terminal_write_abandoned`
++      // is the refusal that prevents an unresumable run (the debt itself), while the non-terminal
++      // one prevents a lesser mutation. Latching them separately also keeps the terminal refusal
++      // observable even when a non-terminal write was refused earlier in the same invocation.
++      await reportOnce(
++        runDir,
++        isTerminalRunStatus(state.status) ? "terminal_write_abandoned" : "run_state_write_abandoned",
++        `refused to write run status ${state.status} into a run owned by `
++          + `${ownership.ownerProcessInstanceId}, not by ${buildProcessInstanceId()}`,
++      );
++      return false;
++    }
++
++    if (ownership.kind === "unverified") {
++      // F-3/F-4: this proceeds — a guard that cannot read the record must not turn a stop into a
++      // crash, and an unreadable record has identified nobody, least of all a DIFFERENT owner. But
++      // proceeding UNRECORDED is the silent failure this repository already has a stated position
++      // against, so the fail-open is written down where an operator can find it. The earlier
++      // version justified the silence by saying leaseHeartbeat answers this case with
++      // lease_unverifiable; that reason is withdrawn (F-4) — it holds only when a real heartbeat is
++      // running, and runLoopFromState's default is INERT_LEASE_HEARTBEAT.
++      await reportOnce(
++        runDir,
++        "ownership_unverified",
++        `proceeding with a run-state write for ${buildProcessInstanceId()}: `
++          + `owner record present but unreadable: ${ownership.detail}`,
++      );
++    }
++
++    // The ONLY writeRunState call in this module. Everything else routes here.
++    await writeRunState(runDir, state);
++    return true;
++  };
++}
++
++// Package 2 / debt 2: this used to be where the ownership guard lived, justified by the claim that
++// it was "the only writer of a terminal loop-state.json". That claim was false (review finding
++// F-1) and the guard has moved to createOwnedRunStateWriter above — see the erratum there. What
++// stays true, and is all this function now claims, is that it is the only writer of a
++// `loop_<terminal>` EVENT.
++//
++// The write goes through the injected writer, which may refuse it. The refusal is deliberately NOT
++// propagated to the caller: the returned RunState and the `loop_<terminal>` event are unaffected
++// by ownership, because nothing resumes off either (evaluateResumeEligibility does not read the
++// event stream and the registry observes three files) while BOTH are load-bearing for reporting
++// why THIS process stopped. assertHeld appends no event of its own by design, so this transition
++// is the only thing that carries the stop reason out to the caller and into the log; suppressing
++// it leaves a run that stopped for a lease reason naming nobody. So this process still reports its
++// own stop, and the other owner's run status is left exactly as resumable as it was.
+ async function persistTerminalState(
+   runDir: string,
++  writeOwnedRunState: OwnedRunStateWriter,
+   state: RunState,
+   decision: TerminalDecision,
+   reason: string,
+ ): Promise<RunState> {
+   const terminalState = transitionRunState(state, decision, reason);
+   await appendTransitionEvent(runDir, terminalState, `loop_${decision}`, reason);
+-
+-  const foreignOwner = await foreignOwnerOf(runDir);
+-
+-  if (foreignOwner !== null) {
+-    await appendEvent(runDir, {
+-      type: "terminal_write_abandoned",
+-      at: new Date().toISOString(),
+-      detail: `refused to write terminal status ${decision} (${reason}) into a run owned by ${foreignOwner}, not by ${buildProcessInstanceId()}`,
+-    });
+-    return terminalState;
+-  }
+-
+-  await writeRunState(runDir, terminalState);
++  await writeOwnedRunState(runDir, terminalState);
+   return terminalState;
+ }
+ 
+ export async function runLoop(contract: LoopContract, runDir: string, adapter: RuntimeAdapter): Promise<RunState> {
+   const state = transitionRunState(initialState(contract), "planning");
+   const ownerRecord = buildInitialOwnerRecord(contract, state);
+   await initializeRunFiles(runDir, contract, state);
+   // §7: as early as possible, but never before initializeRunFiles — the gate may append an
+   // event and events.jsonl does not exist yet.
+   //
+@@ -1111,40 +1179,46 @@ export async function runLoopFromState(
+   contract: LoopContract,
+   runDir: string,
+   adapter: RuntimeAdapter,
+   initialLoopState: RunState,
+   heartbeat: LeaseHeartbeat = INERT_LEASE_HEARTBEAT,
+   leaseLoss: LeaseLossSignal = { lost: null },
+   options?: RunLoopFromStateOptions,
+ ): Promise<RunState> {
+   let state = initialLoopState;
+ 
++  // Package 2 / debt 2, review round 1: created per invocation, so the abandonment-event latch is
++  // scoped to this run of the loop rather than to the process. Every loop-state.json write below
++  // goes through it — see createOwnedRunStateWriter for why the guard lives in the writer rather
++  // than at the decision sites.
++  const writeOwnedRunState = createOwnedRunStateWriter();
++
+   // §8.1: writing attempt artifacts is a side effect, so every such write inside the attempt
+   // body goes through here. Deliberately NOT pushed down into writeCompletedAttemptArtifacts:
+   // that function is also called from the failure path, which has already abandoned.
+   const guardedWriteArtifacts = async (
+     write: () => Promise<void>,
+   ): Promise<void> => {
+     await heartbeat.assertHeld();
+     await write();
+   };
+ 
+   while (true) {
+-    await writeRunState(runDir, state);
++    await writeOwnedRunState(runDir, state);
+     // §6: the event-driven refresh. It survives environments where the timer is unreliable
+     // and additionally evidences that the loop is making progress rather than merely alive.
+     await heartbeat.affirmNow();
+ 
+     // §8: stop at a phase boundary rather than mid-attempt, so the run never tears down
+     // state a new owner might be reading. Launch no further attempt.
+     if (leaseLoss.lost !== null) {
+-      return await persistTerminalState(runDir, state, "cancelled", "lease_lost");
++      return await persistTerminalState(runDir, writeOwnedRunState, state, "cancelled", "lease_lost");
+     }
+ 
+     // Task B2 / L3 §5.4: the same phase boundary, one checkpoint later. Ordered AFTER the lease
+     // check on purpose — a lost lease keeps routing exactly where it always did, so this adds a
+     // refusal and changes none.
+     //
+     // Fitted to this checkpoint ONLY, not to the second `leaseLoss.lost !== null` further down.
+     // Two reasons, and the first is why the two would contradict each other: this one sits above
+     // `const attempt = state.attemptsUsed + 1` just below, so stopping here spends no attempt,
+     // while the other sits inside an attempt that has already been counted — and the writeRunState
+@@ -1178,62 +1252,64 @@ export async function runLoopFromState(
+         // §8.1: adding a worktree mutates the repository, so the lease is re-checked here —
+         // inside the retry loop, because the retry can be a long way from the first attempt.
+         await heartbeat.assertHeld();
+         worktreePath = (await createAttemptWorkspace(contract.context.repoPath, runDir, attempt)).worktreePath;
+       } catch (error) {
+         // §8.1: a refused lease is not a workspace-infrastructure failure and must consume
+         // neither the infra retry nor the blocked_waiting_human escalation below. No worktree
+         // was created, so there is nothing to abandon in place; the attempt simply never
+         // starts and the run stops here.
+         if (isLeaseStopError(error)) {
+-          return await persistTerminalState(runDir, state, "cancelled", error.stopReason);
++          return await persistTerminalState(runDir, writeOwnedRunState, state, "cancelled", error.stopReason);
+         }
+ 
+         if (infraRetryUsed) {
+           await appendEvent(runDir, {
+             type: "workspace_create_failed",
+             at: new Date().toISOString(),
+             detail: String(error),
+           });
+           state = await persistTerminalState(
+             runDir,
++            writeOwnedRunState,
+             state,
+             "blocked_waiting_human",
+             `workspace unavailable: ${String(error)}`,
+           );
+           return state;
+         }
+ 
+         infraRetryUsed = true;
+         await appendEvent(runDir, { type: "workspace_retry", at: new Date().toISOString(), detail: String(error) });
+       }
+     }
+ 
+     let plan: AttemptPlan | null = null;
+     let execution: ExecutionResult | null = null;
+     let verification: VerificationResult | null = null;
+ 
+     try {
+       state = consumeAttemptBudget(state, contract, attempt);
+-      await writeRunState(runDir, state);
++      await writeOwnedRunState(runDir, state);
+ 
+       const planTimeoutMs = getPhaseTimeoutMs(contract, state);
+       // §8.1: launching a Claude call is a side effect.
+       await heartbeat.assertHeld();
+       const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal) =>
+         adapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal)),
+       );
+ 
+       if (planOutcome.timedOut) {
+         state = applyPhaseUsage(state, planOutcome.elapsedMs, undefined);
+         state = await persistTerminalState(
+           runDir,
++          writeOwnedRunState,
+           state,
+           "exhausted",
+           hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("plan", planTimeoutMs),
+         );
+         // §8.1: removing the worktree is a side effect on a directory a new owner may already
+         // be reading.
+         await heartbeat.assertHeld();
+         await cleanupAttemptWorkspaceBestEffort(
+           contract.context.repoPath,
+           worktreePath,
+@@ -1241,34 +1317,34 @@ export async function runLoopFromState(
+           "cleanup after terminal decision exhausted",
+         );
+         return state;
+       }
+ 
+       plan = planOutcome.result;
+       state = applyPhaseUsage(state, planOutcome.elapsedMs, plan.tokenUsage);
+ 
+       if (hasBudgetExceeded(state)) {
+         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+-        state = await persistTerminalState(runDir, state, "exhausted", BUDGET_EXHAUSTED_REASON);
++        state = await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON);
+         await heartbeat.assertHeld();
+         await cleanupAttemptWorkspaceBestEffort(
+           contract.context.repoPath,
+           worktreePath,
+           runDir,
+           "cleanup after terminal decision exhausted",
+         );
+         return state;
+       }
+ 
+       state = transitionRunState(state, "executing");
+       await appendTransitionEvent(runDir, state, "attempt_started", `attempt ${attempt}`);
+-      await writeRunState(runDir, state);
++      await writeOwnedRunState(runDir, state);
+       await appendTransitionEvent(runDir, state, "execute_started", `attempt ${attempt}`);
+ 
+       const executeTimeoutMs = getPhaseTimeoutMs(contract, state);
+       // §8.1: launching a Claude call is a side effect.
+       await heartbeat.assertHeld();
+       const executeOutcome = await runPhaseWithTimeout(
+         executeTimeoutMs,
+         (abortSignal) => adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan)),
+         { awaitAbortedResult: true },
+       );
+@@ -1288,20 +1364,21 @@ export async function runLoopFromState(
+             getExecutionFailureBoundary(state),
+             "retained",
+           );
+           await guardedWriteArtifacts(() => writeAttemptArtifacts(runDir, attempt, {
+             plan,
+             executionRecovery,
+           }));
+           await persistBoundaryAnalysis(runDir, state, heartbeat, executionRecovery, options?.onReconciliationWriteAbandoned);
+           state = await persistTerminalState(
+             runDir,
++            writeOwnedRunState,
+             state,
+             "exhausted",
+             hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("execute", executeTimeoutMs),
+           );
+           await heartbeat.assertHeld();
+           const cleanupStatus = await cleanupAttemptWorkspaceWithStatus(
+             contract.context.repoPath,
+             worktreePath,
+             runDir,
+             "cleanup after terminal decision exhausted",
+@@ -1362,29 +1439,31 @@ export async function runLoopFromState(
+         const partialPathPolicy = evaluatePathPolicy({
+           changedFiles: completedExecution.changedFiles,
+           allowlistPaths: contract.safetyPolicy.allowlistPaths,
+           denylistPaths: contract.safetyPolicy.denylistPaths,
+           maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
+         });
+ 
+         if (partialPathPolicy.humanGateHit) {
+           state = await persistTerminalState(
+             runDir,
++            writeOwnedRunState,
+             state,
+             "blocked_waiting_human",
+             partialPathPolicy.reason ?? completedExecution.failureMessage,
+           );
+           return state;
+         }
+ 
+         state = await persistTerminalState(
+           runDir,
++          writeOwnedRunState,
+           state,
+           completedExecution.failureType === "timeout" ? "exhausted" : "failed",
+           completedExecution.failureMessage,
+         );
+ 
+         await heartbeat.assertHeld();
+         await cleanupAttemptWorkspaceBestEffort(
+           contract.context.repoPath,
+           worktreePath,
+           runDir,
+@@ -1397,63 +1476,65 @@ export async function runLoopFromState(
+         changedFiles: completedExecution.changedFiles,
+         allowlistPaths: contract.safetyPolicy.allowlistPaths,
+         denylistPaths: contract.safetyPolicy.denylistPaths,
+         maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
+       });
+ 
+       if (pathPolicy.humanGateHit) {
+         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
+         state = await persistTerminalState(
+           runDir,
++          writeOwnedRunState,
+           state,
+           "blocked_waiting_human",
+           pathPolicy.reason ?? "human gate or denylist hit",
+         );
+         return state;
+       }
+ 
+       if (hasBudgetExceeded(state)) {
+         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
+-        state = await persistTerminalState(runDir, state, "exhausted", BUDGET_EXHAUSTED_REASON);
++        state = await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON);
+         await heartbeat.assertHeld();
+         await cleanupAttemptWorkspaceBestEffort(
+           contract.context.repoPath,
+           worktreePath,
+           runDir,
+           "cleanup after terminal decision exhausted",
+         );
+         return state;
+       }
+ 
+       state = transitionRunState(state, "verifying");
+       await appendTransitionEvent(runDir, state, "execution_finished", `attempt ${attempt}`);
+-      await writeRunState(runDir, state);
++      await writeOwnedRunState(runDir, state);
+ 
+       const verifyTimeoutMs = getPhaseTimeoutMs(contract, state);
+       // §8.1: launching a Claude call is a side effect. runVerification also shells out to the
+       // contract's required checks inside the attempt worktree, which is one too.
+       await heartbeat.assertHeld();
+       const verifyOutcome = await runPhaseWithTimeout(verifyTimeoutMs, (abortSignal) =>
+         runVerification(
+           contract,
+           adapter,
+           buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution),
+           plan,
+           completedExecution,
+         ),
+       );
+ 
+       if (verifyOutcome.timedOut) {
+         state = applyPhaseUsage(state, verifyOutcome.elapsedMs, undefined);
+         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
+         state = await persistTerminalState(
+           runDir,
++          writeOwnedRunState,
+           state,
+           "exhausted",
+           hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("verify", verifyTimeoutMs),
+         );
+         await heartbeat.assertHeld();
+         await cleanupAttemptWorkspaceBestEffort(
+           contract.context.repoPath,
+           worktreePath,
+           runDir,
+           "cleanup after terminal decision exhausted",
+@@ -1499,51 +1580,51 @@ export async function runLoopFromState(
+           ...transitionRunState(
+             {
+               ...state,
+               recentFailures: [...state.recentFailures, failure],
+             },
+             "planning",
+             decision.reason,
+           ),
+         };
+         await appendTransitionEvent(runDir, state, "verification_rejected", decision.reason);
+-        await writeRunState(runDir, state);
++        await writeOwnedRunState(runDir, state);
+ 
+         await heartbeat.assertHeld();
+ 
+         try {
+           await cleanupAttemptWorkspace(contract.context.repoPath, worktreePath);
+         } catch (error) {
+           state = transitionRunState(state, "failed", String(error));
+           await appendTransitionEvent(runDir, state, "attempt_failed", String(error));
+-          await writeRunState(runDir, state);
++          await writeOwnedRunState(runDir, state);
+           await heartbeat.assertHeld();
+           await cleanupAttemptWorkspaceBestEffort(
+             contract.context.repoPath,
+             worktreePath,
+             runDir,
+             "cleanup after retry cleanup failure",
+           );
+           return state;
+         }
+ 
+         // §8: the same stop, checked again here because this phase boundary can be minutes
+         // away from the top of the loop — the periodic heartbeat timer, not just the
+         // top-of-loop affirmNow() call, can be what discovers the loss during that gap.
+         if (leaseLoss.lost !== null) {
+-          return await persistTerminalState(runDir, state, "cancelled", "lease_lost");
++          return await persistTerminalState(runDir, writeOwnedRunState, state, "cancelled", "lease_lost");
+         }
+ 
+         continue;
+       }
+ 
+-      state = await persistTerminalState(runDir, state, decision.kind, decision.reason);
++      state = await persistTerminalState(runDir, writeOwnedRunState, state, decision.kind, decision.reason);
+ 
+       if (decision.kind !== "blocked_waiting_human") {
+         await heartbeat.assertHeld();
+         await cleanupAttemptWorkspaceBestEffort(
+           contract.context.repoPath,
+           worktreePath,
+           runDir,
+           `cleanup after terminal decision ${decision.kind}`,
+         );
+       }
+@@ -1563,72 +1644,73 @@ export async function runLoopFromState(
+       // sits there, where the returned state is byte-identical to disk; this branch fires
+       // mid-attempt, where `state` may have been advanced by applyPhaseUsage since that write.
+       // Without it the returned state and the persisted one disagree and the claim that this is
+       // structurally the same stop as §5.4's is false.
+       if (error instanceof RunHeartbeatStoppedError) {
+         await appendEvent(runDir, {
+           type: "heartbeat_stopped",
+           at: new Date().toISOString(),
+           detail: String(error),
+         });
+-        await writeRunState(runDir, state);
++        await writeOwnedRunState(runDir, state);
+         return state;
+       }
+ 
+       // §8.1: the side effect was skipped and the attempt is abandoned IN PLACE. No further
+       // side effect of this attempt is attempted, including its worktree cleanup — cleanup
+       // is itself a side effect on a worktree the new owner may already be reading, and
+       // this process has just lost the authority to touch it. The residual worktree is left
+       // for the new owner, whose resume path already cleans up residual worktrees. This
+       // returns before the generic failure handling below on purpose: a refused lease is not
+       // an attempt failure, so it must not be fingerprinted, boundary-analysed or
+       // transitioned to "failed".
+       if (isLeaseStopError(error)) {
+         // A guard that fired after this attempt had already persisted a terminal decision
+         // blocked only the cleanup that follows it: the run has already stopped, and
+         // re-deciding it as "cancelled" would be an illegal transition out of a terminal
+         // status as well as another write to a run this process no longer owns.
+         return isTerminalRunStatus(state.status)
+           ? state
+-          : await persistTerminalState(runDir, state, "cancelled", error.stopReason);
++          : await persistTerminalState(runDir, writeOwnedRunState, state, "cancelled", error.stopReason);
+       }
+ 
+       const failureReason = error instanceof PhaseExecutionError ? error.message : String(error);
+ 
+       if (error instanceof PhaseExecutionError) {
+         state = applyPhaseUsage(state, error.elapsedMs, undefined);
+ 
+         if (execution !== null && isPartialExecutionResult(execution)) {
+           await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
+           const partialPathPolicy = evaluatePathPolicy({
+             changedFiles: execution.changedFiles,
+             allowlistPaths: contract.safetyPolicy.allowlistPaths,
+             denylistPaths: contract.safetyPolicy.denylistPaths,
+             maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
+           });
+ 
+           if (partialPathPolicy.humanGateHit) {
+             state = await persistTerminalState(
+               runDir,
++              writeOwnedRunState,
+               state,
+               "blocked_waiting_human",
+               partialPathPolicy.reason ?? execution.failureMessage,
+             );
+             return state;
+           }
+         }
+       }
+ 
+       if (state.status !== "failed") {
+         state = transitionRunState(state, "failed", failureReason);
+         await appendTransitionEvent(runDir, state, "attempt_failed", failureReason);
+-        await writeRunState(runDir, state);
++        await writeOwnedRunState(runDir, state);
+       }
+ 
+       if (worktreePath !== null) {
+         await cleanupAttemptWorkspaceBestEffort(
+           contract.context.repoPath,
+           worktreePath,
+           runDir,
+           "cleanup after controller failure",
+         );
+       }
+diff --git a/tests/controller/leaseLifecycle.integration.test.ts b/tests/controller/leaseLifecycle.integration.test.ts
+index d26504a..cbcf8c1 100644
+--- a/tests/controller/leaseLifecycle.integration.test.ts
++++ b/tests/controller/leaseLifecycle.integration.test.ts
+@@ -39,38 +39,56 @@ function createContract(repoPath: string): LoopContract {
+     objective: { taskId: "task-1", goal: "Fix", successCondition: "pass", nonGoals: [] },
+     context: { repoPath, targetPaths: ["src"], relevantDocs: [], buildTestCommands: ["npm test"], constraints: [] },
+     executionPolicy: { autonomyLevel: "L2", maxAttempts: 3, perAttemptTimeoutMs: 1000, totalRuntimeBudgetMs: 5000, tokenBudget: 1000, worktreeRequired: true, partialOutcomeRecoveryWindowMs: 1000 },
+     safetyPolicy: { allowlistPaths: ["src/**"], denylistPaths: [".env"], maxFilesTouched: 10, humanGateConditions: [] },
+     verification: { verifierType: "agent", requiredChecks: ["true"], rejectOn: ["tests fail"], evidenceRequired: [] },
+     escalationAndExit: { escalationTargets: ["human"], pauseOn: [], stopOn: [], terminalStates: ["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"] },
+   };
+ }
+ 
+ // Seed an eligible, interrupted run dir at attemptsUsed=N, status "executing".
++//
++// Package 2 / debt 2, human ruling 17. The owner ids below are THIS process's, not a literal
++// "pid:100", and that is load-bearing rather than cosmetic. Every caller of this helper drives
++// runLoopFromState directly, which in production is only ever reached AFTER resumeLoop has
++// completed the owner transfer and written its own id into owner-record.json. Seeding a foreign
++// id therefore modelled a trajectory production cannot produce — a process running a loop it
++// never claimed — and the ownership guard correctly refused its writes. Asserting that refusal as
++// expected behaviour would have written the damaged trajectory into the suite; the fixture is
++// fixed instead.
++//
++// priorProcessInstanceId stays "pid:100": the run really was lost by a previous owner, and that is
++// exactly the shape resumeLoop produces — prior = the dead owner, new = this process. The two
++// `newProcessInstanceId`/`currentProcessInstanceId` values must move together because fileStore
++// compares them for equality when deciding whether a transfer is already committed.
++//
++// The sibling helpers of the same name in resumeLoop.integration.test.ts and cli.test.ts are
++// deliberately NOT changed: those drive resumeLoop/sweep, whose whole job is to take a run over
++// from a foreign owner, so a foreign id is correct there.
+ async function seedEligibleRun(runDir: string, contract: LoopContract, attemptsUsed = 1) {
+   await mkdir(join(runDir, "attempts"), { recursive: true });
+   await writeFile(join(runDir, "loop-contract.json"), JSON.stringify(contract, null, 2));
+   await writeFile(join(runDir, "events.jsonl"), "");
+   await writeFile(join(runDir, "loop-state.json"), JSON.stringify({
+     status: "executing", currentAttempt: attemptsUsed, attemptsUsed,
+     lastTransitionAt: "2026-07-25T00:00:00.000Z", waitingOnHuman: false, stopReason: null,
+     budgetSnapshot: { attemptsRemaining: 2, timeRemainingMs: 5000, tokenBudgetRemaining: 1000 },
+     recentFailures: [],
+   }));
+   await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+     runId: "task-1", logicalSessionId: "task-1:t0", currentOwnerEpoch: 2,
+-    currentProcessInstanceId: "pid:100", lastAffirmedAt: "2026-07-25T00:00:00.000Z",
++    currentProcessInstanceId: buildProcessInstanceId(), lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+     ownerStatus: "current", supersededByEpoch: null,
+   }));
+   await writeFile(join(runDir, "owner-transfer.json"), JSON.stringify({
+     priorOwnerEpoch: 1, newOwnerEpoch: 2, priorProcessInstanceId: "pid:100",
+-    newProcessInstanceId: "pid:100", transferredAt: "2026-07-25T00:00:00.000Z",
++    newProcessInstanceId: buildProcessInstanceId(), transferredAt: "2026-07-25T00:00:00.000Z",
+     reason: "owner lost", eligibleForContinuation: true,
+   }));
+   await writeFile(join(runDir, "reconciliation-record.json"), JSON.stringify({
+     staleSuspicionBasis: [], staleConfirmed: true, ownershipVerdict: "OWNER_LOST",
+     lastTrustedBoundary: "execute", conflictingEvidence: [],
+     takeoverPermission: { allowed: true, reason: "ok" },
+     priorOwnerEpoch: 1, newOwnerEpoch: 2, eligibleForContinuation: true,
+   }));
+ }
+ 
+diff --git a/tests/controller/runLoop.integration.test.ts b/tests/controller/runLoop.integration.test.ts
+index ab42965..0d23a2e 100644
+--- a/tests/controller/runLoop.integration.test.ts
++++ b/tests/controller/runLoop.integration.test.ts
+@@ -1296,25 +1296,35 @@ describe("runLoop", () => {
+       async execute() {
+         throw new Error("execute should not run");
+       },
+       async verify() {
+         throw new Error("verify should not run");
+       },
+     };
+ 
+     const finalState = await runLoopFromState(contract, runDir, adapter, state, undefined, leaseLoss);
+ 
+-    // The exact (not `toContain`) list carries both halves at once: the stop is still reported
+-    // (`loop_cancelled`, written only by persistTerminalState) AND the guard fired
+-    // (`terminal_write_abandoned`, written only by the guard). It also rules out any adapter call
+-    // having slipped through above the checkpoint.
+-    expect(await readEventTypes(runDir)).toEqual(["loop_cancelled", "terminal_write_abandoned"]);
++    // The exact (not `toContain`) list carries three things at once. `run_state_write_abandoned`
++    // is the top-of-loop write being refused — that write sits ABOVE the lease-loss checkpoint and
++    // used to mutate the other owner's file (review finding F-2). `loop_cancelled` is the stop
++    // still being reported (written only by persistTerminalState). `terminal_write_abandoned` is
++    // the terminal write being refused (written only by the guard). The list also rules out any
++    // adapter call having slipped through above the checkpoint.
++    //
++    // Two distinct abandonment types rather than one repeated: the guard latches one event of each
++    // kind per runLoopFromState invocation, so this also pins that the terminal refusal stays
++    // visible even though a non-terminal refusal happened first.
++    expect(await readEventTypes(runDir)).toEqual([
++      "run_state_write_abandoned",
++      "loop_cancelled",
++      "terminal_write_abandoned",
++    ]);
+ 
+     // Reporting half: unchanged by the fix. This process tells its caller why it stopped.
+     expect(finalState.status).toBe("cancelled");
+     expect(finalState.stopReason).toBe("lease_lost");
+ 
+     // Disk half: the run belongs to someone else and its status is not this process's to write.
+     const persisted = await readRunState(runDir);
+     expect(persisted.status).toBe("planning");
+     // The divergence between the two IS the fix, so it is asserted rather than left implied — the
+     // unguarded code made these two equal, and that equality was the data loss.
+@@ -1361,20 +1371,159 @@ describe("runLoop", () => {
+     // of how the owner/transfer/reconciliation fixtures happen to be shaped.
+     const controlResult = evaluateResumeEligibility({
+       ownerRecord,
+       ownerTransfer,
+       reconciliation,
+       runState: { ...persisted, status: "cancelled" },
+     });
+     expect(controlResult).toEqual({ ok: false, reason: "run status cancelled is not resumable" });
+   });
+ 
++  // Package 2 / debt 2, review finding F-1 (Critical). The FIRST version of the ownership guard
++  // sat inside persistTerminalState and justified its coverage with "persistTerminalState is the
++  // only writer of a terminal loop-state.json". That was false: "failed" is terminal
++  // (src/state/stateMachine.ts, `failed: []`) and runLoopFromState's outer catch transitions to it
++  // and calls writeRunState directly, entirely outside persistTerminalState. So a terminal status
++  // still landed in a run owned by someone else, with exactly the debt-2 consequence.
++  //
++  // This test reaches that branch specifically — a plain adapter failure, NOT a lease error, so
++  // isLeaseStopError does not match and control falls through to the generic failure handling at
++  // the bottom of the catch. It would pass against the first version of the guard, which is the
++  // point: it is the regression the first version's own reasoning hid.
++  it("refuses to write a terminal failed status into a run a different owner holds when the attempt fails for a non-lease reason", async () => {
++    const repoPath = await createRepo();
++    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
++    const contract = createContract(repoPath);
++    const state: RunState = { ...makeRunState("planning"), currentAttempt: 0, attemptsUsed: 0 };
++
++    await initializeRunFiles(runDir, contract, state);
++    const persistedStateBefore = await readFile(join(runDir, "loop-state.json"), "utf8");
++
++    await writeOwnerRecord(runDir, {
++      runId: "task-1",
++      logicalSessionId: "task-1:t0",
++      currentOwnerEpoch: 2,
++      currentProcessInstanceId: "pid:999999:1234567890",
++      lastAffirmedAt: "2026-07-25T00:00:00.000Z",
++      ownerStatus: "current",
++      supersededByEpoch: null,
++      leaseAffirmedAt: "2026-07-25T00:00:00.000Z",
++    });
++
++    const adapter: RuntimeAdapter = {
++      // A plain failure, deliberately not a lease error: this is what routes to the outer catch's
++      // generic `transitionRunState(state, "failed", …)` + writeRunState pair.
++      async plan() {
++        throw new Error("test-injected: adapter failure that is not a lease error");
++      },
++      async execute() {
++        throw new Error("execute should not run");
++      },
++      async verify() {
++        throw new Error("verify should not run");
++      },
++    };
++
++    const finalState = await runLoopFromState(contract, runDir, adapter, state);
++
++    // Reporting half, unchanged: this process still reports that its own attempt failed.
++    expect(finalState.status).toBe("failed");
++
++    // The requirement: the other owner's run status was NOT written. Without the fix this reads
++    // "failed", which is terminal and unresumable exactly as "cancelled" is.
++    const persisted = await readRunState(runDir);
++    expect(persisted.status).toBe("planning");
++    expect(await readFile(join(runDir, "loop-state.json"), "utf8")).toBe(persistedStateBefore);
++    expect(await readEventTypes(runDir)).toContain("terminal_write_abandoned");
++
++    // Proved with the production gate rather than by eyeballing the status, and with a control
++    // that feeds the same gate the status the unguarded code would have persisted.
++    const ownerRecord = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as OwnerRecord;
++    const ownerTransfer: OwnerTransferRecord = {
++      priorOwnerEpoch: 1,
++      newOwnerEpoch: 2,
++      priorProcessInstanceId: "pid:100:1",
++      newProcessInstanceId: "pid:999999:1234567890",
++      transferredAt: "2026-07-25T00:00:00.000Z",
++      reason: "owner lost",
++      eligibleForContinuation: true,
++    };
++    const reconciliation: ReconciliationRecord = {
++      staleSuspicionBasis: [],
++      staleConfirmed: true,
++      ownershipVerdict: "OWNER_LOST",
++      lastTrustedBoundary: "execute",
++      conflictingEvidence: [],
++      takeoverPermission: { allowed: true, reason: "ok" },
++      priorOwnerEpoch: 1,
++      newOwnerEpoch: 2,
++      eligibleForContinuation: true,
++    };
++
++    expect(evaluateResumeEligibility({ ownerRecord, ownerTransfer, reconciliation, runState: persisted }))
++      .toEqual({ ok: true });
++    expect(evaluateResumeEligibility({
++      ownerRecord,
++      ownerTransfer,
++      reconciliation,
++      runState: { ...persisted, status: "failed" },
++    })).toEqual({ ok: false, reason: "run status failed is not resumable" });
++  });
++
++  // Package 2 / debt 2, review finding F-3/F-4. The guard fails OPEN when it cannot read the owner
++  // record — a record it could not parse has identified nobody, least of all a different owner,
++  // and refusing there would turn a stop into a crash. What F-3 caught is that the first version
++  // failed open with no trace at all, which is the silent failure this repository already has a
++  // stated position against (fileStore.ts, writeBoundaryArtifacts).
++  //
++  // This pins BOTH halves: the write proceeds AND the fail-open is recorded. Asserting only the
++  // event would pass against a guard that refused the write; asserting only the write would pass
++  // against the silent version.
++  it("records ownership_unverified and still writes when the owner record is present but unreadable", async () => {
++    const repoPath = await createRepo();
++    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
++    const contract = createContract(repoPath);
++    const state: RunState = { ...makeRunState("planning"), currentAttempt: 0, attemptsUsed: 0 };
++
++    await initializeRunFiles(runDir, contract, state);
++    await writeFile(join(runDir, "owner-record.json"), "{ not json");
++
++    const leaseLoss = createLeaseLossSignal();
++    leaseLoss.lost = new RunLeaseLostError("test-injected: this process's own lease died");
++
++    const adapter: RuntimeAdapter = {
++      async plan() {
++        throw new Error("plan should not run: the lease-loss checkpoint sits above any attempt");
++      },
++      async execute() {
++        throw new Error("execute should not run");
++      },
++      async verify() {
++        throw new Error("verify should not run");
++      },
++    };
++
++    const finalState = await runLoopFromState(contract, runDir, adapter, state, undefined, leaseLoss);
++
++    // Fail-open: the write happened. An unreadable record must not strand a run that may well be
++    // this process's own, and must not convert a stop into a crash.
++    expect(finalState.status).toBe("cancelled");
++    expect((await readRunState(runDir)).status).toBe("cancelled");
++
++    // Not silent: exactly one record of the fail-open, and no false accusation of a foreign owner.
++    const eventTypes = await readEventTypes(runDir);
++    expect(eventTypes).toContain("ownership_unverified");
++    expect(eventTypes).not.toContain("terminal_write_abandoned");
++    expect(eventTypes).not.toContain("run_state_write_abandoned");
++    expect(eventTypes.filter((type) => type === "ownership_unverified")).toHaveLength(1);
++  });
++
+   // Task B2 / L3 §5.4 test 8. runLoopFromState is driven directly because runLoop() takes no
+   // options object and the stop slot lives on one.
+   //
+   // The adapter script is load-bearing rather than incidental. The slot could have been fitted to
+   // EITHER of the two `leaseLoss.lost !== null` checkpoints, and an implementation that chose the
+   // other one — inside the attempt, on the retryable path after verification is rejected — also
+   // returns a non-terminal state here. What separates them is only that it returns having already
+   // spent an attempt, so frame 1 rejects verification specifically to give that implementation a
+   // path to its checkpoint: planCalls, the untouched loop-state.json and the exact event list are
+   // then three independent observables of "stopped before any attempt" versus "stopped after one".
