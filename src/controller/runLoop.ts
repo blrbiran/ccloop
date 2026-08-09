@@ -975,26 +975,34 @@ async function foreignOwnerOf(runDir: string): Promise<string | null> {
 // `cancelled: []`, absent from resumeLoop's RESUMABLE_STATUSES) — so one check here covers all
 // fifteen call sites and cannot be forgotten by the sixteenth.
 //
-// It sits at the TOP, above transitionRunState: a run this process does not own is not this
-// process's to re-decide, and computing a transition that may itself be illegal (the caller at the
-// isTerminalRunStatus branch relies on never reaching an illegal one) is not a prerequisite for
-// declining to write.
+// What it withholds is exactly ONE thing: writeRunState, the persisted run status. That narrowness
+// is the design, not laziness, and widening it is a regression rather than extra safety. The debt
+// is that loop-state.json becomes "cancelled" — a dead end (stateMachine `cancelled: []`, absent
+// from RESUMABLE_STATUSES), which is what strands the real owner. The returned RunState and the
+// `loop_<terminal>` event are not that: nothing resumes off either (runLoopFromState's §5.4 note
+// records that evaluateResumeEligibility does not read the event stream and the registry observes
+// three files), while BOTH are load-bearing for reporting why this process stopped. assertHeld
+// appends no event of its own by design, so this transition is the only thing that carries the
+// stop reason out to the caller and into the log; suppressing it leaves a run that stopped for a
+// lease reason naming nobody. So: this process still reports its own stop, and the other owner's
+// run status is left exactly as resumable as it was.
 //
-// The refusal returns `state` UNCHANGED, which is the point of the whole guard: the real owner's
-// run stays exactly as resumable as it was. It is not silent — the abandonment is appended to
-// events.jsonl, following writeBoundaryArtifacts' stance (fileStore.ts) that a protective
-// abandonment with no outlet at all "would be a genuine silent failure". Unlike that call site
-// this one has no operator callback, so events.jsonl is the SOLE outlet and the append is
-// deliberately NOT swallowed: swallowing it would leave the abandonment with no record anywhere.
-// A throw from it is loud and, unlike the swallow's motivating case there, cannot be upgraded into
-// a failed attempt — every one of the four lease-loss call sites either sits outside the attempt
-// try or already sits inside its catch, so this throw leaves runLoopFromState without a write.
+// The refusal is not silent. The abandonment is appended to events.jsonl, following
+// writeBoundaryArtifacts' stance (fileStore.ts) that a protective abandonment with no outlet at
+// all "would be a genuine silent failure". Unlike that call site this one has no operator
+// callback, so events.jsonl is the SOLE outlet and the append is deliberately NOT swallowed:
+// swallowing it would leave the abandonment with no record anywhere. A throw from it cannot be
+// upgraded into a failed attempt — every lease-loss call site either sits outside the attempt try
+// or already sits inside its catch — so it is loud and costs no write.
 async function persistTerminalState(
   runDir: string,
   state: RunState,
   decision: TerminalDecision,
   reason: string,
 ): Promise<RunState> {
+  const terminalState = transitionRunState(state, decision, reason);
+  await appendTransitionEvent(runDir, terminalState, `loop_${decision}`, reason);
+
   const foreignOwner = await foreignOwnerOf(runDir);
 
   if (foreignOwner !== null) {
@@ -1003,11 +1011,9 @@ async function persistTerminalState(
       at: new Date().toISOString(),
       detail: `refused to write terminal status ${decision} (${reason}) into a run owned by ${foreignOwner}, not by ${buildProcessInstanceId()}`,
     });
-    return state;
+    return terminalState;
   }
 
-  const terminalState = transitionRunState(state, decision, reason);
-  await appendTransitionEvent(runDir, terminalState, `loop_${decision}`, reason);
   await writeRunState(runDir, terminalState);
   return terminalState;
 }

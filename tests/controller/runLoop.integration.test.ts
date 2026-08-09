@@ -1247,12 +1247,17 @@ describe("runLoop", () => {
   // heartbeat reports a RunLeaseLostError. owner-record.json on disk already names a DIFFERENT,
   // live, current, non-superseded owner at a newer epoch before that checkpoint is reached.
   //
-  // The requirement being pinned is not "no cancelled event". It is that the OTHER owner's run
-  // survives this process's exit as a resumable run, proved with the production gate
-  // (evaluateResumeEligibility) rather than by reading the status back and calling it good — and
-  // the control at the end feeds that same gate the status the unguarded code used to write, to
-  // show the gate is not answering `ok` for some reason unrelated to the write that did not
-  // happen.
+  // The requirement being pinned is not "nothing happens". It is the SPLIT, and the split is the
+  // whole fix: this process still reports its own stop (a cancelled/lease_lost return value and a
+  // loop_cancelled event — the only records of why it stopped, since assertHeld appends none),
+  // while the other owner's loop-state.json is left byte-identical and still resumable. A guard
+  // widened to suppress the reporting half too would pass a "not cancelled on disk" check and
+  // still be wrong, so the reporting half is asserted here as positively as the disk half.
+  //
+  // Resumability is proved with the production gate (evaluateResumeEligibility) rather than by
+  // reading the status back and calling it good, and the control at the end feeds that same gate
+  // the status the unguarded code used to persist — showing the gate is not answering `ok` for
+  // some reason unrelated to the write that did not happen.
   it("refuses to write a terminal status into a run a different, current owner already holds when this process's own lease is lost, leaving that run resumable", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
@@ -1298,16 +1303,22 @@ describe("runLoop", () => {
 
     const finalState = await runLoopFromState(contract, runDir, adapter, state, undefined, leaseLoss);
 
-    // The guard fired and persistTerminalState did not. The exact (not `toContain`) list carries
-    // both halves in one assertion: `terminal_write_abandoned` is written only by the guard, and
-    // the absence of `loop_cancelled` is decisive because persistTerminalState is the only writer
-    // of a `loop_<terminal>` event. It also rules out any adapter call having slipped through
-    // above the checkpoint.
-    expect(await readEventTypes(runDir)).toEqual(["terminal_write_abandoned"]);
-    expect(finalState.status).toBe("planning");
+    // The exact (not `toContain`) list carries both halves at once: the stop is still reported
+    // (`loop_cancelled`, written only by persistTerminalState) AND the guard fired
+    // (`terminal_write_abandoned`, written only by the guard). It also rules out any adapter call
+    // having slipped through above the checkpoint.
+    expect(await readEventTypes(runDir)).toEqual(["loop_cancelled", "terminal_write_abandoned"]);
+
+    // Reporting half: unchanged by the fix. This process tells its caller why it stopped.
+    expect(finalState.status).toBe("cancelled");
+    expect(finalState.stopReason).toBe("lease_lost");
+
+    // Disk half: the run belongs to someone else and its status is not this process's to write.
     const persisted = await readRunState(runDir);
     expect(persisted.status).toBe("planning");
-    expect(persisted).toEqual(finalState);
+    // The divergence between the two IS the fix, so it is asserted rather than left implied — the
+    // unguarded code made these two equal, and that equality was the data loss.
+    expect(persisted).not.toEqual(finalState);
 
     // Stronger than "the status is not cancelled": loop-state.json is byte-identical to what stood
     // there before this process ever reached the checkpoint. The top-of-loop writeRunState runs
