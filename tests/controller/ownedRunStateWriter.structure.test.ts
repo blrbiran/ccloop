@@ -37,6 +37,23 @@ function importedNames(source: string): string[] {
   return names;
 }
 
+// The other way to get every export of a module into scope without ever writing the name of one:
+// `import * as fileStore from "…/fileStore.js"` followed by `fileStore.writeRunState(…)`. That
+// walked straight past the named-import check above when it was tried, so it is checked separately
+// rather than assumed away.
+function namespaceImportedModules(source: string): string[] {
+  const modules: string[] = [];
+  const namespaceImport = /import\s+\*\s+as\s+\w+\s+from\s+["']([^"']+)["']/g;
+
+  for (const match of source.matchAll(namespaceImport)) {
+    if (match[1] !== undefined) {
+      modules.push(match[1]);
+    }
+  }
+
+  return modules;
+}
+
 // Package 2 / debt D-1, task S4. WHY this test exists rather than a comment saying the same thing:
 // the ownership guard's completeness rested on the claim "runLoop.ts writes loop-state.json only
 // through the guarded writer", and that claim had no enforcement mechanism at all — its acceptance
@@ -68,9 +85,16 @@ describe("runLoop.ts run-state write chokepoint", () => {
     //
     // What this does NOT catch, stated because overstating it would recreate the very defect the
     // test exists to fix: a direct `writeFile(join(runDir, "loop-state.json"), …)` from runLoop.ts
-    // writes the file without ever naming writeRunState, and is STILL not blocked. Only the
-    // type-level invariant (option (c)) closes that, and it changes existing expectations in
+    // writes the file without ever naming writeRunState, and is STILL not blocked; neither is a
+    // dynamic `await import(…)`, which is not a static import clause at all. Only the type-level
+    // invariant (option (c)) closes those, and it changes existing expectations in
     // tests/persistence/fileStore.test.ts, which task S4 was not authorised to do.
     expect(imported).not.toContain("writeRunState");
+
+    // Same requirement, second spelling. Anti-vacuity first, on a literal the regex must match:
+    // there is no namespace import in runLoop.ts to anchor on, so without this a regex that had
+    // stopped matching anything would look exactly like a module that imports no namespaces.
+    expect(namespaceImportedModules('import * as anything from "some/module.js";')).toEqual(["some/module.js"]);
+    expect(namespaceImportedModules(source).filter((module) => module.includes("fileStore"))).toEqual([]);
   });
 });
