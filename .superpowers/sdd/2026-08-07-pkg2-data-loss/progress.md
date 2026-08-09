@@ -1247,3 +1247,19 @@ finalize => 同意」。** ***
   *** **反方立场原样摆出**：`fileStore.ts:412` 那句「deletes a product of the normal path; it does not
   add a refusal」是当作**原则**写的、不是损害分析 —— 据此判 D2 回炉同样成立。
   **这是价值判断不是事实问题，控制器不替人做。** ***
+
+*** **人裁 37。2026-08-10。「批新扩权，D2 走下去」。** ***
+  ⇒ **具名例外（第三条，与人裁 13／14／17 并列，各自只对其具名对象有效）**：
+  准改 `tests/controller/leaseLifecycle.integration.test.ts >
+  lease heartbeat lifecycle > appends owner_transfer_contended and abandons the transfer
+  when the owner-transfer lock stays busy` —— *** **仅限其中读 `reconciliation-record.json` 的那一半**；
+  **其 `owner_transfer_contended` 恰好追加一次的断言必须原样保留。** ***
+  **不得外推到 spec busy-lock 护栏名册里的任何其它条目。**
+  **人已知悉并接受**：这等于裁定「锁持续繁忙而放弃转移的 run 不写 `reconciliation-record.json`」
+  是可接受行为 —— 依据是 §19.2 的实测（该缺席在这条路径上惰性），
+  **而非 §19.1 那条已被证伪的推理**。
+
+  ⚠️ *** **随人裁 37 一并生效的硬条件（控制器写进 brief，非人裁事项）**：
+  实施者必须**实测**「`reconciliation-record.json` 缺席 ＋ `owner-transfer.json` 存在」这个
+  从未被构造过的组合 —— **要么证明不可达，要么证明后果同样惰性。不许用推理交差。**
+  理由：这正是控制器自己 §19.1 栽的那个坑（读代码的机械论证被实测证伪）。 *** 
