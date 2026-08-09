@@ -523,3 +523,152 @@ BUILD_EXIT=0
 —— 处置 (i) 已由人裁定并由我实施验证。§9 其余 7 条**仍然有效，未被本轮触及**，
 其中第 5 条（循环顶部 `writeRunState` 在 `state` 已被 `applyPhaseUsage` 推进的路径上会改动别人的文件）
 仍建议作为相邻一笔债单独评估。
+
+---
+
+# 修复环 2 —— 评审 F-1/F-2/F-3/F-4（本节为追加，上文原文未改动）
+
+## 13. 具名勘误：「唯一写者」那句话是假的
+
+*** **被证伪的原话**（曾在 `persistTerminalState` 上方，commit `87f3582`）：
+「This function is the only writer of a terminal loop-state.json and of a `loop_<terminal>` event」。 ***
+
+**它错在哪**：后半句成立，前半句为假。`failed` **也是终态** ——
+`src/state/stateMachine.ts` 的 `legalTransitions` 里 `failed: []`，而 `isTerminalRunStatus`
+正是「没有合法后继即终态」。`runLoopFromState` 的**外层 catch 有两个分支**
+`transitionRunState(state, "failed", …)` 之后**直接** `writeRunState`，完全不经过
+`persistTerminalState`：泛化失败分支（评审复现的那个）与重试清理失败分支
+（**评审未点名、我自己数出来的第二个**）。于是终态照样落进异己 run，
+`evaluateResumeEligibility` 答 `{ok:false, "run status failed is not resumable"}` —— 与债 2 同型的死端。
+
+**我为什么会写下这句假话**：我把「谁写 `loop_<terminal>` 事件」的答案，套用到了
+「谁写终态 `loop-state.json`」这个不同的问题上。前者我验过（`appendTransitionEvent` 是唯一构造者），
+后者我**没验**，却写成了同一句断言。**这是没有证据的全称主张，不是搜索面不够。**
+
+### 13.1 新的覆盖面，以及凭什么这次是完整的
+
+**旧论证**：「我逐个审过调用点，它们都被覆盖」—— 这正是出错的那种论证。
+**新论证**：**本模块无法绕过守卫写 run state**，因为 `writeRunState` 在 `runLoop.ts` 里
+**只被调用一次**，就在 `createOwnedRunStateWriter` 内部。这是一条**读者可以用一条 grep 验证的模块属性**，
+不是一次需要相信我的审计。
+
+**验收探针（人裁指定）**
+```
+$ grep -n 'writeRunState' src/controller/runLoop.ts
+14:  writeRunState,                          <- import
+987:// … and `writeRunState` is called       <- 注释
+994:// … and call writeRunState              <- 注释
+1056:    // The ONLY writeRunState call in this module. Everything else routes here.
+1057:    await writeRunState(runDir, state);  <- 唯一的调用
+1224:// … the writeRunState                  <- 注释
+1643:// The writeRunState is not redundant …  <- 注释
+
+$ grep -c 'await writeRunState(' src/controller/runLoop.ts
+1
+```
+*** **调用数 = 1。** *** 其余全是 import 与注释。新增一个第 10 处写点若不经 writer，这条计数立刻变 2。
+
+### 13.2 `writeRunState` 9 个调用点逐个覆盖表（我自己数的）
+
+我数得 **9** 个 `await writeRunState(` 调用点，**全在 `runLoop.ts`**；`src/` 其它地方**零个**
+（`fileStore.ts` 那处是定义本身）。**评审员说 10，我说 9** —— 见 §13.3 的调和。
+
+| # | 位置（按分支描述，不用行号） | 写入状态 | 终态？ | 现在是否经守卫 |
+|---|---|---|---|---|
+| 1 | `persistTerminalState` 内 | `cancelled`/`exhausted`/`blocked_waiting_human`/`succeeded` | **是** | ✅ |
+| 2 | `while (true)` 循环顶部 | 当前态 | 否 | ✅ **F-2 现场** |
+| 3 | `consumeAttemptBudget` 之后 | 当前态 | 否 | ✅ |
+| 4 | 转 `executing` ＋ `attempt_started` 之后 | `executing` | 否 | ✅ |
+| 5 | 转 `verifying` ＋ `execution_finished` 之后 | `verifying` | 否 | ✅ |
+| 6 | `verification_rejected` 重试路径 | `planning` | 否 | ✅ |
+| 7 | 重试清理失败 → `failed` | `failed` | **是** | ✅ **F-1 的第二个现场（评审未点名）** |
+| 8 | `RunHeartbeatStoppedError` 分支 | 当前态 | 否 | ✅ |
+| 9 | 泛化失败 → `failed` | `failed` | **是** | ✅ **F-1 现场** |
+
+**9/9 覆盖。** 终态写共 3 处（#1/#7/#9），旧守卫只挡住 #1。
+
+### 13.3 `initializeRunFiles` 要不要也守？—— 结论：**不需要，但这是验出来的，不是先验**
+
+人裁明确要求「验、不要用先验代替证据」。我读了代码，不引用直觉：
+
+1. **调用点只有一个**：`grep -rn 'initializeRunFiles' src/` ⇒ 唯一调用在 `runLoop()` 内，
+   且在 `checkRunLease` **之前**。
+2. **它写 `loop-state.json` 之前先跑 `ensureFreshRunDir(runDir)`**（我把函数体整段打印出来看了）：
+   `blockingPaths` = `loop-contract.json`、`loop-state.json`、`events.jsonl`，任一存在即 `throw`；
+   外加非空 `attempts/` 与 `worktrees/` 也 `throw`。
+   *** **任何真实存在的 run 必然有 `loop-state.json`，因此 `ensureFreshRunDir` 在任何写发生之前就抛了。**
+   `initializeRunFiles` 结构上够不着一个异己 run 的 `loop-state.json`。 ***
+3. **唯一残余情形**：目录里只有 `owner-record.json`（它**不在** blockingPaths 上，`runLoop.ts` 既有注释
+   也这么说）。此时 `initializeRunFiles` 会写入 —— 但**此时并不存在任何 run 状态可被摧毁**
+   （没有 `loop-state.json`），所以不构成债 2 那种数据丢失；紧接着的 `checkRunLease`
+   在对方持活租约时会抛 `RunLeaseHeldError`。**到达该情形需要带外篡改**（删掉三个阻塞文件却留下 owner record）。
+
+⇒ **不给它加守卫**。理由是结构性的（`ensureFreshRunDir` 前置），不是「它只在建新 run 时跑」这种先验。
+
+**与评审员 10 的调和**：我数的是 **`writeRunState` 的调用点 = 9**；若数的是
+**`loop-state.json` 的写者**，则要把 `initializeRunFiles` 算进去 = **10**
+（`observeFields.ts` 的既有注释正是这么并列的：「initializeRunFiles and writeRunState」）。
+**两个数都对，只是口径不同**，我倾向把这一点写进台账，因为 F-1 恰恰就是口径混淆造成的。
+
+## 14. F-1 / F-2 / F-3 / F-4 的处置
+
+- **F-1（Critical）**：守卫从 `persistTerminalState` **搬到写入层** ——
+  新增 module-private `createOwnedRunStateWriter()`，9 处写全部经它；`runLoop.ts` 内
+  `writeRunState` 调用数降为 1。**修掉，且覆盖了评审未点名的第二个终态写点（#7）。**
+- **F-2（Important）**：同一条规则一并修掉 —— **人裁 15**「挡全部 9 处写」。
+  非终态写进异己 run 现在也被拒绝并记 `run_state_write_abandoned`。
+  同时**撤回**我原报告里「逐字节未动」那句：它**当时为假**（F-2 证伪），
+  **现在为真**，且由翻转测试的字节比较断言钉住。
+- **F-3（Important）**：`observeOwnership` 把「无记录(ENOENT)」与「有记录但读不出」**拆开**。
+  前者放行不记事件（无人可护，且是直驱 `runLoopFromState` 的常态）；
+  后者**仍放行**（不把 stop 变 crash）但**追加 `ownership_unverified` 事件**，fail-open 不再无痕。
+- **F-4（Minor）**：**理由撤回**。原文说不可读情形「由 leaseHeartbeat 用 lease_unverifiable 接管」——
+  该说法**只在有真心跳时成立**，而 `runLoopFromState` 的默认是 `INERT_LEASE_HEARTBEAT`，
+  所以它**不能独自承载 fail-open 的决定**。现在 fail-open 由「读不出者未指认任何人 ＋ 拒绝会把
+  停止变崩溃」自己承担，并以事件留痕。
+
+**事件量**：按人裁批准的 latch，每次 `runLoopFromState` 调用**每种类型各一条**
+（`run_state_write_abandoned` / `terminal_write_abandoned` / `ownership_unverified`）。
+分两种放弃类型而非一种，是为了让**终态拒绝**在同一次调用里已有非终态拒绝时仍然可见。
+
+## 15. 三步判据（三条修法各一组，未过滤）
+
+脚本 `mut.sh`，每组：变异 → 红 → `git checkout -- src/controller/runLoop.ts` → 绿，
+每步带必命中 sanity 探针（marker 计数 ＋ 打印被改行），还原后 `git diff --stat -- src` 均为**零输出**。
+
+| 变异 | 内容 | 具名测试 | 变异后 | 红点 | 还原后 |
+|---|---|---|---|---|---|
+| **M1（F-1）** | 泛化失败分支绕回 `writeRunState` | `refuses to write a terminal failed status …` | `1 failed \| 57 skipped (58)` | `expected 'failed' to be 'planning'` @ `readRunState` —— **磁盘**，即 Critical 的数据丢失本体 | `1 passed \| 57 skipped (58)` |
+| **M2（F-2）** | 循环顶部绕回 `writeRunState` | `refuses to write a terminal status … leaving that run resumable` | `1 failed \| 57 skipped (58)` | 事件列表缺 `run_state_write_abandoned` | `1 passed \| 57 skipped (58)` |
+| **M3（F-3）** | 掐掉 `unverified` 上报分支 | `records ownership_unverified and still writes …` | `1 failed \| 57 skipped (58)` | `expected [ 'loop_cancelled' ] to include 'ownership_unverified'` | `1 passed \| 57 skipped (58)` |
+
+**每块均显示具名测试的非零计数。** 新增 2 条测试（F-1、F-3 各一），总数 515 → 517。
+
+## 16. *** 一条既有判据被挡住，停下来等裁，未自改 ***
+
+`tests/controller/leaseLifecycle.integration.test.ts > lease heartbeat lifecycle >
+stays refused until the TTL expires when the lease release loses its CAS`（红在 `:308`）
+```
+- Expected:  Array [ "stop_requested" ]
++ Received:  Array [ "run_state_write_abandoned", "stop_requested" ]
+```
+
+**先判定「是不是我的守卫误报」——不是，守卫按规则正确触发**，证据：
+该测试用 `seedEligibleRun()` 播种，而该 helper **硬编码**
+`currentProcessInstanceId: "pid:100"`（我打印了 helper 源码确认）。
+随后它**直接驱动 `runLoopFromState`**，并按其自身注释刻意**跳过 `resumeLoop`**
+（「resumeLoop's `finally` runs stop() with no gap a test can reach into」）——
+于是**跳过了 `resumeLoop` 在生产中先做的所有权转移**（`resumeLoop` 会写入
+`currentProcessInstanceId: buildProcessInstanceId()` 之后才进循环）。
+所以盘上记录名为 `pid:100`，本进程不是属主，循环顶部那次写被正确拒绝。
+
+⇒ **这是测试夹具与生产路径的差距，不是生产可达状态。** 生产 `resumeLoop` 路径不受影响，
+旁证：`resumeLoop.integration.test.ts` 12 条全绿。
+
+**我不改它。** 它是既有判据，人裁 13/14 是具名例外不得外推。可选处置（不预设，等裁）：
+(i) 把 `run_state_write_abandoned` 加进该条的期望清单（第三次具名例外）；
+(ii) 改该测试的**夹具**，让它像生产那样先取得所有权（改的是 setup 不是断言，但仍动了既有测试）；
+(iii) 认为守卫不该拒绝这种「有心跳但记录未轮转」的写（我反对：那等于承认「持有心跳」可以替代
+「盘上记录指认我」，而心跳的 `expected` 记录本身就来自播种的 `pid:100`，无法证明所有权）。
+
+**因此本轮全套件为 `1 failed | 516 passed (517)`，唯一的红就是这一条，等裁后即可收口。**
