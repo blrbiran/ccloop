@@ -1,8 +1,22 @@
-# ccloop Handoff — **L3 已发布；包 3 已合入；包 1（L5 spec）整分支评审已完成 ⇒ 需修复环 2、未开门；包 2 授权在手、未开工**
+# ccloop Handoff — **L3 已发布；包 3 已合入；包 1（L5 spec）评审完成待修复环 2；包 2 的债 2 已钉住并修掉（任务 1/2 complete，已并入 main、未 push），任务 3 方案获批但未实施**
 
 ---
 
-# HANDOFF EXECUTIVE SUMMARY（下一位 agent 读这 8 行就能开工）
+# HANDOFF EXECUTIVE SUMMARY（下一位 agent 读这几行就能开工）
+
+1. **一律自查，别信本文。** `git log --merges` 最后一笔应仍是 `GATE-PKG3 PASSED`（门 `e42e062`，**唯一固定锚点**）—— **包 1、包 2 都尚未开门**，其后全是普通提交。**本文不写死 HEAD、笔数、测试数**（提交本文就会改变前两项）；远端一律现跑 `git ls-remote origin refs/heads/main`（**已被会话外推进过七次，「一致」与「落后」两个方向都腐坏过**）。⚠️ **上一会话结束时本地领先远端若干笔、未 push** —— push 需人单独授权，**现跑核实，别信这句**。
+2. **先读包 2 台账** `.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md`（12 节）—— 人裁 10–18、任务 1/2 全过程、D-1…D-6、最薄一格、口径分歧，**全在里面，不要重新推导**。包 1 的仍是 `.superpowers/sdd/2026-08-07-pkg1-l5-spec/progress.md`。⚠️ **该目录 `.gitignore` 是 `*`，产物只能 `git add -f` 入库。**
+3. **状态**：包 3 已合入；**包 1 整分支评审已完成（1 Critical / 6 Important / 10 Minor ⇒ 需修复环 2），人裁 9 明令先不开**；**包 2 的债 2 两半都做完了**（`Task 1: complete` 钉住缺陷、`Task 2: complete` 修掉它），已 ff 并入 `main`；**任务 3（第 1 笔）方案已获批但一行代码没写**。
+4. **⚠️ 人裁 18：任务 3 的阶段 1 方案已批** —— 让 `recoverInterruptedOwnerTransfer` 的 `!lockHeld` 分支**真正取锁再 finalize**（取不到就什么都不做、照常裸读），**完全不碰 L1/L2 契约**。**人同时明令本会话不实施，留给下一 session。方向已定，动手时机未到。**
+5. **⚠️ 三个待裁点，人明令「先不裁」**：**A** L1/L2「读不许写」走哪条路（纯读是形状正确的终局，代价是**退役一节 spec ＋ ≥8 条具名判据**）／**B** `tryRecoverStaleOwnerTransferLock` 改失败关闭（**必然推翻两条同名既有判据，人裁 13/14/17 都不 cover**）／**C** B 通过后损坏的锁会永久卡死转移路径，要不要逃生口。**不要自作主张，也不要重开方向讨论。**
+6. *** **D-1 是包 2 最重要的欠账：结构性保证 NOT ESTABLISHED。** *** 守卫的验收探针 `grep -c 'await writeRunState(' src/controller/runLoop.ts` = 1 **挡不住新增绕过写点**（再评审员试 7 种平常写法，**7/7 都留在 1**），且**无 lint / CI / 测试在跑它**；`writeRunState` **仍在 `runLoop.ts` 被 import**。**与 Critical F-1 的根因同形：一个没有执行机制的完整性断言。**
+7. *** **最薄一格**：9 处写点只被变异过 3 处；**`#7「重试清理失败 → failed」既没被变异、也没有任何具名回归测试**，而它正是 F-1 的第二个终态写点。 ***
+8. **⚠️ 落盘协议（写进每份 brief）**：先 `Write` 只有小节标题的骨架并**立刻落盘**，之后每次 `Edit` 只填一节、**结论最先写**。曾有一会话 12 名 agent 死 6 名，全在准备落盘时。
+9. **铁律不软化**：不接受实施者自证（**本轮实证：独立评审员实跑证伪了实施者的承重前提，换来那条 Critical**）；**评审员的结论同样要验**；验证跑绝不过滤（`grep` 与 `tail` 同罪）；下全称否定前先确认 grep 面覆盖断言范围；*** **坏探针永远不能证明「不存在」** ***。对策：**脚本先落盘再 `rtk proxy zsh` 跑，并放一条必命中的 sanity 探针证明检索面是活的**；**评审 brief 必须允许为验证做临时变异并要求证明还原**（否则核心证据会只剩自证 —— 上一轮吃过这个亏）。
+
+---
+
+# 【已过期，保留作历史】上一版执行摘要（写于包 1 整分支评审收口时）
 
 1. **一律自查，别信本文。** `git log --merges` 最后一笔应仍是 `GATE-PKG3 PASSED`（门 `e42e062`，**唯一固定锚点**）——**包 1 尚未开门**，其后是一串普通提交。**本文不写死 HEAD、提交笔数、落后笔数、测试数**（提交本文就会改变前几项）；远端一律现跑 `git ls-remote origin refs/heads/main`（已被会话外推进过**六次**，任何「远端一致/落后」的文字都可能已腐坏，**两个方向都腐坏过**）。
 2. **先读包 1 台账**：`.superpowers/sdd/2026-08-07-pkg1-l5-spec/progress.md` —— 整分支评审的全部裁断、两份 lane 报告的承重结论、控制器 4 次记账、下一步与三条易错点，**全在里面，不要重新推导**。另两份可信源：`2026-08-05-l5-input-scan/`（人裁 1–5、三个工作包）与 `2026-08-05-pkg3-doc-errata/`。⚠️ **该目录 `.gitignore` 是 `*`，产物只能 `git add -f` 入库。**
@@ -15,7 +29,104 @@
 
 ---
 
-# 【最新】2026-08-07 深夜：包 1 整分支评审已完成 ⇒ 需修复环 2，未开门 —— 本节取代下方**一切**状态描述
+# 【最新】2026-08-08/09：包 2 债 2 已钉住并修掉（任务 1/2 complete），任务 3 方案获批未实施 —— 本节取代下方**一切**状态描述
+
+> 下方所有小节都停在更早的视角。**凡描述「现在该做什么 / 现在在哪一笔 / 还剩什么没做」的句子，一律以本节为准**；其余（陷阱、教训、铁律）照读。就地注解、不改原件。
+>
+> **具体作废紧随其后那节的这几句**：「包 2 授权在手、一行代码没写」——**包 2 的债 2 已实施完毕并合入**；「下一步 = 修复环 2」——**那是包 1 的，仍未开**，而本轮做的是**包 2**，两者不要读串。
+
+## 一句话
+
+**包 2 的债 2 走完了「注入 → 修法 → 独立评审 → 修复环 → 换人 scoped 再评审」全套工序：任务 1 与任务 2 均 complete，四条 finding 全 ADDRESSED，6 条 deferred；已 fast-forward 并入 `main`（门锚点未动）。任务 3（第 1 笔）的阶段 1 方案已获人裁 18 批准，但人明令留到下一 session 实施。**
+
+## 先跑这些，以输出为准（本文不写死 HEAD）
+
+```bash
+cd /Users/biran/code/skills/loop/ccloop
+git log --merges --format='%h %cd %s'          # 最后一笔仍应是 GATE-PKG3；包 1、包 2 都未开门
+git ls-remote origin refs/heads/main           # 一律现跑；七次会话外推送，两个方向都腐坏过
+git status --short; git worktree list; git branch
+export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm test -- --run
+```
+
+**上一会话收口时的验证**（控制器亲跑、未过滤、`RUN` 路径已核）：`Test Files 30 passed (30)` ／ `Tests 517 passed (517)` ／ `TSC_EXIT=0` ／ `BUILD_EXIT=0`。**517 = 原 514 ＋ 任务 1 的 1 条 ＋ 任务 2 的 2 条。不继承任何先前的绿。**
+
+## 唯一可信进度源
+
+**`.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md`**（12 节）—— 人裁 10–18、两份开工前扫描、任务 1/2 的实施/评审/修复环/再评审逐条结论、D-1…D-6、最薄一格、一处口径分歧，**全在里面**。同目录另有 10 份 `.md` 产物（2 扫描 brief ＋ 2 扫描报告 ＋ 3 任务 brief ＋ 2 任务报告 ＋ 1 设计方案 ＋ 3 评审报告），**都已 `git add -f` 入库，不要重新推导**。
+⚠️ **`review-*.diff` / `rereview-*.diff` 刻意不入库**（可重建），照 handoff 既有惯例。
+
+## 包 2 做了什么（**不要重做**）
+
+| 阶段 | 结论 |
+|---|---|
+| 开工前扫描 | 两名只读扫描员。查出 **`:1514` 那个 lease-loss 检查点比另三个多一层 `isTerminalRunStatus` 门槛**；查出 **`runLoop.integration.test.ts:1977` 那条测试故意把第 4 笔的残余 TOCTOU 钉成「未关闭」，其注释自陈是 2026-08-02 的一次 Human ruling** |
+| 任务 1（钉住） | 补实跑注入。**0 Critical / 0 Important / 2 Minor**。**控制器独立复现三步判据**（B 步红在 `readRunState` 的磁盘断言 ⇒ 钉的是数据丢失本体、非恒绿） |
+| 任务 2（修法） | 独立评审 **1 Critical / 2 Important / 3 Minor**；修复环一轮；**换人** scoped 再评审 **四条全 ADDRESSED、零新破坏** |
+
+**守卫最终形态**：`createOwnedRunStateWriter()` 在**写入层**（不是塞进 `persistTerminalState`），**9 处 `writeRunState` 全部经它**。ENOENT ⇒ 放行不记事件；有记录但读不出 ⇒ 放行但记 `ownership_unverified`；异己属主 ⇒ 拒绝并记 `run_state_write_abandoned`（**每次 `runLoopFromState` latch 一次**）。
+
+## 本轮换来的、下一位必须知道的五条
+
+1. *** **`persistTerminalState` 不是终态 `loop-state.json` 的唯一写者** —— 实施者原注释这么写，**是假的**。 *** 独立评审员**实跑**证伪（外层 catch 的 `writeRunState` 把终态 `failed` 落进异己 run，`evaluateResumeEligibility` 实测 `{ok:false,"run status failed is not resumable"}`）；**实施者随后自己又找出评审员没点名的第二个终态写点**（重试清理失败分支）。**这条 Critical 就是「不接受实施者自证」买到的。**
+2. *** **D-1：验收探针挡不住新增绕过写点。** *** 见执行摘要第 6 条。**覆盖面事实成立**（`await writeRunState(` = 1 且在 writer 内、`await writeOwnedRunState(` = 9，再评审员独立验过），**缺的是执行机制**。建议给一个真不变量：把 `writeRunState` 从该模块 import 移走 ／ lint 规则 ／ 读源码的测试。
+3. *** **最薄一格：`#7「重试清理失败 → failed」没有任何具名回归测试**，只靠 D-1 那条没有执行机制的结构性事实覆盖。 ***
+4. **`initializeRunFiles` 不需守卫 —— 而且是验出来的**（不是先验）：它写盘前先跑 `ensureFreshRunDir`，其 `blockingPaths` 含 `loop-state.json`，任何真实 run 都会在写发生前 throw。**「9 vs 10」的差异是口径**（`writeRunState` 调用点 = 9；`loop-state.json` 的写者含 `initializeRunFiles` = 10）—— **F-1 正是口径混淆造成的，两个数都对，别当分歧。**
+5. **夹具缺陷的正确修法是根治而非掩盖**：`leaseLifecycle` 的 `seedEligibleRun` 硬编码 `pid:100`，人裁 17 定为**改 helper**（`currentProcessInstanceId` 与 `newProcessInstanceId` **必须一起改** —— `fileStore` 有既有判定要求两者相等）。**理由**：把 `run_state_write_abandoned` 加进期望清单等于**把一个生产中不会发生的轨迹钉成「正确行为」**。⚠️ `tests/` 下有**三个互不相干的同名 `seedEligibleRun`**，另两个（`resumeLoop` / `cli`）**故意不改** —— 从异己属主手里接管正是那两者的职责。
+
+## ⚠️ 人裁 10–18（逐条只在其具名范围内有效，**一律不得外推**）
+
+| # | 内容 |
+|---|---|
+| **10** | 一条**名单外**失败（`persists phase usage evidence from the subprocess adapter without recomputing controller totals`，ENOENT `plan.json`）**记录挂账、不入 flake 名单、不单开根因轮**。全套件约 1/6 红、隔离 0/8、**代码零改动、根因至今是空的**。见到它按**完整测试名**比对，**仍不得挥手放过** |
+| **11** | `SweepOptions.stderr` 契约的测试半边**等包 1 修复环 2 之后**再做，不在包 2 范围 |
+| **12** | 包 2 开 worktree ＋ 新分支（**已用完并按令删除**） |
+| **13** | **具名例外**：准改第 4 笔那条 2026-08-02 Human ruling 的判据（**该任务本轮未做，例外仍挂着**） |
+| **14** | **具名例外**：准把 `terminal_write_abandoned` 加进**那两条**测试的期望清单 |
+| **15** | 守卫挡**全部 9 处**写（不变式是「不要改你不拥有的 run」，终态与否只是损害严重度） |
+| **16** | 准许包 2 任务 2 继续超预算，**但记账不停** |
+| **17** | **具名例外**：准改 `leaseLifecycle` 的 `seedEligibleRun` 夹具（改夹具 ≠ 改判据） |
+| **18** | 任务 3 阶段 1 方案**获批**，**但本会话不实施** |
+
+## ⚠️ 一处口径分歧，控制器不替人消解（供复核者推翻）
+
+再评审员指出**有且只有 1 处既有断言被改**（那条 `toEqual` 事件清单 2 元素 → 3 元素）。按「**既有 = 任务 2 之前**」口径**未破例**（该测试是任务 2 自己建的）；按「**既有 = 本修复环之前**」口径**算破了**。**两种口径操作后果不同 —— 需要时请问人，不要自己选一个。**
+
+## ⚠️ 又一次同形歧义（本次交接令）
+
+人下达交接令时逐字说「**三条同意，结论记录下来，但是先不改**」——**与人裁 8／人裁 9 措辞完全相同**。「三条」有两种读法：① 控制器收口时列的「下一 session 三件事」（实施阶段 1 ／ 裁 A·B·C ／ 处理 D-1 与最薄一格）；② 任务 3 的三个待裁点 A/B/C。
+*** **两种读法操作后果相同：全部记录进本文与台账，本会话一律不动手。** *** 故控制器按该共同后果执行，**并把歧义原样留在这里**。**若下一位需要区分，请问人，不要自己选一个。**
+
+## 控制器本轮自曝错误 2 次（都不是自己第一时间发现的）
+
+1. *** **转述走样**：控制器对人与对实施者都说过「不再向 `runLoop.ts` import `writeRunState`」——**那是实施者提案里的话、最终未做到**，实施者报告本身也没这么声称。**由 scoped 再评审员查出。** *** **转述前先核原文。**
+2. **卫生疏漏**：一度把三个可重建的 `review-*.diff` 连带 `git add -f` 入库，已清除。
+3. （另有两次被 harness 或自查当场拦下、未造成后果：一次想用 `grep -v` 过滤验证跑输出；一次删除前的 `find` 清点被 rtk 默认改写折叠成了假的零输出。**「验证跑绝不过滤」这条，这次是在删除前的清点上咬人的。**）
+
+## 下一步（**未执行**，人明令留下一 session）
+
+1. **实施任务 3 阶段 1**（人裁 18 已批方案）。⚠️ **开工前先探设计员留下的那条未知**：阶段 1 会让**读路径创建/删除锁文件**，**会不会弄红精确文件集合类的测试 —— 设计员答「无法判定」**。
+2. **裁 A / B / C 三点**（见执行摘要第 5 条）。⚠️ **若选 A 的「纯读」路，设计员建议单独成包记账**，其材料准备明显超出单个 100k 任务预算。
+3. **处理 D-1 与最薄一格**（见执行摘要第 6、7 条）。
+4. **包 1 的修复环 2 仍然没开**（人裁 9），与包 2 是两条线，**别读串**。
+5. **开门、合并、删分支、push 四件各需人单独授权。**
+
+## 建议调用的 skills（接手任务 3 / 包 1 修复环 2）
+
+| skill | 何时 | 注意 |
+|---|---|---|
+| `superpowers:subagent-driven-development` | 任务 3 的实施阶段 | 「实施者 → **换人**独立评审员 → 修复环 → **换人** scoped 再评审 → 台账记 complete」。**不接受实施者自证**——本轮实证它换来了那条 Critical |
+| `superpowers:requesting-code-review` | 每任务一次 ＋ 每道门一次 | 提示词必写：不接受实施者自证、findings 带可构造场景、锚点用符号名不用行号、不许用收窄搜索面支撑全称否定、落盘协议、***允许为验证做临时变异但必须证明还原*** |
+| `superpowers:receiving-code-review` | 拿到评审结论、准备处置时 | **评审员的结论同样要验**。本轮两次实证：控制器复核收紧了扫描员一条措辞过宽的全称否定；再评审员推翻了控制器一处转述 |
+| `superpowers:verification-before-completion` | 声称「通过/完成」之前 | 复跑全套件 ＋ typecheck ＋ build，`rtk proxy`，**未过滤**，并核 vitest 首行 `RUN` 路径 |
+| `superpowers:systematic-debugging` | 撞到不在 flake 名单内的失败 | 名单只有 (B) 与 (F) 两条；**另有人裁 10 那条已挂账、按名比对、不要重新调查** |
+| `superpowers:using-git-worktrees` | 任务 3 开工前 | ⚠️ **`EnterWorktree` 默认基点是 `origin/<default-branch>`，会丢掉未推送的本地提交** —— 必须先 `git worktree add <path> -b <branch> HEAD` **显式指定基点**，再用 `path` 接管；**建完立刻 `npm ci`**（陷阱 5） |
+| `superpowers:finishing-a-development-branch` | 每道门之后 | **门必须是 merge、结论在主题行**；⚠️ **非门的合并一律用 `--ff-only`** —— 造一笔非门 merge 会毁掉「`git log --merges` 末笔 = GATE-PKG3」这个唯一锚点 |
+| ~~`superpowers:brainstorming`~~ | — | **任务 3 的方案已由设计员产出并经人裁 18 批准，不要重跑** |
+
+---
+
+# 【已被上方 2026-08-08/09 那节取代，保留作历史】2026-08-07 深夜：包 1 整分支评审已完成 ⇒ 需修复环 2，未开门
 
 > 下方所有小节都停在更早的视角。**凡描述「现在该做什么 / 现在在哪一笔 / 还剩什么没做」的句子，一律以本节为准**；其余（陷阱、教训、铁律）照读。就地注解、不改原件。
 >
