@@ -1469,6 +1469,137 @@ describe("runLoop", () => {
     })).toEqual({ ok: false, reason: "run status failed is not resumable" });
   });
 
+  // Package 2 / debt 2, task S4 — the thinnest cell (#7). This is the SECOND terminal write site of
+  // Critical finding F-1: the retryable path's `cleanupAttemptWorkspace` throw, which transitions to
+  // "failed" and persists it. Of the nine loop-state.json write sites the guard covers, this one was
+  // neither mutated by the reviewer nor pinned by any named test; it was carried solely by the
+  // structural claim that every write routes through the guarded writer — a claim that, until S4,
+  // had no enforcement mechanism behind it. A structural argument covering a site nothing tests is
+  // how F-1 happened in the first place, so the site gets its own regression.
+  //
+  // Reached deliberately, not incidentally: the frame rejects verification (safeToRetry) so the
+  // decision is `retryable`, and cleanupAttemptWorkspace is mocked to throw so control enters the
+  // catch inside that branch — the ONLY route to this write. It is not the outer catch's failure
+  // branch, which the F-1 test above already covers.
+  it("refuses to write the terminal failed status of a retry-cleanup failure into a run a different owner holds", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const contract = createContract(repoPath);
+    const state: RunState = { ...makeRunState("planning"), currentAttempt: 0, attemptsUsed: 0 };
+
+    await initializeRunFiles(runDir, contract, state);
+    // Written by initializeRunFiles through the same writeJsonFileAtomically that writeRunState
+    // uses (src/persistence/fileStore.ts), so the comparison below is a byte comparison and not a
+    // comparison of two serializers.
+    const persistedStateBefore = await readFile(join(runDir, "loop-state.json"), "utf8");
+
+    await writeOwnerRecord(runDir, {
+      runId: "task-1",
+      logicalSessionId: "task-1:t0",
+      currentOwnerEpoch: 2,
+      currentProcessInstanceId: "pid:999999:1234567890",
+      lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+      ownerStatus: "current",
+      supersededByEpoch: null,
+      leaseAffirmedAt: "2026-07-25T00:00:00.000Z",
+    });
+
+    vi.resetModules();
+    vi.doMock("../../src/workspace/worktreeManager.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/workspace/worktreeManager.js")>(
+        "../../src/workspace/worktreeManager.js",
+      );
+
+      return {
+        ...actual,
+        cleanupAttemptWorkspace: async () => {
+          throw new Error("test-injected: retry cleanup failed");
+        },
+      };
+    });
+
+    try {
+      const { runLoopFromState: observedRunLoopFromState } = await import("../../src/controller/runLoop.js");
+      const adapter = new ScriptedAdapter([
+        {
+          plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+          execution: {
+            changedFiles: ["src/index.ts"],
+            diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+            commandOutputs: ["edited"],
+            stdoutStderrLog: "fail",
+          },
+          verification: {
+            approved: false,
+            rejectCategory: "tests-failed",
+            primaryTargetPaths: ["src/index.ts"],
+            failingCommand: "npm test",
+            safeToRetry: true,
+            evidence: ["FAIL"],
+            pauseSignals: [],
+            stopSignals: [],
+          },
+        },
+      ]);
+
+      const finalState = await observedRunLoopFromState(contract, runDir, adapter, state);
+
+      // Reporting half, unchanged: this process still reports that its own attempt failed, and for
+      // the cleanup reason. Asserting it keeps the test honest about what the guard does NOT do —
+      // it does not suppress this process's own account of why it stopped.
+      expect(finalState.status).toBe("failed");
+      expect(finalState.stopReason).toBe("Error: test-injected: retry cleanup failed");
+
+      // The requirement. Without the guard at this site loop-state.json reads "failed", which is
+      // terminal and therefore unresumable — the data loss the debt names. Two independent
+      // observables of the same fact: the parsed status, and the file byte-for-byte untouched.
+      const persisted = await readRunState(runDir);
+      expect(persisted.status).toBe("planning");
+      expect(await readFile(join(runDir, "loop-state.json"), "utf8")).toBe(persistedStateBefore);
+
+      // Not silent. A refusal with no record is the failure mode this repository has a stated
+      // position against, and `terminal_write_abandoned` rather than the non-terminal event is what
+      // says the refusal that mattered — the terminal one — is the one that happened here.
+      expect(await readEventTypes(runDir)).toContain("terminal_write_abandoned");
+
+      // Proved with the production gate rather than by eyeballing the status, and with a control
+      // that feeds the same gate the status the unguarded code would have persisted.
+      const ownerRecord = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as OwnerRecord;
+      const ownerTransfer: OwnerTransferRecord = {
+        priorOwnerEpoch: 1,
+        newOwnerEpoch: 2,
+        priorProcessInstanceId: "pid:100:1",
+        newProcessInstanceId: "pid:999999:1234567890",
+        transferredAt: "2026-07-25T00:00:00.000Z",
+        reason: "owner lost",
+        eligibleForContinuation: true,
+      };
+      const reconciliation: ReconciliationRecord = {
+        staleSuspicionBasis: [],
+        staleConfirmed: true,
+        ownershipVerdict: "OWNER_LOST",
+        lastTrustedBoundary: "execute",
+        conflictingEvidence: [],
+        takeoverPermission: { allowed: true, reason: "ok" },
+        priorOwnerEpoch: 1,
+        newOwnerEpoch: 2,
+        eligibleForContinuation: true,
+      };
+
+      expect(evaluateResumeEligibility({ ownerRecord, ownerTransfer, reconciliation, runState: persisted }))
+        .toEqual({ ok: true });
+      expect(evaluateResumeEligibility({
+        ownerRecord,
+        ownerTransfer,
+        reconciliation,
+        runState: { ...persisted, status: "failed" },
+      })).toEqual({ ok: false, reason: "run status failed is not resumable" });
+    } finally {
+      vi.doUnmock("../../src/workspace/worktreeManager.js");
+      vi.resetModules();
+    }
+  });
+
   // Package 2 / debt 2, review finding F-3/F-4. The guard fails OPEN when it cannot read the owner
   // record — a record it could not parse has identified nobody, least of all a different owner,
   // and refusing there would turn a stop into a crash. What F-3 caught is that the first version
