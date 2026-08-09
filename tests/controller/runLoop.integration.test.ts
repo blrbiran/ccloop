@@ -2541,6 +2541,13 @@ describe("runLoop", () => {
         // Emitted by the outer catch's isLeaseStopError branch, since state.status was not yet
         // terminal when the guard fired (this attempt never got as far as persistTerminalState).
         "loop_cancelled",
+        // Package 2 / task 2, human ruling 14. persistTerminalState's ownership guard reads
+        // owner-record.json, finds pid:other-controller rather than this process, and declines to
+        // persist the terminal run status — recording the abandonment here rather than failing
+        // silently. The status this process reports (asserted above) is unchanged; what the guard
+        // withholds is the write to a run it no longer owns. This entry was added because the
+        // exhaustive list's premise changed, not because the list was wrong.
+        "terminal_write_abandoned",
       ]);
       await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
       expect(await readEventDetails(runDir, "lease_lost")).toEqual([
@@ -2678,6 +2685,11 @@ describe("runLoop", () => {
         // Emitted by the outer catch's isLeaseStopError branch, since state.status was not yet
         // terminal when the guard fired.
         "loop_cancelled",
+        // Package 2 / task 2, human ruling 14 — same mechanism as the sibling test above:
+        // persistTerminalState's ownership guard declines to persist the terminal run status into
+        // a run owned by pid:other-controller, and records that abandonment rather than failing
+        // silently.
+        "terminal_write_abandoned",
       ]);
       await expect(readdir(join(runDir, "worktrees"))).resolves.toEqual(["attempt-1"]);
       expect(await readEventDetails(runDir, "lease_lost")).toEqual([

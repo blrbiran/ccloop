@@ -443,3 +443,83 @@ BUILD_EXIT=0
 
 **未破的部分**：没有任何一次验证跑被 grep/tail 过滤（唯一两次 `tail` 用在**探索性**的中间量测上，
 不是三步判据也不是最终验证；三步判据与最终跑均为完整未过滤输出）。
+
+---
+
+# 修复环 1 —— 人裁 14 落地（本节为追加，上文原文未改动）
+
+## 12. 人裁 14：把 `terminal_write_abandoned` 加进那两条测试的期望事件清单
+
+**背景**：§6 簇 3 那 2 条红，我停下来等裁而未自改。人已裁定采纳我列的第一种处置。
+理由（人已认可）：行为确实变了、且是已授权的变更，事件是该变更的可见部分；
+那两条测试的清单意图没错，只是穷举前提被作废了。
+**这是人裁 4 的第二次具名例外，授权仅限这两条，不外推。**
+
+### 12.1 改了什么（范围写死，未越界）
+
+只在 `tests/controller/runLoop.integration.test.ts` 两处期望事件清单的 `"loop_cancelled"` **之后**
+各加一行 `"terminal_write_abandoned"`（顺序与控制器亲验的实际顺序一致：
+`loop_planning, attempt_started, execute_started, lease_lost, loop_cancelled, terminal_write_abandoned`），
+各配一段说明为何新增（点明是穷举前提改变，不是原清单写错）。
+
+- `preserves the winner reconciliation view when another controller already completed the transfer`
+- `writes no synthesized winner reconciliation view when another controller already completed the transfer before success reconciliation was written`
+
+**未做**：没有改守卫代码，没有碰任何其它测试，没有重构。
+`git diff --stat -- tests` = `1 file changed, 12 insertions(+)`（纯新增，零删除零修改）。
+
+### 12.2 证据（四项，未过滤）
+
+**① 两条具名测试各自单跑，非零计数**
+```
+=== EVIDENCE 1a: preserves the winner reconciliation view ... ===
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-data-loss
+ ✓ tests/controller/runLoop.integration.test.ts (56 tests | 55 skipped) 185ms
+ Test Files  1 passed (1)
+      Tests  1 passed | 55 skipped (56)
+EXIT_1A=0
+
+=== EVIDENCE 1b: writes no synthesized winner reconciliation view ... ===
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-data-loss
+ ✓ tests/controller/runLoop.integration.test.ts (56 tests | 55 skipped) 175ms
+ Test Files  1 passed (1)
+      Tests  1 passed | 55 skipped (56)
+EXIT_1B=0
+```
+
+**② 全套件，未过滤**
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-data-loss
+ Test Files  30 passed (30)
+      Tests  515 passed (515)
+VITEST_EXIT=0
+```
+*** **零红** —— 比要求还干净：本轮连允许出现的 flake (B) 都通过了
+（`run-scenario CLI > records env names only and tracks descendants rooted at the spawned pid`，2623ms 绿），
+人裁 10 那条名单外的也绿（706ms）。 ***
+总数 515 与 §7 一致，我没有新增或删除任何测试。
+
+**③ typecheck 与 build**
+```
+TSC_EXIT=0
+BUILD_EXIT=0
+```
+
+**④ `git status --short`**：见 §12.3。
+
+### 12.3 sanity 探针与诚实说明
+
+- sanity 探针 `git diff --stat -- src` 在两次跑中**均为零输出** ⇒ **守卫代码一行未动**，
+  这一轮的全绿完全来自测试清单的两行新增。
+- *** **一处探针预测失误，如实记**：我写的探针注释预期 `terminal_write_abandoned` 在测试文件里出现
+  **3** 次，实跑得到 **4** 次。核对后是**我的预测算错**，不是改动出错 ——
+  翻转后的那条测试引用了它两次（事件数组里 1 次 ＋ 上方注释里 1 次），加上本轮新增的 2 次共 4 次。
+  探针本身命中且输出正确，错的是我写下的期望值。 ***
+
+### 12.4 本轮结论
+
+**§6 簇 3 的 2 条红已按人裁 14 消除，债 2 的修复至此在全套件上零红收口。**
+§9 列出的「我没有验到的部分」第 1 条（「簇 3 那 2 条红的处置我没有验证任何一种」）**至此已失效**
+—— 处置 (i) 已由人裁定并由我实施验证。§9 其余 7 条**仍然有效，未被本轮触及**，
+其中第 5 条（循环顶部 `writeRunState` 在 `state` 已被 `applyPhaseUsage` 推进的路径上会改动别人的文件）
+仍建议作为相邻一笔债单独评估。
