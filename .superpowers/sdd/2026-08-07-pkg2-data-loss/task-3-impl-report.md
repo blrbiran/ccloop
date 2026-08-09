@@ -309,3 +309,226 @@ recomputing controller totals`）本轮也是绿的（完整输出第 124 行，
 贴出，如实标注为估计，不假装精确**。没有触发「必须当场收口」的信号（任务已经做完到可以交付的状态），
 但如果后续还有本任务范围内的追加工作（例如评审员要求的修复环），**下一步操作前应该先重新核一次
 实际用量，不能想当然认为还有余量**。
+
+⚠️ **回填（修复环 1 开始前）**：控制器反馈 harness 实测上一轮用了 **195,610 tokens**——
+远超我当时给的「6-8 成量级」估计（即已经**超过**单任务 100k 预算的 1.9 倍，不是接近而是已经超支）。
+**如实认领**：我上一轮把「没有精确计数工具」当成了「可以给一个模糊估计」的许可，这是错的 ——
+Rule 6 要求「若接近预算，当场明写，不许静默超支」，而我给的区间估计**在数量级上就错了**，
+这不是「精确度不足」，是**我的估计方法本身不可靠**，不应该再被当作参考基准。
+本轮（修复环 1）预算记账见本节末尾的回填，会明确标注「我依旧拿不到精确数字」，不再给一个
+可能同样量级错误的估计冒充结论。
+
+## 修复环 1（独立评审员 review-task-3.md，0 Critical / 3 Important / 3 Minor；本环只处理 3 条 Important）
+
+### 结论（最先写）
+
+**DONE。** 3 条 Important 全部处理；3 条 Minor 按控制器指示原样 deferred，未动。
+commit 范围：`be4c344..<本环 commit>`（HEAD 修复环 1 之前是 `7ff426d`，即评审员报告落盘那次提交；
+本环的代码 + 测试改动落在其之上）。全量验证 30 files / 518 tests 全绿，
+`TEST_EXIT=0 / TSC_EXIT=0 / BUILD_EXIT=0`，**没有任何既有判据变红**。
+
+**每条 Important 用哪条判据钉住**（点名测试名，详见下文「验证证据」一节）：
+- **Important-1**（承重注释为假、断言钉偶然调度顺序）：改写同一条
+  `tests/persistence/fileStore.test.ts` 里
+  `describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racing the same marker")`
+  → `it("lets exactly one of two concurrent readOwnerRecord calls finalize the transaction; the
+  other returns without writing")`——把对 `ownerFromB.currentOwnerEpoch`/`currentProcessInstanceId`
+  的定值断言，换成「渲染只在 `finalizeOrder.length` 上」的 `rename` 调用计数不变式 ＋
+  对 `ownerFromB.currentOwnerEpoch` 改为「合法值集合 `[1, 2]`」的宽断言，并改写了失实的注释。
+- **Important-2**（finalize 抛时锁必须释放这条设计细节全仓零判据）：给
+  `tests/persistence/fileStore.test.ts` 里三条既有 fail-closed 测试
+  （`refuses to finalize a v2 marker whose finalizeOrder omits a legal file, rather than silently
+  orphaning the omitted pending` / `refuses to finalize a v2 marker whose reconciliation pending
+  is missing, keeping the marker and staging in place` / `refuses to finalize an unparseable
+  marker, keeping every staged file in place`）各**新增一行纯断言**
+  `await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();`
+  ——三条既有断言一字未改，只加了新行。
+- **Important-3**（新判据对真回归唯一鉴别力是 5 秒超时，非断言）：同 Important-1 的那条 `it(...)`,
+  给 `aLockWritten` 的等待包一层新增的模块级辅助函数 `withNamedTimeout`（3000ms，早于 vitest 默认
+  5000ms 超时），超时时抛一个具名 `Error`，直接指认「reader A 没有在 3s 内打开锁文件 ⇒ 未锁分支
+  没有在取锁」这条不变式，取代 vitest 通用的 `Test timed out in 5000ms`。
+
+**有没有既有判据变红**：**没有**。全量验证 518/518 全绿；三条 fail-closed 测试新增的断言不影响它们
+既有的 `rejects.toBeInstanceOf(...)` 与「marker/pending 仍在」那几条既有断言（新行加在最后，
+既有断言字节不变）。
+
+### 3 条 Minor —— 按控制器指示，本环一律不动
+
+- Minor-1（报告 §3 对 B 步变异的措辞不准确）：**不动**，属于报告措辞问题，deferred。
+- Minor-2（C 步还原证据不锁定字节）：**不动**，本环所有变异均采用
+  「先提交（HEAD `7ff426d`）→ 变异 → `grep -c MUTATION_RV` + `git diff --stat -- <file>` 验证还原」，
+  已经是评审员建议的正确做法（见下），但这不算是回去改 Minor-2 本身的措辞，Minor-2 作为 deferred
+  finding 原样挂账，不在本报告里改判它的状态。
+- Minor-3（「全量绿」被报告 §5 说成对设计员估计的「最强实证」措辞过强）：**不动**，deferred，
+  未回去改 §5 原文措辞。
+
+### 修复设计（怎么改的，为什么这样改）
+
+**Important-1 + Important-3 合并处理**（同一条测试的两处缺陷）：
+
+- 评审员指出 `expect(ownerFromB.currentOwnerEpoch).toBe(1)` 钉的是「B 的裸读发生在 A 改写
+  `owner-record.json` 之前」这一**偶然的时序**，不是「B 没有 finalize」这个真正该钉的不变式；
+  且上方注释「held by the same gates」今天为假——我核实评审员的构造完全正确：`bAttemptedAcquire`
+  在 B 的 `readFile(lockPath)` 调用**返回结果之后**才 resolve（见改动前代码 `const result = await
+  actual.readFile(...args); if (...) bAttemptedAcquire.resolve(); return result;`），
+  A 立刻被放行去跑 finalize；而 B 自己还要再走 `JSON.parse` → `isProcessActive` → 抛
+  `OwnerTransferLockBusyError` → catch → `readOwnerRecordRaw`，这几步和 A 的 finalize（约 8 次 fs
+  操作）完全没有互斥关系，谁先摸到 `owner-record.json` 纯属两条 promise 链各自要跑几步的偶然结果。
+  **接受评审员的判断，不重新论证。**
+- **改法**：采用评审员在 Findings 里给出的方向——「由计数（对 `rename`/marker unlock 的观测计数）
+  或由『B 的这次 `readOwnerRecord` 全程没有产生任何写』来表达」。具体实现：在测试已有的
+  `vi.doMock("node:fs/promises", ...)` 里新增一个 `rename` 包装，累加调用次数到 `renameCount`；
+  `finalizePendingOwnerTransfer` 对 `marker.finalizeOrder` 的每个条目**恰好**做一次 `rename`
+  （见 `src/persistence/fileStore.ts:991-996` 的 `for (const entry of staged) { …; await
+  rename(entry.tempPath, entry.targetPath); }`），所以 `renameCount === finalizeOrder.length`
+  直接编码「finalize 总共只跑了一次」——如果两个读者都跑到 finalize，要么是 4 次 rename（两次都
+  成功），要么是第二次在读已被第一次删除的 pending 时 ENOENT 抛出（Promise.all 直接 reject，
+  测试本身就会失败）。`finalizeOrder` 变量本身与写 marker fixture 那处**共用同一个数组**，
+  避免把「2」这个数字写死两遍、失去可追溯性。
+  对 `ownerFromB` 保留了两条**不依赖调度顺序**的断言：`runId` 不随 epoch 变化恒为 `"task-1"`；
+  `currentOwnerEpoch` 断言改为「属于 `[1, 2]` 合法值集合」——诚实地承认两个值都是「B 走了
+  busy-return 路径、自己没有 finalize」这同一个正确行为下的合法结果，不再假装能预测具体哪个。
+  注释同步改写，不再写「held by the same gates」这句失实的话。
+- **Important-3 单独再加一层**：给 `aLockWritten` 的等待包一个新增的模块级函数
+  `withNamedTimeout<T>(promise, ms, message)`（放在 `createDeferred` 旁边，同样的辅助函数区），
+  内部用 `Promise.race` 语义（`setTimeout` 拒绝 + 原 promise 的 `.then` 双路径，都会 `clearTimeout`
+  避免遗留定时器）实现；超时阈值选 **3000ms**（明显小于 vitest 单测默认 5000ms 超时，保证具名错误
+  一定先触发，而不是被 vitest 自己的通用超时抢先）。旧形状下 A 根本不 `open` 锁文件，`aLockWritten`
+  永不 resolve，3s 后会抛出具名错误，直接指认「unlocked 分支没有在取锁」，而不是一条无信息量的
+  `Test timed out in 5000ms`。
+
+**Important-2**：评审员的建议是「给三条 fail-closed 测试中的至少一条补上」锁已释放的断言，
+且强调「这是纯新增断言，不改任何既有断言」。本环选择**三条全补**而不是「至少一条」——
+三条测试各自钉的是 `finalizePendingOwnerTransfer` 三种不同的抛出原因
+（`OwnerTransferMarkerFinalizeOrderInvalidError` / `OwnerTransferPendingMissingError` /
+`OwnerTransferMarkerUnreadableError`），补全三条能确认「finalize 抛时锁必被释放」这条设计细节
+在**每一种**抛出原因下都成立，而不是只在其中一种下被偶然验证到。每条测试只在文件末尾追加了一行
+`await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();`
+（外加一行两句注释），**逐字核对过：三条测试原有的所有断言一个字节没动**。
+
+### 验证证据（每条 Important 各自的 A/B/C）
+
+三条 Important 共用同一份「先改（对齐 HEAD `7ff426d`）→ 单独跑绿 → 精确复现评审员给出的那个
+构造场景（红）→ 手工还原变异并核对（`grep -c MUTATION_RV` 0 命中 ＋ `git diff --stat -- src`/`--
+src tests` 与预期改动面一致）→ 重跑绿」流程。**全部命令脚本先落盘、`rtk proxy zsh` 跑、
+未过滤、整份读出**（下面贴的是关键片段，完整日志在 scratchpad
+`fix1-a.log` / `fix1-m4.log` / `fix1-m4-restored.log` / `fix1-m3.log` / `fix1-m2.log` /
+`fix1-full.log`）。
+
+**A（本环改完之后，整份 `fileStore.test.ts` 单跑，含三条 Important 触及的全部测试）**：
+```
+export ECC_GATEGUARD=off DISABLE_OMC=1
+cd .../.worktrees/pkg2-data-loss
+npx vitest run tests/persistence/fileStore.test.ts --run
+```
+```
+ RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-data-loss
+
+ ✓ tests/persistence/fileStore.test.ts (77 tests) 682ms
+   ✓ fileStore > refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives 512ms
+
+ Test Files  1 passed (1)
+      Tests  77 passed (77)
+```
+非零命中（77/77），`RUN` 首行为 worktree 路径。
+
+**Important-1 的 B（重放评审员的 M4：只在测试侧插入 100ms 合法重调度，生产代码不动，
+证明改写后的判据不再被这个手法击穿）**：在 mock 的 `readFile` 里 `bAttemptedAcquire.resolve()`
+之后加 `await new Promise((r) => setTimeout(r, 100));`（标注 `MUTATION_RV`），单跑该具名测试：
+```
+ ✓ tests/persistence/fileStore.test.ts (77 tests | 76 skipped) 111ms
+ Test Files  1 passed (1)
+      Tests  1 passed | 76 skipped (77)
+```
+**仍然绿**（耗时从 9ms 变成 111ms，符合插入了 100ms 延迟的预期）——证明 Important-1 的修复生效：
+评审员用来证伪旧断言的那个「完全合法的重调度」，改写后的判据不再受它影响。
+**C**：手工去掉这三行 `MUTATION_RV` 插入代码，`grep -c MUTATION_RV tests/persistence/fileStore.test.ts`
+= 0，`git diff --stat -- src tests` 只剩本环合法改动（`tests/persistence/fileStore.test.ts | 85
++++...----`，`1 file changed, 76 insertions(+), 9 deletions(-)`，src 侧零输出），重跑同一条命令，
+`Tests 1 passed | 76 skipped (77)`，9ms（与插入前一致）。
+
+**Important-3 的 B（重放评审员的 M3：生产代码还原成阶段 1 之前「探锁 → 可能删锁 → 不持锁
+finalize」的形状，标注 `MUTATION_RV`）**：
+```
+ ❯ tests/persistence/fileStore.test.ts (77 tests | 1 failed | 76 skipped) 3015ms
+   × recoverInterruptedOwnerTransfer: two concurrent unlocked readers racing the same marker >
+     lets exactly one of two concurrent readOwnerRecord calls finalize the transaction; the other
+     returns without writing 3014ms
+     → reader A never opened the owner-transfer lock file within 3000ms -- the unlocked branch is
+       not acquiring a lock before finalizing (recoverInterruptedOwnerTransfer's !lockHeld branch
+       may have regressed to the pre-phase-1 unlocked-finalize shape)
+ Test Files  1 failed (1)
+      Tests  1 failed | 76 skipped (77)
+```
+红点是**具名错误**（3014ms，早于 vitest 5000ms 默认超时），不再是通用的
+`Test timed out in 5000ms.`——直接指认「unlocked 分支没有在取锁」这条不变式。
+**C**：手工把 `src/persistence/fileStore.ts` 还原为持锁形状，`grep -c MUTATION_RV
+src/persistence/fileStore.ts` = 0，`git diff --stat -- src` **零输出**（与 HEAD `7ff426d` 完全一致），
+重跑同一条命令回到 A 步的绿。
+
+**Important-2 的 B（重放评审员的 M2：`release()` 移出 `finally`，只在 finalize 成功路径释放，
+标注 `MUTATION_RV`）**：整份 `fileStore.test.ts` 单跑：
+```
+ ❯ tests/persistence/fileStore.test.ts (77 tests | 3 failed) 705ms
+   × fileStore > refuses to finalize a v2 marker whose finalizeOrder omits a legal file, rather
+     than silently orphaning the omitted pending 9ms
+     → promise resolved "'{\n  "holderProcessInstanceId": "pid:…'" instead of rejecting
+   × fileStore > refuses to finalize a v2 marker whose reconciliation pending is missing, keeping
+     the marker and staging in place 3ms
+     → promise resolved "'{\n  "holderProcessInstanceId": "pid:…'" instead of rejecting
+   × fileStore > refuses to finalize an unparseable marker, keeping every staged file in place 2ms
+     → promise resolved "'{\n  "holderProcessInstanceId": "pid:…'" instead of rejecting
+ Test Files  1 failed (1)
+      Tests  3 failed | 74 passed (77)
+```
+三条新增断言全部精确命中（红点行号分别是 `:483` / `:540` / `:579`，都是新增的那一行），
+消息都是 `promise resolved "...holderProcessInstanceId..." instead of rejecting`
+——锁文件真实还在，`rejects.toThrow()` 落空。这就是评审员报告 §3 里说的「M2 之前 518 全绿」
+的那个真回归，现在被三条新增断言同时抓住。
+**C**：手工把 `release()` 放回 `finally`，`grep -c MUTATION_RV src/persistence/fileStore.ts` = 0，
+`git diff --stat -- src` 零输出，`git status --porcelain -- src` 零输出。
+
+### 全量验证（三条 Important 全部还原之后）
+
+命令（脚本先落盘 `run-full.sh`，`rtk proxy zsh` 跑，未过滤，整份读出）：
+```
+export ECC_GATEGUARD=off DISABLE_OMC=1
+npx vitest run --run; echo "TEST_EXIT=$?"
+./node_modules/.bin/tsc --noEmit; echo "TSC_EXIT=$?"
+npm run build; echo "BUILD_EXIT=$?"
+```
+**首行**：`RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-data-loss`
+（worktree，非仓库根）。
+**结尾两行**：
+```
+ Test Files  30 passed (30)
+      Tests  518 passed (518)
+```
+**三个退出码**：`TEST_EXIT=0 / TSC_EXIT=0 / BUILD_EXIT=0`。测试总数与本环之前一致（518，
+本环只在既有测试里加断言，没有新增 `it` 块，数量不变符合预期）。
+flake (B) `records env names only and tracks descendants rooted at the spawned pid` 本轮绿
+（2799ms，第 118 行）；人裁 10 挂账那条 `persists phase usage evidence from the subprocess adapter
+without recomputing controller totals` 本轮也绿（734ms，第 114 行）——按名比对记录，不重新调查、
+不外推。
+
+**没有任何既有判据变红。**
+
+### 预算记账（修复环 1，回应控制器「要最诚实数字或明说拿不到」）
+
+**如实说明：这个环境里我没有能读到我自身逐调用 token 用量的工具或 API。** 上一轮我把「没有精确
+计数」偷换成了「可以给一个模糊估计」，而那个估计（6-8 成量级）与控制器后来给出的 harness 实测
+195,610 tokens **在数量级上都对不上**（195,610 已经是 100k 预算的约 1.96 倍）。这说明我的估计方法
+本身不可靠，不是"精度不够"的问题。
+
+**本环（修复环 1）我能诚实给出的只有这些**：
+- 本环做了 3 次「改代码/测试 → 单跑验证 → 手工变异复现评审员场景 → 手工还原 → 核对
+  `grep -c MUTATION_RV` / `git diff --stat`」的循环，外加 1 次整份 `fileStore.test.ts` 单跑
+  （A 步）、1 次全量套件跑（30 files/518 tests）、1 次 tsc、1 次 build；输入端读了完整的
+  `review-task-3.md`（492 行）；输出端本节报告约 200 行。
+- **我不会把"操作次数"换算成一个 token 估计再报出来**——上一轮已经证明这类换算会错到数量级，
+  与其重复同一个不可靠的方法，不如明确说：**拿不到精确数字，也不再提供替代的模糊估计**。
+- 如果控制器需要一个可信的用量数字，**只有 harness 自己的实测（如上一轮的 195,610）是可信来源**，
+  我这边报不出等价可信度的数字。
+- 感知层面的信号（仅供参考，非计数）：本环任务范围比上一轮小（只改 4 个测试断言 + 1 个新增辅助
+  函数，不涉及生产代码的净变更），过程中没有出现「大段来回读同一批文件」的情况，主观判断本环
+  消耗低于上一轮，但**这仍然是判断，不是数字，不应被当成预算依据**。

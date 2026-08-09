@@ -475,6 +475,12 @@ describe("fileStore", () => {
     await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
     await expect(readFile(join(runDir, ".owner-record.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
     await expect(readFile(join(runDir, ".reconciliation-record.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
+    // Task 3 / phase 1 (fix loop 1, Important-2): readOwnerRecord went through the unlocked
+    // branch's acquire -> finalize -> release, and finalize threw here. The lock must still have
+    // been released in the `finally` -- otherwise this run's transfer lock leaks permanently
+    // every time a marker like this one is read, which is strictly worse than not acquiring a
+    // lock at all.
+    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();
   });
 
   // §4.4 rule 2, fail-closed / depth-defense. This branch IS reachable in production (a v2
@@ -529,6 +535,9 @@ describe("fileStore", () => {
     await expect(readFile(join(runDir, ".owner-transfer.transaction.json"), "utf8")).resolves.toEqual(expect.any(String));
     await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
     await expect(readFile(join(runDir, ".owner-record.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
+    // Task 3 / phase 1 (fix loop 1, Important-2): the lock acquired by the unlocked branch must
+    // still be released in `finally` even though finalize threw here.
+    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();
   });
 
   // §4.4 rule 3, depth-defense. writeJsonFileViaFixedTemp's safeUnlink → write → rename sequence
@@ -565,6 +574,9 @@ describe("fileStore", () => {
     await expect(readFile(join(runDir, ".owner-transfer.transaction.json"), "utf8")).resolves.toBe("{not valid json");
     await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
     await expect(readFile(join(runDir, ".owner-record.pending.json"), "utf8")).resolves.toEqual(expect.any(String));
+    // Task 3 / phase 1 (fix loop 1, Important-2): the lock acquired by the unlocked branch must
+    // still be released in `finally` even though finalize threw here.
+    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();
   });
 
   it("finalizes a v1 marker over its two files without throwing", async () => {
@@ -2936,16 +2948,26 @@ describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racin
         "owner lost after reconciliation",
       );
 
+      // Shared with the rename-count invariant asserted after Promise.all below, so that number is
+      // derived from the same source as the marker fixture, not a bare magic number:
+      // finalizePendingOwnerTransfer performs exactly one rename per finalizeOrder entry, once per
+      // invocation, so renameCount after both readers settle is proof of *how many times finalize
+      // ran in total* -- finalizeOrder.length means exactly once; double that (or a thrown ENOENT
+      // from a second finalizer hitting pendings the first already deleted) would mean two
+      // finalizers raced.
+      const finalizeOrder = ["owner-transfer.json", "owner-record.json"];
+
       await writeOwnerRecord(runDir, initialOwnerRecord);
       await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(transfer.transferRecord, null, 2));
       await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(transfer.nextOwnerRecord, null, 2));
       await writeFile(
         join(runDir, ".owner-transfer.transaction.json"),
-        JSON.stringify({ version: 1, stagedAt: transfer.transferRecord.transferredAt, finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
+        JSON.stringify({ version: 1, stagedAt: transfer.transferRecord.transferredAt, finalizeOrder }, null, 2),
       );
       // Deliberately no lock file: this is the unlocked (G0) shape both readers start from.
 
       let aOpenedLock = false;
+      let renameCount = 0;
       const aLockWritten = createDeferred<void>();
       const bAttemptedAcquire = createDeferred<void>();
 
@@ -2988,6 +3010,10 @@ describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racin
 
             return result;
           },
+          rename: async (...args: Parameters<typeof actual.rename>) => {
+            renameCount += 1;
+            return actual.rename(...args);
+          },
         };
       });
 
@@ -2995,21 +3021,42 @@ describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racin
         const fileStore = await import("../../src/persistence/fileStore.js");
 
         const aPromise = fileStore.readOwnerRecord(runDir);
-        await aLockWritten.promise;
+        // Named timeout, well under vitest's 5000ms default: if reader A never reaches the point
+        // where it has opened and written the lock file, that means the unlocked branch is not
+        // acquiring a lock at all (e.g. reverted to the pre-phase-1 "probe -> maybe delete ->
+        // finalize unlocked" shape) -- surface that as the failure, not a bare
+        // "Test timed out in 5000ms" that names no invariant and reads like an unrelated flake.
+        await withNamedTimeout(
+          aLockWritten.promise,
+          3000,
+          "reader A never opened the owner-transfer lock file within 3000ms -- the unlocked branch "
+            + "is not acquiring a lock before finalizing (recoverInterruptedOwnerTransfer's "
+            + "!lockHeld branch may have regressed to the pre-phase-1 unlocked-finalize shape)",
+        );
         const bPromise = fileStore.readOwnerRecord(runDir);
 
         const [ownerFromA, ownerFromB] = await Promise.all([aPromise, bPromise]);
 
         // Reader A is the one paused-then-released by the gates above, so it is deterministically
-        // the one that finalizes; reader B is deterministically forced to attempt its acquire
-        // while A's lock is still held with real content, so it deterministically loses.
+        // the one that finalizes.
         expect(ownerFromA.currentOwnerEpoch).toBe(2);
         expect(ownerFromA.currentProcessInstanceId).toBe("pid:67890");
-        // Reader B's plain read observes whatever is on disk when it fell back after losing the
-        // acquire race -- which, held by the same gates, is still the pre-recovery record, proving
-        // B took the busy-return path rather than finalizing (or re-finalizing) anything itself.
-        expect(ownerFromB.currentOwnerEpoch).toBe(1);
-        expect(ownerFromB.currentProcessInstanceId).toBe("pid:12345");
+        // Reader B is deterministically forced to attempt its acquire while A's lock is still held
+        // with real content, so it deterministically loses the acquire race and never calls
+        // finalizePendingOwnerTransfer itself. What is NOT deterministic is how soon after that its
+        // own plain read of owner-record.json happens relative to A's finalize -- both process pairs
+        // this can legitimately return (the pre-transfer record, or the one A just published) are
+        // correct outcomes of the busy-return path. Pinning one specific value here would be pinning
+        // accidental scheduling, not the invariant (see task-3-impl-report.md, fix loop 1,
+        // Important-1) -- the invariant this test exists to prove is asserted below instead, via a
+        // count of how many times finalize actually ran.
+        expect(ownerFromB.runId).toBe("task-1");
+        expect([1, 2]).toContain(ownerFromB.currentOwnerEpoch);
+
+        // The invariant: finalize ran exactly once across both concurrent calls, not twice (which
+        // would mean both readers reached finalizePendingOwnerTransfer and either produced a torn
+        // publish or one crashed reading pendings the other already deleted).
+        expect(renameCount).toBe(finalizeOrder.length);
 
         // The transaction was published exactly once: no torn or duplicate publish from two
         // finalizers racing on the fixed owner-transfer / owner-record temp names.
@@ -3039,6 +3086,26 @@ function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void
     resolve = res;
   });
   return { promise, resolve };
+}
+
+// Turns a stuck gate into a message that names the invariant it was waiting on, instead of
+// vitest's generic "Test timed out in 5000ms" -- which on its own tells a future maintainer
+// nothing about which guarantee broke and reads exactly like an unrelated flake. `ms` must stay
+// well under vitest's 5000ms default per-test timeout so this message wins the race.
+function withNamedTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error as Error);
+      },
+    );
+  });
 }
 
 describe("strict persisted-artifact readers", () => {
