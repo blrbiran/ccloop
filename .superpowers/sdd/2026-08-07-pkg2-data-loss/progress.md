@@ -624,11 +624,62 @@ finalize => 同意」。** ***
   （sanity：同范围 `tests/` 新增 77 行，检索面是活的。）
   ⚠️ 该范围内还含控制器自己的台账笔 `1cfba42`（`progress.md` +72）—— **再评审时属噪声，不是被审对象。**
 
-*** **⚠️ 状态：任务 3 阶段 1 尚未 complete。scoped 再评审（换人）未做。** ***
-  按本仓库铁律，**修复环之后的状态是「实施者声称已修」，不是「已验证」**。
-  **下一步 = 换人 scoped 再评审**（范围 `7ff426d..b104397`，逐条 verdict ADDRESSED / NOT ADDRESSED）。
+*** **人裁 21。2026-08-09。人选「继续走完 scoped 再评审，把任务 3 阶段 1 收口成 complete，
+第 4 笔留下一会话」。** ***（控制器给的三个选项之一，逐字采纳第 1 条。）
 
-*** **⚠️ Rule 6：控制器在此就地停住，等人裁。** ***
+**scoped 再评审**（**换人**：既非实施者、也非上一轮评审员；opus 档，139,311 tokens；
+  报告 `rereview-task-3.md`，commit `087d0b2`；范围 `7ff426d..b104397`）：
+  *** **三条 Important 全部 ADDRESSED；无新破坏（0 Critical / 0 Important）；既有断言未被动。** ***
+  - **Important-1 ADDRESSED**：他自己重放那次 100ms 合法重调度 ⇒ **77/77 全绿**；
+    失实注释「held by the same gates」与两条 epoch 定值断言**已删除**；
+    新的 `renameCount` 不变式经其 M6 变异证**非空转**（`expected 2 to be 3`）。
+  - **Important-2 ADDRESSED**：他自己把 `release()` 移出 `finally` ⇒ 三条新增断言**同时红**。
+  - **Important-3 ADDRESSED 但带保留**：`withNamedTimeout` 的具名错误（3029ms）取代了通用 5000ms 超时
+    ——**正是该 finding 自己开的处方**；**但机制仍然是超时**，那条 it 的断言在该回归下依旧一次都没执行到。
+    *** **他明写两种读法都记进报告交裁，没有替人消解。记正面样本。** ***
+  - 他 5 次变异全部还原：`git diff` 全树空 ＋ `MUTATION_RR` 零命中 ＋ 双探针验活。
+  - **预算：他明说「拿不到精确数字，不给估计」**，改为交出可数事实（7 次 vitest ／ 1 次 tsc ／
+    1 次 build，退出码全 0，`RUN` 首行为 worktree）。**又一个正面样本。**
+
+*** **控制器亲验再评审员最承重的那条（不接受评审员自证）** ***：
+  取 Important-2。**同一个变异**（`await lock.release()` 移出 `finally`，标 `MUTATION_CTL`），
+  跑 `fileStore.test.ts` ⇒ ` Tests  3 failed | 74 passed (77)`，红点**恰好落在那三条新断言**
+  （`:483` / `:540` / `:579`），且 `Received` 是**真实的锁文件内容**
+  （`{"holderProcessInstanceId":"pid:24957","acquiredAt":…}`）
+  ⇒ *** **钉的是盘上真状态，不是实现细节字节。修复前同一变异是 82/82 全绿 —— 前后对照成立。** ***
+  还原：`git checkout -- src/persistence/fileStore.ts` ⇒ `git diff` 原始输出空、
+  `grep -c MUTATION_CTL` = 0、sanity grep（`lock.release()`）命中 4。
+
+**最终验证（控制器亲跑、未过滤、HEAD `087d0b2`）**：
+  `RUN  v2.1.9 …/.worktrees/pkg2-data-loss`（**路径已核**）
+  ` Test Files  30 passed (30)` ／ `      Tests  518 passed (518)` ／ `TEST_EXIT=0`
+  `TSC_EXIT=0` ／ `BUILD_EXIT=0`；工作树干净。
+  **518 = 517 ＋ 任务 3 的 1 条并发判据**（Important-2 的三条是给既有测试**追加断言**，不增用例数）。
+  ⚠️ **本轮零红**（连 flake (B)/(F) 与人裁 10 那条都没红）——**「本次没跑出来」不构成任何 flake
+  已消失的证据**，累计口径照旧。
+  ⚠️ **控制器自曝第 3 次**：最终验证的第一版探针不合格 —— 用 `sed -n 5p` **猜行号**取 `RUN` 行（返回空），
+  且「零红」靠一条**未经验证的 grep** 下全称否定。**已用一个已知含 `FAIL` 的旧日志（`s2-test.log`）
+  当对照把探针验活**（对照命中 1、最终日志 0、无意义 token 0）才下的结论。
+  **「坏探针不能证明不存在」这条，本会话第三次咬人。**
+
+*** **Task 3 (阶段 1): complete（commits `2d7ff84..087d0b2`，再评审三条全 ADDRESSED，零新破坏）** ***
+
+**deferred（不进环，交下一轮／人裁；以两份报告原文为准，控制器不重推聚合数）**：
+  `Task 3: minor (deferred): 第一轮评审的 3 条 Minor（见 review-task-3.md，本轮再评审员未处理）`
+  *** `Task 3: minor (deferred): 再评审员的最重顾虑 —— 「两个 finalizer 同时跑」这类回归（其 M5）
+   实际红法是 `Promise.all` 抛 ENOENT，而不是 `renameCount` 断言。
+   ⇒ **Important-3 抱怨的「靠异常而非断言变红」这个形状，换了个类别还在。** *** `
+  `Task 3: minor (deferred): 弱断言（`[1,2]` / `runId`）`
+  `Task 3: minor (deferred): 具名超时余量从 5s 收到 3s`
+  `Task 3: minor (deferred): rename 计数器作用域未限定`
+
+*** **⚠️ 一处口径分歧，控制器不替人消解（再评审员原样交出，控制器原样留档）** ***：
+  **Important-3 算不算真 ADDRESSED？** 读法 ①「finding 自己开的处方已兑现（具名错误取代通用超时）
+  ⇒ ADDRESSED」；读法 ②「机制仍是超时、断言仍未执行到 ⇒ 形状未变，只是换了个名字」。
+  **控制器按再评审员给的 verdict（ADDRESSED）记 complete，并把残余形状记成上面那条 deferred。
+  两种读法的操作后果不同 —— 需要时请问人，不要自己选一个。**
+
+*** **⚠️ Rule 6：控制器曾在再评审前就地停住并向人 surface（人裁 21 批准继续）。** ***
   三名 subagent 的 harness 实测用量：实施者首轮 **195,610** ＋ 独立评审员 **162,614** ＋
   实施者修复环 **285,805** ＝ **约 644k**，外加控制器本轮。
   **单任务 100k 与单会话 300k 均已大幅突破**（**人裁 16 只对任务 2 有效，不外推**）。
