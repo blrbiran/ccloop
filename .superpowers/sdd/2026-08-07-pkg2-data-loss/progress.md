@@ -465,3 +465,81 @@ finalize => 同意」。** ***
 **Rule 6 记账**：本会话已用去可观预算（开工自查 ＋ STEP 0 ＋ 名单外失败定性 ＋ 两名扫描员 ＋
 控制器两次独立复核 ＋ worktree 与基线）。**就地收口交接，实施阶段留给下一会话开**，
 以免实施者的报告与修复环挤在预算尾巴上。
+
+--------------------------------------------------------------------------------
+13. 下一会话（2026-08-09）—— 人裁 19/20、S0 基线、S1 前置探测
+--------------------------------------------------------------------------------
+
+*** **人裁 19。2026-08-09。人逐字答复「第 4 笔在本会话范围内」。** ***
+  ⇒ **人裁 13 的具名例外由此激活**：准改
+  `runLoop.integration.test.ts > reads owner-transfer.json for the published-winner check and
+   finalizes none of the winner's transaction inside the publish window` **这一条判据**，
+  **仅限它，不得外推**。实施者仍须在报告里正面处理 §4 待人裁 3 下列的两句（证明「第 4 笔关闭后
+  那条轨迹不再是 damaged」；指明推翻了 2026-08-02 那次 Human ruling 的哪一部分，逐字引）。
+
+*** **人裁 20。2026-08-09。人逐字答复「按你的顺序执行」。** ***
+  即控制器所列 S0（基线）→ S1（前置探测）→ S2（worktree）→ S3（阶段 1 实施）；
+  **S4（D-1 ＋ 最薄一格）留下一会话**。
+
+⚠️ **一处歧义，就地记明、不私自消解**：控制器所列顺序**不含第 4 笔**，故「按你的顺序」无法给它定位。
+  两种读法：① 追加在 S3 之后；② 回到包 2 原定「第 4 笔 → 第 1 笔」次序、先于 S3。
+  **后果不同**（预算只够一条时落下的那条不同）。**控制器按 ① 执行并已向人明示可改**，
+  **原样留档**。分叉点在 S2 之后的派单，此前两种读法动作完全相同。
+
+**S0 基线（控制器亲跑、未过滤、全文落盘 scratchpad `s0-test.log`）**：
+  `RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop`  <- 首行路径已核为仓库根
+  ` Test Files  30 passed (30)` ／ `      Tests  517 passed (517)`
+  `TEST_EXIT=0` ／ `TSC_EXIT=0` ／ `BUILD_EXIT=0`；HEAD `4e6d3ee`
+  **本仓库第 8 处 STEP 0，第 7 处（红）之后的第一处绿。不继承任何先前的绿。**
+  按名比对：**人裁 10 那条名单外失败本轮通过**（`✓ persists phase usage evidence… 739ms`）
+  ⇒ **累计 1/7 红，仍不构成它消失的证据**；flake (B) 本轮也通过（`records env names only… 2725ms`）。
+
+**开工自查的一处腐坏（就地记明）**：`git ls-remote origin refs/heads/main` = `077919c`
+  —— **第 8 次会话外推送**。实测 `merge-base --is-ancestor 077919c HEAD` = YES、
+  `rev-list --left-right --count 077919c...HEAD` = `0 1` ⇒ **只领先 1 笔、无分叉、可 ff**。
+  handoff 那句「本地领先若干笔」半腐坏。**push 仍需人单独授权，本轮未做。**
+  另：handoff 说 pkg2 目录「另有 10 份 `.md`」，**该聚合数为假** —— 其自身逐项枚举
+  （2+2+3+2+1+3）＝ 13，实测也是 13。**又一次「聚合数不可重推」，不外推、就地记明。**
+
+*** **S1 —— 设计员那条唯一的主要未知（§7.1 末「无法判定」）现在可判定了：类非空，但阶段 1 不受影响。** ***
+
+  **判别式**：「对 run 目录做精确文件集合／全树快照断言」＝ 全仓一切目录枚举原语的调用点。
+  **搜索面先声明再断言**（脚本落盘后 `rtk proxy zsh` 跑，两条 sanity 探针：
+  `readOwnerRecord` 在 `fileStore.test.ts` 命中 23 次；无意义 token 在 `src`+`tests` 零命中）。
+  **枚举原语全面**：`readdir` ／ `readdirSync` ／ `opendir` ／ `glob*` ／ `fast-glob`
+  —— 后四者在 `src`+`tests` **零命中**，故该面等价于 `readdir` 的全部调用点。
+
+  | 断言点 | 目标 | 会触发 recovery-on-read？ | 判定 |
+  |---|---|---|---|
+  | `runLoop.integration:1586` | `runDir/attempts` **子目录** | — | **不受影响**（锁在 runDir 顶层） |
+  | `runLoop.integration:1884/2530/2701/2843` ／ `leaseLifecycle:1419/1490` | `runDir/worktrees` **子目录** | — | **不受影响**（同上） |
+  | `fileStore.test.ts:3186` `(await readdir(runDir)).sort()).toEqual([...])` | runDir **顶层精确集合** | **否** —— 该测试只调 `initializeRunFiles` ＋ `writeRunState`，不经 `readOwnerRecord` | **不受影响** |
+  | `fileStore.test.ts:3206` `readdir(runDir)).toEqual(["loop-state.json"])` | runDir **顶层精确集合** | **否**（同上，EISDIR 失败半边） | **不受影响** |
+  | `zeroWrite.test.ts` `snapshotTree()` **全树快照** | 整棵树 | *** **是** *** —— `buildRecoveryRun()` 正是为触发 recovery 而造（三个前置条件齐备、`.owner-transfer.lock` 刻意缺席） | **不受影响，理由见下** |
+
+  *** **zeroWrite 为什么不受影响（机械理由，不是估计）**：`snapshotTree` 只为**文件与符号链接**记
+  `{size, mtimeMs, sha256}` 条目，**目录只递归、不记条目** ⇒ **目录 mtime 不入快照**。
+  阶段 1 的锁是**创建后又删除**的瞬时文件 ⇒ **不留任何 key**。 ***
+  ⚠️ **顺带证伪一句既有注释的措辞**：`zeroWrite.test.ts:396-402` 写
+  「Going through `claimOwnerRecordWithPrecondition` **would create and delete
+  `.owner-transfer.lock`** and run a lockHeld recovery pass, so "everything else byte-identical"
+  would be false」——**「create and delete 锁」这半不是它为假的原因**（瞬时文件对
+  `snapshotTree` 不可见），**为假的是「lockHeld recovery pass」那半**（它会 finalize 暂存文件、
+  重写 owner-record）。**该注释未被本轮改动，只记明措辞归因不准，不动它。**
+
+  *** **唯一的红条件 = 锁泄漏**（`finalize` 抛而没走 `finally` 释放，即设计员列的新增风险 2）。
+  而那不是回归，是缺陷本身。 *** **已有现成断言会当场抓住它**（下一位不必新造）：
+  `zeroWrite.test.ts:567` `pathExists(runDir/.owner-transfer.lock) === false`；
+  `fileStore.test.ts` 的 **8 处** `await expect(readFile(join(runDir,".owner-transfer.lock"),"utf8")).rejects.toThrow()`
+  （`:740 :775 :884 :1033 :1111 :1207 :1268 :1412`）。
+  ⚠️ **反过来的一条也要知道**：`ensureFreshRunDir` 的 `blockingPaths` **不含** `.owner-transfer.lock`，
+  `directoryHasEntries` 只作用于 `attempts/` 与 `worktrees/` ⇒ **一把泄漏的锁不会挡住新 run**，
+  **在生产侧是静默的**。测试侧那 9 条断言是唯一的执行机制。
+
+  **`release()` 的语义已亲验**（`fileStore.ts:846-851`）：`handle.close()` ＋ `safeUnlink(lockPath)`
+  ⇒ **确实删文件**，不是只放句柄。
+  **`scanRuns` 不触发 recovery**（L2 走 `readOwnerRecordWithoutRecovery`，这正是 `zeroWrite:190`
+  那条承重测试存在的理由）⇒ `ccloop ls` 一侧不在面上。
+
+  **控制器没做的（如实记）**：没有实跑阶段 1 的变更去验上述判定 —— 上述全部是**读代码的机械论证**，
+  **实施者必须自己再撞一次**，尤其是 zeroWrite 那条全树快照。**这条判定不构成实施者的免验理由。**
