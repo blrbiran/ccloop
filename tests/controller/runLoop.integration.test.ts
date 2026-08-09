@@ -2357,16 +2357,30 @@ describe("runLoop", () => {
   // the case that function's own constraint 2 names as "a genuine silent failure". That is why the
   // gap is left named rather than closed here.
   //
-  // It does NOT pin "the winner was not overwritten". It cannot: the check returns false here
-  // (owner-record.json is still the old epoch — P1's rename #2 has not happened), so the loser does
-  // go on to write its downgraded record, which is exactly the shape of the residual TOCTOU this
-  // layer leaves open (§13, 4th entry). The stronger property is not pinnable at this layer. Do not
-  // read assertion (a) as more than it is.
+  // ⚠️ Amended by package 2 / §13 4th entry (D2), and the amendment is narrow. Assertion (a) used
+  // to read `expect(ownerTransferReadOutcomesInWindow).toContain("ok")`. D2 puts the loser's
+  // read → decide → write inside the same .owner-transfer.lock that P1 holds for its whole
+  // transaction, so inside this window the loser never reaches that read at all: it finds the lock
+  // held by a live pid, exhausts its bounded retry and abandons. The observation the old (a) made
+  // is not weakened here, it is no longer reachable — so (a) is REPLACED by the observation that
+  // now stands in the same place, and the array it used to inspect is asserted EMPTY rather than
+  // deleted, so that a future edit which lets the loser read here again reds this test instead of
+  // passing silently.
   //
-  // ⚠️ No terminal-state assertion, deliberately. "P1's third rename puts the winner's record back"
-  // is an ordering this harness imposes, not a property of the system — in production the loser's
-  // write may perfectly well land after rename #3. Asserting it as correct behaviour would write a
-  // damaged trajectory into the suite. Everything asserted below is scoped to the loser's window.
+  // It still does NOT pin "the winner was not overwritten", and still could not: nothing below
+  // observes the state after P1's transaction completes. What changed is WHY the loser does not
+  // overwrite — before D2 it went on to write its downgrade, now it is refused the lock. The
+  // terminal property lives in the two interleaving tests that follow this one, which is where it
+  // belongs: it is a claim about both processes having finished, not about the loser's window.
+  //
+  // ⚠️ No terminal-state assertion here, deliberately, and D2 does NOT lift that. "P1's third
+  // rename puts the winner's record back" is an ordering this harness imposes, not a property of
+  // the system — in production the loser's write may perfectly well land after rename #3. Asserting
+  // it as correct behaviour would write a damaged trajectory into the suite. That sentence survives
+  // D2 intact and is why the two tests below assert the terminal state under BOTH lock orders
+  // instead of under this one: a terminal assertion that holds only for the order the fixture
+  // happens to produce is the same damaged trajectory under a new name. Everything asserted below
+  // is scoped to the loser's window.
   //
   // Assertion (b) observes finalize through its rename SOURCES rather than through a spy on
   // finalizePendingOwnerTransfer (not exported, and not to be exported for a test), and it is a
@@ -2386,7 +2400,7 @@ describe("runLoop", () => {
   // layer. A name is what appears in failure output, so it names the two things actually asserted:
   // clause 1 is assertion (a), clause 2 is assertion (b). Human ruling; the plan carries the
   // matching in-place amendment note (Amended 2026-08-02 (d), §Task A9).
-  it("reads owner-transfer.json for the published-winner check and finalizes none of the winner's transaction inside the publish window", async () => {
+  it("abandons the loser's reconciliation write against the winner's held transfer lock and finalizes none of the winner's transaction inside the publish window", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
@@ -2426,6 +2440,7 @@ describe("runLoop", () => {
     let runLoserInsideWindow: (() => Promise<void>) | null = null;
     const ownerTransferReadOutcomesInWindow: string[] = [];
     const publishTempRenameSourcesInWindow: string[] = [];
+    const reconciliationAbandonmentsInWindow: string[] = [];
 
     vi.resetModules();
     vi.doMock("node:fs/promises", async () => {
@@ -2524,7 +2539,11 @@ describe("runLoop", () => {
       };
 
       runLoserInsideWindow = async () => {
-        await observedRunLoopFromState(contract, runDir, adapter, state);
+        await observedRunLoopFromState(contract, runDir, adapter, state, undefined, undefined, {
+          onReconciliationWriteAbandoned: (detail) => {
+            reconciliationAbandonmentsInWindow.push(detail);
+          },
+        });
       };
 
       // P1. Its lock is held for the whole transaction by `pid:${process.pid}` — this very test
@@ -2557,15 +2576,353 @@ describe("runLoop", () => {
       ) as { status: string };
       expect(analysis.status).toBe("stale_candidate");
 
-      // (a) The loser's protective read succeeded: owner-transfer.json was already published
-      // when the loser read it, so the read succeeded. Under the finalize order this test pins,
-      // that file is published first and this is guaranteed; publish it later and the loser's read
-      // ends in ENOENT, taking the check with it.
-      expect(ownerTransferReadOutcomesInWindow).toContain("ok");
+      // (a) The loser's protective write was ABANDONED inside the window, and abandoned for the
+      // one reason D2 introduces: P1's transfer lock was held by a live pid for the whole
+      // transaction, so the loser's read → decide → write never started. The detail string is the
+      // operator-visible half of that abandonment (the events.jsonl half is written under a
+      // swallowing try/catch and cannot carry a test's weight).
+      expect(reconciliationAbandonmentsInWindow).toHaveLength(1);
+      expect(reconciliationAbandonmentsInWindow[0]).toContain("OwnerTransferLockBusyError");
+      // …and the read the old assertion (a) pinned is now unreachable here rather than merely
+      // unobserved: the loser opened no protective read of owner-transfer.json at all.
+      expect(ownerTransferReadOutcomesInWindow).toEqual([]);
 
       // (b) The loser did not finalize the winner's transaction on its behalf: no rename inside its
       // window took one of the transaction's publish temps as its source.
       expect(publishTempRenameSourcesInWindow).toEqual([]);
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  });
+
+  // Package 2 / §13 4th entry (D2) — interleaving 1 of 2. The pair exists because ONE terminal
+  // assertion is not evidence: the 2026-08-02 ruling on the test above rejected a terminal
+  // assertion precisely because the order it depended on was the harness's choice. A terminal state
+  // that is identical under BOTH orders of the two lock spans is a property of the system; a
+  // terminal state observed under one order is that same rejected trajectory wearing a new name. So
+  // this file asserts the same terminal proposition twice, once per order, and neither test is
+  // complete without the other.
+  //
+  // Order 1: the loser's whole span (acquire → read → decide → write → release) runs BEFORE the
+  // winner takes the lock. Nothing is mocked and nothing is interleaved — this order needs no
+  // fixture trickery, because two spans that do not overlap in time are exactly what the lock
+  // produces on its own.
+  //
+  // The first two assertions are the ones that carry weight against the alternative fix this design
+  // rejected (fail closed on a merely-absent owner-transfer.json): under that alternative the loser
+  // writes nothing here, and "the terminal state is the winner's" would still be green — order
+  // independence bought by deleting a product of the normal path. Asserting the loser's downgrade
+  // IS on disk before the winner runs is what refuses that trade.
+  it("keeps the loser's downgrade when its protected span runs first, and still ends at the winner's reconciliation record", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const state: RunState = {
+      status: "planning",
+      currentAttempt: 0,
+      attemptsUsed: 0,
+      lastTransitionAt: "2026-07-23T00:00:00.000Z",
+      waitingOnHuman: false,
+      stopReason: null,
+      budgetSnapshot: {
+        attemptsRemaining: contract.executionPolicy.maxAttempts,
+        timeRemainingMs: contract.executionPolicy.totalRuntimeBudgetMs,
+        tokenBudgetRemaining: contract.executionPolicy.tokenBudget,
+      },
+      recentFailures: [],
+    };
+
+    // Same lever as the test above: `ownerStatus: "lost"` plus changed paths keeps the loser's
+    // verdict at OWNER_UNDECIDABLE with takeover denied, so it attempts no transfer of its own and
+    // reaches writeBoundaryArtifacts carrying a stale_candidate downgrade.
+    const priorOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1:lock-order-loser-first",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: buildProcessInstanceId(),
+      lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+      ownerStatus: "lost" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+
+    await initializeRunFiles(runDir, contract, state);
+    await writeOwnerRecord(runDir, priorOwnerRecord);
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 2;\n");
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    const abandonments: string[] = [];
+    await runLoopFromState(contract, runDir, adapter, state, undefined, undefined, {
+      onReconciliationWriteAbandoned: (detail) => {
+        abandonments.push(detail);
+      },
+    });
+
+    // The claim this order is here to make: acquiring the lock did not turn the normal path into a
+    // refusal. A free lock is the common case (no concurrent transfer), and in it the loser still
+    // publishes its downgrade.
+    expect(abandonments).toEqual([]);
+    const loserRecord = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as { newOwnerEpoch: number | null; eligibleForContinuation: boolean };
+    expect(loserRecord.eligibleForContinuation).toBe(false);
+    expect(loserRecord.newOwnerEpoch).toBeNull();
+
+    // Fixture precondition: the loser left ownership alone, so the winner's CAS below is a genuine
+    // epoch-1 transfer and not a mismatch dressed up as one.
+    const persistedOwnerRecord = JSON.parse(
+      await readFile(join(runDir, "owner-record.json"), "utf8"),
+    ) as OwnerRecord;
+    expect(persistedOwnerRecord.currentOwnerEpoch).toBe(1);
+
+    const { writeOwnerTransferArtifacts } = await import("../../src/persistence/fileStore.js");
+    const { applyOwnerEpochTransfer } = await import("../../src/ownership/ownerController.js");
+    const winner = applyOwnerEpochTransfer(
+      persistedOwnerRecord,
+      "pid:67890",
+      "2026-07-23T00:01:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerTransferArtifacts(
+      runDir,
+      persistedOwnerRecord,
+      winner.nextOwnerRecord,
+      winner.transferRecord,
+      {
+        staleSuspicionBasis: ["winner: continuity suspicion confirmed"],
+        staleConfirmed: true,
+        ownershipVerdict: "OWNER_LOST",
+        lastTrustedBoundary: "execute",
+        conflictingEvidence: [],
+        takeoverPermission: { allowed: true, reason: "strict owner-loss conditions satisfied" },
+        priorOwnerEpoch: 1,
+        newOwnerEpoch: 2,
+        eligibleForContinuation: true,
+      },
+    );
+
+    // The terminal proposition, order 1 of 2.
+    const terminal = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as { newOwnerEpoch: number | null; eligibleForContinuation: boolean };
+    expect(terminal.eligibleForContinuation).toBe(true);
+    expect(terminal.newOwnerEpoch).toBe(2);
+  });
+
+  // Package 2 / §13 4th entry (D2) — interleaving 2 of 2, and the one with teeth.
+  //
+  // The fixture does not arrange the SAFE order and then assert it came out well; it arranges the
+  // damaging one and asserts the system refuses to be put in it. Two hooks on node:fs/promises'
+  // `rename` drive it: (i) the winner's transaction is held at its FIRST publish rename, i.e. with
+  // owner-transfer.json published and owner-record.json still at the old epoch — the stale pair
+  // that makes the published-winner check return false; (ii) the loser's own publish of
+  // reconciliation-record.json is held until the winner's transaction has FULLY completed, so if
+  // the loser ever gets that far its write lands after rename #3. That is the ordering the
+  // 2026-08-02 ruling named as production-reachable ("the loser's write may perfectly well land
+  // after rename #3"), and before D2 it ends with the winner's record destroyed.
+  //
+  // Under D2 hook (ii) never fires: the loser cannot start its read → decide → write while the
+  // winner holds the transfer lock, and the winner is released instead by the loser's run
+  // FINISHING (the Promise.race below), not by the loser reaching a write. Both branches of that
+  // race are live — one per code shape — which is what keeps this fixture from deadlocking on
+  // whichever shape it is measuring.
+  //
+  // The terminal assertion is deliberately first, ahead of the corroborating context: it is the
+  // proposition the test is named for, so it must be the assertion that fires. Its pair is the test
+  // above; neither order alone establishes anything, and a reviewer who runs only one of them has
+  // measured a harness, not a system.
+  it("keeps the winner's reconciliation record as the terminal state when the loser's write is forced to land after the winner's last rename", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 20,
+        totalRuntimeBudgetMs: 20,
+        partialOutcomeRecoveryWindowMs: 10,
+      },
+    };
+
+    const state: RunState = {
+      status: "planning",
+      currentAttempt: 0,
+      attemptsUsed: 0,
+      lastTransitionAt: "2026-07-23T00:00:00.000Z",
+      waitingOnHuman: false,
+      stopReason: null,
+      budgetSnapshot: {
+        attemptsRemaining: contract.executionPolicy.maxAttempts,
+        timeRemainingMs: contract.executionPolicy.totalRuntimeBudgetMs,
+        tokenBudgetRemaining: contract.executionPolicy.tokenBudget,
+      },
+      recentFailures: [],
+    };
+
+    const transactionPublishTempNames = new Set([
+      ".owner-transfer.publish.tmp",
+      ".owner-record.publish.tmp",
+      ".reconciliation-record.publish.tmp",
+    ]);
+
+    let interleaved = false;
+    let loserReachedItsOwnPublish = false;
+    let runLoser: (() => Promise<void>) | null = null;
+    let loserRun: Promise<void> | null = null;
+    const abandonments: string[] = [];
+    let releaseWinner: () => void = () => {};
+    const winnerMayProceed = new Promise<void>((resolve) => {
+      releaseWinner = resolve;
+    });
+    let markWinnerTransactionDone: () => void = () => {};
+    const winnerTransactionDone = new Promise<void>((resolve) => {
+      markWinnerTransactionDone = resolve;
+    });
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        rename: async (...args: Parameters<typeof actual.rename>) => {
+          const source = basename(String(args[0]));
+          const target = basename(String(args[1]));
+
+          // Hook (ii). The loser's own atomic publish goes through buildAtomicTempPath, whose
+          // per-process stamp cannot collide with the transaction's three fixed publish temps, so
+          // the source test distinguishes the two writers without a spy.
+          if (target === "reconciliation-record.json" && !transactionPublishTempNames.has(source)) {
+            loserReachedItsOwnPublish = true;
+            releaseWinner();
+            await winnerTransactionDone;
+          }
+
+          await actual.rename(...args);
+
+          // Hook (i).
+          if (!interleaved && runLoser !== null && transactionPublishTempNames.has(source)) {
+            interleaved = true;
+            loserRun = runLoser();
+            await Promise.race([winnerMayProceed, loserRun.then(() => undefined, () => undefined)]);
+          }
+        },
+      };
+    });
+
+    try {
+      const { writeOwnerTransferArtifacts } = await import("../../src/persistence/fileStore.js");
+      const { runLoopFromState: observedRunLoopFromState } = await import("../../src/controller/runLoop.js");
+      const { applyOwnerEpochTransfer } = await import("../../src/ownership/ownerController.js");
+
+      await initializeRunFiles(runDir, contract, state);
+      const priorOwnerRecord = {
+        runId: "task-1",
+        logicalSessionId: "task-1:lock-order-winner-first",
+        currentOwnerEpoch: 1,
+        currentProcessInstanceId: buildProcessInstanceId(),
+        lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+        ownerStatus: "lost" as const,
+        supersededByEpoch: null,
+        leaseAffirmedAt: null,
+      };
+      await writeOwnerRecord(runDir, priorOwnerRecord);
+
+      const winner = applyOwnerEpochTransfer(
+        priorOwnerRecord,
+        "pid:67890",
+        "2026-07-23T00:01:00.000Z",
+        "owner lost after reconciliation",
+      );
+
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(context.worktreePath, "src", "index.ts"), "export const value = 2;\n");
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      runLoser = async () => {
+        await observedRunLoopFromState(contract, runDir, adapter, state, undefined, undefined, {
+          onReconciliationWriteAbandoned: (detail) => {
+            abandonments.push(detail);
+          },
+        });
+      };
+
+      // P1, holding the lock for its whole transaction under this very test process's live pid.
+      await writeOwnerTransferArtifacts(
+        runDir,
+        priorOwnerRecord,
+        winner.nextOwnerRecord,
+        winner.transferRecord,
+        {
+          staleSuspicionBasis: ["winner: continuity suspicion confirmed"],
+          staleConfirmed: true,
+          ownershipVerdict: "OWNER_LOST",
+          lastTrustedBoundary: "execute",
+          conflictingEvidence: [],
+          takeoverPermission: { allowed: true, reason: "strict owner-loss conditions satisfied" },
+          priorOwnerEpoch: 1,
+          newOwnerEpoch: 2,
+          eligibleForContinuation: true,
+        },
+      );
+      markWinnerTransactionDone();
+
+      if (loserRun !== null) {
+        await loserRun;
+      }
+
+      // The terminal proposition, order 2 of 2 — same proposition as the test above, opposite order.
+      const terminal = JSON.parse(
+        await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+      ) as { newOwnerEpoch: number | null; eligibleForContinuation: boolean };
+      expect(terminal.eligibleForContinuation).toBe(true);
+      expect(terminal.newOwnerEpoch).toBe(2);
+
+      // Corroborating context, kept below the claim on purpose. Without these the terminal
+      // assertion could be green on a fixture where the two never met at all.
+      expect(interleaved).toBe(true);
+      const analysis = JSON.parse(
+        await readFile(join(runDir, "boundary-analysis.json"), "utf8"),
+      ) as { status: string };
+      expect(analysis.status).toBe("stale_candidate");
+      expect(loserReachedItsOwnPublish).toBe(false);
+      expect(abandonments).toHaveLength(1);
+      expect(abandonments[0]).toContain("OwnerTransferLockBusyError");
     } finally {
       vi.doUnmock("node:fs/promises");
       vi.resetModules();

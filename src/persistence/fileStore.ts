@@ -362,13 +362,14 @@ async function readPersistedSuccessfulTransferArtifacts(
     ownerTransferRecord = await readOwnerTransferRecordRaw(runDir);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      // This return also skips the owner-record read below, and with it that read's
-      // recoverInterruptedOwnerTransfer side effect. Deliberate, and not a behavior loss: when the
-      // three reads shared one Promise.all, the array was evaluated eagerly, so this file's
-      // readFile was issued before recovery reached any rename — the observation was pre-recovery
-      // either way — and a rejecting Promise.all left that recovery dangling and unawaited. An
-      // interrupted transfer's marker and pendings are reclaimed by every path that actually
-      // claims or transfers ownership; a protective read is not one of them and must not write.
+      // This return also skips the owner-record read below. Package 2 / 4th entry (D2) changed what
+      // that costs: recovery no longer rides on this function's owner-record read at all — the
+      // single caller runs recoverInterruptedOwnerTransfer(runDir, { lockHeld: true }) once, before
+      // this read, under the transfer lock it holds for the whole read → decide → write. So an
+      // early return here skips a read, not a recovery, and the pre-D2 justification for skipping
+      // that recovery (a protective read must not write) is now delivered by construction: the
+      // recovery that does happen is performed by the lock holder, exactly as
+      // writeOwnerTransferArtifacts and claimOwnerRecordWithPrecondition perform it.
       return { kind: "no_published_transfer" };
     }
 
@@ -377,9 +378,14 @@ async function readPersistedSuccessfulTransferArtifacts(
 
   // readPersistedReconciliationRecord carries its own `catch { return undefined }` and never
   // throws, so anything this catch sees came from the owner-record read.
+  //
+  // readOwnerRecordRaw, not readOwnerRecord: this function now runs with the transfer lock HELD,
+  // and readOwnerRecord's recoverInterruptedOwnerTransfer(runDir) — no lockHeld — would try to take
+  // that same non-reentrant lock, fail against this very process's own live lock file, and swallow
+  // the recovery silently. Same precedent, same reason, as the two lock holders above.
   try {
     const [ownerRecord, reconciliationRecord] = await Promise.all([
-      readOwnerRecord(runDir),
+      readOwnerRecordRaw(runDir),
       readPersistedReconciliationRecord(runDir),
     ]);
 
@@ -429,7 +435,100 @@ async function preserveSuccessfulReconciliationIfNeeded(
   };
 }
 
+// Package 2 / §13 4th entry (D2). Bound and delay are this module's own, deliberately NOT imported
+// from the controller's OWNER_TRANSFER_LOCK_RETRY_* : runLoop.ts imports this file, so importing
+// back would close a cycle. The SHAPE is the controller's, per its own bounded-retry precedent in
+// persistOwnerTransfer — retry a busy lock a bounded number of times, then give up — because a
+// winner's transfer transaction holds this lock for a handful of renames and giving up on the first
+// EEXIST would refuse the write for a contention that clears in microseconds.
+const RECONCILIATION_LOCK_RETRY_ATTEMPTS = 3;
+const RECONCILIATION_LOCK_RETRY_DELAY_MS = 50;
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+// Diverges from persistOwnerTransfer's loop on exactly one point, and the divergence is forced:
+// there, a non-busy failure is RETHROWN; here every failure — busy-after-the-bound, and the
+// non-EEXIST errnos acquireOwnerTransferLock rethrows unchanged (EACCES / ENOSPC / EROFS) — becomes
+// an abandonment instead. Constraint 1 on writeBoundaryArtifacts' abandon arm is why: a throw out of
+// this path reaches runLoopFromState's outer catch, where isLeaseStopError does not match an I/O
+// error, and a refusal to overwrite a winner's record would be upgraded into a failed attempt.
+async function acquireOwnerTransferLockForReconciliation(
+  runDir: string,
+): Promise<
+  | { kind: "lock"; lock: { release: () => Promise<void> } }
+  | { kind: "abandon"; error: unknown }
+> {
+  let lastBusyError: unknown = new OwnerTransferLockBusyError("owner transfer already in progress");
+
+  for (let attempt = 0; attempt < RECONCILIATION_LOCK_RETRY_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await delay(RECONCILIATION_LOCK_RETRY_DELAY_MS);
+    }
+
+    try {
+      return { kind: "lock", lock: await acquireOwnerTransferLock(runDir) };
+    } catch (error) {
+      if (!(error instanceof OwnerTransferLockBusyError)) {
+        return { kind: "abandon", error };
+      }
+
+      lastBusyError = error;
+    }
+  }
+
+  return { kind: "abandon", error: lastBusyError };
+}
+
+// Package 2 / §13 4th entry (D2): the loser's read → decide → write is one critical section under
+// the SAME cross-process lock that a winner holds for its entire publish transaction — acquire,
+// recover, three renames, release (writeOwnerTransferArtifacts). Two lock spans cannot interleave,
+// so the loser's write is either wholly before the winner takes the lock (the winner's rename #3
+// then publishes over it) or wholly after the winner released it (the loser then reads the
+// COMMITTED pair, transferRepresentsPublishedWinner holds, and resolveSuccessfulReconciliation
+// writes the winner's own record back). The third order — decide on a pre-transfer observation,
+// write after rename #3 — is the one that destroyed the winner's record, and it is the one the lock
+// removes. What that does NOT make order-independent is named where it lives: a lock this process
+// can have stolen from it (tryRecoverStaleOwnerTransferLock) puts the third order back, and any
+// successful resume turns clause (b) of transferRepresentsPublishedWinner false at the same epoch
+// by human ruling, after which the protection is gone by design and not by race.
+//
+// The heartbeat's runExclusive is NOT an alternative to this: it is an in-process promise queue and
+// constrains no other process.
+async function publishReconciliationUnderTransferLock(
+  runDir: string,
+  nextReconciliationRecord: ReconciliationRecord,
+): Promise<ReconciliationWriteDecision> {
+  const acquisition = await acquireOwnerTransferLockForReconciliation(runDir);
+
+  if (acquisition.kind === "abandon") {
+    return acquisition;
+  }
+
+  try {
+    // The lock holder's form of the recovery this path already performed before D2, via
+    // readOwnerRecord inside readPersistedSuccessfulTransferArtifacts. Same precedent as
+    // writeOwnerTransferArtifacts and claimOwnerRecordWithPrecondition. Without it the decision
+    // could be taken against an owner-record.json that an interrupted transfer has already
+    // superseded on disk — the stale pair this entry is about.
+    await recoverInterruptedOwnerTransfer(runDir, { lockHeld: true });
+    const decision = await preserveSuccessfulReconciliationIfNeeded(runDir, nextReconciliationRecord);
+
+    if (decision.kind === "write") {
+      await writeJsonFileAtomically(
+        join(runDir, "reconciliation-record.json"),
+        decision.record,
+      );
+    }
+
+    return decision;
+  } finally {
+    await acquisition.lock.release();
+  }
+}
 
 export async function writeBoundaryArtifacts(
   runDir: string,
@@ -446,7 +545,11 @@ export async function writeBoundaryArtifacts(
   await writeJsonFileAtomically(join(runDir, "boundary-analysis.json"), artifacts.boundaryAnalysis);
 
   if (artifacts.reconciliationRecord !== undefined) {
-    const decision = await preserveSuccessfulReconciliationIfNeeded(
+    // D2: read, decision AND write all happen inside publishReconciliationUnderTransferLock's lock
+    // span. The two events below stay outside it on purpose — they are audit, they move no
+    // decision, and appending them under the lock would hold a cross-process critical section open
+    // across an appendFile for nobody's benefit.
+    const decision = await publishReconciliationUnderTransferLock(
       runDir,
       artifacts.reconciliationRecord,
     );
@@ -494,13 +597,10 @@ export async function writeBoundaryArtifacts(
       return;
     }
 
-    await writeJsonFileAtomically(
-      join(runDir, "reconciliation-record.json"),
-      decision.record,
-    );
-
     // Appended AFTER the write, not before: the event asserts that a published winner's record was
-    // destroyed, and if writeJsonFileAtomically throws it was not.
+    // destroyed, and if writeJsonFileAtomically throws it was not — under D2 that throw propagates
+    // out of publishReconciliationUnderTransferLock, so this line is still unreachable when the
+    // write failed.
     if (decision.publishedWinnerReplacedDetail !== undefined) {
       try {
         await appendEvent(runDir, {
