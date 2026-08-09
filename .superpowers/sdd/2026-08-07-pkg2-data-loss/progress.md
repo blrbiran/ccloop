@@ -288,6 +288,51 @@
   （**人裁 13 的例外只针对第 4 笔那一条，明写不得援引到本任务**）、三步判据、落盘协议、
   探针纪律、扫描员结论属单方证词必须自己再撞一次。
 
+--------------------------------------------------------------------------------
+9. 任务 1（债 2 补实跑注入）—— 实施、评审、控制器复核，收口
+--------------------------------------------------------------------------------
+
+**实施者交付**（`ed22305`）：新增一条测试
+  `runLoop > writes an unresumable cancelled status into a run a different, current owner
+   already holds when this process's own lease is lost`
+  （`tests/controller/runLoop.integration.test.ts`，+115 行）。
+**控制器亲验其范围边界**：`git diff --stat f6a35d0..HEAD -- src` **零输出** ⇒ **债 2 一行没修**，
+守住了 brief 的硬边界；`git status` 干净 ⇒ 变异已还原。
+
+**独立评审员**（换人，未参与实施）：**规范符合 ✅ ／ 质量通过 ／ 0 Critical ／ 0 Important ／ 2 Minor**。
+  他独立重核了扫描员 1 的四个数（15 调用点 ／ 4 个 lease-loss 检查点 ／ `cancelled: []` ／
+  `RESUMABLE_STATUSES`），**三方一致** ⇒ §5 记的「单方证词」到此已被第二方独立撞过。
+
+*** **⚠️ 但评审员自报了一个落在核心证据上的缺口，控制器必须自己补** ***：
+  他**没有 literal 重跑三步判据的 B/C**（只做静态交叉验证），**原因是控制器 brief 里写了
+  「不许改任何代码」**—— 这条限制恰好绑住了他复现变异实验的手。
+  *** **这是控制器的 brief 设计缺陷，不是评审员失职。下一份评审 brief 必须写明：
+  允许为验证做临时变异，但必须还原并证明还原。** ***
+
+*** **控制器独立复现三步判据（不接受实施者自证；命令与未过滤输出如下）** ***：
+  **A 注入前绿**：` Tests  1 passed | 55 skipped (56)`（**非零计数，证明选择器命中**）
+  **B 注入后红**：变异 = 在 `persistTerminalState` 内**抑制 `writeRunState`**
+    （等价于「加了所有权守卫后拒绝写」）⇒ ` Tests  1 failed | 55 skipped (56)`
+    *** **红点正对**：`AssertionError: expected 'planning' to be 'cancelled'`，
+    抛在 `expect(persisted.status).toBe("cancelled")`，而 `persisted` 来自
+    **`readRunState(runDir)`（从磁盘读回）** *** ⇒ **该测试断言的是落盘终态、即数据丢失本体，
+    不是内存中间变量；且它不是恒绿测试。**
+  **C 还原后绿**：`git checkout -- src/controller/runLoop.ts`（**单文件明确路径**）⇒
+    `git diff --stat -- src` 零输出、`grep -c MUTATION` **0 命中**、
+    ` Tests  1 passed | 55 skipped (56)`。
+
+**2 条 Minor（deferred，不进修复环）**：
+  `Task 1: minor (deferred): 报告对变异插入位置的文字描述与所贴调用栈行号不自洽，读者需自行做行号算术`
+  *** `Task 1: minor (deferred):` **`:1514` 那个 lease-loss 检查点比另三个多一层
+   `isTerminalRunStatus` 门槛** —— 报告把四处笼统归为「成立」，未点出这一结构性差异。 ***
+   ⚠️ **这条必须带进任务 2 的 brief：设计所有权守卫时不许假设四处行为等价。**
+
+*** **Task 1: complete（commits `f6a35d0..ed22305`，review clean，2 minor deferred）** ***
+
+**预算记账（如实）**：实施者自报约 90k–120k，**大概率已触及或略超单任务 100k**，
+明写未静默 —— **记正面样本**；但也暴露一个可改的地方：**brief 强制先读的材料体量过大**，
+下一份 brief 应改为「指名到节」而不是「整份报告」。评审员约 55k–75k，未破。
+
 **下一步（未执行，交接给下一会话）—— 前置全部就绪，可直接派实施者**：
 
   ✅ 已就绪：worktree ＋ 分支 ＋ `npm ci` ＋ 新工作区基线（§7）；两份开工前扫描（§5/§6）；
