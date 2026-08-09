@@ -1198,3 +1198,52 @@ finalize => 同意」。** ***
   在 HEAD 与在 BASE `2af4137` 各跑一次同一探针，**若两处结果相同则假说被证伪，且那是合格答案**；
   构造不出来也要如实报。**明令不许往有趣的方向偏。** 探针文件用后即删并证明还原。
   **两种结果导向相反的裁决**：证实 ⇒ D2 回炉（那个写不能不发生）；证伪 ⇒ 改护栏测试这条路变便宜。
+
+--------------------------------------------------------------------------------
+19.2 探针结果 —— *** 控制器 §19.1 的推理被证伪 ***
+--------------------------------------------------------------------------------
+
+**测量员**（窄任务，sonnet 档，harness 实测 **92,749**；报告 `probe-resume-after-busy-lock.md`）：
+*** **REFUTED。** ***
+
+  | | HEAD（D2） | 对照（pre-D2 `2af4137`） |
+  |---|---|---|
+  | 放弃时写了 `reconciliation-record.json`？ | **否** | **是** |
+  | 放弃时写了 `owner-transfer.json`？ | **否** | **否** |
+  | `resumeLoop` 结果 | throws `ResumeNotEligibleError` | **同** |
+  | 错误消息 | `… ENOENT … open '.../owner-transfer.json'` | **同** |
+  | `resume_denied` 事件数 | 1 | 1 |
+
+*** **⇒ 那个 run 在 D2 之前就已经不可 resume 了**，原因是 `owner-transfer.json` 从不被暂存
+（**与 D2 无关**），`resumeLoop` 的 `Promise.all` 在同一个无守卫读模式上先失败 ——
+`reconciliation-record.json` 的有无**根本轮不到起作用**。 ***
+
+*** **控制器独立核实（不接受测量员自证）** ***：其引用的佐证是**追踪在库的既有断言**，与本次工作无关：
+  `tests/controller/leaseLifecycle.integration.test.ts:527`
+  `await expect(access(join(runDir, "owner-transfer.json"))).rejects.toThrow(); // never staged`
+  （must-hit `owner_transfer_contended` = 7、must-miss = 0）。
+  工作树已证干净：`rtk proxy git diff` **0 字节**、探针文件已删（`ls` 报 No such file）。
+
+*** **⇒ 控制器 §19.1 的承重推理不成立，就地更正、不掩饰。** ***
+  **本仓库第 N 次实证「读代码得出的机械论证不等于实测」——这次栽的是控制器自己，
+  而且是控制器自己要求去测才测出来的。记明：拒绝拿自己的推理去请人下裁决，这个决定是对的。**
+
+**⇒ D2 的实际代价（现在是实测的）**：`reconciliation-record.json` 在这条路径上的缺席是**惰性的**
+  —— registry 根本不读它（`sweepRuns.ts:100` 逐字「not in L2's OBSERVED_FILES at all」）；
+  `readPersistedReconciliationRecord` 有 `catch → undefined`；唯一危险的无守卫读在这条路径上够不着。
+
+*** **⚠️ 测量员自己留下的诚实缺口（控制器认为这是下一步的硬条件，不是可选项）** ***：
+  **「`reconciliation-record.json` 缺席、但 `owner-transfer.json` 存在」这个组合从未被构造过。**
+  它在 D2 下**看起来可达**（一个早先完成过转移、因而有 `owner-transfer.json` 的 run，
+  稍后在边界写时撞上忙锁）。**要么证明不可达，要么证明后果同样惰性 —— 必须实测，不许推理。**
+  他另留一条：`Promise.all` 的拒绝顺序是竞态，**哪条 ENOENT 浮出来不确定**
+  （不影响结论 —— 两处都缺 `owner-transfer.json`，两处都必然拒绝）。**记正面样本：他没有把结论说满。**
+
+**控制器给人的建议（已交人裁，控制器不替人选）**：
+  **建议批一条新的具名扩权**（仅限 `lease heartbeat lifecycle > appends owner_transfer_contended
+  and abandons the transfer when the owner-transfer lock stays busy` 中读 `reconciliation-record.json`
+  那一半，**保留其 `owner_transfer_contended` 恰好一次的断言**），让 D2 走下去，**并把上面那个未构造
+  组合写成 brief 的硬条件**。
+  *** **反方立场原样摆出**：`fileStore.ts:412` 那句「deletes a product of the normal path; it does not
+  add a refusal」是当作**原则**写的、不是损害分析 —— 据此判 D2 回炉同样成立。
+  **这是价值判断不是事实问题，控制器不替人做。** ***
