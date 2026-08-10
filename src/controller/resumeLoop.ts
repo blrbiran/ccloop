@@ -16,8 +16,61 @@ import type { RunState, RunStatus } from "../state/types.js";
 import type { RunLeaseLostError } from "../ownership/lease.js";
 import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
-import { cleanupAttemptWorkspaceBestEffort, createLeaseLossSignal, runLoopFromState } from "./runLoop.js";
+import {
+  cleanupAttemptWorkspaceBestEffort,
+  createLeaseLossSignal,
+  OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS,
+  OWNER_TRANSFER_LOCK_RETRY_DELAY_MS,
+  runLoopFromState,
+} from "./runLoop.js";
 import type { StopRequestSignal } from "./runLoop.js";
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+// Package 2 / §13 4th entry, review round 2 (I-1). D2 made writeBoundaryArtifacts take
+// .owner-transfer.lock on EVERY stale_candidate boundary write, so this claim — which takes the
+// same lock — can now meet a holder that is merely writing a boundary artifact, where before D2 it
+// met one only during an actual transfer or claim. That turned a near-impossible collision into a
+// routine one, and with no retry here it surfaced as a resume refused for a contention that clears
+// in microseconds.
+//
+// Bounded retry, lock-busy only, is this codebase's existing answer to exactly this error, and the
+// shape below is persistOwnerTransfer's (spec §5.2 requirements 1 and 2) with nothing added: the
+// same two exported constants, the same "retry busy, rethrow everything else, rethrow on the last
+// attempt" test. A CAS mismatch is NOT retried, for persistOwnerTransfer's own stated reason —
+// retrying it would re-run the CAS against evidence this resume never evaluated.
+//
+// claimOwnerRecordWithPrecondition itself is deliberately NOT touched. The retry belongs to the
+// caller here exactly as it belongs to persistOwnerTransfer there, so the fail-fast primitive keeps
+// its meaning for every other caller, and this change stays inside resume's own policy.
+//
+// The refusal is still recorded exactly once: this helper only decides WHEN to give up, and the
+// single appendEvent in the call site's catch below is untouched.
+async function claimOwnerRecordWithBoundedLockRetry(
+  runDir: string,
+  expectedOwnerRecord: OwnerRecord,
+  nextOwnerRecord: OwnerRecord,
+): Promise<void> {
+  for (let attempt = 0; attempt < OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await delay(OWNER_TRANSFER_LOCK_RETRY_DELAY_MS);
+    }
+
+    try {
+      await claimOwnerRecordWithPrecondition(runDir, expectedOwnerRecord, nextOwnerRecord);
+      return;
+    } catch (error) {
+      const isLastAttempt = attempt === OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS - 1;
+      if (!(error instanceof OwnerTransferLockBusyError) || isLastAttempt) {
+        throw error;
+      }
+    }
+  }
+}
 
 export class ResumeNotEligibleError extends Error {
   constructor(message: string) {
@@ -158,7 +211,7 @@ export async function resumeLoop(
     leaseAffirmedAt: null,
   };
   try {
-    await claimOwnerRecordWithPrecondition(runDir, ownerRecord, nextOwnerRecord);
+    await claimOwnerRecordWithBoundedLockRetry(runDir, ownerRecord, nextOwnerRecord);
   } catch (error) {
     // §3: stays fail-closed either way, but a busy lock never evaluated a CAS, so the detail
     // must not claim one did.

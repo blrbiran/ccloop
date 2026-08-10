@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, readFile, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resumeLoop, ResumeNotEligibleError } from "../../src/controller/resumeLoop.js";
 import { createAttemptWorkspace } from "../../src/workspace/worktreeManager.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
@@ -229,6 +229,123 @@ describe("resumeLoop", () => {
     expect(denied).toHaveLength(1);
     expect(denied[0].detail).not.toContain("claim CAS failed");
     expect(denied[0].detail).toContain("lock busy");
+  });
+
+  // Package 2 / §13 4th entry, review round 2 (I-1). D2 put the loser's reconciliation
+  // read → decide → write inside .owner-transfer.lock, which is the same lock this claim takes, so
+  // a resume can now collide with an ordinary boundary write rather than only with a transfer. The
+  // pair below pins the two halves of the answer this codebase already gives that error elsewhere
+  // (leaseLifecycle's "retries a busy owner-transfer lock and completes once it clears" / "abandons
+  // the transfer once the retry bound is exhausted…"): contention that clears must not refuse the
+  // resume, contention that persists still must.
+  //
+  // claimOwnerRecordWithPrecondition is mocked rather than driven by a real lock file — the same
+  // reason the transfer-side pair gives: the release has to be deterministic, gated on a call
+  // count, not on racing a real unlock against a real ~50ms backoff. The test above this one
+  // already covers the real-lock-file path, and it is untouched.
+  it("retries a busy owner-transfer lock during the resume claim and completes once it clears", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    let claimCalls = 0;
+
+    vi.resetModules();
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+
+      return {
+        ...actual,
+        claimOwnerRecordWithPrecondition: async (
+          ...args: Parameters<typeof actual.claimOwnerRecordWithPrecondition>
+        ) => {
+          claimCalls += 1;
+          if (claimCalls === 1) {
+            throw new actual.OwnerTransferLockBusyError("owner transfer already in progress");
+          }
+          return actual.claimOwnerRecordWithPrecondition(...args);
+        },
+      };
+    });
+
+    try {
+      const { resumeLoop: observedResumeLoop } = await import("../../src/controller/resumeLoop.js");
+
+      // Captured rather than awaited bare: under a mutation that removes the retry this call
+      // throws, and a test that dies of the throw reports an exception instead of a failed
+      // assertion. Every claim below is an assertion.
+      let thrown: unknown = null;
+      let finalStatus: string | null = null;
+      try {
+        finalStatus = (await observedResumeLoop(runDir, new ScriptedAdapter([successFrame()]))).status;
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeNull();
+      expect(finalStatus).toBe("succeeded");
+      expect(claimCalls).toBe(2); // refused once, retried once, claimed
+      expect(await readEventTypes(runDir)).toContain("resume_adopted");
+      expect(await readEventTypes(runDir)).not.toContain("resume_denied");
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
+
+  it("abandons the resume once the claim's retry bound is exhausted, with the refusal recorded exactly once", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    let claimCalls = 0;
+
+    vi.resetModules();
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+
+      return {
+        ...actual,
+        claimOwnerRecordWithPrecondition: async () => {
+          claimCalls += 1;
+          throw new actual.OwnerTransferLockBusyError("owner transfer already in progress");
+        },
+      };
+    });
+
+    try {
+      const { resumeLoop: observedResumeLoop, ResumeNotEligibleError: ObservedResumeNotEligibleError } =
+        await import("../../src/controller/resumeLoop.js");
+      const { OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS } = await import("../../src/controller/runLoop.js");
+
+      let thrown: unknown = null;
+      try {
+        await observedResumeLoop(runDir, new ScriptedAdapter([successFrame()]));
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(ObservedResumeNotEligibleError);
+      // The bound itself: exactly as many attempts as the constant allows, no more and no fewer.
+      expect(claimCalls).toBe(OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS);
+      const denied = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type: string; detail: string })
+        .filter((event) => event.type === "resume_denied");
+      // Retrying must not multiply the record of the refusal.
+      expect(denied).toHaveLength(1);
+      expect(denied[0].detail).toContain("lock busy");
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
   });
 
   it("aborts when a concurrent owner-record change breaks the claim CAS", async () => {
