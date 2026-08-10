@@ -1,6 +1,54 @@
-# ccloop Handoff — **L3 已发布；包 3 已合入；包 1（L5 spec）评审完成待修复环 2；包 2 的债 2 与任务 3 阶段 1 都已做完并 ff 并入 `main`（未 push）；包 2 只剩 S4 与第 4 笔**
+# ccloop Handoff — **L3 已发布；包 3 已合入；包 1（L5 spec）待修复环 2；包 2 的债 2／任务 3 阶段 1／S4 均已 ff 并入 `main`；第 4 笔（D2）在 `feat/pkg2-4th` 上、评审中、未合**
 
 ---
+
+# 【最新】2026-08-10 —— **本节取代下方一切状态描述**
+
+> ⚠️ **一律自查，别信本文。** 门锚点 `e42e062`（`GATE-PKG3`）是唯一固定值，可放心引用；**HEAD／笔数／测试数／远端一律现跑**。
+> ⚠️ **远端已被推进 10 次**；第 10 次（`2026-08-10 23:50:42`）经 `git reflog show origin/main` 归因为**人自己 push**，与前九次性质不同。**仍要现跑。**
+
+## 唯一可信进度源
+`.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **现为 19 节，人裁 10–37 全在里面**。
+⚠️ 该目录 `.gitignore` 是 `*`，产物只能 `git add -f` 入库。
+⚠️ **包 2 期间一切台账与 handoff 写入只进 worktree 副本，主仓库不得领先** —— 否则 `--ff-only` 通路没了、门锚点毁掉。
+
+## 已完成并已 `--ff-only` 并入 `main`（**都不要重做**）
+- 债 2（任务 1／2）、任务 3 阶段 1（第 1 笔）—— 见台账 §9–§14。
+- *** **S4: complete** *** —— **D-1 ＋ 最薄一格 `#7`**，见台账 §16–§17。
+  - D-1 走**方案 (a)**（人裁 29）：写入器抽成 `src/controller/ownedRunStateWriter.ts`，`runLoop.ts` **不再 import `writeRunState`**，并由 `tests/controller/ownedRunStateWriter.structure.test.ts` **用 `ts.createSourceFile` 解析而非正则**钉住。
+  - `#7`（重试清理失败 → failed）已补具名回归测试，**红在断言而非异常/超时**。
+  - *** **D-1 现状不得说成「已关严」** ***：已挡住 #1/#2/#3/#4/#5/#6/#8/#11（实测）；***仍然敞开 #7 直接 `writeFile`／#9 动态 `import()`／#10 委托第三模块***。只有方案 (c)（类型级不变量）能关掉这三条，**它要改 `fileStore.test.ts` 一大片既有判据 ⇒ 需单独人裁**。**是降级，不是关严。**
+
+## 进行中：第 4 笔（**未合，随时可弃**）
+分支 `feat/pkg2-4th`（复用 worktree `.worktrees/pkg2-s4`）。**方案 D2 已获人裁 33**：把输家的「读 → 判定 → 写」整段放进跨进程 `.owner-transfer.lock`。
+已走完：只读设计（4 候选）→ 实施（一度 BLOCKED）→ 人裁 36 探针 → 修复环 1 → **换人**独立评审（0 Critical / 2 Important）→ 修复环 2 → **换人** scoped 再评审（进行中）。
+
+**⚠️ 接手前必读的四条**
+1. *** **人裁 37 依赖的命题被更正过。** *** 台账 §19.2 曾把它记成「该组合**不可达**」——**那是控制器的错，前提为假**。实际成立的是更窄的：***「D2 既不能创造、也不能加宽它」***。该组合**确实可达**（赢家 `finalizePendingOwnerTransfer` 的 rename 窗口内），**且不需要竞态、结果是确定性的**；但那个窗口**是既有的**（赢家单机崩溃即可产生），**D2 反而改善了崩溃赢家那一格**。**更正见 §19.3，原措辞保留不删。**
+2. **控制器犯过第二个错**：读了评审 finding 却没读它的**处置建议**（原文「不要在本项里改它…需要它自己的裁决」）就派了修复环 2。实施者没有折中，把重试放在**调用方** `resumeLoop`、原语 `claimOwnerRecordWithPrecondition` **逐字节未动**（控制器已比对确认）。**该处置是否仍需单独人裁，留给下一位/人。**
+3. *** **举证责任仍未免除**（人裁 13 只解除流程约束）：任何终态断言必须覆盖**两种交错**，只钉单一顺序 = 2026-08-02 那次 Human ruling 杀掉的同一条 damaged trajectory 换个名字。人裁 35 已准为此新增 `it`。 ***
+4. **具名例外已用掉三个**（人裁 13 ／ 14 ／ 17 之外，新增 **人裁 37**：仅限 `leaseLifecycle` 那条 busy-lock 护栏测试中**读 `reconciliation-record.json` 的那一半**，其 `owner_transfer_contended` 断言必须保留）。**第四个必须问人。**
+
+## 仍然开着
+- **待裁点 3（第 4 笔收口时必问）**：把残余从「本层读写不互斥」降格为「锁协议自身的可靠性」（§13 第 1 笔，属 L5），**算「关闭」还是「降级」**。
+- **待裁点 A / B / C** —— 人明令先不裁。⚠️ **人裁 34 只解除了「扩大 B 的执行面」这一件，B 本身仍未裁。**
+- **包 1 的修复环 2** —— 人裁 9，**另一条线，别读串**。
+- `SweepOptions.stderr` 契约的测试半边 —— 人裁 11，等包 1 修复环 2 之后。
+
+## 本轮查明、下一位直接用（不要重新推导）
+1. *** **`runExclusive`（`leaseHeartbeat.ts`）是纯进程内 promise 队列，不碰文件系统**；`runLoop.ts` 的 INERT 版就是 `(fn) => fn()`。全仓**唯一**跨进程原语是 `acquireOwnerTransferLock`。 *** ⇒ 「把 `writeBoundaryArtifacts` 挪进 exclusive span 就好了」**是错的**。控制器已亲验。
+2. **`reconciliation-record.json` 缺席的处理在三处口径不一致**：`readPersistedReconciliationRecord` 有 `catch → undefined`（安全）；**registry 结构上读不到它**（`pickReader` 对它抛，`sweepRuns.ts:100` 逐字说它不在 L2 的 `OBSERVED_FILES` 里）；*** **而 `readReconciliationRecord` 完全无守卫，且直通 `resumeLoop.ts` 的 `Promise.all`** ***。**这与 D-1、Critical F-1 同族：一个在多数地方成立、于是被当成普遍成立的假设。**
+3. **新的验证纪律两条**（本轮由 subagent 换来，已生效）：① `git checkout <commit> -- path` **会进暂存区** ⇒ 还原证明必须**同时**验 `git diff` 与 `git diff --cached` 为 0 字节；② **变异实验前必须先把被变异的基线提交**，否则 `git checkout --` 会还原到错误目标并静默销毁工作。
+4. **预算纪律**：**不收 subagent 自报估计，一律以 harness 实测为准**。本会话四名以上 subagent 明确拒绝给估计并改交可数事实，**记正面样本**。
+
+## ⚠️ 铁律（本会话又被验证了三次，全部咬在控制器身上）
+**验证跑绝不过滤 —— `grep` 与 `tail` 同罪，过滤显示与过滤落盘同罪**（控制器本会话犯 2 次）；**坏探针永远不能证明「不存在」**（控制器本会话犯 3 次：`$?` 取错、zsh `:s` 修饰符、未加引号的 `--include=*.ts`）；***读代码的机械论证不等于实测*** —— 控制器 §19.1 那条推理每一环都读对了，**结论仍然是错的**，被自己要求的实测证伪。**唯一做对的是没拿它去请人下裁决。**
+
+---
+
+# 【已过期，保留作历史】上一版标题与执行摘要
+
+**L3 已发布；包 3 已合入；包 1（L5 spec）评审完成待修复环 2；包 2 的债 2 与任务 3 阶段 1 都已做完并 ff 并入 `main`（未 push）；包 2 只剩 S4 与第 4 笔**
 
 # HANDOFF EXECUTIVE SUMMARY（下一位 agent 读这几行就能开工）
 
