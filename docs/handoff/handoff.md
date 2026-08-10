@@ -5,7 +5,20 @@
 # 【最新】2026-08-10 —— **本节取代下方一切状态描述**
 
 > ⚠️ **一律自查，别信本文。** 门锚点 `e42e062`（`GATE-PKG3`）是唯一固定值，可放心引用；**HEAD／笔数／测试数／远端一律现跑**。
-> ⚠️ **远端已被推进 10 次**；第 10 次（`2026-08-10 23:50:42`）经 `git reflog show origin/main` 归因为**人自己 push**，与前九次性质不同。**仍要现跑。**
+> ⚠️ **远端已被推进 11 次**；第 10、11 次经 `git reflog show origin/main` 归因为**人自己 push**，与前九次性质不同。**仍要现跑。**
+
+## 先跑这些，以输出为准（**本文不写死 HEAD／笔数／测试数 —— 提交本文这个动作本身就会改前两项**）
+
+```bash
+cd /Users/biran/code/skills/loop/ccloop
+git log --merges --format='%h %cd %s'   # 末笔必须仍是 GATE-PKG3（e42e062）；包 1、包 2 都未开门
+git ls-remote origin refs/heads/main    # 一律现跑：已被推进 11 次，两个方向都腐坏过
+git status --short; git worktree list; git branch -vv
+export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm test -- --run
+```
+
+⚠️ **验证性命令一律走 `rtk proxy`** —— 默认改写会把输出折叠成假计数。
+⚠️ **`e42e062`（门）是已固定的历史锚点，可放心引用；其余一律自查。**
 
 ## 唯一可信进度源
 `.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **现为 19 节（含 19.1–19.5），人裁 10–43 全在里面**。
@@ -66,6 +79,26 @@
 
 ## ⚠️ 铁律（本会话又被验证了三次，全部咬在控制器身上）
 **验证跑绝不过滤 —— `grep` 与 `tail` 同罪，过滤显示与过滤落盘同罪**（控制器本会话犯 2 次）；**坏探针永远不能证明「不存在」**（控制器本会话犯 3 次：`$?` 取错、zsh `:s` 修饰符、未加引号的 `--include=*.ts`）；***读代码的机械论证不等于实测*** —— 控制器 §19.1 那条推理每一环都读对了，**结论仍然是错的**，被自己要求的实测证伪。**唯一做对的是没拿它去请人下裁决。**
+
+## ⚠️ 人裁 44（本次交接令）—— **第五次同一句措辞**
+
+人逐字答复「**三条同意，结论记录下来，但是先不改**」。
+⚠️ *** **这与人裁 5／8／9／28 逐字相同，是本仓库第五次。** *** 「三条」有两种读法：
+① 控制器收口时列的三件需单独授权/定夺的事（**两条旧分支** ／ **孤儿目录 `.worktrees/pkg2-data-loss`** ／ **整分支评审的预算口径**）；② **三个待裁点 A / B / C** 本身。
+*** **两种读法操作后果相同：全部记录进本文与台账，本轮一律不动手。** *** 控制器按该共同后果执行，**并把歧义原样留在这里**。**若下一位需要区分，请问人，不要自己选一个。**
+
+## 建议调用的 skills（接手整分支评审 → 开门）
+
+| skill | 何时 | 注意 |
+|---|---|---|
+| `superpowers:requesting-code-review` | **立刻**（包 2 的整分支评审，范围 `e42e062..HEAD`） | **派最强档。** brief 必写：不接受实施者自证／findings 带可构造场景／**锚点用符号名不用行号**／不许用收窄搜索面支撑全称否定／落盘协议／***允许为验证做临时变异但必须证明还原***／**必撞上文那五个跨笔面** |
+| `superpowers:receiving-code-review` | 拿到结论、准备处置时 | **评审员的结论同样要验。** ⚠️ ***本会话新增教训：finding 与它的「处置建议」是两回事*** —— 控制器只读了 finding 就派工，做了评审员明说不该在本项做的修改 |
+| `superpowers:subagent-driven-development` | 若整分支评审出 Critical/Important | 「实施者 → **换人**独立评审 → 修复环 → **换人** scoped 再评审 → 台账记 complete」 |
+| `superpowers:verification-before-completion` | 声称「通过/完成」之前 | 复跑全套件 ＋ typecheck ＋ build，`rtk proxy`，**未过滤**，核 vitest 首行 `RUN` 路径。⚠️ **探针本身要先验活**：拿一个已知含 `FAIL` 的旧日志当对照，否则「零红」是未经验证的全称否定 |
+| `superpowers:systematic-debugging` | 撞到不在 flake 名单内的失败 | 名单只有 (B) 与 (F)；**另有人裁 10 那条已挂账、按完整测试名比对、不要重新调查**（累计 1/11 红，**「本次没跑出来」不构成它消失的证据**） |
+| `superpowers:using-git-worktrees` | 若修复环需要工作区 | ⚠️ **`EnterWorktree` 默认基点是 `origin/<default-branch>`，会丢掉未推送的本地提交** —— 必须先 `git worktree add <path> -b <branch> HEAD` **显式指定基点**，再用 `path` 接管；**建完立刻 `npm ci`**；**期间台账只写 worktree 副本，主仓库不得领先** |
+| `superpowers:finishing-a-development-branch` | 开门时 | **门必须是 merge、结论在主题行**；⚠️ **非门的合并一律 `--ff-only`**，否则毁掉唯一锚点。**开门、合并、删分支、push 四件各需人单独授权；控制器不许 push** |
+| ~~`superpowers:brainstorming`~~ | — | **包 2 四笔的方案都已获批并实施完毕，不要重跑。** 待裁点 A/B/C **人明令先不裁，也不要重开方向讨论** |
 
 ---
 
