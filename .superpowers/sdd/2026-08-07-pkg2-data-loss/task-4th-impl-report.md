@@ -388,3 +388,171 @@ controller totals`，本次两轮全套件里它都是**绿**的）。⇒ 按 br
 
 **最后，一条我明确标「未验」的**：D2 之后终态仍依赖「锁不被偷」（`tryRecoverStaleOwnerTransferLock`）。
 **我没有为它写任何判据，也没有实测过锁被偷的轨迹。它仍然是残余，应当具名传给 L5。**
+
+---
+
+# 修复环 1（人裁 37）—— 追加报告
+
+**FIX_BASE `9881b91`**，本轮改动面：**`tests/controller/leaseLifecycle.integration.test.ts` 一个文件，+27 / −8。`src/` 自 FIX_BASE 起零字节改动。**
+
+## F1. 结论
+
+**状态：DONE。上一轮的 BLOCKED 已解除，且解除它的不是授权本身，是两件被实测的事。**
+
+1. **人裁 37 具名的那条判据已按「只改读 `reconciliation-record.json` 的那一半」改完，全套件回到全绿**
+   （`Test Files 31 passed (31)` / `Tests 522 passed (522)`，exit 0；本轮**一条 flake 都没出现**）。
+   `owner_transfer_contended` 的两条断言**逐字未动**（见 F4 的删除行清单：8 行删除里没有一行属于它们）。
+2. *** **人裁 37 的硬性条件已完成实测，答案是两句话，不能只说一句：** ***
+   - **那个组合的后果不是无害的** —— 实测：把 `reconciliation-record.json` 从一个本来可 resume 的 run 里删掉，
+     `resumeLoop` 抛 `ResumeNotEligibleError`，报错信息里逐字含 `reconciliation-record.json`（G3b）。
+     **所以「后果 inert」这条路走不通，我不拿它交差。**
+   - **但 D2 造不出那个组合** —— 两条腿都实测了（G1、G2），加上一次代码面枚举（带必命中/必不命中对照）。
+3. **有一个我必须主动交代的窗口**：那个组合**确实存在**，但只存在于**赢家自己事务的 finalize 窗口内**
+   （rename #1 之后、rename #3 之前）。**这个窗口不是 D2 造的，而且实测在 D2 前后逐字相同**（G4）。
+
+## F2. 人裁 37 硬性条件的实测 —— 「reconciliation 缺席 ＋ owner-transfer 在场」
+
+**方法**：临时探针 `tests/controller/tmp-gap-probe.test.ts`（**已删除**，删除证明在 F5），
+在 HEAD（D2）与 **pre-D2 对照**（`git checkout 2af4137 -- src`）各跑一遍。
+对照有效性已核：对照下 `grep -c "publishReconciliationUnderTransferLock" src/persistence/fileStore.ts` = **0**；
+还原后 = **4**。
+
+| 探针 | 问的问题 | HEAD（D2） | pre-D2 对照 |
+|---|---|---|---|
+| **G1** | 生产路径上唯一的 `owner-transfer.json` 发布者，会不会留下「transfer 在、reconciliation 不在」？ | **绿** —— 经 `runLoop` 完成一次真实转移后，两个文件**都在**，`reconciliation.newOwnerEpoch === 2` | **绿（相同）** |
+| **G2** | 已经有这两个文件的 run，D2 的锁忙 abandon 会不会把 reconciliation 删掉？ | **绿** —— abandon 确实发生（`abandonments` 长度 1，含 `OwnerTransferLockBusyError`），而 `reconciliation-record.json` **逐字节未变** | **红**（`expected [] to have a length of 1`）—— pre-D2 根本不 abandon，它去写。**这条本来就是 D2 专属命题，红得其所** |
+| **G3a** | 基线：两个文件都在的 eligible run 能 resume 吗？ | **绿**（`status === "succeeded"`） | **绿（相同）** |
+| **G3b** | *** 只删掉 `reconciliation-record.json`，后果是什么？ *** | **绿** —— `resumeLoop` 抛 `ResumeNotEligibleError`，`String(thrown)` 含 `reconciliation-record.json` | **绿（相同）** |
+| **G4** | 赢家事务自己的 finalize 窗口里，这个组合出现吗？ | **绿**，实测序列逐字：<br>`after owner-transfer.json: transfer=true reconciliation=false`<br>`after owner-record.json: transfer=true reconciliation=false`<br>`after reconciliation-record.json: transfer=true reconciliation=true` | **绿（序列逐字相同）** |
+
+### F2.1 代码面枚举（脚本落盘后 `rtk proxy zsh` 跑，全文 tee，未过滤；带必不命中对照）
+
+- **`owner-transfer.json` 的生产发布者只有一条路**：`finalizePendingOwnerTransfer`。
+  另一个能写它的导出 `writeOwnerTransferRecord` 在 `src/` 下**零调用者**（`B_EXIT=0`，命中只有它自己的定义行），
+  且其就地注释逐字自陈：「It exists only to build test fixtures — every call site is under tests/…；
+  **Production must publish owner-transfer.json only through finalizePendingOwnerTransfer**」。
+- **`writeOwnerTransferArtifacts` 的生产调用者只有一处**：`src/controller/runLoop.ts:681`（`persistOwnerTransfer`），
+  它**总是**传 `reconciliationRecord` ⇒ marker 恒为 **v2**（`finalizeOrder` 含 `RECONCILIATION_RECORD_FILE`）。
+  v1（不含 reconciliation）只有在 `reconciliationRecord === undefined` 时才产生，**生产上没有这样的调用点**。
+- **`src/` 下没有任何东西删除 `reconciliation-record.json`**（`cleanupOwnerTransferStagingWithoutMarker` 只删 staging 临时/pending 文件）。
+- **必不命中对照** `zzz_control_token_never_present_zzz`：`D_EXIT=1`（同一批 grep、同一批路径）⇒ 上面的零命中不是坏探针造成的。
+
+### F2.2 正面回答
+
+*** **组合可达吗？** —— **D2 造不出它。** 三条独立的实测/枚举各自足以支撑： ***
+(i) 唯一的生产发布者把两个文件放在**同一笔事务**里提交（G1，pre-D2 相同）；
+(ii) D2 的 abandon **不写也不删**，已有的文件逐字节不动（G2）；
+(iii) 没有任何代码删除该文件，且能单独写 `owner-transfer.json` 的那个导出在生产上零调用者（F2.1）。
+
+*** **那它在哪儿真的出现？** —— **只在赢家事务的 finalize 窗口内**（G4 的第 1、2 行）。 ***
+**这个窗口属于 `finalizePendingOwnerTransfer`，D2 一个字节没碰它；实测序列在 D2 前后逐字相同。**
+⇒ 若有并发 `resumeLoop` 恰好落在这个窗口里读，它会被拒（G3b 的后果），
+**但这是一条先于 D2 就存在的行为，不是 D2 引入的，也不是本笔的范围。我把它具名记下，不顺手改。**
+
+*** **后果 inert 吗？** —— **不 inert，我不含糊**（G3b）。 ***
+正因为不 inert，本条的结论**完全压在「D2 造不出它」上**，而那三条是实测/枚举，不是推理。
+
+⚠️ **仍然标未验的一格**：G3b 只证明「该组合会拒绝 resume」。
+**我没有测「finalize 窗口内并发 resume」这条完整轨迹**（要同时驱动一笔事务与一次 resume 竞速）。
+**它是先于 D2 的行为，我判断不属于本笔，但我不假装测过。**
+
+## F3. 被改的那一条既有判据（人裁 37）—— 改前改后逐字对照
+
+**测试名：一个字未改**（`appends owner_transfer_contended and abandons the transfer when the owner-transfer lock stays busy`）。
+
+**删掉的（读 `reconciliation-record.json` 的那一半，且仅此）：**
+```ts
+const reconciliation = JSON.parse(
+  await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+) as { ownershipVerdict: string; newOwnerEpoch: number | null; eligibleForContinuation: boolean };
+...
+expect(reconciliation.newOwnerEpoch).toBeNull();
+expect(reconciliation.eligibleForContinuation).toBe(false);
+```
+**换成的：**
+```ts
+await expect(access(join(runDir, "reconciliation-record.json"))).rejects.toThrow();
+expect(await readEvents(runDir)).toContainEqual(
+  expect.objectContaining({ type: "reconciliation_write_abandoned" }),
+);
+```
+*** **必须保留的那一半，逐字未动（可与 FIX_BASE 逐字节比对）：** ***
+```ts
+expect(await readEvents(runDir)).toContainEqual(
+  expect.objectContaining({ type: "owner_transfer_contended" }),
+);
+expect(await readEventTypes(runDir)).not.toContain("owner_epoch_transferred");
+```
+`expect(owner.currentOwnerEpoch).toBe(1)`、`expect(finalState.status).toBe("exhausted")`、
+`await expect(access(join(runDir, "owner-transfer.json"))).rejects.toThrow();` 同样**逐字未动**。
+
+**为什么是「替换」而不是「删除」**：新形状把一条断言换成**两条** ——
+「文件不在」**和**「拒绝上了事件流」。**缺席不等于沉默**：只断言前者，将来谁把事件那半砍掉，测试仍然绿，
+而那正是 `writeBoundaryArtifacts` 约束 2 逐字点名的 "a genuine silent failure"。这一层理由写进了就地注释。
+
+### F3.1 三步变异证据（这条判据自己的）
+
+| 步 | 做法 | 结果 |
+|---|---|---|
+| 注入前 | HEAD | **绿**，`1 passed | 26 skipped (27)`，exit 0 |
+| **注入后** | **pre-D2 对照**（`git checkout 2af4137 -- src`，D2 符号计数实测为 0） | *** **红**，`AssertionError: promise resolved "undefined" instead of rejecting`（行 541，即 `access(reconciliation-record.json)` 那条断言） *** —— **靠断言变红，不是异常、不是超时**；`1 failed | 26 skipped (27)`，exit 1 |
+| 还原 | `git checkout HEAD -- src` | `rtk proxy git diff -- src` **原始输出 0 字节**；必命中探针 `publishReconciliationUnderTransferLock` = **4**；必不命中 `CCLOOP_MUTATION` = **0** |
+
+## F4. 改动面与删除行（硬边界）
+
+`git diff --numstat 9881b91 -- src tests`：
+```
+27	8	tests/controller/leaseLifecycle.integration.test.ts
+```
+**`src/` 自 FIX_BASE 起零改动 —— 本轮是纯测试改动。**
+`git diff -U0 9881b91 -- tests | grep "^-"` 的 8 行删除**全部**落在人裁 37 具名那条 `it` 的
+「读 `reconciliation-record.json`」那一半（3 行读取 ＋ 1 行空行 ＋ 2 行注释 ＋ 2 行断言）。
+*** **`owner_transfer_contended` 相关断言零删除、零修改。其余任何既有判据零删除。** ***
+**我没有需要第二条例外**（人裁 37 明令：需要第二条就停下上报 —— 不需要）。
+
+## F5. 临时探针的删除证明
+
+| 探针 | 期望 | 实测 |
+|---|---|---|
+| `git status --porcelain` | 不再出现 `tmp-gap-probe.test.ts` | 只剩 ` M tests/controller/leaseLifecycle.integration.test.ts` ＋ 两条本任务前就存在的 `?? …*.diff` |
+| **必不命中** `grep -rn "tmp-gap-probe\|gap probe" tests/` | 零命中 | `PROBE_GREP_EXIT=1` |
+| **必命中对照（同一 grep 根）** `grep -rc "describe(" tests/controller/leaseLifecycle.integration.test.ts` | 非零 | `1` ⇒ **上面的零命中不是坏探针** |
+| `rtk proxy git diff -- src` | 空 | 0 字节 |
+
+## F6. 全套件 ＋ `tsc --noEmit` ＋ `npm run build`（未过滤）
+
+`RUN` 首行已核：`RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-s4`。
+
+| 项 | 结果 | exit |
+|---|---|---|
+| 全套件 | **`Test Files 31 passed (31)` / `Tests 522 passed (522)`** | **0** |
+| `npx tsc --noEmit` | 无输出 | **0** |
+| `npm run build` | 正常输出，无错误 | **0** |
+
+**本轮零失败、零 flake**：允许的两条 flake 与那条已挂账的 `plan.json` ENOENT **都没有出现**
+（`evidence.test.ts > run-scenario CLI > records env names only…` 绿 3027ms；
+`runLoop > persists phase usage evidence…` 绿 858ms）。
+
+## F7. 按协调者要求原样带过来的东西（不改口径）
+
+- **两个死/错变异必须留档**：M2（把 `release()` 提前）**三条判据全绿**，是死探针；
+  M2′（只删锁、留下 `{lockHeld:true}` 恢复）让 I2 红在 `loserReachedItsOwnPublish` 而**终态断言仍绿**。
+  *** **只有忠实的两处一起回退（M3：函数体回退 ＋ `readOwnerRecordRaw` 改回 `readOwnerRecord`）才能让 I2 的终态断言变红。**
+  复现必须用 M3。 ***
+- **与设计员的分歧仍然挂着，不合并**：他把
+  「Everything asserted below is scoped to the loser's window」列为**被推翻**；
+  **我仍然认为它被保留了** —— 改后的 A9′ 所有断言仍只看输家窗口，终态命题在两条新增 `it` 里。
+  **我没有采纳他的读法，也没有要求他采纳我的。**
+- **`cleanupOwnerTransferStagingWithoutMarker` 那处我自己引入的新写，仍然挂在评审员名下**（本轮未动它，全套件绿）。
+- **偷锁残余仍然具名、未钉、属于 L5**，本轮没有为它加任何判据。
+
+## F8. 预算
+
+**harness 的实数我读不到，因此不给估计。** 会话成本提示（hook）本轮显示 `~$148.84`，
+**那是美元不是 token，我不拿它当 token 计数用。** 人裁 32 已放行，我没有为预算停下。
+
+## F9. 本轮我自己发现的、自己的缺陷
+
+**一条**：我最初打算把 G3b 写成「后果 inert」的证据 —— 实测直接把这个期待打掉了（resume 被拒）。
+**是先写探针再下结论救了这一条**；如果我先写结论再补探针，我会写出一句「后果无害」的假话。
+本轮没有其他自伤。

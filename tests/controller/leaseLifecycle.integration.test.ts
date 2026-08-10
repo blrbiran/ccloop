@@ -513,16 +513,35 @@ describe("lease heartbeat lifecycle", () => {
       currentOwnerEpoch: number;
       currentProcessInstanceId: string;
     };
-    const reconciliation = JSON.parse(
-      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
-    ) as { ownershipVerdict: string; newOwnerEpoch: number | null; eligibleForContinuation: boolean };
-
     // The transfer never happened: the record still names the ORIGINAL (lost) owner, not this
-    // process, and the reconciliation record reports the same "abandoned" shape as any other
-    // dropped transfer.
+    // process.
     expect(owner.currentOwnerEpoch).toBe(1);
-    expect(reconciliation.newOwnerEpoch).toBeNull();
-    expect(reconciliation.eligibleForContinuation).toBe(false);
+
+    // ⚠️ Amended by package 2 / §13 4th entry (D2), under human ruling 37, and amended ONLY here:
+    // the two clauses this test is named for — the contention event is appended, and the transfer
+    // is abandoned — are untouched below and remain this test's guardrail.
+    //
+    // What changed is the trace this attempt leaves BEHIND that abandonment. D2 puts the loser's
+    // reconciliation read → decide → write inside the same .owner-transfer.lock the CAS above
+    // could not get, and this fixture's lock is held by a live pid for the whole run, so the
+    // boundary write is refused for the same reason the transfer was. The record whose shape used
+    // to be asserted here (newOwnerEpoch null, eligibleForContinuation false) is therefore never
+    // written at all, and the assertions that read it are replaced by the two observations that
+    // now stand in their place: the file is absent, and the refusal is on the record as an event.
+    //
+    // Absent is not silent, and that distinction is why this is an amendment rather than a
+    // deletion: a protective refusal that left no trace would be exactly the silent failure
+    // writeBoundaryArtifacts' own constraint 2 names. Both halves are asserted, so a future edit
+    // that drops the event while keeping the refusal reds this test.
+    //
+    // Measured before this was written, not assumed: a run in this state was already non-resumable
+    // before D2 — owner-transfer.json is never staged here either (line below, predating D2), and
+    // resumeLoop's Promise.all fails on that sibling read regardless. See
+    // .superpowers/sdd/2026-08-07-pkg2-data-loss/probe-resume-after-busy-lock.md.
+    await expect(access(join(runDir, "reconciliation-record.json"))).rejects.toThrow();
+    expect(await readEvents(runDir)).toContainEqual(
+      expect.objectContaining({ type: "reconciliation_write_abandoned" }),
+    );
     expect(finalState.status).toBe("exhausted");
     await expect(access(join(runDir, "owner-transfer.json"))).rejects.toThrow(); // never staged
 
