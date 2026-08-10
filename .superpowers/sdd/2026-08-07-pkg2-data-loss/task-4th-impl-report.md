@@ -556,3 +556,140 @@ expect(await readEventTypes(runDir)).not.toContain("owner_epoch_transferred");
 **一条**：我最初打算把 G3b 写成「后果 inert」的证据 —— 实测直接把这个期待打掉了（resume 被拒）。
 **是先写探针再下结论救了这一条**；如果我先写结论再补探针，我会写出一句「后果无害」的假话。
 本轮没有其他自伤。
+
+---
+
+# 修复环 2（评审 I-1）—— 追加报告
+
+**FIX_BASE `221b8f0`**，本轮 HEAD `9a557e4`。改动面：
+```
+55	2	src/controller/resumeLoop.ts
+118	1	tests/controller/resumeLoop.integration.test.ts
+```
+**3 行删除全部是 import 行与被替换的那一行调用，零既有判据被改、零既有判据被删。**
+
+## G1. 结论
+
+**状态：DONE。I-1 已关闭，且是**实测**关闭的，不是论证关闭的。**
+
+- **改法**：在 `resumeLoop` 的 claim 处加**有界重试**，形状逐字抄 `persistOwnerTransfer`
+  （同两个导出常量、同「只重试 busy／其余立即抛／最后一次抛」的判定）。
+- *** **`claimOwnerRecordWithPrecondition` 一个字节没动。** *** 见 G2 的口径说明 —— 这是我对
+  「评审员的处置建议」与「协调者的指令」冲突的处理方式，不是折中，是两者都满足的那个位置。
+- **两条新判据**在 `tests/controller/resumeLoop.integration.test.ts`，
+  **各自在变异下靠断言变红**（不是异常、不是超时），见 G3。
+- **既有那条 `stays fail-closed when the claim hits a busy owner-transfer lock, without claiming a CAS failure`
+  在加重试前后、以及变异前后，一直是绿的** —— 它的夹具是**永久忙**的活 pid 锁文件，重试耗尽后落到同一个终态。
+  ⇒ **没有触发第二条例外的需要**（协调者的硬限制 1 未触发，我不需要第三条人裁）。
+- **我不认为有界重试在这里是错的答案**，理由在 G4；如果我认为是错的，我会按协调者给的口径直接说，而不是勉强实现。
+
+## G2. 一处必须上报的口径冲突（Rule 7 / brief §1）
+
+*** **评审员对 I-1 的处置建议逐字是：** ***
+> **Recommended disposition:** record the contention surface against D2 in the ledger, and decide
+> explicitly whether `claimOwnerRecordWithPrecondition` should adopt `persistOwnerTransfer`'s
+> bounded retry. **Do not change it inside this item** — that is a semantic change to a
+> lock-taking path and needs its own ruling.
+
+**而协调者的指令是「把 claim 路径拉回既有约定」。两者字面冲突，我就地上报，不静默取一边。**
+
+**我的处理**：冲突只在**「改哪一层」**上，不在**「要不要修」**上。
+评审员保护的是 **`claimOwnerRecordWithPrecondition` 这个持锁原语的语义**（fail-fast），
+而 `persistOwnerTransfer` 的既有判例把重试放在**调用者**、把 fail-fast 留在原语。
+⇒ **我把重试放在 `resumeLoop` 自己的 claim 调用处，原语一个字节不动。**
+这样：
+- 原语对**其他每一个调用者**的含义不变 ⇒ 评审员那句「不要在本笔里改它」被逐字遵守；
+- resume 路径拿到了约定的有界重试 ⇒ 协调者的指令被满足；
+- **没有引入第三种语义**（没有新事件类型、没有新常量、没有新错误分类）。
+
+*** **但我不替人裁：如果人裁认为「resume 的重试策略」本身也需要单独一条人裁，那么本轮这一处就该回滚。
+我把判断权原样交回去，并且明确说：我认为不需要，理由在 G4。** ***
+
+## G3. 三步变异证据（两条新判据各自）
+
+**变异 MR**（脚本落盘后 `rtk proxy zsh` 跑，不在命令行嵌引号）：把
+`claimOwnerRecordWithBoundedLockRetry` 的循环体换成**修复前的形状** —— 单次调用、无退避。
+`tsc --noEmit` 在变异下 **exit 0**（所以这不是靠编译错误变红的）。
+
+| 判据（完整测试名） | 注入前 | **注入后（靠哪一条断言变红）** | 还原后 |
+|---|---|---|---|
+| `resumeLoop > retries a busy owner-transfer lock during the resume claim and completes once it clears` | **绿**，`1 passed | 13 skipped (14)`，exit 0 | *** **红** ——`expect(thrown).toBeNull()`（行 288）：`AssertionError: expected ResumeNotEligibleError: owner-transfer lo… to be null` *** ，exit 1 | 绿 |
+| `resumeLoop > abandons the resume once the claim's retry bound is exhausted, with the refusal recorded exactly once` | **绿**，`1 passed | 13 skipped (14)`，exit 0 | *** **红** —— `expect(claimCalls).toBe(OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS)`（行 336）：`AssertionError: expected 1 to be 3` *** ，exit 1 | 绿 |
+| **既有** `resumeLoop > stays fail-closed when the claim hits a busy owner-transfer lock, without claiming a CAS failure` | 绿 | **绿（不受影响）** —— 永久忙锁，重试耗尽后终态相同 | 绿 |
+
+*** **两条都是 `AssertionError`。** *** 第一条**刻意**把 `resumeLoop` 的抛出捕获进 `thrown` 再断言 ——
+否则在 MR 下测试会死于异常而不是死于断言，那正是本仓库不收的形状。就地注释写了这个理由。
+
+**「重试真的被执行了」不是靠形状论证，是靠计数断言**：
+`claimCalls === 2`（第一次忙、退避、第二次成功）与 `claimCalls === OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS`（耗尽）。
+**确定性来自 mock**（按调用计数放行），判例是既有的
+`retries a busy owner-transfer lock and completes once it clears (spec requirement 1)` ——
+它给的理由逐字：release 必须确定，不能拿真实解锁去赛真实的 ~50ms 退避。**我没有发明新夹具形状。**
+
+### G3.1 还原证明（含协调者新加的那条铁律）
+
+| 探针 | 期望 | 实测 |
+|---|---|---|
+| `rtk proxy git diff` | 空 | `UNSTAGED_BYTES=0` |
+| *** `git diff --cached`（**新铁律**：`git checkout <commit> -- path` 会**入暂存区**） *** | 空 | `STAGED_BYTES=0` |
+| **必不命中** `grep -rn "CCLOOP_MUTATION" src tests` | 零命中 | `MUT_EXIT=1` |
+| **必命中（同一 grep、同一文件）** `grep -c "claimOwnerRecordWithBoundedLockRetry" src/controller/resumeLoop.ts` | 非零 | **2**（定义 ＋ 调用点） |
+
+## G4. 我为什么认为有界重试在这里是对的（协调者请我表态）
+
+1. **它恢复的是 D2 之前的结果，不是新增能力。** D2 之前，边界写不持锁，resume 的 claim 与它并发时**能成功**。
+   D2 之后 claim 会撞上锁。**有界重试把「短暂争用」的结果还原成 D2 之前的样子，把「持续争用」仍然拒掉。**
+2. **拒绝没有被削弱。** fail-closed 完全保留：耗尽即拒，`resume_denied` **恰好一次**（既有判据已钉 `denied` 长度 1，
+   我的新判据再钉一次调用次数上界）。
+3. **代价是有界且很小**：最坏 2 × 50ms = 100ms 的退避，发生在一次人/清扫发起的 resume 上。
+4. **CAS 不重试**，理由沿用 `persistOwnerTransfer` 就地注释逐字：重试 CAS 等于拿这次 resume 从未求值过的证据再判一次。
+
+**反方我也写下来**：如果有人认为「resume 应当立刻失败、让上层重试」，那是一个合理的相反口径 ——
+**但它与本仓库对同一个错误的既有约定相反**（Rule 11：conformance > taste）。**我选了约定，并把分歧记在这里。**
+
+## G5. 三条 Minor（不在范围内）
+
+**我一条都没修**（M-1 命名、M-2 `cleanupOwnerTransferStagingWithoutMarker`、M-3 自争用）。
+*** **本轮改动 moot 掉的 Minor：零条。** *** 逐条核过：
+- **M-1**（ruling 13 的引用按名字解析不到）：本轮没碰那个测试名 ⇒ 不受影响。
+- **M-2**（`cleanupOwnerTransferStagingWithoutMarker` 暴露面变大）：在 `fileStore` 的 reconciliation 锁段里，
+  本轮没碰 `src/persistence/fileStore.ts` ⇒ 不受影响。
+- **M-3**（进程与自己心跳的 affirm 争用，导致放弃自己的 reconciliation 写）：那是 reconciliation 路径，
+  本轮改的是 resume 的 claim 路径 ⇒ **不受影响，M-3 依然成立**。
+  ⚠️ 顺带说明：**M-3 与本轮的修法同形但不同路径** —— reconciliation 那侧**已经**有有界重试（修复环 0 就加了），
+  M-3 说的是「三次都撞上自己的 affirm」，加重试解决不了它。**我没有顺手动它。**
+
+## G6. 全套件 ＋ `tsc --noEmit` ＋ `npm run build`（未过滤）
+
+`RUN` 首行已核：`RUN  v2.1.9 /Users/biran/code/skills/loop/ccloop/.worktrees/pkg2-s4`。
+
+| 项 | 结果 | exit |
+|---|---|---|
+| 全套件 | **`Test Files 31 passed (31)` / `Tests 524 passed (524)`** | **0** |
+| `npx tsc --noEmit` | 无输出 | **0** |
+| `npm run build` | 正常输出，无错误 | **0** |
+
+**零失败、零 flake**（允许的两条与那条已挂账的 `plan.json` ENOENT 本轮都没出现）。
+判据总数由 522 增至 **524**（本轮 +2，全是新增，无删除）。
+
+## G7. 本轮我自己发现的、自己的缺陷
+
+*** **一条真的，而且是我自己造成的破坏，如实自曝：** ***
+我在第一次做变异还原时跑了 `git checkout -- src/controller/resumeLoop.ts`，
+**而那时 I-1 的修复还没 commit** —— 这一条命令把**我自己尚未提交的修复连同变异一起抹掉了**。
+证据是当时的还原探针自己抓到的：`claimOwnerRecordWithBoundedLockRetry` 的**必命中探针返回 0**。
+**是「必命中探针」把它抓住的**，不是我记得。
+
+- **影响**：只损失我自己的未提交工作，`tests/` 未受影响（我只 checkout 了那一个 src 文件）；无用户数据损失。
+- **改正**：重做修复 ⇒ **先 commit（`9a557e4`）再做变异** ⇒ 之后的 `git checkout --` 还原到的是**已提交的修复**，
+  不再是修复前状态。第二次还原的两个平面都实测为 0 字节。
+- **教训（写给下一位）**：*** 变异实验必须在「被变异的代码已经提交」之后做。 ***
+  否则 `git checkout --` 的还原目标不是你以为的那个。这条与协调者新加的
+  「`git checkout <commit> -- path` 会入暂存区」是同一类陷阱的两面。
+
+**除此之外本轮没有其他自伤。**
+
+## G8. 预算
+
+**harness 的实数我读不到，不给估计。** 会话成本提示（hook）本轮显示 `~$160.81` —— **美元，不是 token 计数**。
+人裁 32 已放行，我没有为预算停下。
