@@ -433,3 +433,215 @@ TEST_EXIT=0
   - （另：`f584bb6` 里改过 `src/controller/resumeLoop.ts` 与 `tests/controller/resumeLoop.integration.test.ts`，
     已被 `5026bea` revert，不在分支尖端。）
 - commit：**3 个**（`38d4a33` 2.1–2.3；`f584bb6` 2.4 修法＋判据；`5026bea` revert 2.4）。
+
+---
+
+# 第二轮（人裁 50–55）
+
+## R2-0. 结论（最先填）
+
+| 任务 | 状态 | 关键实测 |
+|---|---|---|
+| **1. C-1 走 O1(a) 原子发布（`link`）** | **DONE** | 双进程争用：**基线 140 → 修后 0**；**必命中对照（修后构建）10 > 0**；**必不命中对照 0**；退回两步发布的判据**红在断言**，还原绿 |
+| **2. resume 读顺序 ＋ 18 行判据** | **DONE** | `f584bb6` 已 cherry-pick（`17b40d6`）；18 行逐行改完；**逐 gap 实测**了「accepted 之后磁盘是什么」；9+9 拆分与 S-3 逐句指认写进了代码注释 |
+| **3. `vi.mock` 共享工厂原样退回（人裁 55）** | **DONE** | 工厂与包 2 之前**逐字节相同**（`diff` 实测 `FACTORY_IDENTICAL_TO_BASE`）；2.2 两条判据重测：`3→1` **红在断言**，还原绿；新夹具**与不打桩路径行为一致**（测内对照断言） |
+| **4. Low-1 / Low-2 / Low-3 / Low-4** | **DONE**（全部只改措辞／留档） | 见 R2-4 |
+
+**最终验证（分支尖端 `330b252`，未过滤、整份读回，`RUN` 路径已核为本工作区）**
+`npm test -- --run` → **TEST_EXIT=0，31/31 文件，531/531 测试全绿**（上一轮 529 ＋ 本轮 2 条新判据）；
+`npm run typecheck` → **0**；`npm run build` → **0**。**零跳过、零失败、无 flake 命中**。
+
+**⚠️ Rule 12 —— 一件必须说清楚的越界风险（请裁）**
+人裁 50 的产品改动**打红了一条 brief 未点名的既有测试**：
+`recoverInterruptedOwnerTransfer: two concurrent unlocked readers racing the same marker`。
+原因是**机制性的**：它的夹具钩在 `open(lockPath)` 上（用来把 reader A 暂停在"锁已写好"的瞬间），
+而 O1(a) 之后**生产代码再也不会 `open` 锁路径**（改由 `link` 发布）⇒ 钩子永不触发 ⇒ 它以自己的具名超时红掉，
+**而它守的不变量其实完好无损**。
+我做的处置：**只把钩子从 `open` 移到 `link`（同一瞬间：锁已完整落盘、A 尚未离开临界区），
+断言一条没动、夹具语义没动**，并在测试里把原钩子与原理由**逐字引用保留**。
+这不在人裁 51 点名的 18 行内，属于人裁 50 的**未预见连带**。**若认为需要单独授权，请裁；我不替人消解。**
+
+## R2-1. 任务 1 —— C-1 的原子发布（人裁 50/52）
+
+**改法**（`src/persistence/fileStore.ts`，`acquireOwnerTransferLock`）：
+内容先写进**每进程／每次尝试唯一**的 staging 路径（`buildAtomicTempPath(lockPath)`，用 `"w"` 而非 `"wx"`
+—— 该路径专属本次尝试，放一个无意义的 EEXIST 出去会被下面的 catch 误读成锁争用），
+再用 `await link(stagingPath, lockPath)` 做**原子 test-and-set**，随后 `safeUnlink(stagingPath)`。
+- ⛔ `tryRecoverStaleOwnerTransferLock`：**一行未动**（实测：分支 diff 内该函数无改动）。
+- ⛔ `release()`：**一行未动**（仍是 `handle.close()` ＋ `safeUnlink(lockPath)`；handle 现在开在 staging inode 上，
+  `link` 之后与 `lockPath` 同 inode，语义不变）。
+- EEXIST 之后的既有流程（`tryRecover…`／`attempt<2`／`OwnerTransferLockBusyError`）**保持不变**；
+  非 EEXIST 的 errno 仍原样外传。
+- **临时文件不泄漏**：成功路径 `safeUnlink(stagingPath)`；任何失败路径由内层 `catch` 关句柄 ＋ `safeUnlink(stagingPath)`
+  后再抛；`open` 本身失败则根本没有临时文件。
+
+**平台口径（人裁 52）写进了仓库两处**：
+1. 源码注释逐字写明依赖 POSIX `link(2)`「if the link named by the new argument exists, link() shall fail」
+   的原子语义，目标平台 = **darwin + linux**，Windows 不是目标；
+2. `package.json` 加了 `"os": ["darwin", "linux"]`。
+   **理由（brief 要求做了或没做都要说）**：这是同一句话的机器可读形式，能让 win32 上的 `npm install` 直接
+   `EBADPLATFORM` 失败，而不是装完之后在运行期踩一把不原子的锁。**代价我也说明**：win32 上安装会因此失败
+   —— 这正是意图，但它是一个我**无法在本机实测**的后果（本机是 darwin），据实标注。
+
+### 三条验收硬条件（全部实测，日志整份落盘）
+
+**探针**：`.superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/`（已入库，`run.mts` / `child.mts` / `stager.mts` / `truncator.mts`）。
+两个**真 Node 进程**（`tsx`，各自独立进程）通过**生产入口** `affirmOwnerLease` 反复取放锁。
+**没有人工加宽窗口，没有手植 0 字节锁** —— 所有锁文件都是 `fileStore.ts` 自己创建的。
+
+*** **⚠️ 第一版探针被我自己废掉了，这一点必须留档** ***：它统计的是「两个进程调用区间重叠」，
+而**必不命中对照（无 staged 残留，偷锁分支不可达）也报了 4364 次**
+⇒ 那个指标量的是调用交错、不是互斥破坏。**坏探针不能证明任何事**，所以换成下面这个不需要时钟的指标。
+
+**指标 = 丢失更新（lost update）**：`affirmOwnerLease` 在锁内做 CAS（读 → 比对 `expected` → 写后继），
+调用方提供后继的戳，所以每个进程给自己的写打全局唯一 id。
+**互斥成立 ⇒ 成功的写构成一条链，任何 base 值只能被消费一次**；
+两个进程同时进到锁内，就会读到同一个 base 并双双写成功 ⇒ **同一个 base 被消费两次**。
+该指标**只会少算不会多算**（偷到锁但两段临界区没交错到"读在写前"时不计），所以「修后 = 0」是安全方向，
+而"少算"的风险由必命中对照兜住。
+
+| 跑法 | 构建 | staged 残留 | 外部截断 | **互斥破坏次数** | 判定 |
+|---|---|---|---|---|---|
+| **BASELINE** | 未修（两步发布） | 有 | 无 | *** **140** *** | 缺陷成立 |
+| **必不命中对照** | 未修 | **无** | 无 | **0** | 指标不会乱开火 ⇒ 指标可信 |
+| **修后** | O1(a) | 有 | 无 | *** **0** *** | 修法成立 |
+| *** **必命中对照** *** | **O1(a) 修后** | 有 | **有**（第三进程持续把锁截成 0 字节） | *** **10** *** | **修后构建上探针仍能开火 ⇒ 上面的 0 不是假阴性** |
+
+（各跑 5s；日志：`probe2-baseline-staged.log` / `probe2-baseline-nostaged.log` / `probe2-fixed-staged.log` /
+`probe2-fixed-truncated.log`，另存有被废弃的第一版 `probe-baseline-*.log` 两份。）
+
+⚠️ **必命中对照的 10 次同时说明一件事，必须明说**：C-1 的**另一半仍然开着** ——
+`tryRecoverStaleOwnerTransferLock` 的 `catch` 分支照样会夺走活持有者的锁，只要锁**由外部原因**变得不可解析。
+本轮按人裁 50 **只做 (a)**，那一半是待裁点 B。
+
+### 第三条：把实现退回两步发布必须红在断言
+
+新判据（`tests/persistence/fileStore.test.ts`）：
+`the owner-transfer lock is published atomically, never as an empty file that fills in later >
+has parseable content at the first instant the lock path exists`。
+用**局部** `vi.doMock` 包住 `open` 与 `link`，在两者中**任意一个让锁路径出现的瞬间**用 `readFileSync` 同步读回内容
+（同步是关键：一旦 `await`，生产代码的下一步就把零字节瞬间抹掉了）。
+另有反空转断言 `expect(sightings).toHaveLength(1)`（坏探针不能证明"没看到"）。
+
+- **变异（退回两步发布：`open(lockPath,"wx")` ＋ 去掉 `link`）**：
+```
+ × has parseable content at the first instant the lock path exists
+   → expected { empty: true, parseable: false } to deeply equal { empty: false, parseable: true }
+ Tests  1 failed | 79 skipped (80)     EXIT=1
+```
+**红在断言**（`toEqual`），不是异常/超时。
+- **还原**：`80 passed (80)`，`EXIT=0`。
+
+## R2-2. 任务 2 —— resume 读顺序与那 18 行（人裁 51/54）
+
+`f584bb6` 已 cherry-pick 为 `17b40d6`（产品改动 ＋ 上一轮那条**在未修代码上红在断言**的回归判据，原样保留）。
+
+### (a) 逐 gap 举证：为什么 `accepted` 是正确终态（**实测，不是论证**）
+
+把矩阵**临时**加了一列 `afterResume`（resume 尝试之后再快照一次磁盘），跑完即还原
+（还原实测：`grep -c afterResume` = 0，且随后整份 fileStore 80/80 绿）。测得：
+
+| gap | 夹具 1（first-transfer）resume 后磁盘 | 夹具 2（double-transfer）resume 后磁盘 |
+|---|---|---|
+| 05 / 06 / 07 | `T=e2 O=e2 R=e2 M=absent P=---` | `T=e3 O=e3 R=e3 M=absent P=---` |
+| 08 / 09 / 10 | `T=e2 O=e2 R=e2 M=absent P=---` | `T=e3 O=e3 R=e3 M=absent P=---` |
+| 11 / 12 / 13 | `T=e2 O=e2 R=e2 M=absent P=---` | `T=e3 O=e3 R=e3 M=absent P=---` |
+| **01–04（对照）** | `afterResume` **＝ staged 原样**（磁盘未被碰） | 同左 |
+| **14（对照，本来就 accepted）** | `T=e2 O=e2 R=e2 M=absent P=---` | `T=e3 O=e3 R=e3 M=absent P=---` |
+
+⇒ **每一个 gap 的 accepted 都落在"事务被完整提交、三个文件 epoch 一致、marker 与 pendings 都被回收"的终态上**，
+且**与 gap 14 的终态逐字相同** —— 而 gap 14 在我动手之前就是 `accepted`，矩阵注释自己称在那格上「refusing would be
+the bug, not the guard」。所以这不是"放宽后勉强能跑"，而是**resume 现在是在一笔已提交的事务上做判定，而不是在半笔上**。
+**gaps 01–04 仍然 refused 且磁盘零改动**，说明放行只发生在"事务可完成"的格子上。
+⛔ 以上没有一句用到"人已授权"。
+
+### (b) 9 + 9 拆分（原样分开，不合并）
+
+- **first-transfer 夹具的 9 行**（gap 05–13）：原判决是 `refused: cannot read run artifacts`。
+  *** **这是缺陷自产的假拒绝** *** —— ENOENT 打在一个"正在飞行中的恢复马上就会发布"的文件上。
+  改它**只是删掉一个 bug 造出来的错误拒绝，不新增任何许可**。
+- **double-transfer 夹具的 9 行**（gap 05–13）：原判决是**两条 `evaluateResumeEligibility` epoch 判据**的拒绝
+  （`published eligibility has been superseded…` ×3、`reconciliation newOwnerEpoch does not match…` ×6）。
+  *** **这才是真正的「新增许可」** ***，也是需要人裁 54 的那一半。
+
+### (c) S-3 逐字指认（`docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md:120`）
+
+- **被本次改动推翻的那一句**：「**只增加拒绝，绝不新增许可**」——
+  在 double-transfer 的那 9 行上，本次改动**确实新增了许可**。人裁 54 已知情拍板，**不是静默覆盖**：
+  该判定连同 9+9 拆分已写进 `fileStore.test.ts` 那条测试的注释里。
+- **没有被推翻、且仍然成立的那一句**（同一段）：「放松 `resumeLoop` 对 reconciliation 的必需性
+  （例如「若存在则校验，不存在则跳过」）…**缺失即拒绝的 fail-closed 行为必须保留**」——
+  *** **本次改动没有跳过任何缺失的 reconciliation** ***：它仍是必需的、仍然被读；变的只是**读的时刻**
+  （挪到发布它的恢复之后）。gaps 01–04 就是这条仍然成立的实证。
+
+### (d) 更正上一轮 §6 的假陈述（评审员 Imp-2）
+
+上一轮报告 §6 第 2 点写「**而且是**让那两条 epoch 判据成为承重判据的**唯一来源**」——
+*** **这句是假的，现予更正** ***：`tests/controller/resumeLoop.gate.test.ts` **直接断言这两条判据**，
+打上本次改动后仍 **27/27 全绿**（本轮实测，见 `t2-affected-green.log`）。
+准确表述是：**realistic-crash 交错下的承重覆盖没了，单元层的直接覆盖仍在**；
+而且 18 行里**有 9 行本就是假拒绝**。矩阵注释里也已写明这一点（它自己只作过更窄的主张）。
+
+## R2-3. 任务 3 —— `vi.mock` 共享工厂退回（人裁 55）
+
+- 共享工厂**已原样退回**。实测（不是眼看）：
+```
+diff <(sed -n '/^const renameSpy/,/^});/p' <dbac288 版>) <(同段 <当前>) && echo FACTORY_IDENTICAL_TO_BASE
+→ FACTORY_IDENTICAL_TO_BASE
+```
+- 新观测手段：`withLockAttemptCounter(runDir, body)` —— **局部** `vi.resetModules()` + `vi.doMock("node:fs/promises")`
+  + 动态 import（本文件的 crash-gap 矩阵与两读者竞态测试早就用这个 seam），只包 `link`，**计数在调用之前自增**
+  （输掉 EEXIST 的那次尝试也算一次），全部转发。
+- **Imp-1 的理由已改对**：现在的等价关系是 *** **一次「link 到锁路径」＝ 一次取锁尝试** ***
+  —— `acquireOwnerTransferLock` 每次循环迭代恰好发布一次 `link`，**包括内层 `attempt<2` 的那次迭代**。
+  上一轮那句「一次 open ＝ 一次尝试」被评审员实测证伪（可偷的锁上一次重试迭代 = 2 次 open），已删除。
+  `toBe(3)` 旁边另注明它依赖**"锁被活进程持有"**这个夹具前提。
+- **重测（硬条件）**：`RECONCILIATION_LOCK_RETRY_ATTEMPTS 3→1`：
+```
+ × retries a busy owner-transfer lock … once it clears
+   → expected [ 'reconciliation_write_abandoned' ] to not include 'reconciliation_write_abandoned'
+ × abandons the reconciliation publish … after exactly three lock attempts
+   → expected 1 to be 3 // Object.is equality
+ Tests  2 failed | 78 skipped (80)   EXIT=1
+```
+**两条都红在断言**；还原 `3` 后 `2 passed`，整份文件 `80 passed (80)`。
+- **新夹具没有改变被测行为（硬条件）**：耗尽那条测试里加了**测内对照** ——
+  同一场景再跑一遍，走**未打桩、静态 import 的** `writeBoundaryArtifacts`，
+  然后把三项可观测（abandon 事件条数 / reconciliation 是否发布 / boundary-analysis 状态）**与打桩那次逐项相等断言**。
+  它今天绿，即"打桩与不打桩行为一致"。
+
+## R2-4. 任务 4 —— 四条 Low
+
+- **Low-1（勘误二的时间限定）**：`IS FALSE AFTER D2` → 改为**「写下那个词的当时就已经为假」**，
+  并说明 D2 没有引入该窗口（它是两步发布形状的固有属性）。同处补了第二条勘误：该窗口**现已关闭**（人裁 50），
+  仍然开着的是 `catch` 分支那一半（待裁点 B）。
+- **Low-2（人裁 13 被说窄）**：改为「ruling 13 是一次**具名扩权**，授权包 2 **改这条判据本身**，改名只是其后果之一」。
+- **Low-3（第三条常数断言算术上是死的）**：**明说它是文档性断言** —— 前两条钉死 3 与 50 之后，
+  `(3-1)*50` 恒为 100，**它永远不可能第一个失败、变异检出力为 0**；保留是因为它写出了人裁 38 真正批准的那个量
+  （约 100ms 总退避），**但它不是执行机制，前两行才是**。
+- **Low-4（`vi.mock` 越界的事实与处置留档）**：事实（工厂引入于 `fb62714`，早于包 2 基点 `e42e062`，
+  两种口径都判越界；但它没有改任何既有 `expect`）＋ 处置（人裁 55 判退回，本轮已退回并换成局部 seam）
+  **同时写在了报告这里和 `withLockAttemptCounter` 的注释里**。
+
+## R2-5. 我没做的 / 我被挡住的 / 需要问人的
+
+1. *** **两读者竞态测试的夹具钩子（`open` → `link`）** *** —— 见 R2-0 结尾。**这是本轮唯一的越界风险，请裁。**
+2. **C-1 的另一半没修**（`tryRecoverStaleOwnerTransferLock` 的 `catch` 分支不查死活）——
+   人裁 50 明令只做 (a)，我一行没碰；必命中对照的那 10 次就是它仍然开着的实测证据。
+3. `package.json` 的 `"os"` 字段在 **win32 上的后果我无法在本机实测**（本机 darwin），只做了口径声明。
+4. 人裁 53 的三件新账（第二出口 / `release()` / 重复测试块）**归控制器写台账，我没写**。
+5. 待裁点 A / B / C 没碰；包 1 没碰；没有 push / 建删分支 / 合并 / 开门。
+
+## R2-6. 预算：harness 可数事实（不自报估计）
+
+**拿不到精确 token 数**：harness 只回报会话累计美元口径提示，不是本任务增量、也不是 token 计数。
+可数事实：
+- 全套件跑：**1 次**（最终）；单文件/单名过滤跑：**11 次**。
+- `npm run typecheck`：**4 次**；`npm run build`：**1 次**。
+- 双进程探针跑：**6 次**（废弃指标 2 次 ＋ 现行指标 4 次）。
+- 变异：**3 次**（退回两步发布 1；`RECONCILIATION_LOCK_RETRY_ATTEMPTS 3→1` 1；矩阵临时加列 1），各自都有还原。
+- 本轮改动文件：`src/persistence/fileStore.ts`、`src/controller/resumeLoop.ts`（cherry-pick）、`package.json`、
+  `tests/persistence/fileStore.test.ts`、`tests/controller/resumeLoop.integration.test.ts`（cherry-pick）、
+  `tests/controller/leaseLifecycle.integration.test.ts`、`tests/controller/runLoop.integration.test.ts`、
+  新增 `.superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/*.mts` 四个。
+- 本轮 commit：**3 个**（`501194b`、`17b40d6`、`330b252`）。
