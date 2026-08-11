@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, readFile, access } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, access, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -102,6 +102,86 @@ describe("resumeLoop", () => {
     // it right now" — only the heartbeat may write a non-null lease.
     expect(owner.leaseAffirmedAt).toBeNull();
     expect(await readEventTypes(runDir)).toContain("resume_adopted");
+  });
+
+  // Package 2 whole-branch review, Lane 1 finding I-4 — the regression judgement for the read-order
+  // fix, written BEFORE the fix and measured red against the unfixed code.
+  //
+  // The defect: readOwnerRecord is the one read in resumeLoop's Promise.all with a side effect — it
+  // runs recoverInterruptedOwnerTransfer first (take the lock, read the marker, three renames).
+  // readReconciliationRecord has no such guard and, sitting in the SAME Promise.all, is issued at
+  // the same instant and does not wait for it. The transaction's finalizeOrder is
+  // [owner-transfer.json, owner-record.json, reconciliation-record.json], so a crash between rename
+  // #2 and #3 leaves a real gap: the first two files are published, the third is not, and the
+  // recovery that would publish it is still in flight when the unguarded read hits ENOENT.
+  //
+  // What that costs is NOT a crash and NOT data loss — both lanes disproved the earlier "it
+  // explodes" wording. It is that a run interrupted inside the commit window is REFUSED on its
+  // first resume, with the wrong reason attached ("cannot read run artifacts"), and heals only
+  // because that first attempt's recovery finished in the background. This test pins the first
+  // resume.
+  //
+  // Red on an ASSERTION, not on a throw or a timeout: the outcome is captured as a value and
+  // compared. This repository has twice found tests that only went red by dying, so a fix whose
+  // regression test could not distinguish "refused" from "blew up" would not be evidence.
+  it("resumes a run interrupted between the transaction's owner-record and reconciliation renames, instead of refusing it as unreadable", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    // The commit-window state, built from the seeded run: owner-transfer.json and owner-record.json
+    // are published (renames #1 and #2 happened), reconciliation-record.json is not (rename #3 did
+    // not), and the marker plus all three pendings survive — which is exactly what
+    // finalizePendingOwnerTransfer needs to finish the job idempotently.
+    const reconciliationRecord = JSON.parse(
+      await readFile(join(runDir, "reconciliation-record.json"), "utf8"),
+    ) as Record<string, unknown>;
+    await unlink(join(runDir, "reconciliation-record.json"));
+
+    await writeFile(
+      join(runDir, ".owner-transfer.pending.json"),
+      await readFile(join(runDir, "owner-transfer.json"), "utf8"),
+    );
+    await writeFile(
+      join(runDir, ".owner-record.pending.json"),
+      await readFile(join(runDir, "owner-record.json"), "utf8"),
+    );
+    await writeFile(
+      join(runDir, ".reconciliation-record.pending.json"),
+      JSON.stringify(reconciliationRecord, null, 2),
+    );
+    await writeFile(
+      join(runDir, ".owner-transfer.transaction.json"),
+      JSON.stringify(
+        {
+          version: 2,
+          stagedAt: "2026-07-25T00:00:00.000Z",
+          finalizeOrder: ["owner-transfer.json", "owner-record.json", "reconciliation-record.json"],
+        },
+        null,
+        2,
+      ),
+    );
+
+    // Fixture precondition, so the assertions below cannot pass vacuously against a run dir that
+    // was never in the commit window at all.
+    await expect(access(join(runDir, "reconciliation-record.json"))).rejects.toThrow();
+
+    const outcome = await resumeLoop(runDir, new ScriptedAdapter([successFrame()])).then(
+      (state) => ({ kind: "resumed", detail: state.status }),
+      (error) => ({ kind: "refused", detail: error instanceof Error ? error.message : String(error) }),
+    );
+
+    // The requirement. Against the unfixed read order this is
+    // { kind: "refused", detail: "cannot read run artifacts: Error: ENOENT … reconciliation-record.json" }.
+    expect(outcome).toEqual({ kind: "resumed", detail: "succeeded" });
+
+    // The recovery really did commit the transaction's third file — i.e. the resume was permitted
+    // because the artifacts were made whole, not because some check was skipped.
+    expect(JSON.parse(await readFile(join(runDir, "reconciliation-record.json"), "utf8"))).toEqual(reconciliationRecord);
+    expect(await readEventTypes(runDir)).toContain("resume_adopted");
+    expect(await readEventTypes(runDir)).not.toContain("resume_denied");
   });
 
   // A8's fourth layer. The 12d(iii)/(iv) tests stop at runLoopFromState, so without this one a
