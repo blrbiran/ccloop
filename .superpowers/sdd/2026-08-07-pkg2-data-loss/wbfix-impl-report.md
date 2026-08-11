@@ -645,3 +645,132 @@ diff <(sed -n '/^const renameSpy/,/^});/p' <dbac288 版>) <(同段 <当前>) && 
   `tests/controller/leaseLifecycle.integration.test.ts`、`tests/controller/runLoop.integration.test.ts`、
   新增 `.superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/*.mts` 四个。
 - 本轮 commit：**3 个**（`501194b`、`17b40d6`、`330b252`）。
+
+---
+
+# 第三轮（人裁 56/57）
+
+## R3-0. 结论（最先写）
+
+| 任务 | 状态 | 先红后绿双向实测 |
+|---|---|---|
+| **1. Imp-1 —— 修掉本轮自己引入的泄漏路径** | **DONE** | 未修副本上 **2 条判据全红、且都红在断言**；修后 fileStore **82/82 绿** |
+| **2. Imp-2 —— 把举证落进套件（`afterResume` 列）** | **DONE** | 读顺序退回 `Promise.all` ⇒ 矩阵**红在 `expect.soft(...).toEqual`**；还原绿 |
+| **3. Low-1~Low-4（只改措辞／补文档）** | **DONE** | 见 R3-3 |
+
+**人裁 56 记明**：两读者竞态测试的夹具 hook 从 `open` 移到 `link`，**已被追认为第七个具名例外**
+（沿用人裁 17「改夹具 ≠ 改判据」）。**本轮未再改动该 hook**，只按 Low-1 改了它那句诊断措辞。
+
+**最终验证（分支尖端 `179d776`，未过滤、整份落盘、整份读回，`RUN` 路径已核为本工作区）**
+`npm test -- --run` → **TEST_EXIT=0，31/31 文件，533/533 全绿**；
+`npm run typecheck` → **0**；`npm run build` → **0**。
+
+**逐文件计数比对（第二轮 531 → 第三轮 533）**：**31 个文件全部对齐，无一下降**，
+唯一变化 `tests/persistence/fileStore.test.ts` **80 → 82**（＋2 ＝ Imp-1 的两条新判据）。
+（脚本对两份完整日志逐文件比对，`files that DROPPED: none`。）
+
+⚠️ **Rule 12 自曝**：最终全套件跑完后，我第一次是用 `sed -n '/Test Files/,$p'` **看**日志尾部的 ——
+**这违反「过滤显示与过滤落盘同罪」**。当场改正：整份 157 行读回（`r3-final-test.log`），
+本节所有结论都出自那次完整读回。
+
+## R3-1. 任务 1（Imp-1）—— `link()` 之后的 staging 清理
+
+### 先读先例（brief 明令，Rule 11）
+`writeJsonFileAtomically` 对同类 staging 清理写着：
+「Best effort, and **intentionally not safeUnlink**: cleanup here runs while an error is already in
+flight, and a cleanup failure must not replace the error the caller needs to see. safeUnlink rethrows
+anything that is not ENOENT, which would do exactly that.」
+⇒ **与既有约定同形**：两处 staging 清理都改成 `try { await unlink(...) } catch { /* best effort */ }`
+（抽成 `discardLockStaging`，因为两处一模一样）。
+
+**成功路径需要第二条理由，且更重**，已逐字写进注释：先例那条理由讲的是「别顶替在飞的错误」，
+而 `link()` 成功之后那一句的问题是 —— **锁已经发布**，抛出去就等于把一把**活锁**丢在盘上、
+调用方拿不到 `release`、`handle` 永不 close，而且因为锁记录里的 pid 还活着，
+`tryRecoverStaleOwnerTransferLock` **拒绝回收** ⇒ 该 runDir 的一切 owner-transfer 操作
+在持有进程退出前持续 `OwnerTransferLockBusyError`。**丢一个 staging 名字是污渍，丢一把锁是停机**，所以吞掉污渍。
+- ⛔ `tryRecoverStaleOwnerTransferLock`：仍未碰。⛔ `release()`：仍未碰。
+- 可达性按评审员的判断照录：**仅环境类 errno**（EACCES/EPERM/EROFS/ESTALE/EIO），并发不可达。
+
+### 判据 ＋ 双向实测
+新增 `describe("a failure to clear the lock's publish staging file never costs the caller its lock")`，
+用**局部** `vi.doMock` 只让 **staging 路径**的 `unlink` 抛 `EACCES`（锁路径自己的 unlink 不动，
+所以 `release()` 是真的在做事）；staging 路径按**形状**匹配（`..owner-transfer.lock.` 前缀 ＋ `.tmp` 后缀），
+名字由生产代码自己挑，测试不写死。
+
+**未修（`git archive HEAD` 出的副本 ＋ 新测试；工作树全程不脏）**：
+```
+ × completes the claim and leaves no lock behind when clearing the staging file fails after the publish
+   → expected { kind: 'threw', …(1) } to deeply equal { kind: 'completed' }
+     - "kind": "completed"   + "detail": "Error: EACCES: permission denied, unlink"  + "kind": "threw"
+ × still reports a busy lock, not the cleanup's errno, when the staging cleanup fails on a contended acquire
+   → expected 'Error' to be 'OwnerTransferLockBusyError'
+ Tests  2 failed | 80 skipped (82)   EXIT=1
+```
+**两条都红在断言**（`toEqual` / `toBe`），不是异常/超时 —— 第一条把 rejection 收成值再比就是为了这个。
+第二条同时**实测证实了评审员那句「内层 `safeUnlink` 会用别的 errno 顶替 EEXIST」**：未修时调用方收到的是裸 `Error`。
+
+**修后**：`tests/persistence/fileStore.test.ts` **82 passed (82)，EXIT=0**。
+
+## R3-2. 任务 2（Imp-2）—— 把举证落进套件
+
+`observeCrashMatrix` 现在对 **`forResume`**（真正跑过 resume 的那份副本）再拍一次 `crashSnapshot`，
+并入行字符串成为 `afterResume` 列，**34 行全部带上**。
+**墙钟问题**：`crashSnapshot` 只渲染**存在性与 epoch**（哪几个文件在、各自什么 epoch、marker 是否可解析、
+还剩哪些 pending），**没有任何时间字段进入它** ⇒ 不会写成恒假断言。
+18 格的值实测确定无抖动：first `T=e2 O=e2 R=e2 M=absent P=---`，double `T=e3 O=e3 R=e3 M=absent P=---`；
+refused 的 4 格则等于 staged 原样（resume 什么都没动）。**我预填的 34 行一次通过，无需回填。**
+
+**变异（读顺序退回 `Promise.all` 并列，在 `git archive` 副本里做）**：
+```
+- "gap 05 … | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | …"
++ "gap 05 … | resume=refused: cannot read run artifacts | afterResume T=e2 O=e2 R=e2 M=absent P=--- | …"
+ （gaps 05–13 两个夹具共 18 行）   EXIT=1，红在 expect.soft(...).toEqual
+```
+还原后绿（最终全套件 533/533 已含这条）。
+
+*** **一句必须说准的话（Rule 12）** ***：上面这次变异里，**变红的是 `resume=` 那一列，不是新加的 `afterResume` 列**
+—— 因为 `readOwnerRecord` 里的恢复照跑，所以即便 resume 被误拒，磁盘仍走到已提交终态。
+所以我又做了一次**针对新列**的变异（删掉 `finalizePendingOwnerTransfer` 里回收 marker 的那句 `safeUnlink`）：
+```
++ "gap 11 … | afterResume T=e2 O=e2 R=e2 M=v2 P=--- | …"      （M=absent → M=v2）
+```
+⇒ 新列**确实跟踪 resume 之后的磁盘状态并随之变化**。
+但**老实说**：这两次变异里新列都不是**唯一**变红的列，我**没有**构造出「只有 `afterResume` 红」的变异
+—— 它防的是「将来某次回归让 accepted 的 resume 落在撕裂状态上」这一类，而那要人为造一个缺陷才能单独演示。
+**新列的价值是守卫，不是我已经抓到过什么。**
+
+## R3-3. 任务 3 —— 四条 Low
+
+- **Low-1（命名超时会误诊）**：消息改成**同时点名两种回归** —— (a) unlocked-finalize 回归；
+  (b) **原子发布被退回两步**（此时 hook 等的 `link` 永不发生，锁其实取到了）。
+- **Low-2（悬空引用 `openSpy`）**：`busyLockRecord` 上方那句改成指向 `withLockAttemptCounter`（全仓最后一处）。
+- **Low-3（`BYTE-FOR-BYTE` overclaim）**：改成「**同一个已提交终态；三个文件逐字段相同，唯一差异是墙钟
+  `lastAffirmedAt`**」，并注明这与本文件自陈的「crashSnapshot does NOT compare file contents byte for byte」现已自洽。
+- **Low-4（必命中对照灵敏度未记录）**：
+  - `probe-c1/run.mts` 新增 **SENSITIVITY** 段：必命中对照速率约 **0.3/s**，**5s 常读到 0**，
+    **须 ≥10s 并重复**，期望值是**个位数**；并说明「0」恰好也是「探针坏了」的形状，别据此误判。
+  - 参数 `truncated` 且 `durationMs < 10000` 时**打印 stderr 警告**（不用读注释也能看见）。
+  - **自报绝对值已改成可复现表述**：源码与测试注释里的「140 / 0」改为
+    「修前每 5s **数百**量级（本机 140；独立评审员另测 137/213/252），修后**数千个 CAS base、零违规**」，
+    并写明**结论靠的是两臂之差，不是任何单一数字**。
+  - 本轮复测（10s）：`mutualExclusionViolations: **6**`，3195 个 base —— 与评审员的 1–4 同量级。
+  ⚠️ 第二轮报告里的「10」**不撤销、就地勘误**（本仓库惯例）：那个数在 5s 下**不可复现**，以本节表述为准。
+
+## R3-4. 我没做的 / 被挡住的
+
+1. **没有构造出只让 `afterResume` 单独变红的变异**（见 R3-2 末尾），据实说明。
+2. **Imp-1 的真实触发我没造出来**（评审员也没有）：EACCES/EROFS/ESTALE 是环境事实，
+   我是**用注入的 errno** 测的路径，不是真造出只读挂载。判据本身是实测，触发条件是注入。
+3. **C-1 另一半仍未修**（`tryRecoverStaleOwnerTransferLock` 的 `catch` 分支不查死活）—— 待裁点 B，未碰。
+4. 人裁 53 的三件新账仍归控制器写台账；待裁点 A/B/C、包 1 未碰；没有 push / 建删分支 / 合并。
+5. 全程**变异只在 `git archive` 出的副本里做**（`scratchpad/unfixed`、`scratchpad/mut2`），工作树未脏；
+   每次跑完 `git status --short` 只显示我自己的正式改动。
+
+## R3-5. 预算：可数事实（不自报估计）
+
+**拿不到精确 token 数**（harness 只回报会话累计美元口径提示，不是本任务增量）。
+- 全套件跑：**1 次**；单文件/单名过滤跑：**5 次**；`typecheck` **2 次**；`build` **1 次**；探针跑 **1 次**（10s truncated）。
+- 变异：**3 次**（Imp-1 未修副本 1；读顺序退回 1；marker 回收删除 1），**全部在 archive 副本里**，无需还原工作树。
+- 改动文件：`src/persistence/fileStore.ts`、`tests/persistence/fileStore.test.ts`、
+  `.superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/run.mts`（＋本报告）。
+- 本轮 commit：**1 个**（`179d776`）＋ 报告 commit。
