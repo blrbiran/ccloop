@@ -1838,3 +1838,24 @@ Lane 2 的基线 `TEST_EXIT=1`，两条红：flake (B)（名单内）＋
   **C-1 降级未关闭**（两个失败开放出口逐字节未动）／**待裁点 A、B、C 全部未裁**／
   **包 1 的修复环 2 未开，包 1 不具备开门条件**（另一条线）／§22.7 那七条残余全部仍在。
   *** **「GATE-PKG2 PASSED」只说明包 2 这条线走完了它的工序，不说明这些残余消失了。** ***
+
+--------------------------------------------------------------------------------
+22.10 人裁 60 —— 清理；以及 `origin/main` 的第 12 次移动
+--------------------------------------------------------------------------------
+
+*** **人裁 60。2026-08-11。「同意删 worktree 与分支」。** *** —— 已执行。
+  **删除前先清点**（本仓库明令的一步）：
+  `.worktrees/pkg2-wbfix` 清点为空（只有 gitignore 内的 `dist/` 构建产物）⇒ 直接 `git worktree remove`。
+  `.worktrees/bdesign` 有 2 个未跟踪 `.md`（`pointB-design.md` / `pointB-design-brief.md`），
+  **两个都已逐字节比对确认与 `main` 内的副本相同** ⇒ `--force` 丢弃的就是清点过的那两个，**零损失**（同人裁 41 那次做法）。
+  分支 `feat/pkg2-wb-fixes` 用 *** **`-d` 不是 `-D`** ***（`git branch --merged main` 验过）已删，was `8d5f50a`。
+  `git worktree prune` 已跑，`git worktree list` 只剩主仓库。
+  **未动**（人裁 44 明令）：孤儿目录 `.worktrees/pkg2-data-loss`；旧分支 `backup/evidence-first-v1-…` 与 `docs/pkg3-errata`。
+
+*** **⚠️ `origin/main` 的第 12 次移动 —— 门那一笔已发布，而控制器从未 push。** ***
+  开门后数分钟内：`git ls-remote origin refs/heads/main` = `86d3bd6` = 本地 `main`；
+  `git reflog show origin/main@{0}` 记 `update by push`。**控制器本会话一次都没执行过 push（人裁 24 始终有效）**
+  ⇒ **该次推送来自会话之外**。按前 11 次的归因惯例大概率是人自己做的，**但控制器不替人认定，只留档事实**。
+  *** **抓到它的方法值得记**：合并前 `git status` 显示 `ahead 26`，合并后变成无 ahead 标记 ——
+  **`git status` 的 ahead/behind 读的是缓存的 remote-tracking ref，不是远端**。
+  **判断远端一律 `git ls-remote`。** ***

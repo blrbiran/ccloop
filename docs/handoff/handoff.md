@@ -1,8 +1,111 @@
-# ccloop Handoff — **L3 已发布；包 3 已合入；包 1（L5 spec）待修复环 2；包 2 全部四笔（债 2／第 1 笔／S4／第 4 笔）均已走完工序并 ff 并入 `main`（未 push）；包 2 只剩三个待裁点与包 1 的修复环 2**
+# ccloop Handoff — **L3 已发布；包 3、包 2 已开门（`GATE-PKG2`，C-1 降级未关闭）；包 1（L5 spec）仍待修复环 2、不具备开门条件；待裁点 A／B／C 全部未裁**
 
 ---
 
-# 【最新】2026-08-10 —— **本节取代下方一切状态描述**
+# 【最新】2026-08-11 —— **本节取代下方一切状态描述**
+
+> ⚠️ **一律自查，别信本文。** **两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用；HEAD／笔数／测试数／远端一律现跑。**
+> ⚠️ **本文不写死 HEAD** —— 提交本文这个动作本身就会改它。
+
+## 先跑这些，以输出为准
+
+```bash
+cd /Users/biran/code/skills/loop/ccloop
+git log --merges --format='%h %cd %s'   # 末笔应是 GATE-PKG2（86d3bd6），其下是 GATE-PKG3（e42e062）
+git ls-remote origin refs/heads/main    # 一律现跑：已被推进 12 次，两个方向都腐坏过
+git status --short; git worktree list; git branch -vv
+export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm test -- --run
+```
+
+⚠️ **验证性命令一律走 `rtk proxy`**（默认改写会把输出折叠成假计数）。
+⚠️ **`git status` 的 `ahead/behind` 是缓存的 remote-tracking ref，不是远端** —— 判断远端必须 `git ls-remote`。
+**上一会话就是靠这一条抓到：门开出后几分钟内远端已含它，而控制器从未 push（第 12 次移动，会话外）。**
+
+## 唯一可信进度源
+
+`.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **现为 22 节（含 22.1–22.9），人裁 10–60 全在里面**。
+⚠️ 该目录 `.gitignore` 是 `*`，产物只能 `git add -f` 入库。
+同目录另有整分支评审与三轮修复的全部一手材料（**不要重新推导**）：
+`wholebranch-lane1-report.md` / `wholebranch-lane2-report.md`（两条 lane）、
+`wbfix-review.md` / `wbfix-rereview.md` / `wbfix-rereview2.md`（**三名不同的评审员**）、
+`pointB-design.md`（待裁点 B 的裁决材料，678 行）、`probe-c1/`（双进程争用探针，含灵敏度自陈）。
+
+## 包 2 已开门 —— **但「PASSED」不等于「没问题了」**
+
+`GATE-PKG2 PASSED`（`86d3bd6`，人裁 59）覆盖的是**整分支评审 ＋ 三轮修复 ＋ 四名独立评审员**。
+四笔（债 2／第 1 笔／S4／第 4 笔）此前已各自 ff 并入。**门后实测：31 files / 533 tests 全绿，三个退出码 0。**
+
+*** **⚠️ C-1 降级，未关闭 —— 门的主题行里就写着 `C-1 DOWNGRADED not closed`。** ***
+`acquireOwnerTransferLock` 已改为 **staging ＋ `link()` 原子发布**（人裁 50 只批了这一格），
+生产代码自己再也造不出「锁已存在但内容不可解析」的窗口（FIXED 构建 4069 个 CAS base 实测 **0** 次违约，
+修前是 140/137/213/252 量级）。**但 `tryRecoverStaleOwnerTransferLock` 的两个失败开放出口逐字节未动**：
+1. 锁不可解析 ＋ 任一 staged artifact 存在 ⇒ **不问存活直接删锁**；
+2. *** **锁可解析但 `holderProcessInstanceId` 不是 `pid:<n>` ⇒ 不问存活直接删锁，连 staged 判据都不要求，比第 1 条更宽松。** ***
+⇒ 触发条件从「两个正常进程即可」收窄为「**需外部写者损坏锁文件**」。**不许在任何地方写成「C-1 已修复」**
+（与人裁 39 对第 4 笔的口径同形：**一律记降级**）。
+
+## 仍然开着（**接手前先看这张表**）
+
+| # | 项 | 要点 |
+|---|---|---|
+| 1 | **待裁点 B** | 人裁 58：**暂不改、不再阻塞开门**，但 **B 本身仍未裁**。*** **裁 B 时措辞必须同时盖住上面第 2 个出口 —— B 的原文只改 `catch` 分支，盖不住它。** *** 材料已就绪：`pointB-design.md` 的选项矩阵 O1–O5 ＋ Q1–Q8 |
+| 2 | **待裁点 A／C** | A 从未解封；C（B 通过后损坏的锁永久卡死转移路径，要不要逃生口）有设计但未裁 |
+| 3 | **包 1 的修复环 2** | 人裁 9，**另一条线，别读串**。1 Critical / 6 Important 未修 ⇒ **包 1 不具备开门条件** |
+| 4 | `SweepOptions.stderr` 契约的测试半边 | 人裁 11，等包 1 修复环 2 之后 |
+| 5 | **人裁 53 的三件新账** | ① 第二出口（并入 B 的措辞）② `release()` 无条件 `safeUnlink` 且**今天零测试覆盖**（加身份校验后 524/524 全绿）—— **将来修它必须同时补守护判据** ③ `fileStore.test.ts` 有**一对逐字节相同的重复测试块**（控制器亲验），删重复＝动既有判据，需单独授权 |
+| 6 | **第四名评审员的两条 Low** | staging 残留物无回收路径（已实测 8 条路径，**残留不喂给 B 的偷锁分支**，只占空间）／`acquireOwnerTransferLock` 的 `catch` 里 `handle.close()` 可用其 errno 顶掉 `EEXIST` 而错分类（**第二轮遗留，非第三轮引入，此刻锁未发布不会停摆**） |
+| 7 | **遗留物** | 旧分支 `backup/evidence-first-v1-…` 与 `docs/pkg3-errata`；孤儿目录 `.worktrees/pkg2-data-loss`（不在 `git worktree list` 里）。**人裁 44 明令记录不处理** |
+
+## 上一会话换来的、**下一位直接用**的教训
+
+1. *** **「派了评审员」不等于「这一格被看过」。** *** 修复环第二轮**我们自己**在 `acquireOwnerTransferLock` 里引入了一条
+   Important，**是第三名评审员查出来的**；因为第三轮又动了同一个函数，控制器**再派第四名**专问
+   「修一个洞是不是开了个新的」。**要按改动落点决定再派谁，不是按流程凑人头。**
+2. **两条互不通气的 lane 独立撞到同一处 Critical —— 包 1 的先例第二次成立。** 任务级四笔全是 0 Critical，
+   整分支级出了 1 Critical。**任务级全绿不能替代整分支级。**
+3. *** **评审员的结论同样要验，而且验得出东西。** *** 第三名评审员查出实施者的 gap 快照取自
+   **只跑过 recovery 的那份副本**（不是 resume 之后），自己插桩重造；第四名评审员**推翻了实施者
+   「造不出只让新列变红的变异」的自陈**（它造出来了）。**低估自己和高估自己一样要纠。**
+4. **控制器写的任务书被实施者实测证伪过一次**（brief 说「不改任何现有断言」，实测翻了 18 行判据）。
+   **实施者就地停住上报是对的。**
+5. **举证责任不随授权解除**（人裁 13 的口径，本轮再次执行）：改那 18 行 = 断言「accepted 是正确行为」，
+   实施者必须**先逐 gap 证明再改期望**，不许拿「人已授权」当论据。
+6. *** **具名例外从 4 个涨到 7 个**（48／51／56）。每个都具名、都不外推，**但这个斜率本身是信号** ***
+   —— 下一位若要开第八个，**先问这个仓库为什么需要这么多例外**。
+7. **根因形状仍在复现**：「一个没有执行机制的完整性断言」／「测试靠异常/超时变红而不是靠断言变红」。
+   本轮每一条新判据都**被要求实测「红在断言上」**，四名评审员逐条复核过。
+
+## ⚠️ 铁律（本会话又各咬了一次）
+
+**验证跑绝不过滤** —— `grep`/`tail`/`sed` 同罪，**过滤显示与过滤落盘同罪**（实施者自曝 1 次 `sed`，评审员自曝 1 次 `grep`，均当场整份读回重下结论）；
+**坏探针不能证明「不存在」** —— 先用已知命中的对照验活（B 的设计员**自曝两次坏探针**，是「STOLEN 用例必须有 STOLEN」那半边对照把假阴性暴露出来的）；
+*** **读代码的机械论证不等于实测** ***；**不接受实施者自证，评审员的结论同样要验**；
+*** **finding 与它的「处置建议」是两回事，只读前者会派错工** ***；
+**变异必须证明还原** —— 同时验 `git diff` 与 `git diff --cached` 为 0 字节（**最佳实践已出现：在 `git archive` 出的副本里做变异，工作树全程不脏**）。
+
+## ⚠️ 仍需人单独授权的四件
+
+**开门／合并／删分支或 worktree／push** —— 各需单独授权。**控制器全程不许 push。**
+**非门合并一律 `--ff-only`**（造 merge commit 会毁掉门锚点）；**开门那一笔必须是 merge、结论写在主题行**。
+⚠️ **有 worktree 且其分支将来要 ff 并入时，台账只写 worktree 副本、主仓库不得领先**；
+**detached 且永不合并的 worktree 不受此限**（上一会话用过，理由已留档在台账 §20）。
+
+## 建议调用的 skills
+
+| skill | 何时 | 注意 |
+|---|---|---|
+| `superpowers:brainstorming` | 若要裁 B／C，或开新工作包 | **不要重开包 2 已定的方向**；B 的材料已在 `pointB-design.md`，**先读再问，别重新推导** |
+| `superpowers:requesting-code-review` | 包 1 修复环 2 之后；任何新工作包 | brief 必写：不接受实施者自证／findings 带可构造场景／**锚点用符号名不用行号**／不许用收窄搜索面支撑全称否定／落盘协议／***允许临时变异但必须证明还原***／**finding 与处置建议分开写** |
+| `superpowers:receiving-code-review` | 拿到结论、准备处置时 | **评审员的结论同样要验**；**读完 finding 一定要读它的处置建议再派工** |
+| `superpowers:subagent-driven-development` | 出 Critical/Important 时 | 「实施者 → **换人**评审 → 修复环 → **换人** scoped 再评审」；**若修复环动了上一轮出事的同一个函数，再换一个人** |
+| `superpowers:verification-before-completion` | 声称「通过/完成」之前 | 复跑全套件 ＋ typecheck ＋ build，`rtk proxy`，**未过滤**，核 vitest 首行 `RUN` 路径；**探针先验活** |
+| `superpowers:systematic-debugging` | 撞到名单外失败 | 允许的 flake 只有 (B)/(F)；**另有三条已挂账按完整测试名比对、不要重新调查**（人裁 10 那条＋台账 §21.5 两条负载敏感的） |
+| `superpowers:using-git-worktrees` | 需要隔离工作区时 | ⚠️ **`EnterWorktree` 默认基点是 `origin/<default-branch>`，会丢掉未推送的本地提交** —— 必须 `git worktree add <path> -b <branch> HEAD` **显式指定基点**；**建完立刻 `npm ci`**；**并行 agent 各给一个 worktree**（否则变异实验互相踩踏，红绿都不可信） |
+| `superpowers:finishing-a-development-branch` | 开门／合并时 | 见上一节四件授权 |
+
+---
+
+# 【已过期，保留作历史】2026-08-10
 
 > ⚠️ **一律自查，别信本文。** 门锚点 `e42e062`（`GATE-PKG3`）是唯一固定值，可放心引用；**HEAD／笔数／测试数／远端一律现跑**。
 > ⚠️ **远端已被推进 11 次**；第 10、11 次经 `git reflog show origin/main` 归因为**人自己 push**，与前九次性质不同。**仍要现跑。**
