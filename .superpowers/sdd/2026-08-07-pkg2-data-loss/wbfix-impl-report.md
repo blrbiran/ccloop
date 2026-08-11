@@ -421,7 +421,8 @@ TEST_EXIT=0
 - 变异次数：**5 次**（守卫放行三终态 1；`OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS` 3→2 1；
   `OWNER_TRANSFER_LOCK_RETRY_DELAY_MS` 50→40 1；`RECONCILIATION_LOCK_RETRY_ATTEMPTS` 3→1 1；
   2.4 的修法本身作为「反向变异」1）。每一次都配了还原后的绿。
-- 落盘日志：`scratchpad/logs/` 下 **14 个 `.log`**，全部未过滤。
+- 落盘日志：`scratchpad/logs/` 下 **23 个 `.log`**（含 4 个 typecheck 中间日志），全部未过滤。
+  完整路径：`/private/tmp/claude-501/-Users-biran-code-skills-loop-ccloop/c74add88-b8d0-4cb8-8759-2160067337a8/scratchpad/logs/`
 - 改动文件（分支尖端 `5026bea`，`git diff --stat 9392ce6..HEAD`，411 insertions / 5 deletions）：
   - `src/controller/ownedRunStateWriter.ts`（+20/-1，**纯注释**）
   - `src/persistence/fileStore.ts`（+16，**纯注释**）
