@@ -1,4 +1,4 @@
-import { access, appendFile, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { access, appendFile, link, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { LoopContract } from "../contract/schema.js";
@@ -933,12 +933,47 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<boolean
   return true;
 }
 
+// Package 2 whole-branch review, Critical C-1, fixed under human ruling 50 (option O1(a): make the
+// publish atomic; do NOT touch tryRecoverStaleOwnerTransferLock, which is open point B).
+//
+// WHAT WAS WRONG. The lock used to be published in TWO steps: `open(lockPath, "wx")` created the
+// file, and `handle.writeFile(...)` filled it. Between those two awaits the lock EXISTS AND IS ZERO
+// BYTES, and an intruder that hits EEXIST in that window reads "" in
+// tryRecoverStaleOwnerTransferLock, whose `JSON.parse` throws, whose `catch` branch never asks
+// whether the holder is alive, and which therefore unlinks a LIVE holder's lock as soon as any
+// staged artifact is present. Two processes then believe they hold the same cross-process lock.
+// Measured with two real Node processes hammering this function through affirmOwnerLease's
+// compare-and-swap: 140 lost updates in 5s, against 0 for the same probe with the steal branch made
+// unreachable (.superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/).
+//
+// WHAT IS DIFFERENT NOW. The content is written to a per-process, per-attempt staging path first,
+// and the lock is published by `link(stagingPath, lockPath)`. `link` is an atomic test-and-set: it
+// either creates the new name or fails with EEXIST, and the name it creates is a second name for an
+// inode that ALREADY HOLDS THE FULL CONTENT. There is no instant at which lockPath exists and is
+// unparseable, so the steal branch is no longer reachable through this function's own publish.
+//
+// PLATFORM (human ruling 52): the target platforms are darwin and linux, and this is where that
+// dependency is written down rather than left for the next reader to infer. It rests on POSIX
+// link(2): "if the link named by the new argument exists, link() shall fail" — i.e. the existence
+// check and the creation are one operation in the kernel. Windows is NOT a target; package.json
+// carries the same statement in machine-readable form ("os": ["darwin", "linux"]).
+//
+// WHAT IS DELIBERATELY UNCHANGED: everything after an EEXIST (the tryRecoverStale... call, the
+// two-iteration loop, OwnerTransferLockBusyError), the non-EEXIST rethrow, and `release()` — the
+// last two by explicit instruction, because the still-open half of C-1 lives there.
 async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () => Promise<void> }> {
   const { lockPath } = getOwnerTransferPaths(runDir);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    // Fresh on every attempt, and unique per process: buildAtomicTempPath stamps the process id,
+    // the process start time and a per-call sequence number, so two acquirers — in this process or
+    // any other — can never stage into the same file. "w" rather than "wx" on purpose: this path is
+    // this attempt's alone, so an EEXIST here would be meaningless, and letting one escape would be
+    // read by the catch below as lock contention that never happened.
+    const stagingPath = buildAtomicTempPath(lockPath);
+
     try {
-      const handle = await open(lockPath, "wx");
+      const handle = await open(stagingPath, "w");
 
       try {
         await handle.writeFile(
@@ -951,11 +986,18 @@ async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () =
             2,
           ),
         );
+        // The publish. EEXIST here means someone else holds the lock and is routed to the
+        // unchanged branch below exactly as `open(lockPath, "wx")`'s EEXIST used to be.
+        await link(stagingPath, lockPath);
       } catch (error) {
         await handle.close();
-        await safeUnlink(lockPath);
+        await safeUnlink(stagingPath);
         throw error;
       }
+
+      // The lock is published; the staging name has done its job. The handle stays open on the same
+      // inode, which is what release() closes.
+      await safeUnlink(stagingPath);
 
       return {
         release: async () => {

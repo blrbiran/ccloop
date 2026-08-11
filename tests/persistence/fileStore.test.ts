@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, readdir, readFile, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -39,16 +40,6 @@ import type { OwnerRecord, OwnerTransferRecord, ReconciliationRecord } from "../
 // call log is new.
 const renameSpy = vi.fn();
 
-// Package 2 whole-branch review, Lane 2 finding I-2. Same shape and same reason as renameSpy
-// directly above, for a different question: how many times a call ATTEMPTED to take
-// .owner-transfer.lock. fileStore.ts calls `open` in exactly one place — acquireOwnerTransferLock —
-// so one open of the lock path is one acquisition attempt, and that is the only way to observe the
-// reconciliation retry loop's bound from outside (its two constants are module-private and are
-// deliberately left that way; exporting them for a test would be the self-referential assertion
-// this finding is about). Pure observation: every call is forwarded to the real implementation, so
-// no other test in this file sees any change in behaviour.
-const openSpy = vi.fn();
-
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -57,16 +48,65 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       renameSpy(...args);
       return actual.rename(...args);
     },
-    open: async (...args: Parameters<typeof actual.open>) => {
-      openSpy(...args);
-      return actual.open(...args);
-    },
   };
 });
 
-// Scoped to one run directory, because openSpy accumulates across the whole file.
-function lockAcquireAttempts(runDir: string): number {
-  return openSpy.mock.calls.filter((call) => String(call[0]) === join(runDir, ".owner-transfer.lock")).length;
+// Package 2 whole-branch review, Lane 2 finding I-2 — the observation seam for the reconciliation
+// retry bound, rebuilt under HUMAN RULING 55.
+//
+// WHAT THIS REPLACES, stated plainly rather than quietly dropped: the previous round observed the
+// same thing by adding a pass-through `open` spy INSIDE the shared vi.mock factory above. That
+// factory predates package 2 (introduced in fb62714), so under either reading of "existing" it was
+// a shared fixture nobody had named, and the independent review recorded it as out of bounds
+// (Low-4). Ruling 55 rolled it back: the factory above is byte-identical to what it was before this
+// fix round, and the counting happens here instead, in a LOCAL vi.doMock that exists only for the
+// two tests that need it — the same doMock + dynamic-import seam the crash-gap matrix and the
+// two-readers race test in this file already use.
+//
+// WHAT IS COUNTED, and why the count means what it says (this is the correction the review's Imp-1
+// asked for): each iteration of acquireOwnerTransferLock's loop publishes the lock with exactly one
+// `link(staging, lockPath)`, so ONE LINK TO THE LOCK PATH IS ONE ACQUISITION ATTEMPT — including
+// the inner `attempt < 2` iteration that runs when tryRecoverStaleOwnerTransferLock reports the
+// lock recoverable. The previous wording claimed that equivalence for `open`, and the reviewer
+// disproved it by measurement: with a stealable lock, one retry iteration issued two opens. The two
+// tests below pin an exact count, and they may do so because their fixture holds the lock with a
+// LIVE pid, so tryRecoverStale... returns false and each attempt is exactly one link. That fixture
+// premise is named again on the assertion itself.
+async function withLockAttemptCounter<T>(
+  runDir: string,
+  body: (
+    fileStore: typeof import("../../src/persistence/fileStore.js"),
+    attempts: () => number,
+  ) => Promise<T>,
+): Promise<T> {
+  const lockPath = join(runDir, ".owner-transfer.lock");
+  let attempts = 0;
+
+  vi.resetModules();
+  vi.doMock("node:fs/promises", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+    return {
+      ...actual,
+      link: async (...args: Parameters<typeof actual.link>) => {
+        // Counted BEFORE the call, so an attempt that loses the race (EEXIST) counts exactly like
+        // one that wins it. Everything is forwarded; nothing is faked.
+        if (String(args[1]) === lockPath) {
+          attempts += 1;
+        }
+
+        return actual.link(...args);
+      },
+    };
+  });
+
+  try {
+    const fileStore = await import("../../src/persistence/fileStore.js");
+    return await body(fileStore, () => attempts);
+  } finally {
+    vi.doUnmock("node:fs/promises");
+    vi.resetModules();
+  }
 }
 
 const contract: LoopContract = {
@@ -2674,6 +2714,15 @@ describe("fileStore", () => {
     };
   }
 
+  async function pathExists(path: string): Promise<boolean> {
+    try {
+      await stat(path);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function readEventTypesOrNone(runDir: string): Promise<string[]> {
     try {
       return (await readFile(join(runDir, "events.jsonl"), "utf8"))
@@ -2700,14 +2749,18 @@ describe("fileStore", () => {
       void unlink(lockPath).catch(() => undefined);
     }, 70);
 
-    try {
-      await writeBoundaryArtifacts(runDir, {
-        boundaryAnalysis: staleCandidateAnalysis(),
-        reconciliationRecord: record,
-      });
-    } finally {
-      clearTimeout(release);
-    }
+    const attemptsTaken = await withLockAttemptCounter(runDir, async (fileStore, attempts) => {
+      try {
+        await fileStore.writeBoundaryArtifacts(runDir, {
+          boundaryAnalysis: staleCandidateAnalysis(),
+          reconciliationRecord: record,
+        });
+      } finally {
+        clearTimeout(release);
+      }
+
+      return attempts();
+    });
 
     // First, and deliberately before any file read: with the retry removed this is the assertion
     // that fails, so the test reds on an assertion rather than on an ENOENT from reading a file
@@ -2717,7 +2770,7 @@ describe("fileStore", () => {
     // The retry is what got it there: attempt 1 met the live lock. `toBeGreaterThanOrEqual` rather
     // than an exact count because whether the win lands on attempt 2 or 3 is a timing detail the
     // production code does not decide; that it took more than one is the requirement.
-    expect(lockAcquireAttempts(runDir)).toBeGreaterThanOrEqual(2);
+    expect(attemptsTaken).toBeGreaterThanOrEqual(2);
 
     expect(JSON.parse(await readFile(join(runDir, "reconciliation-record.json"), "utf8"))).toEqual(record);
   });
@@ -2728,16 +2781,26 @@ describe("fileStore", () => {
     // Never released: the whole retry window meets the same live holder.
     await writeFile(lockPath, busyLockRecord());
 
-    await writeBoundaryArtifacts(runDir, {
-      boundaryAnalysis: staleCandidateAnalysis(),
-      reconciliationRecord: winnerReconciliation(),
+    const attemptsTaken = await withLockAttemptCounter(runDir, async (fileStore, attempts) => {
+      await fileStore.writeBoundaryArtifacts(runDir, {
+        boundaryAnalysis: staleCandidateAnalysis(),
+        reconciliationRecord: winnerReconciliation(),
+      });
+
+      return attempts();
     });
 
     // The bound itself, as a literal. This is the assertion the reviewer's mutation (attempts -> 1)
     // has to fail: it pins that the loop gave up after three attempts, not after one and not
     // unboundedly. It is the counterpart of leaseLifecycle's writeCalls assertion, written as a
     // literal here because the constant it pins is module-private.
-    expect(lockAcquireAttempts(runDir)).toBe(3);
+    //
+    // The count is exact only because of a fixture premise, named here rather than left implicit
+    // (the review's Imp-1): the lock above is held by a LIVE pid, so
+    // tryRecoverStaleOwnerTransferLock refuses to steal it and each retry costs exactly one
+    // publish attempt. Against a stealable lock one retry can cost two, and this literal would be
+    // measuring something else.
+    expect(attemptsTaken).toBe(3);
 
     // Refused, recorded exactly once, and nothing published — the same three observations the
     // transfer side's exhaustion test makes.
@@ -2750,6 +2813,28 @@ describe("fileStore", () => {
     // boundary-analysis.json is written before the lock is ever taken, so its presence is what
     // shows the abandonment was scoped to the reconciliation publish.
     expect(JSON.parse(await readFile(join(runDir, "boundary-analysis.json"), "utf8")).status).toBe("stale_candidate");
+
+    // The counting seam is required to prove nothing about the behaviour it observes (ruling 55
+    // asked for the seam to be replaced; a replacement nobody checked would just move the problem).
+    // So the same scenario runs once more through the UNMOCKED, statically imported
+    // writeBoundaryArtifacts, and every observable this test asserts is compared. If the local
+    // doMock changed what is under test, these two would disagree.
+    const controlDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await writeFile(join(controlDir, ".owner-transfer.lock"), busyLockRecord());
+    await writeBoundaryArtifacts(controlDir, {
+      boundaryAnalysis: staleCandidateAnalysis(),
+      reconciliationRecord: winnerReconciliation(),
+    });
+
+    expect({
+      abandonments: (await readEventTypesOrNone(controlDir)).filter((type) => type === "reconciliation_write_abandoned").length,
+      reconciliationPublished: await pathExists(join(controlDir, "reconciliation-record.json")),
+      analysisStatus: JSON.parse(await readFile(join(controlDir, "boundary-analysis.json"), "utf8")).status as string,
+    }).toEqual({
+      abandonments: (await readEventTypesOrNone(runDir)).filter((type) => type === "reconciliation_write_abandoned").length,
+      reconciliationPublished: await pathExists(join(runDir, "reconciliation-record.json")),
+      analysisStatus: JSON.parse(await readFile(join(runDir, "boundary-analysis.json"), "utf8")).status as string,
+    });
   });
 
   it("calls onReconciliationWriteAbandoned exactly once with the read failure and still resolves", async () => {
@@ -3033,6 +3118,92 @@ function ownerRecord(overrides: Partial<OwnerRecord> = {}): OwnerRecord {
   };
 }
 
+// Package 2 whole-branch review, Critical C-1, human ruling 50 (option O1(a)). The enforcement
+// mechanism for the atomic publish, and the reason it exists at all: the two-real-process probe in
+// .superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/ measures the defect (140 lost updates before
+// the fix, 0 after), but a probe is not a guardrail — nothing in the suite would notice if the
+// publish went back to two steps. Without this test the fix would be the fifth "completeness claim
+// with no enforcement behind it" in this repository's history.
+//
+// WHAT IS ASSERTED is the property, not the implementation: at the instant `.owner-transfer.lock`
+// FIRST EXISTS, its content already parses. That is the whole of C-1's first half — an intruder
+// that hits EEXIST reads whatever is there at that moment, and a zero-byte read is what sends
+// tryRecoverStaleOwnerTransferLock into the `catch` branch that unlinks a live holder's lock.
+//
+// HOW it is observed without touching production code or the shared mock factory at the top of this
+// file: a LOCAL vi.doMock of node:fs/promises wraps the two calls that can bring the lock path into
+// existence — `open` (the old two-step publish) and `link` (the new atomic one) — and reads the file
+// back SYNCHRONOUSLY the instant either resolves. Synchronously matters: an await would let the
+// production code's own next step run first and the zero-byte instant would be gone.
+describe("the owner-transfer lock is published atomically, never as an empty file that fills in later", () => {
+  it("has parseable content at the first instant the lock path exists", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    const current = ownerRecord();
+    await writeOwnerRecord(runDir, current);
+
+    const sightings: Array<{ via: string; empty: boolean; parseable: boolean }> = [];
+
+    const observe = (via: string): void => {
+      const contents = readFileSync(lockPath, "utf8");
+      let parseable = true;
+
+      try {
+        JSON.parse(contents);
+      } catch {
+        parseable = false;
+      }
+
+      sightings.push({ via, empty: contents.length === 0, parseable });
+    };
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        open: async (...args: Parameters<typeof actual.open>) => {
+          const handle = await actual.open(...args);
+          if (String(args[0]) === lockPath) {
+            observe("open");
+          }
+          return handle;
+        },
+        link: async (...args: Parameters<typeof actual.link>) => {
+          const result = await actual.link(...args);
+          if (String(args[1]) === lockPath) {
+            observe("link");
+          }
+          return result;
+        },
+      };
+    });
+
+    try {
+      const fileStore = await import("../../src/persistence/fileStore.js");
+      await fileStore.claimOwnerRecordWithPrecondition(
+        runDir,
+        current,
+        ownerRecord({ currentProcessInstanceId: "pid:222" }),
+      );
+
+      // Anti-vacuity, and load-bearing: a wrapper that stopped seeing the lock path would make the
+      // real assertion below pass forever while observing nothing — the broken-probe failure mode
+      // this repository keeps hitting. Exactly one publish happens in this call.
+      expect(sightings).toHaveLength(1);
+
+      // The requirement. Under the two-step publish this reads { empty: true, parseable: false },
+      // because `open(lockPath, "wx")` returns with the file created and still zero bytes.
+      expect({ empty: sightings[0]?.empty, parseable: sightings[0]?.parseable })
+        .toEqual({ empty: false, parseable: true });
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  });
+});
+
 describe("claimOwnerRecordWithPrecondition", () => {
   it("writes the next record when the precondition matches", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
@@ -3122,39 +3293,53 @@ describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racin
 
         return {
           ...actual,
-          open: async (...args: Parameters<typeof actual.open>) => {
-            const handle = await actual.open(...args);
+          // Reader A is paused immediately after its lock is PUBLISHED, so B meets a lock that is
+          // on disk with complete content. Human ruling 50 changed how that publish happens, and
+          // this hook followed it; the original hook and its reasoning are quoted below rather than
+          // deleted, because this repository does not silently overwrite what it once did.
+          //
+          // ORIGINAL HOOK (until the C-1 fix): it wrapped `open`, matched `.owner-transfer.lock`,
+          // and patched that one FileHandle's `writeFile`, with this verbatim reasoning:
+          //   "Patches only this one FileHandle instance (reader A's), not the module or any
+          //    other test. Runs the real write first so the lock file has full, valid JSON
+          //    content on disk before reader B ever gets a chance to look at it -- otherwise B
+          //    could observe the (unrelated, already-known) zero-length lock window instead of
+          //    the busy-lock path this test targets."
+          //
+          // *** ERRATUM 1 (kept from the previous round, CORRECTED here per the independent
+          // review's Low-1). The word "unrelated" in that sentence is FALSE, and — this is the
+          // correction — it was ALREADY FALSE THE MOMENT IT WAS WRITTEN. The earlier erratum said
+          // "false AFTER D2", which wrongly suggests D2 introduced the window; it did not. The
+          // zero-byte window was an inherent property of the two-step publish
+          // (`open(lockPath,"wx")` then `handle.writeFile`) for as long as that shape existed. The
+          // window is the counter-example to this test's own subject: an intruder that hit it
+          // landed in tryRecoverStaleOwnerTransferLock's `catch` branch, which never calls
+          // isProcessActive and unlinks a LIVE holder's lock whenever staged artifacts exist. ***
+          //
+          // *** ERRATUM 2 (this round). That window is now CLOSED: under human ruling 50 the lock
+          // is published atomically with `link()`, so there is no instant at which the lock exists
+          // unparseable, and the fixture no longer has to steer B away from anything — B cannot
+          // reach the window through the production publish at all. Measured, not assumed: 140
+          // cross-process lost updates before the fix, 0 after
+          // (.superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/). What is STILL open is the other
+          // half of C-1 — the `catch` branch itself, which is open point B and was not touched, and
+          // which an externally corrupted lock still reaches. ***
+          //
+          // The hook had to move because it instrumented the very call ruling 50 replaced: with the
+          // atomic publish, nothing ever calls `open` on the lock path, so the old hook would never
+          // fire and this test would fail on its own named timeout while the invariant it guards
+          // was still perfectly true. Every assertion below is UNCHANGED, and so is the instant
+          // being forced: A is released only after B's failed acquire, with a complete lock on disk.
+          link: async (...args: Parameters<typeof actual.link>) => {
+            const result = await actual.link(...args);
 
-            if (!aOpenedLock && String(args[0]).endsWith(".owner-transfer.lock")) {
+            if (!aOpenedLock && String(args[1]).endsWith(".owner-transfer.lock")) {
               aOpenedLock = true;
-              const originalWriteFile = handle.writeFile.bind(handle);
-              // Patches only this one FileHandle instance (reader A's), not the module or any
-              // other test. Runs the real write first so the lock file has full, valid JSON
-              // content on disk before reader B ever gets a chance to look at it -- otherwise B
-              // could observe the (unrelated, already-known) zero-length lock window instead of
-              // the busy-lock path this test targets.
-              // *** ERRATUM (package 2 whole-branch review, Critical C-1). The word "unrelated"
-              // above is KEPT VERBATIM — this repository does not silently soften a claim it once
-              // made — but it IS FALSE AFTER D2, and a reader must not carry it away. This test
-              // exists to establish "exactly one finalizer at a time"; the zero-length lock window
-              // is precisely the path that makes that conclusion FALSE, because an intruder that
-              // hits it lands in tryRecoverStaleOwnerTransferLock's `catch` branch, which never
-              // calls isProcessActive and unlinks a LIVE holder's lock whenever staged artifacts
-              // exist. The controller reproduced that with two real processes (ledger §21.1). So
-              // the window is not a neighbouring curiosity: it is the counter-example to this
-              // test's own subject, still unfixed (C-1, repair deferred to a human decision).
-              // The fixture below is deliberately UNCHANGED — steering B away from the window is
-              // what isolates the busy-lock path this test is for, and changing it would change
-              // what the test measures. ***
-              handle.writeFile = (async (...writeArgs: Parameters<typeof originalWriteFile>) => {
-                const result = await originalWriteFile(...writeArgs);
-                aLockWritten.resolve();
-                await bAttemptedAcquire.promise;
-                return result;
-              }) as typeof handle.writeFile;
+              aLockWritten.resolve();
+              await bAttemptedAcquire.promise;
             }
 
-            return handle;
+            return result;
           },
           readFile: async (...args: Parameters<typeof actual.readFile>) => {
             const result = await actual.readFile(...args);
