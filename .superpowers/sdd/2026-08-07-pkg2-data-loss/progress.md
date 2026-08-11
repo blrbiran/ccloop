@@ -1534,3 +1534,140 @@ scoped 再评审 Important-1 ADDRESSED、零新破坏、零既有判据被动用
   `git diff --cached` 为 0 字节**／**finding 与处置建议分开写**／**不得动用第五个具名例外**／
   锚点用符号名不用行号／落盘协议（先落骨架、结论最先填）／**不要自报预算估计，只交可数事实**。
   **两条 lane 互不通气**（刻意，为的是交叉印证）。
+
+--------------------------------------------------------------------------------
+21. 包 2 整分支评审 —— 两条 lane 交付、控制器亲验、**结论：不具备开门条件**
+--------------------------------------------------------------------------------
+
+**两份报告已入库**（`7925441`）：`wholebranch-lane1-report.md`（生产代码面）／
+`wholebranch-lane2-report.md`（判据面 ／ 声明-代码一致性）。
+
+| lane | Critical | Important | Minor |
+|---|---|---|---|
+| Lane 1 | 1（C-1） | 4（三终态零判据／结构判据只解析一个文件／重试上限自指断言／resume 误拒） | 1 |
+| Lane 2 | 1（C-1，**同一处**） | 2（重试次数零执行机制／D2 自己那条重试零判据） | 3 |
+
+*** **包 1 的先例第二次成立**：两条 lane **互不通气**，**独立撞到同一处 Critical**。
+任务级评审四笔全是 0 Critical，整分支级出了 1 Critical。**任务级全绿确实不能替代整分支级。** ***
+
+21.1 唯一的 Critical（C-1）—— **控制器亲验，真双进程复现**
+--------------------------------------------------------------------------------
+
+*** **`.owner-transfer.lock` 可以从一个活着的持有者手里被偷走。** ***
+**锚点**：`acquireOwnerTransferLock` ／ `tryRecoverStaleOwnerTransferLock` ／
+`publishReconciliationUnderTransferLock`（`src/persistence/fileStore.ts`）。
+
+**机制**：`acquireOwnerTransferLock` 分两步发布锁 —— `await open(lockPath,"wx")` 之后文件**已存在但 0 字节**，
+内容要到 `await handle.writeFile(...)` 才落地。闯入者此时 EEXIST → `tryRecoverStaleOwnerTransferLock`
+→ `JSON.parse("")` 抛 → 落入 `catch` 分支，*** **而该分支从不调用 `isProcessActive`** *** ——
+只问 `transactionMarkerPath || ownerPendingPath || transferPendingPath` 是否存在，
+有就 `safeUnlink(lockPath)` 放行。**两个进程同时认为自己持有这把跨进程锁。**
+Lane 1 另加一格：`release()` 是无条件 `safeUnlink`，**不校验将删的锁是不是自己那一把**。
+
+*** **控制器独立复现（不复用任何评审员的脚本；持有者是另一个真 node 进程，全程活着）** ***
+（探针 `scratchpad/probe-c1.mts` + `holder.mts`，`rtk proxy npx tsx`，未过滤）：
+
+| 场景 | 抛出 | 锁事后 | 判定 |
+|---|---|---|---|
+| **SANITY-1** 格式良好的活锁 ＋ staged（**必须被尊重**） | `OwnerTransferLockBusyError` | 存活 88B | 尊重 ✅ |
+| *** **PROBE 0 字节活锁 ＋ staged** *** | `OwnerTransferPendingMissingError` | *** **absent（被 unlink）** *** | *** **锁被偷，闯入者已在临界区内** *** |
+| **SANITY-2** 0 字节活锁、**无** staged（**必须被尊重**） | `OwnerTransferLockBusyError` | 存活 0B | 尊重 ✅ |
+
+⚠️ PROBE 抛的是 `OwnerTransferPendingMissingError` 而**不是** busy —— 这恰恰证明它**越过了锁**、
+已经进到 `finalizePendingOwnerTransfer` 里面。两条对照分别证明「不是怎么都能抢到」与
+「触发条件正是 `catch { hasStagedArtifacts }` 那一支」。
+*** **这同时补上了 Lane 2 自陈没做到的那一格（它是单进程内复现）。** ***
+
+**后果（为什么是 Critical）**：
+1. `publishReconciliationUnderTransferLock` 的源码注释把「**Two lock spans cannot interleave**」
+   当作承重前提写死，*** **该前提为假** ***。**第 4 笔（D2）的顺序无关性整个挂在它上面。**
+2. 任务 3 阶段 1 声称关掉的「双 finalizer 竞态」也挂在它上面。
+3. 今天可达：四步链条不需要任何 mock，全是生产入口。
+
+*** **⚠️ Lane 2 另查明一条更难被发现的**：本轮新加的
+`lets exactly one of two concurrent readOwnerRecord calls finalize the transaction…` 测试，
+**在夹具里明文绕开了这个 0 字节窗口**，注释逐字称它「(unrelated, already-known)」。
+**一条为了证明「锁互斥」而写的测试，把使该前提为假的那条路径标注成「无关」。**
+这是「一个没有执行机制的完整性断言」的新一例，**且这次发生在用来建立该前提的测试内部**。 ***
+
+**两条 lane 对处置的建议一致：本轮不修。** 自然修法（`catch` 分支加 liveness/年龄判据，
+或把锁内容与锁的出现变成一次原子发布）**落在待裁点 B 的地界**（`tryRecoverStaleOwnerTransferLock`
+失败开放 → 失败关闭），**人明令先不裁**。两条 lane 都**只指出关系、不主张裁 B**。
+
+21.2 控制器亲验的两条 Important（各配必红对照，证明变异面是活的）
+--------------------------------------------------------------------------------
+
+*** **不接受实施者自证，评审员的结论同样要验。** *** 控制器亲跑 4 次全套件（`rtk proxy`，整份落盘）：
+
+| 变异 | 期望 | 实测 |
+|---|---|---|
+| **mutA** 守卫对 `exhausted`/`blocked_waiting_human`/`succeeded` 三种终态放行 | Lane 1 说全绿 | *** **`TEST_EXIT=0`，日志整份读回 `31 passed (31) / 524 passed (524)`** *** |
+| **ctrlB**（必红对照）同样手法但放行 `failed`/`cancelled` | 必须红 | `TEST_EXIT=1` ✅ 变异面是活的 |
+| **mutC** `OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS` 3 → 2 | 两条 lane 都说全绿 | `TEST_EXIT=0` |
+| **ctrlD**（必红对照）3 → 1 | 必须红 | `TEST_EXIT=1` ✅ 下限 2 被钉住 |
+
+**还原证明**：`git status --porcelain` 空、`git diff` **0 字节**、`git diff --cached` **0 字节**。
+⚠️ `TEST_EXIT=0` 本身不能排除「一条都没收集到也退 0」，故 **mutA 的日志整份读回**；
+mutC 依据的是**同一文件同一夹具的 ctrlD 退出 1**（证明收集面对该变异形状是活的）＋ Lane 2 的独立同变异。
+
+⇒ **两条都成立**：三种终态的所有权拒写**零判据**（它们都不在 `RESUMABLE_STATUSES` 内，
+即与 `cancelled`/`failed` 一样会让别人的 run 不可恢复 —— **正是 Critical F-1 的损害形状**）；
+重试的「3」这个数字**零执行机制**（两条耗尽断言写成
+`expect(...).toBe(OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS)`，**左右同源、恒真** —— Rule 9 明禁的形状）。
+
+21.3 被两条 lane 推翻的既有说法（**推翻同样是交付**）
+--------------------------------------------------------------------------------
+
+1. *** **brief／台账 `:1461` 那句「分不清 1 次与 3 次」是错的。** *** 两条 lane 独立实测：
+   **3→1 会红 2 条**（下限 2 被钉住），**3→2 全绿**。真实缺口是「钉住下限 2、钉不住 3」。
+2. *** **台账 `:1458`「顺序无关性…零判据钉住」过强。** *** 更精确（Lane 2）：
+   「格式良好 ＋ 活 pid」这一片**有**判据；**零字节窗口那一片既无判据、又被新测试主动绕开**。
+   **精确化之后问题更重 —— 「被绕开」比「没写」更难被将来的人发现。**
+3. *** **「`readReconciliationRecord` 无守卫会炸」是错的。** *** 两条 lane 独立实测：
+   `resumeLoop` 外层 try/catch 把它转成 **fail-closed 且留痕**的 `ResumeNotEligibleError` + `resume_denied`。
+   **不是今天可达的红线。** 但 Lane 1 查明它有另一种真实后果（见 21.4 的 I-4）：**误拒 ＋ 归因错误**。
+4. **D-1 的结构判据本身很死**（Lane 2 三种合法改写全红，`ts.createSourceFile` 确是格式无关，不是又一个正则）；
+   **但它只解析 `runLoop.ts` 一个文件** —— Lane 1 由此查出**第四条既有枚举没提到的形状**：
+   *** **`resumeLoop.ts` 完全不在判据视野内。** *** 它今天没 import `writeRunState`，
+   **但没有任何东西阻止它明天 import**。
+
+21.4 其余 finding（逐条见两份报告，此处只给索引与处置口径）
+--------------------------------------------------------------------------------
+
+| 编号 | 内容 | 两条 lane 的处置建议 |
+|---|---|---|
+| L1 I-1 | 三种终态零判据（**控制器亲验**） | 建议本轮补判据，**但需新增 `it` ⇒ 撞第五个具名例外，必须问人** |
+| L1 I-2 | 结构判据只解析一个文件；`resumeLoop.ts` 不在视野内 | 不改判据；**只建议把 `ownedRunStateWriter.ts` 的 "HONEST LIMIT" 注释补上第 4 条**（注释与实际不符的更正） |
+| L1 I-3 ＝ L2 I-1 | 重试「3」零执行机制、耗尽断言自指 | 不改产品代码（3 次是人裁 38 批的）；补绝对值断言**要动既有测试文件 ⇒ 问人** |
+| L2 I-2 | D2 自己那条 reconciliation 重试**在 `tests/` 下零引用**，拆成不重试仍全绿 | **纯新增一条测试**，不动任何既有判据 |
+| L1 I-4 | resume 的 `Promise.all` 与它自己触发的崩溃恢复赛跑 ⇒ **事务提交窗口内崩溃的 run 首次 resume 必被误拒且归因错误**（第二次自愈） | 修法极小（把 `readOwnerRecord` 提出来先 await），**但属行为改动 ⇒ 问人** |
+| L1 M-1 | 四个具名例外里**只有人裁 13 在使用点没有源码锚点**（全仓检索 `ruling 13` 零命中，同次检索 14/17/37 命中 ⇒ 检索面已证活） | 加一行注释，零风险 |
+| L2 M-2 | **第五处动了既有测试体**：`fileStore.test.ts` 三条既有 fail-closed 测试各**新增**一行锁释放断言。**两种「既有」口径分别报，两种口径下都是纯增强** | 建议台账显式登记为第五处，**不替人消解口径** |
+| L2 M-3 | 第三处口径无判据（非红线） | 不修 |
+
+**具名例外逐条裁断（Lane 2，控制器采信其证据面）**：13／14／17／37 *** **全部在界内** ***。
+`git diff e42e062 HEAD -- tests/` 里被删除的 `expect(` **一共 3 行**，全部落在 13 与 37 之内；
+**没有软化**（无「加个 `if`」「放宽 matcher」「`toEqual` 换 `toContain`」）。
+**人裁 39 被遵守**：全目录检索（带必命中＋必不命中双探针）**没有任何一处把第 4 笔写成「已关闭」**。
+⚠️ **但人裁 13 的替代论证强度低于它自陈的强度** —— 那两条新测试建立的「顺序无关」
+**建立在被 C-1 证伪的前提之上**。**例外没越界，论证被削弱。**
+
+21.5 名单外失败（按人裁 10 同形挂账，**不重新调查、也不挥手放过**）
+--------------------------------------------------------------------------------
+
+Lane 2 的基线 `TEST_EXIT=1`，两条红：flake (B)（名单内）＋
+*** `subprocessClaudeAdapter.test.ts > waits for close before interrupting a close-pending successful execute` ***（**名单外**）；
+另在一次变异跑里 `evidence.test.ts > finalize-review CLI > rejects unknown verdicts and diagnoses` 超时（**名单外**）。
+两条单跑均绿，且两个文件**都不在 `e42e062..HEAD` 的改动面里**。
+⚠️ **一条可能的解释是机器负载**（本轮三个工作区并发跑全套件），**但控制器没有实测它，故只记为线索，不作结论**。
+⇒ 按「已具名、已测量、根因未证」挂账，**不入 flake 名单，不单开根因轮**。
+*** **同时它证伪了一件事：`§20` 那个「本轮零红」的基线不可无条件继承。** ***
+
+21.6 控制器的裁断与就地停住
+--------------------------------------------------------------------------------
+
+*** **包 2 现在不具备开门条件。** *** 理由不是「有 Critical 就不能开门」这条教条，而是：
+**C-1 证伪了第 4 笔与任务 3 阶段 1 两笔的承重前提**，而这两笔的「complete（降级）」结论
+正是建立在那个前提上的。**在人对 C-1 表态之前，把包 2 的门开出去等于把一条已知为假的前提焊进历史。**
+
+**控制器就地停住，等人裁**。待人裁的问题已同时写进 handoff。
