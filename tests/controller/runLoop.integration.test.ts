@@ -2581,8 +2581,10 @@ describe("runLoop", () => {
   //
   // *** SOURCE ANCHOR for that human ruling, added by the package 2 whole-branch fix round: the
   // ruling is HUMAN RULING 13 of the package 2 ledger
-  // (.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md), and it is a NAMED EXCEPTION to this
-  // repository's standing rule that an existing test's name is not to be changed. It is recorded
+  // (.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md). CORRECTED per the independent
+  // review's Low-2, which found the first version of this anchor described the grant too NARROWLY:
+  // ruling 13 is a named widening of scope that authorised package 2 to CHANGE THIS JUDGEMENT AT
+  // ALL — renaming it is one consequence of that grant, not the whole of it. It is recorded
   // here because a whole-branch reviewer searched the entire repository for "ruling 13" and got
   // zero hits while the same search hit for rulings 14/17/37 — i.e. the search surface was proven
   // live and this one anchor was genuinely missing — so a reader of this test could not learn from

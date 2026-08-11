@@ -3047,27 +3047,75 @@ describe("fileStore", () => {
   //     record + pre-recovery transfer/reconciliation". That interleaving is exactly what the two
   //     epoch-equality criteria in evaluateResumeEligibility exist to refuse, and it is why the
   //     double-transfer fixture — not the first-transfer one — is what makes them load-bearing.
+  //
+  // *** AMENDED under HUMAN RULING 51 — the SIXTH named exception, which covers gaps 05..13 of both
+  // fixtures (18 rows) AND NOTHING ELSE. The paragraph immediately above is kept verbatim and is now
+  // HISTORY: that interleaving no longer exists. resumeLoop awaits readOwnerRecord FIRST and only
+  // then reads the rest (Lane 1 finding I-4), because the interleaving was not a design, it was a
+  // defect — a run interrupted inside the commit window was refused on its first resume with
+  // "cannot read run artifacts" and healed by itself on the second.
+  //
+  // THE 18 ROWS ARE TWO DIFFERENT THINGS AND MUST NOT BE READ AS ONE (the independent review's
+  // Imp-2; the earlier report merged them and that merge was false):
+  //   - first-transfer fixture, 9 rows: these read `refused: cannot read run artifacts`. That
+  //     refusal was MANUFACTURED BY THE DEFECT — an ENOENT on a file the recovery already in flight
+  //     was about to publish. Deleting it removes a wrong answer; it grants nothing.
+  //   - double-transfer fixture, 9 rows: these were refused by the two epoch-equality criteria in
+  //     evaluateResumeEligibility. Those refusals were real refusals. Changing them IS A NEW
+  //     PERMISSION, and it is the half that needs a ruling.
+  //
+  // WHAT THAT SECOND HALF DOES TO S-3, named to the sentence rather than waved at (the standing
+  // position is docs/superpowers/decisions/2026-07-29-technical-debt-attribution.md):
+  //   - The clause it moves: "只增加拒绝，绝不新增许可" ("only add refusals, never add
+  //     permissions"). On those 9 rows this change adds a permission. That is a deliberate,
+  //     human-ruled exception (ruling 54), recorded here rather than absorbed silently.
+  //   - The clause it does NOT move, and which still holds: "放松 resumeLoop 对 reconciliation 的
+  //     必需性（例如「若存在则校验，不存在则跳过」）… 缺失即拒绝的 fail-closed 行为必须保留"
+  //     ("relaxing resumeLoop's requirement for reconciliation — e.g. check it if present, skip it
+  //     if absent — is forbidden; missing-means-refused must be preserved"). Nothing here skips a
+  //     missing reconciliation-record.json. It is still required and still read; what changed is
+  //     only that it is read AFTER the recovery that publishes it. Gaps 01..04 above are the
+  //     evidence: where the transaction cannot be completed, resume is still refused and the disk
+  //     is left untouched.
+  //
+  // WHY `accepted` IS THE CORRECT TERMINAL STATE ON ALL 18 ROWS — measured, not argued. The matrix
+  // was temporarily instrumented to also snapshot the run dir AFTER the resume attempt, and for
+  // every one of gaps 05..13 in BOTH fixtures that snapshot is the fully committed, internally
+  // consistent triple with the staging reclaimed — `T=e2 O=e2 R=e2 M=absent P=---` for the
+  // first-transfer fixture and `T=e3 O=e3 R=e3 M=absent P=---` for the double-transfer one. That is
+  // BYTE-FOR-BYTE THE SAME END STATE as gap 14, which this suite already accepted before any of
+  // this and which the comment above calls the square where "refusing would be the bug, not the
+  // guard". No torn publish, no orphaned pending, no surviving marker, and the epochs agree across
+  // all three files — the resume is evaluated on a committed transaction, not on a half of one. ***
   it(
     "refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives",
     async () => {
       // Soft, so one run reports BOTH fixtures' verdicts instead of aborting at the first
       // divergence: which fixture a mutation kills is the whole point of §10 test 6b.
       expect.soft(await observeCrashMatrix(stageFirstOwnerTransferCrashedAt)).toEqual([
-        // Nothing is published yet, so resume never reaches the eligibility gate at all: reading
-        // owner-transfer.json / reconciliation-record.json throws first.
+        // Gaps 01..04: nothing is published yet AND the transaction cannot be completed (the
+        // marker is unparseable, or a pending it promises is gone), so recovery refuses and resume
+        // refuses with it. Unchanged by ruling 51, and deliberately so: this is the fail-closed
+        // half S-3 requires, and it is what shows the amendment below is not "skip what is
+        // missing".
+        //
+        // Gaps 05..13 BELOW ARE THE 9 AMENDED ROWS OF THIS FIXTURE (ruling 51). They used to read
+        // `refused: cannot read run artifacts`. That refusal was the defect's own product: the
+        // reconciliation read raced the recovery that was about to publish it. Removing it grants
+        // nothing — the run was always eligible; the reader was looking too early.
         "gap 01 | T=absent O=e1 R=absent M=unparseable P=TOR | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferMarkerUnreadableError | after T=absent O=e1 R=absent M=unparseable P=TOR",
         "gap 02 | T=absent O=e1 R=absent M=v2 P=-OR | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=absent O=e1 R=absent M=v2 P=-OR",
         "gap 03 | T=absent O=e1 R=absent M=v2 P=T-R | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=absent O=e1 R=absent M=v2 P=T-R",
         "gap 04 | T=absent O=e1 R=absent M=v2 P=TO- | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=absent O=e1 R=absent M=v2 P=TO-",
-        "gap 05 | T=absent O=e1 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 06 | T=absent O=e1 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 07 | T=absent O=e1 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 08 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 09 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 10 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 11 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 12 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 13 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=refused: cannot read run artifacts | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 05 | T=absent O=e1 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 06 | T=absent O=e1 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 07 | T=absent O=e1 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 08 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 09 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 10 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 11 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 12 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 13 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
         // Past the commit point: all three published. Gap 14 still has the marker, so recovery
         // republishes idempotently and reclaims it; gaps 15..17 have no marker, so recovery is
         // the zero-write read (cleanup is gated on lockHeld) and the residue survives untouched.
@@ -3080,26 +3128,40 @@ describe("fileStore", () => {
       expect.soft(await observeCrashMatrix(stageDoubleOwnerTransferCrashedAt)).toEqual([
         // Gaps 1..4: the published triple is internally consistent at e2 and would pass the gate
         // on its own. The refusal comes only from recovery refusing to decide — an undecidable
-        // transaction must not resume even when what is published looks eligible.
+        // transaction must not resume even when what is published looks eligible. Unchanged.
+        //
+        // Gaps 05..13 BELOW ARE THE OTHER 9 AMENDED ROWS — and these are the ones that matter.
+        // They were refused by real criteria (see the two comments that follow, kept verbatim as
+        // history), not by a manufactured read error, so amending them ADDS A PERMISSION and is the
+        // half that required human ruling 54. Measured end state after an accepted resume here:
+        // `T=e3 O=e3 R=e3 M=absent P=---`, i.e. the transaction committed in full.
         "gap 01 | T=e2 O=e2 R=e2 M=unparseable P=TOR | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferMarkerUnreadableError | after T=e2 O=e2 R=e2 M=unparseable P=TOR",
         "gap 02 | T=e2 O=e2 R=e2 M=v2 P=-OR | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=e2 O=e2 R=e2 M=v2 P=-OR",
         "gap 03 | T=e2 O=e2 R=e2 M=v2 P=T-R | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=e2 O=e2 R=e2 M=v2 P=T-R",
         "gap 04 | T=e2 O=e2 R=e2 M=v2 P=TO- | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=e2 O=e2 R=e2 M=v2 P=TO-",
-        // Gaps 5..7: recovery advances owner-record.json to e3 while owner-transfer.json is still
-        // the e2 one. Criterion B (ownerRecord.currentOwnerEpoch !== ownerTransfer.newOwnerEpoch)
-        // is the ONLY criterion that refuses this shape — criterion A sees e2 === e2 and passes.
-        "gap 05 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=refused: published eligibility has been superseded by a newer owner epoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 06 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=refused: published eligibility has been superseded by a newer owner epoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 07 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=refused: published eligibility has been superseded by a newer owner epoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        // Gaps 8..13: owner-transfer.json is already e3 and the owner record reads e3, but
+        // Gaps 5..7, HISTORY (kept verbatim; true before the read-order fix, false after it):
+        // "recovery advances owner-record.json to e3 while owner-transfer.json is still the e2 one.
+        // Criterion B (ownerRecord.currentOwnerEpoch !== ownerTransfer.newOwnerEpoch) is the ONLY
+        // criterion that refuses this shape — criterion A sees e2 === e2 and passes."
+        // That mixed view was the interleaving itself: post-recovery owner record, pre-recovery
+        // transfer. With the reads sequenced there is no mixed view left to refuse — all three
+        // files are read at e3. Criterion B is NOT left unexercised by this: it is asserted
+        // directly, on constructed inputs, in tests/controller/resumeLoop.gate.test.ts.
+        "gap 05 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 06 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 07 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        // Gaps 8..13, HISTORY (kept verbatim; true before the read-order fix, false after it):
+        // "owner-transfer.json is already e3 and the owner record reads e3, but
         // reconciliation-record.json is still the e2 one. Criterion B passes (e3 === e3); only
-        // criterion A (reconciliation.newOwnerEpoch !== ownerTransfer.newOwnerEpoch) refuses.
-        "gap 08 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=refused: reconciliation newOwnerEpoch does not match owner-transfer newOwnerEpoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 09 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=refused: reconciliation newOwnerEpoch does not match owner-transfer newOwnerEpoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 10 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=refused: reconciliation newOwnerEpoch does not match owner-transfer newOwnerEpoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 11 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=refused: reconciliation newOwnerEpoch does not match owner-transfer newOwnerEpoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 12 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=refused: reconciliation newOwnerEpoch does not match owner-transfer newOwnerEpoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 13 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=refused: reconciliation newOwnerEpoch does not match owner-transfer newOwnerEpoch | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        // criterion A (reconciliation.newOwnerEpoch !== ownerTransfer.newOwnerEpoch) refuses."
+        // Same correction as above: the stale reconciliation view was the race, not the run's
+        // state. Criterion A also keeps its own direct coverage in resumeLoop.gate.test.ts.
+        "gap 08 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 09 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 10 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 11 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 12 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 13 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
         "gap 14 | T=e3 O=e3 R=e3 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
         "gap 15 | T=e3 O=e3 R=e3 M=absent P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=TOR",
         "gap 16 | T=e3 O=e3 R=e3 M=absent P=-OR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=-OR",
