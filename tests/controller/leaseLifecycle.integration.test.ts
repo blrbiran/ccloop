@@ -677,9 +677,27 @@ describe("lease heartbeat lifecycle", () => {
     });
 
     try {
-      const { runLoop: observedRunLoop, OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS } = await import(
-        "../../src/controller/runLoop.js"
-      );
+      const {
+        runLoop: observedRunLoop,
+        OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS,
+        OWNER_TRANSFER_LOCK_RETRY_DELAY_MS,
+      } = await import("../../src/controller/runLoop.js");
+
+      // Package 2 whole-branch fix round, Lane 1 I-3 / Lane 2 I-1 — ADDED, nothing removed. The
+      // assertion further down (`writeCalls === OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS`) has the
+      // constant on both sides and therefore holds for any value it takes: the controller measured
+      // 3 -> 2 with the whole suite still green, so the only thing pinned was a floor of 2. The
+      // self-referential form is kept — "the loop honours its configuration" is a real property —
+      // and the configured VALUE is pinned here as the literals human ruling 38 approved: three
+      // attempts, ~100ms of total backoff = (3 - 1) x 50ms.
+      expect(OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS).toBe(3);
+      expect(OWNER_TRANSFER_LOCK_RETRY_DELAY_MS).toBe(50);
+      // DOCUMENTARY, and labelled as such per the independent review's Low-3: with the two
+      // lines above pinning 3 and 50, (3 - 1) * 50 is 100 by arithmetic, so this line can never
+      // be the first to fail and its mutation-detection power is zero. It is kept because it
+      // states the quantity human ruling 38 actually approved — the ~100ms of total backoff —
+      // which neither literal above says on its own. It is not a guard; the two lines above are.
+      expect((OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS - 1) * OWNER_TRANSFER_LOCK_RETRY_DELAY_MS).toBe(100);
 
       const adapter: RuntimeAdapter = {
         async plan() {

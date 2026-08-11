@@ -98,7 +98,25 @@ async function observeOwnership(runDir: string): Promise<OwnershipObservation> {
 //   never names writeRunState; a dynamic `await import("…/fileStore.js")`, which is not a static
 //   import declaration; and a third module that imports writeRunState and is called from here.
 //   Closing them needs the type-level invariant (option (c)), which changes existing test
-//   expectations in tests/persistence/fileStore.test.ts and was not authorised. ***
+//   expectations in tests/persistence/fileStore.test.ts and was not authorised.
+//   FOURTH PATH, added by the package 2 whole-branch fix round because the three above understate
+//   the boundary and an honest limit that is itself too narrow is the same defect one layer up:
+//   tests/controller/ownedRunStateWriter.structure.test.ts PARSES EXACTLY ONE FILE. Its
+//   `runLoopSourcePath` is hardcoded to src/controller/runLoop.ts, so the enforced claim is about
+//   runLoop.ts's import list and about nothing else. Concretely, and stated as three facts rather
+//   than one summary:
+//     (1) a dynamic `await import()` anywhere is invisible to it — it walks ImportDeclaration
+//         nodes, and a dynamic import is not one;
+//     (2) a NEW third module that imports writeRunState and is called from a covered file is
+//         invisible to it — and so is the act of adding such a module to src/ at all: no test in
+//         this repository observes the set of files under src/, so nothing makes a sound when one
+//         appears;
+//     (3) *** src/controller/resumeLoop.ts is COMPLETELY OUTSIDE the check's field of view. *** It
+//         does not import writeRunState today, and nothing whatsoever prevents it from importing
+//         it tomorrow: the structure test would stay green, because it never reads that file.
+//   This paragraph changes the STATED boundary to match the measured one. It adds no guarantee,
+//   and the parse scope is deliberately NOT widened here — widening it is a new claim that was not
+//   authorised for this round. ***
 //
 // That structure is the point, and it is a correction of how the first version of this guard
 // argued for its own completeness. That version sat inside persistTerminalState and justified its
