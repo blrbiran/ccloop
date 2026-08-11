@@ -498,6 +498,22 @@ async function acquireOwnerTransferLockForReconciliation(
 //
 // The heartbeat's runExclusive is NOT an alternative to this: it is an in-process promise queue and
 // constrains no other process.
+//
+// *** ERRATUM (package 2 whole-branch review, Critical C-1) — the sentence "Two lock spans cannot
+// interleave" above is KEPT VERBATIM rather than softened, because this repository records what it
+// once claimed; but that premise has been DISPROVED BY MEASUREMENT and must not be relied on:
+//   - acquireOwnerTransferLock creates the lock with `open(lockPath, "wx")` and only then does
+//     `handle.writeFile(...)`. Between those two awaits the lock file exists and is ZERO BYTES.
+//   - An intruder that hits EEXIST in that window calls tryRecoverStaleOwnerTransferLock, whose
+//     `JSON.parse("")` throws, so control lands in the `catch` branch — and that branch NEVER
+//     CALLS isProcessActive. It asks only whether staged artifacts exist, and if they do it
+//     `safeUnlink`s the lock and reports it recovered.
+//   - So a LIVE holder's lock is taken away from it, and two lock spans DO interleave — including
+//     the third order this comment says the lock removes.
+// The controller reproduced this with two REAL processes (ledger §21.1, with a must-hit and a
+// must-miss control), so it is not a reading of the code. It is a KNOWN, UNFIXED Critical (C-1);
+// the repair is a separate human decision (open point B) and was DELIBERATELY NOT MADE in this
+// round — no line of acquireOwnerTransferLock or tryRecoverStaleOwnerTransferLock was touched. ***
 async function publishReconciliationUnderTransferLock(
   runDir: string,
   nextReconciliationRecord: ReconciliationRecord,

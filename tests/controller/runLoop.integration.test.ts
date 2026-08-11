@@ -1469,6 +1469,184 @@ describe("runLoop", () => {
     })).toEqual({ ok: false, reason: "run status failed is not resumable" });
   });
 
+  // Package 2 whole-branch review, Lane 1 finding I-1 — NEW COVERAGE, added under HUMAN RULING 48,
+  // the fifth named exception. That grant covers exactly the additions below and the constant
+  // assertions in the two retry tests; it authorises no other change to any existing expectation.
+  //
+  // What was missing, measured rather than argued: the controller opened the guard for
+  // `exhausted`, `blocked_waiting_human` and `succeeded` — i.e. let a foreign-owned run be written
+  // with each of those three terminal statuses — and the WHOLE suite stayed green at 524/524. The
+  // same mutation applied to `failed` / `cancelled` goes red, which is the must-hit control that
+  // proves the mutation surface is live. So these three terminal statuses had ZERO assertions
+  // behind them.
+  //
+  // They are not a lesser case of `failed`/`cancelled`. None of the three is in RESUMABLE_STATUSES
+  // (src/controller/resumeLoop.ts), so writing any of them into a run this process does not own
+  // makes that run unresumable for its real owner — the exact damage shape of Critical finding
+  // F-1. Each test below therefore ends the same way that finding's own test does: with the
+  // production gate answering `ok` for what is on disk, and a control feeding that same gate the
+  // status the unguarded writer would have persisted.
+  const foreignOwnerProcessInstanceId = "pid:999999:1234567890";
+
+  const foreignOwnerTransfer: OwnerTransferRecord = {
+    priorOwnerEpoch: 1,
+    newOwnerEpoch: 2,
+    priorProcessInstanceId: "pid:100:1",
+    newProcessInstanceId: foreignOwnerProcessInstanceId,
+    transferredAt: "2026-07-25T00:00:00.000Z",
+    reason: "owner lost",
+    eligibleForContinuation: true,
+  };
+
+  const foreignReconciliation: ReconciliationRecord = {
+    staleSuspicionBasis: [],
+    staleConfirmed: true,
+    ownershipVerdict: "OWNER_LOST",
+    lastTrustedBoundary: "execute",
+    conflictingEvidence: [],
+    takeoverPermission: { allowed: true, reason: "ok" },
+    priorOwnerEpoch: 1,
+    newOwnerEpoch: 2,
+    eligibleForContinuation: true,
+  };
+
+  // Runs one loop to a terminal state against a run whose owner-record.json names a DIFFERENT,
+  // current, live owner, and reports everything the assertions below need. The fixture is the F-1
+  // test's, unchanged; only the route to the terminal status differs per caller.
+  async function observeTerminalWriteAgainstForeignOwner(
+    contract: LoopContract,
+    adapter: RuntimeAdapter,
+  ): Promise<{
+    finalState: RunState;
+    persisted: RunState;
+    persistedBytesBefore: string;
+    persistedBytesAfter: string;
+    eventTypes: string[];
+    ownerRecord: OwnerRecord;
+  }> {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const state: RunState = { ...makeRunState("planning"), currentAttempt: 0, attemptsUsed: 0 };
+
+    await initializeRunFiles(runDir, contract, state);
+    const persistedBytesBefore = await readFile(join(runDir, "loop-state.json"), "utf8");
+
+    await writeOwnerRecord(runDir, {
+      runId: "task-1",
+      logicalSessionId: "task-1:t0",
+      currentOwnerEpoch: 2,
+      currentProcessInstanceId: foreignOwnerProcessInstanceId,
+      lastAffirmedAt: "2026-07-25T00:00:00.000Z",
+      ownerStatus: "current",
+      supersededByEpoch: null,
+      leaseAffirmedAt: "2026-07-25T00:00:00.000Z",
+    });
+
+    const finalState = await runLoopFromState(contract, runDir, adapter, state);
+
+    return {
+      finalState,
+      persisted: await readRunState(runDir),
+      persistedBytesBefore,
+      persistedBytesAfter: await readFile(join(runDir, "loop-state.json"), "utf8"),
+      eventTypes: await readEventTypes(runDir),
+      ownerRecord: JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as OwnerRecord,
+    };
+  }
+
+  // The two halves that must BOTH hold, exactly as in the F-1 test: this process still reports its
+  // own terminal outcome to its caller, and the other owner's loop-state.json is byte-identical and
+  // still resumable. A guard widened to suppress the reporting half would pass a "not written on
+  // disk" check and still be wrong.
+  async function expectForeignOwnersRunLeftResumable(
+    observation: Awaited<ReturnType<typeof observeTerminalWriteAgainstForeignOwner>>,
+    terminalStatus: RunState["status"],
+  ): Promise<void> {
+    expect(observation.finalState.status).toBe(terminalStatus);
+    expect(observation.persisted.status).toBe("planning");
+    expect(observation.persistedBytesAfter).toBe(observation.persistedBytesBefore);
+    expect(observation.eventTypes).toContain("terminal_write_abandoned");
+
+    expect(evaluateResumeEligibility({
+      ownerRecord: observation.ownerRecord,
+      ownerTransfer: foreignOwnerTransfer,
+      reconciliation: foreignReconciliation,
+      runState: observation.persisted,
+    })).toEqual({ ok: true });
+
+    // The control, and the reason this is F-1 damage rather than a cosmetic difference: fed the
+    // status the unguarded writer would have persisted, the same gate refuses.
+    expect(evaluateResumeEligibility({
+      ownerRecord: observation.ownerRecord,
+      ownerTransfer: foreignOwnerTransfer,
+      reconciliation: foreignReconciliation,
+      runState: { ...observation.persisted, status: terminalStatus },
+    })).toEqual({ ok: false, reason: `run status ${terminalStatus} is not resumable` });
+  }
+
+  it("refuses to write a terminal succeeded status into a run a different owner holds", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const adapter = new ScriptedAdapter([successFrame()]);
+
+    await expectForeignOwnersRunLeftResumable(
+      await observeTerminalWriteAgainstForeignOwner(contract, adapter),
+      "succeeded",
+    );
+  });
+
+  it("refuses to write a terminal exhausted status into a run a different owner holds", async () => {
+    const repoPath = await createRepo();
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: { ...baseContract.executionPolicy, perAttemptTimeoutMs: 20 },
+    };
+
+    // The per-attempt timeout route, copied from "exhausts the run when planning exceeds
+    // per-attempt timeout": plan outlives its own phase timeout, so the run ends exhausted without
+    // ever reaching execute.
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        await delay(160);
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        throw new Error("execute should not run");
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    await expectForeignOwnersRunLeftResumable(
+      await observeTerminalWriteAgainstForeignOwner(contract, adapter),
+      "exhausted",
+    );
+  });
+
+  it("refuses to write a terminal blocked_waiting_human status into a run a different owner holds", async () => {
+    const repoPath = await createRepo();
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      escalationAndExit: { ...baseContract.escalationAndExit, pauseOn: ["needs-human-review"] },
+    };
+
+    // The pauseOn route, copied from "blocks for human input when approval also hits a pauseOn
+    // gate": verification approves but raises a pause signal the contract gates on.
+    const adapter = new ScriptedAdapter([
+      {
+        ...successFrame(),
+        verification: { ...successFrame().verification, pauseSignals: ["needs-human-review"] },
+      },
+    ]);
+
+    await expectForeignOwnersRunLeftResumable(
+      await observeTerminalWriteAgainstForeignOwner(contract, adapter),
+      "blocked_waiting_human",
+    );
+  });
+
   // Package 2 / debt 2, task S4 — the thinnest cell (#7). This is the SECOND terminal write site of
   // Critical finding F-1: the retryable path's `cleanupAttemptWorkspace` throw, which transitions to
   // "failed" and persists it. Of the nine loop-state.json write sites the guard covers, this one was
@@ -2400,6 +2578,16 @@ describe("runLoop", () => {
   // layer. A name is what appears in failure output, so it names the two things actually asserted:
   // clause 1 is assertion (a), clause 2 is assertion (b). Human ruling; the plan carries the
   // matching in-place amendment note (Amended 2026-08-02 (d), §Task A9).
+  //
+  // *** SOURCE ANCHOR for that human ruling, added by the package 2 whole-branch fix round: the
+  // ruling is HUMAN RULING 13 of the package 2 ledger
+  // (.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md), and it is a NAMED EXCEPTION to this
+  // repository's standing rule that an existing test's name is not to be changed. It is recorded
+  // here because a whole-branch reviewer searched the entire repository for "ruling 13" and got
+  // zero hits while the same search hit for rulings 14/17/37 — i.e. the search surface was proven
+  // live and this one anchor was genuinely missing — so a reader of this test could not learn from
+  // the code that its name was changed under a named grant of permission. Nothing about the test
+  // changes here; only the anchor is added. ***
   it("abandons the loser's reconciliation write against the winner's held transfer lock and finalizes none of the winner's transaction inside the publish window", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));

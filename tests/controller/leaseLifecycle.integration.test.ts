@@ -677,9 +677,22 @@ describe("lease heartbeat lifecycle", () => {
     });
 
     try {
-      const { runLoop: observedRunLoop, OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS } = await import(
-        "../../src/controller/runLoop.js"
-      );
+      const {
+        runLoop: observedRunLoop,
+        OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS,
+        OWNER_TRANSFER_LOCK_RETRY_DELAY_MS,
+      } = await import("../../src/controller/runLoop.js");
+
+      // Package 2 whole-branch fix round, Lane 1 I-3 / Lane 2 I-1 — ADDED, nothing removed. The
+      // assertion further down (`writeCalls === OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS`) has the
+      // constant on both sides and therefore holds for any value it takes: the controller measured
+      // 3 -> 2 with the whole suite still green, so the only thing pinned was a floor of 2. The
+      // self-referential form is kept — "the loop honours its configuration" is a real property —
+      // and the configured VALUE is pinned here as the literals human ruling 38 approved: three
+      // attempts, ~100ms of total backoff = (3 - 1) x 50ms.
+      expect(OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS).toBe(3);
+      expect(OWNER_TRANSFER_LOCK_RETRY_DELAY_MS).toBe(50);
+      expect((OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS - 1) * OWNER_TRANSFER_LOCK_RETRY_DELAY_MS).toBe(100);
 
       const adapter: RuntimeAdapter = {
         async plan() {

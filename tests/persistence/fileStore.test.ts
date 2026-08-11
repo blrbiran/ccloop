@@ -39,6 +39,16 @@ import type { OwnerRecord, OwnerTransferRecord, ReconciliationRecord } from "../
 // call log is new.
 const renameSpy = vi.fn();
 
+// Package 2 whole-branch review, Lane 2 finding I-2. Same shape and same reason as renameSpy
+// directly above, for a different question: how many times a call ATTEMPTED to take
+// .owner-transfer.lock. fileStore.ts calls `open` in exactly one place — acquireOwnerTransferLock —
+// so one open of the lock path is one acquisition attempt, and that is the only way to observe the
+// reconciliation retry loop's bound from outside (its two constants are module-private and are
+// deliberately left that way; exporting them for a test would be the self-referential assertion
+// this finding is about). Pure observation: every call is forwarded to the real implementation, so
+// no other test in this file sees any change in behaviour.
+const openSpy = vi.fn();
+
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -47,8 +57,17 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       renameSpy(...args);
       return actual.rename(...args);
     },
+    open: async (...args: Parameters<typeof actual.open>) => {
+      openSpy(...args);
+      return actual.open(...args);
+    },
   };
 });
+
+// Scoped to one run directory, because openSpy accumulates across the whole file.
+function lockAcquireAttempts(runDir: string): number {
+  return openSpy.mock.calls.filter((call) => String(call[0]) === join(runDir, ".owner-transfer.lock")).length;
+}
 
 const contract: LoopContract = {
   objective: { taskId: "task-1", goal: "Fix test", successCondition: "tests pass", nonGoals: [] },
@@ -2607,6 +2626,132 @@ describe("fileStore", () => {
   // 12d(iii): the producing side of A8's operator channel. The two tests below reuse the
   // "owner-record.json is missing" fixture above (transfer published, owner record absent),
   // which is the cheapest shape that reaches the abandon branch, and add the third argument.
+  // Package 2 whole-branch review, Lane 2 finding I-2 — PURE ADDITION, no existing expectation
+  // touched. D2 gave the reconciliation publish its own bounded retry
+  // (RECONCILIATION_LOCK_RETRY_ATTEMPTS / _DELAY_MS in src/persistence/fileStore.ts), and the
+  // reviewer measured that the whole tests/ tree referenced neither constant and that cutting
+  // attempts to 1 — i.e. deleting the retry outright — left the ENTIRE suite green. The transfer
+  // side and the resume side each have a "clears" / "exhausted" pair; this third retry had none.
+  // The two tests below are that pair, shaped after leaseLifecycle's "retries a busy owner-transfer
+  // lock and completes once it clears (spec requirement 1)" / "abandons the transfer once the retry
+  // bound is exhausted…".
+  //
+  // The lock is a REAL lock file naming this live process, so the busy path is the production one:
+  // acquireOwnerTransferLock gets EEXIST, tryRecoverStaleOwnerTransferLock sees a live pid and
+  // refuses to steal it, and OwnerTransferLockBusyError is what the retry loop actually catches.
+  //
+  // Attempt counting is by openSpy (see its note at the top of this file), not by a mocked failure
+  // count: the loop's bound is the thing under test, so nothing that shapes it may be faked.
+  function busyLockRecord(): string {
+    return JSON.stringify(
+      { holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-07-25T00:00:00.000Z" },
+      null,
+      2,
+    );
+  }
+
+  function staleCandidateAnalysis(): RunBoundaryAnalysis {
+    return {
+      status: "stale_candidate",
+      strongProgressAt: "2026-07-21T10:00:00.000Z",
+      weakProgressAt: "2026-07-21T10:05:00.000Z",
+      suspectReason: "healthy window exceeded",
+      staleCandidateReason: "continuity evidence missing",
+    };
+  }
+
+  function winnerReconciliation(): ReconciliationRecord {
+    return {
+      staleSuspicionBasis: ["owner transfer already published"],
+      staleConfirmed: true,
+      ownershipVerdict: "OWNER_LOST",
+      lastTrustedBoundary: "execute",
+      conflictingEvidence: [],
+      takeoverPermission: { allowed: true, reason: "strict owner-loss conditions satisfied" },
+      priorOwnerEpoch: 1,
+      newOwnerEpoch: 2,
+      eligibleForContinuation: true,
+    };
+  }
+
+  async function readEventTypesOrNone(runDir: string): Promise<string[]> {
+    try {
+      return (await readFile(join(runDir, "events.jsonl"), "utf8"))
+        .split("\n")
+        .filter((line) => line !== "")
+        .map((line) => (JSON.parse(line) as { type: string }).type);
+    } catch {
+      return [];
+    }
+  }
+
+  it("retries a busy owner-transfer lock for the reconciliation publish and writes the record once it clears", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    await writeFile(lockPath, busyLockRecord());
+
+    const record = winnerReconciliation();
+
+    // The release is scheduled between the first attempt (t≈0) and the third (t≈2 x 50ms), so the
+    // publish can only succeed by RETRYING. The window is one-sided on purpose: the third attempt
+    // cannot happen before 100ms — two real sleeps stand in front of it — so a slow machine can
+    // only move the success from attempt 2 to attempt 3, never turn it into a failure.
+    const release = setTimeout(() => {
+      void unlink(lockPath).catch(() => undefined);
+    }, 70);
+
+    try {
+      await writeBoundaryArtifacts(runDir, {
+        boundaryAnalysis: staleCandidateAnalysis(),
+        reconciliationRecord: record,
+      });
+    } finally {
+      clearTimeout(release);
+    }
+
+    // First, and deliberately before any file read: with the retry removed this is the assertion
+    // that fails, so the test reds on an assertion rather than on an ENOENT from reading a file
+    // that was never written.
+    expect(await readEventTypesOrNone(runDir)).not.toContain("reconciliation_write_abandoned");
+
+    // The retry is what got it there: attempt 1 met the live lock. `toBeGreaterThanOrEqual` rather
+    // than an exact count because whether the win lands on attempt 2 or 3 is a timing detail the
+    // production code does not decide; that it took more than one is the requirement.
+    expect(lockAcquireAttempts(runDir)).toBeGreaterThanOrEqual(2);
+
+    expect(JSON.parse(await readFile(join(runDir, "reconciliation-record.json"), "utf8"))).toEqual(record);
+  });
+
+  it("abandons the reconciliation publish once the reconciliation retry bound is exhausted, after exactly three lock attempts", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    // Never released: the whole retry window meets the same live holder.
+    await writeFile(lockPath, busyLockRecord());
+
+    await writeBoundaryArtifacts(runDir, {
+      boundaryAnalysis: staleCandidateAnalysis(),
+      reconciliationRecord: winnerReconciliation(),
+    });
+
+    // The bound itself, as a literal. This is the assertion the reviewer's mutation (attempts -> 1)
+    // has to fail: it pins that the loop gave up after three attempts, not after one and not
+    // unboundedly. It is the counterpart of leaseLifecycle's writeCalls assertion, written as a
+    // literal here because the constant it pins is module-private.
+    expect(lockAcquireAttempts(runDir)).toBe(3);
+
+    // Refused, recorded exactly once, and nothing published — the same three observations the
+    // transfer side's exhaustion test makes.
+    expect(
+      (await readEventTypesOrNone(runDir)).filter((type) => type === "reconciliation_write_abandoned"),
+    ).toHaveLength(1);
+    await expect(readFile(join(runDir, "reconciliation-record.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    // boundary-analysis.json is written before the lock is ever taken, so its presence is what
+    // shows the abandonment was scoped to the reconciliation publish.
+    expect(JSON.parse(await readFile(join(runDir, "boundary-analysis.json"), "utf8")).status).toBe("stale_candidate");
+  });
+
   it("calls onReconciliationWriteAbandoned exactly once with the read failure and still resolves", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
 
@@ -2988,6 +3133,19 @@ describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racin
               // content on disk before reader B ever gets a chance to look at it -- otherwise B
               // could observe the (unrelated, already-known) zero-length lock window instead of
               // the busy-lock path this test targets.
+              // *** ERRATUM (package 2 whole-branch review, Critical C-1). The word "unrelated"
+              // above is KEPT VERBATIM — this repository does not silently soften a claim it once
+              // made — but it IS FALSE AFTER D2, and a reader must not carry it away. This test
+              // exists to establish "exactly one finalizer at a time"; the zero-length lock window
+              // is precisely the path that makes that conclusion FALSE, because an intruder that
+              // hits it lands in tryRecoverStaleOwnerTransferLock's `catch` branch, which never
+              // calls isProcessActive and unlinks a LIVE holder's lock whenever staged artifacts
+              // exist. The controller reproduced that with two real processes (ledger §21.1). So
+              // the window is not a neighbouring curiosity: it is the counter-example to this
+              // test's own subject, still unfixed (C-1, repair deferred to a human decision).
+              // The fixture below is deliberately UNCHANGED — steering B away from the window is
+              // what isolates the busy-lock path this test is for, and changing it would change
+              // what the test measures. ***
               handle.writeFile = (async (...writeArgs: Parameters<typeof originalWriteFile>) => {
                 const result = await originalWriteFile(...writeArgs);
                 aLockWritten.resolve();

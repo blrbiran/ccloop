@@ -322,7 +322,20 @@ describe("resumeLoop", () => {
     try {
       const { resumeLoop: observedResumeLoop, ResumeNotEligibleError: ObservedResumeNotEligibleError } =
         await import("../../src/controller/resumeLoop.js");
-      const { OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS } = await import("../../src/controller/runLoop.js");
+      const { OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS, OWNER_TRANSFER_LOCK_RETRY_DELAY_MS } =
+        await import("../../src/controller/runLoop.js");
+
+      // Package 2 whole-branch fix round, Lane 1 I-3 / Lane 2 I-1 — ADDED, nothing removed. The
+      // assertion further down (`claimCalls === OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS`) compares the
+      // observed count against the very constant that produced it, so it is true for ANY value of
+      // that constant: the controller measured 3 -> 2 leaving the WHOLE suite green, and only
+      // 3 -> 1 red (two tests, via a different route). What that self-referential form pins is
+      // "the loop honours its configuration", which is right and is kept; what nothing pinned was
+      // the configured VALUE itself. These two lines pin it, as the literals approved in human
+      // ruling 38: three attempts, ~100ms of total backoff = (3 - 1) x 50ms.
+      expect(OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS).toBe(3);
+      expect(OWNER_TRANSFER_LOCK_RETRY_DELAY_MS).toBe(50);
+      expect((OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS - 1) * OWNER_TRANSFER_LOCK_RETRY_DELAY_MS).toBe(100);
 
       let thrown: unknown = null;
       try {
