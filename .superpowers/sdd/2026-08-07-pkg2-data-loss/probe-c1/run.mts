@@ -16,6 +16,21 @@
 //                the fix does not claim to close (that branch is open point B and was not touched),
 //                so this must read > 0 even on the FIXED build. Without it, "0 after the fix" would
 //                be an unverified negative.
+//
+// SENSITIVITY — READ THIS BEFORE CONCLUDING ANYTHING FROM A SINGLE RUN. An independent reviewer
+// measured the must-hit control's rate at roughly 0.3 violations per second: at the 5s default it
+// frequently reads ZERO, and only at 10s per run, repeated, does it settle into a stable 1-4. Zero
+// is also exactly what a BROKEN probe looks like, so a short truncated run is the easiest way for a
+// later reader to misdiagnose this as "the control cannot fire".
+//   - Run `truncated` for at least 10000ms, and repeat it; treat single-digit counts as the
+//     expected magnitude, not as a weak result.
+//   - No count printed by this probe is a reproducible constant. They depend on run length, machine
+//     and load: the same `staged` baseline has been measured at 140, 137, 213 and 252 across
+//     machines and runs. What is reproducible, and what the C-1 claim actually rests on, is the
+//     DIFFERENCE between arms: thousands of CAS bases consumed with a non-zero violation count
+//     before the fix, versus thousands consumed with exactly zero after it.
+// The parent prints a warning below when `truncated` is run too briefly, so nobody has to remember
+// this paragraph.
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -29,6 +44,13 @@ const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 
 const mode = process.argv[2] ?? "staged";
 const durationMs = Number(process.argv[3] ?? "4000");
+
+if (mode === "truncated" && durationMs < 10000) {
+  process.stderr.write(
+    `WARNING: the must-hit control fires at roughly 0.3/s; at ${durationMs}ms a reading of 0 is `
+      + "common and does NOT mean the probe cannot fire. Use >= 10000ms and repeat.\n",
+  );
+}
 
 const runDir = await mkdtemp(join(tmpdir(), "ccloop-c1-probe-"));
 await writeFile(join(runDir, "owner-record.json"), JSON.stringify({

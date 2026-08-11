@@ -933,6 +933,36 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<boolean
   return true;
 }
 
+// Removing the lock's staging name, on BOTH paths that reach it, and deliberately NOT through
+// safeUnlink. This is the same shape writeJsonFileAtomically already uses for the same kind of
+// cleanup, and its comment states one of the two reasons verbatim: "Best effort, and intentionally
+// not safeUnlink: cleanup here runs while an error is already in flight, and a cleanup failure must
+// not replace the error the caller needs to see. safeUnlink rethrows anything that is not ENOENT,
+// which would do exactly that." That reason covers the failure path here.
+//
+// The SUCCESS path needs a second reason, and it is the more serious one — the scoped re-review's
+// Imp-1, a defect this fix round introduced itself. `safeUnlink` after a SUCCESSFUL `link` sat
+// between the publish and the `return`, where the pre-C-1 code had no throwing statement at all. A
+// non-ENOENT errno there (EACCES/EPERM/EROFS/ESTALE/EIO — environment faults; concurrency cannot
+// produce them, since this staging file is this attempt's alone) escaped through the outer catch's
+// `if (code !== "EEXIST") throw error`, and by then THE LOCK WAS ALREADY PUBLISHED: the caller
+// never received `release`, the handle was never closed, and because the lock record names a pid
+// that is still alive, tryRecoverStaleOwnerTransferLock refuses to reclaim it. Every owner-transfer
+// operation on that run — heartbeat affirm, transfer, reconciliation publish — would then fail with
+// OwnerTransferLockBusyError until the holding process exited. Losing the staging name is a smudge;
+// losing the lock is an outage, so the smudge is swallowed.
+//
+// On the failure path there is a third effect worth naming: safeUnlink could replace an EEXIST with
+// its own errno, which would route a genuine lock contention out of the busy-lock branch entirely.
+async function discardLockStaging(stagingPath: string): Promise<void> {
+  try {
+    await unlink(stagingPath);
+  } catch {
+    // swallowed on purpose; see above. A leftover staging file is inert: it is uniquely named per
+    // process and per attempt, nothing reads it, and no acquisition path looks for it.
+  }
+}
+
 // Package 2 whole-branch review, Critical C-1, fixed under human ruling 50 (option O1(a): make the
 // publish atomic; do NOT touch tryRecoverStaleOwnerTransferLock, which is open point B).
 //
@@ -943,8 +973,12 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<boolean
 // whether the holder is alive, and which therefore unlinks a LIVE holder's lock as soon as any
 // staged artifact is present. Two processes then believe they hold the same cross-process lock.
 // Measured with two real Node processes hammering this function through affirmOwnerLease's
-// compare-and-swap: 140 lost updates in 5s, against 0 for the same probe with the steal branch made
-// unreachable (.superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/).
+// compare-and-swap (.superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/): with the steal branch
+// reachable, the two-step publish produced lost updates in the HUNDREDS per 5s run (140 here; an
+// independent reviewer measured 137/213/252 on other runs and machines), while the same probe
+// against this atomic publish consumed thousands of CAS bases and produced ZERO. The counts are not
+// reproducible constants — run length, machine and load move them — so the claim rests on that
+// difference between arms, not on any single number; see the probe's own SENSITIVITY note.
 //
 // WHAT IS DIFFERENT NOW. The content is written to a per-process, per-attempt staging path first,
 // and the lock is published by `link(stagingPath, lockPath)`. `link` is an atomic test-and-set: it
@@ -991,13 +1025,13 @@ async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () =
         await link(stagingPath, lockPath);
       } catch (error) {
         await handle.close();
-        await safeUnlink(stagingPath);
+        await discardLockStaging(stagingPath);
         throw error;
       }
 
       // The lock is published; the staging name has done its job. The handle stays open on the same
       // inode, which is what release() closes.
-      await safeUnlink(stagingPath);
+      await discardLockStaging(stagingPath);
 
       return {
         release: async () => {

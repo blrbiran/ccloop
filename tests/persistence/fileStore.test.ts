@@ -2680,7 +2680,7 @@ describe("fileStore", () => {
   // acquireOwnerTransferLock gets EEXIST, tryRecoverStaleOwnerTransferLock sees a live pid and
   // refuses to steal it, and OwnerTransferLockBusyError is what the retry loop actually catches.
   //
-  // Attempt counting is by openSpy (see its note at the top of this file), not by a mocked failure
+  // Attempt counting is by withLockAttemptCounter (see its note above), not by a mocked failure
   // count: the loop's bound is the thing under test, so nothing that shapes it may be faked.
   function busyLockRecord(): string {
     return JSON.stringify(
@@ -3078,15 +3078,27 @@ describe("fileStore", () => {
   //     evidence: where the transaction cannot be completed, resume is still refused and the disk
   //     is left untouched.
   //
-  // WHY `accepted` IS THE CORRECT TERMINAL STATE ON ALL 18 ROWS — measured, not argued. The matrix
-  // was temporarily instrumented to also snapshot the run dir AFTER the resume attempt, and for
-  // every one of gaps 05..13 in BOTH fixtures that snapshot is the fully committed, internally
-  // consistent triple with the staging reclaimed — `T=e2 O=e2 R=e2 M=absent P=---` for the
-  // first-transfer fixture and `T=e3 O=e3 R=e3 M=absent P=---` for the double-transfer one. That is
-  // BYTE-FOR-BYTE THE SAME END STATE as gap 14, which this suite already accepted before any of
-  // this and which the comment above calls the square where "refusing would be the bug, not the
-  // guard". No torn publish, no orphaned pending, no surviving marker, and the epochs agree across
-  // all three files — the resume is evaluated on a committed transaction, not on a half of one. ***
+  // WHY `accepted` IS THE CORRECT TERMINAL STATE ON ALL 18 ROWS — measured, and now ENFORCED. Every
+  // row below carries an `afterResume` column: the state the resume attempt itself left on disk.
+  // For all of gaps 05..13 in BOTH fixtures it is the fully committed, internally consistent triple
+  // with the staging reclaimed — `T=e2 O=e2 R=e2 M=absent P=---` for the first-transfer fixture and
+  // `T=e3 O=e3 R=e3 M=absent P=---` for the double-transfer one — which is THE SAME COMMITTED END
+  // STATE gap 14 reaches, the square this comment already calls the one where "refusing would be
+  // the bug, not the guard". No torn publish, no orphaned pending, no surviving marker, and the
+  // epochs agree across all three files: the resume is evaluated on a committed transaction, not on
+  // half of one.
+  //
+  // Two precision notes, both from the scoped re-review:
+  //   - "the same end state" is a claim about the SNAPSHOT (presence, epoch, marker, pendings) and
+  //     about the artifacts' fields — NOT about bytes. An independent reviewer compared all three
+  //     files field by field against gap 14 and found them identical except owner-record.json's
+  //     `lastAffirmedAt`, which is a wall clock and cannot match. An earlier version of this
+  //     paragraph said "byte-for-byte", which was an overclaim and also contradicted this file's
+  //     own statement that crashSnapshot "does NOT compare file contents byte for byte" (Low-3).
+  //   - until fix round 3 this paragraph rested on a measurement taken OUT OF TREE, with nothing in
+  //     the suite pinning it — the `after` column is taken from a second copy that only ran
+  //     recovery, never a resume. That gap was the review's Imp-2, and the `afterResume` column is
+  //     the repair: a regression that let an accepted resume land on a torn state now reds here. ***
   it(
     "refuses resume at every pre-commit crash gap of the three-file transaction, commits idempotently past it, and finishes recovery wherever the marker survives",
     async () => {
@@ -3103,26 +3115,26 @@ describe("fileStore", () => {
         // `refused: cannot read run artifacts`. That refusal was the defect's own product: the
         // reconciliation read raced the recovery that was about to publish it. Removing it grants
         // nothing — the run was always eligible; the reader was looking too early.
-        "gap 01 | T=absent O=e1 R=absent M=unparseable P=TOR | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferMarkerUnreadableError | after T=absent O=e1 R=absent M=unparseable P=TOR",
-        "gap 02 | T=absent O=e1 R=absent M=v2 P=-OR | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=absent O=e1 R=absent M=v2 P=-OR",
-        "gap 03 | T=absent O=e1 R=absent M=v2 P=T-R | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=absent O=e1 R=absent M=v2 P=T-R",
-        "gap 04 | T=absent O=e1 R=absent M=v2 P=TO- | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=absent O=e1 R=absent M=v2 P=TO-",
-        "gap 05 | T=absent O=e1 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 06 | T=absent O=e1 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 07 | T=absent O=e1 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 08 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 09 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 10 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 11 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 12 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 13 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 01 | T=absent O=e1 R=absent M=unparseable P=TOR | resume=refused: cannot read run artifacts | afterResume T=absent O=e1 R=absent M=unparseable P=TOR | recovery=throws OwnerTransferMarkerUnreadableError | after T=absent O=e1 R=absent M=unparseable P=TOR",
+        "gap 02 | T=absent O=e1 R=absent M=v2 P=-OR | resume=refused: cannot read run artifacts | afterResume T=absent O=e1 R=absent M=v2 P=-OR | recovery=throws OwnerTransferPendingMissingError | after T=absent O=e1 R=absent M=v2 P=-OR",
+        "gap 03 | T=absent O=e1 R=absent M=v2 P=T-R | resume=refused: cannot read run artifacts | afterResume T=absent O=e1 R=absent M=v2 P=T-R | recovery=throws OwnerTransferPendingMissingError | after T=absent O=e1 R=absent M=v2 P=T-R",
+        "gap 04 | T=absent O=e1 R=absent M=v2 P=TO- | resume=refused: cannot read run artifacts | afterResume T=absent O=e1 R=absent M=v2 P=TO- | recovery=throws OwnerTransferPendingMissingError | after T=absent O=e1 R=absent M=v2 P=TO-",
+        "gap 05 | T=absent O=e1 R=absent M=v2 P=TOR | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 06 | T=absent O=e1 R=absent M=v2 P=TOR | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 07 | T=absent O=e1 R=absent M=v2 P=TOR | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 08 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 09 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 10 | T=e2 O=e1 R=absent M=v2 P=TOR | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 11 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 12 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 13 | T=e2 O=e2 R=absent M=v2 P=TOR | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
         // Past the commit point: all three published. Gap 14 still has the marker, so recovery
         // republishes idempotently and reclaims it; gaps 15..17 have no marker, so recovery is
         // the zero-write read (cleanup is gated on lockHeld) and the residue survives untouched.
-        "gap 14 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
-        "gap 15 | T=e2 O=e2 R=e2 M=absent P=TOR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=TOR",
-        "gap 16 | T=e2 O=e2 R=e2 M=absent P=-OR | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=-OR",
-        "gap 17 | T=e2 O=e2 R=e2 M=absent P=--R | resume=accepted | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=--R",
+        "gap 14 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=---",
+        "gap 15 | T=e2 O=e2 R=e2 M=absent P=TOR | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=TOR",
+        "gap 16 | T=e2 O=e2 R=e2 M=absent P=-OR | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=-OR",
+        "gap 17 | T=e2 O=e2 R=e2 M=absent P=--R | resume=accepted | afterResume T=e2 O=e2 R=e2 M=absent P=--- | recovery=ok | after T=e2 O=e2 R=e2 M=absent P=--R",
       ]);
 
       expect.soft(await observeCrashMatrix(stageDoubleOwnerTransferCrashedAt)).toEqual([
@@ -3135,10 +3147,10 @@ describe("fileStore", () => {
         // history), not by a manufactured read error, so amending them ADDS A PERMISSION and is the
         // half that required human ruling 54. Measured end state after an accepted resume here:
         // `T=e3 O=e3 R=e3 M=absent P=---`, i.e. the transaction committed in full.
-        "gap 01 | T=e2 O=e2 R=e2 M=unparseable P=TOR | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferMarkerUnreadableError | after T=e2 O=e2 R=e2 M=unparseable P=TOR",
-        "gap 02 | T=e2 O=e2 R=e2 M=v2 P=-OR | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=e2 O=e2 R=e2 M=v2 P=-OR",
-        "gap 03 | T=e2 O=e2 R=e2 M=v2 P=T-R | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=e2 O=e2 R=e2 M=v2 P=T-R",
-        "gap 04 | T=e2 O=e2 R=e2 M=v2 P=TO- | resume=refused: cannot read run artifacts | recovery=throws OwnerTransferPendingMissingError | after T=e2 O=e2 R=e2 M=v2 P=TO-",
+        "gap 01 | T=e2 O=e2 R=e2 M=unparseable P=TOR | resume=refused: cannot read run artifacts | afterResume T=e2 O=e2 R=e2 M=unparseable P=TOR | recovery=throws OwnerTransferMarkerUnreadableError | after T=e2 O=e2 R=e2 M=unparseable P=TOR",
+        "gap 02 | T=e2 O=e2 R=e2 M=v2 P=-OR | resume=refused: cannot read run artifacts | afterResume T=e2 O=e2 R=e2 M=v2 P=-OR | recovery=throws OwnerTransferPendingMissingError | after T=e2 O=e2 R=e2 M=v2 P=-OR",
+        "gap 03 | T=e2 O=e2 R=e2 M=v2 P=T-R | resume=refused: cannot read run artifacts | afterResume T=e2 O=e2 R=e2 M=v2 P=T-R | recovery=throws OwnerTransferPendingMissingError | after T=e2 O=e2 R=e2 M=v2 P=T-R",
+        "gap 04 | T=e2 O=e2 R=e2 M=v2 P=TO- | resume=refused: cannot read run artifacts | afterResume T=e2 O=e2 R=e2 M=v2 P=TO- | recovery=throws OwnerTransferPendingMissingError | after T=e2 O=e2 R=e2 M=v2 P=TO-",
         // Gaps 5..7, HISTORY (kept verbatim; true before the read-order fix, false after it):
         // "recovery advances owner-record.json to e3 while owner-transfer.json is still the e2 one.
         // Criterion B (ownerRecord.currentOwnerEpoch !== ownerTransfer.newOwnerEpoch) is the ONLY
@@ -3147,25 +3159,25 @@ describe("fileStore", () => {
         // transfer. With the reads sequenced there is no mixed view left to refuse — all three
         // files are read at e3. Criterion B is NOT left unexercised by this: it is asserted
         // directly, on constructed inputs, in tests/controller/resumeLoop.gate.test.ts.
-        "gap 05 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 06 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 07 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 05 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 06 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 07 | T=e2 O=e2 R=e2 M=v2 P=TOR | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
         // Gaps 8..13, HISTORY (kept verbatim; true before the read-order fix, false after it):
         // "owner-transfer.json is already e3 and the owner record reads e3, but
         // reconciliation-record.json is still the e2 one. Criterion B passes (e3 === e3); only
         // criterion A (reconciliation.newOwnerEpoch !== ownerTransfer.newOwnerEpoch) refuses."
         // Same correction as above: the stale reconciliation view was the race, not the run's
         // state. Criterion A also keeps its own direct coverage in resumeLoop.gate.test.ts.
-        "gap 08 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 09 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 10 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 11 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 12 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 13 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 14 | T=e3 O=e3 R=e3 M=v2 P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
-        "gap 15 | T=e3 O=e3 R=e3 M=absent P=TOR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=TOR",
-        "gap 16 | T=e3 O=e3 R=e3 M=absent P=-OR | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=-OR",
-        "gap 17 | T=e3 O=e3 R=e3 M=absent P=--R | resume=accepted | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=--R",
+        "gap 08 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 09 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 10 | T=e3 O=e2 R=e2 M=v2 P=TOR | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 11 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 12 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 13 | T=e3 O=e3 R=e2 M=v2 P=TOR | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 14 | T=e3 O=e3 R=e3 M=v2 P=TOR | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=---",
+        "gap 15 | T=e3 O=e3 R=e3 M=absent P=TOR | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=TOR",
+        "gap 16 | T=e3 O=e3 R=e3 M=absent P=-OR | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=-OR",
+        "gap 17 | T=e3 O=e3 R=e3 M=absent P=--R | resume=accepted | afterResume T=e3 O=e3 R=e3 M=absent P=--- | recovery=ok | after T=e3 O=e3 R=e3 M=absent P=--R",
       ]);
     },
     120000,
@@ -3182,8 +3194,9 @@ function ownerRecord(overrides: Partial<OwnerRecord> = {}): OwnerRecord {
 
 // Package 2 whole-branch review, Critical C-1, human ruling 50 (option O1(a)). The enforcement
 // mechanism for the atomic publish, and the reason it exists at all: the two-real-process probe in
-// .superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/ measures the defect (140 lost updates before
-// the fix, 0 after), but a probe is not a guardrail — nothing in the suite would notice if the
+// .superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/ measures the defect (hundreds of lost updates
+// per 5s run before the fix, zero after — magnitudes, not reproducible constants; see that probe's
+// SENSITIVITY note), but a probe is not a guardrail — nothing in the suite would notice if the
 // publish went back to two steps. Without this test the fix would be the fifth "completeness claim
 // with no enforcement behind it" in this repository's history.
 //
@@ -3263,6 +3276,110 @@ describe("the owner-transfer lock is published atomically, never as an empty fil
       vi.doUnmock("node:fs/promises");
       vi.resetModules();
     }
+  });
+});
+
+// Package 2 fix round 3, the scoped re-review's Imp-1 — a defect THIS fix round introduced and the
+// guard that keeps it from coming back. Making the publish atomic put a throwing statement between
+// the publish and the return: `safeUnlink(stagingPath)` rethrows every errno that is not ENOENT, so
+// an environment fault (EACCES/EPERM/EROFS/ESTALE/EIO) there escaped with the LOCK ALREADY ON DISK
+// and no `release` in the caller's hands. That lock is not reclaimable either — its record names a
+// live pid, so tryRecoverStaleOwnerTransferLock refuses it — which turns every later
+// owner-transfer operation on that run into OwnerTransferLockBusyError until the process exits.
+//
+// Both tests below inject the fault at the one place that can produce it: `unlink` of the lock's
+// staging path. Nothing else is faked, and the lock path's own unlink (release's) is left alone, so
+// what is measured is the real release doing real work.
+describe("a failure to clear the lock's publish staging file never costs the caller its lock", () => {
+  // The staging name is buildAtomicTempPath(lockPath): same directory, a dot-prefixed name derived
+  // from the lock's own basename, ending .tmp. Matching on that rather than on an exact string
+  // keeps the fault injection honest — the production code picks the name, not this test.
+  async function lockFileExists(lockPath: string): Promise<boolean> {
+    try {
+      await stat(lockPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function isLockStagingPath(candidate: string, runDir: string): boolean {
+    return candidate.startsWith(join(runDir, "..owner-transfer.lock.")) && candidate.endsWith(".tmp");
+  }
+
+  async function withFailingStagingUnlink<T>(
+    runDir: string,
+    body: (fileStore: typeof import("../../src/persistence/fileStore.js")) => Promise<T>,
+  ): Promise<T> {
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        unlink: async (...args: Parameters<typeof actual.unlink>) => {
+          if (isLockStagingPath(String(args[0]), runDir)) {
+            const error = new Error("EACCES: permission denied, unlink") as NodeJS.ErrnoException;
+            error.code = "EACCES";
+            throw error;
+          }
+
+          return actual.unlink(...args);
+        },
+      };
+    });
+
+    try {
+      return await body(await import("../../src/persistence/fileStore.js"));
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  }
+
+  it("completes the claim and leaves no lock behind when clearing the staging file fails after the publish", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const current = ownerRecord();
+    await writeOwnerRecord(runDir, current);
+
+    // Captured as a value, not awaited bare: against the unfixed code this call rejects, and a test
+    // that dies of the rejection would report an exception instead of a failed assertion.
+    const outcome = await withFailingStagingUnlink(runDir, async (fileStore) =>
+      fileStore
+        .claimOwnerRecordWithPrecondition(runDir, current, ownerRecord({ currentProcessInstanceId: "pid:222" }))
+        .then(() => ({ kind: "completed" }), (error: unknown) => ({ kind: "threw", detail: String(error) })));
+
+    // The requirement, in two halves. First: the caller got its lock's lifecycle back — the claim
+    // ran to completion rather than escaping between publish and return.
+    expect(outcome).toEqual({ kind: "completed" });
+
+    // Second, and this is the half that names the damage: release() actually ran, so the lock is
+    // gone. Left behind it would be unreclaimable (live pid) and would block every owner-transfer
+    // operation on this run until the process exits.
+    expect(await lockFileExists(join(runDir, ".owner-transfer.lock"))).toBe(false);
+
+    // The claim's own effect still happened; the fault was contained to the staging cleanup.
+    expect((await readOwnerRecord(runDir)).currentProcessInstanceId).toBe("pid:222");
+  });
+
+  it("still reports a busy lock, not the cleanup's errno, when the staging cleanup fails on a contended acquire", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await writeOwnerRecord(runDir, ownerRecord());
+    // A live holder: link() will lose with EEXIST, and tryRecoverStaleOwnerTransferLock will refuse
+    // to steal it, so the correct answer is OwnerTransferLockBusyError.
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-07-25T00:00:00.000Z" }, null, 2),
+    );
+
+    const outcome = await withFailingStagingUnlink(runDir, async (fileStore) =>
+      fileStore
+        .claimOwnerRecordWithPrecondition(runDir, ownerRecord(), ownerRecord({ currentProcessInstanceId: "pid:222" }))
+        .then(() => "completed", (error: unknown) => (error as Error).name));
+
+    // A cleanup that rethrows would replace EEXIST with EACCES here and route a genuine contention
+    // out of the busy-lock branch entirely, so the caller would see a bare errno instead.
+    expect(outcome).toBe("OwnerTransferLockBusyError");
   });
 });
 
@@ -3381,9 +3498,10 @@ describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racin
           // *** ERRATUM 2 (this round). That window is now CLOSED: under human ruling 50 the lock
           // is published atomically with `link()`, so there is no instant at which the lock exists
           // unparseable, and the fixture no longer has to steer B away from anything — B cannot
-          // reach the window through the production publish at all. Measured, not assumed: 140
-          // cross-process lost updates before the fix, 0 after
-          // (.superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/). What is STILL open is the other
+          // reach the window through the production publish at all. Measured, not assumed:
+          // cross-process lost updates in the hundreds per 5s run before the fix, zero after
+          // (.superpowers/sdd/2026-08-07-pkg2-data-loss/probe-c1/; the absolute counts vary with run
+          // length and machine, the difference between arms does not). What is STILL open is the other
           // half of C-1 — the `catch` branch itself, which is open point B and was not touched, and
           // which an externally corrupted lock still reaches. ***
           //
@@ -3434,9 +3552,12 @@ describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racin
         await withNamedTimeout(
           aLockWritten.promise,
           3000,
-          "reader A never opened the owner-transfer lock file within 3000ms -- the unlocked branch "
-            + "is not acquiring a lock before finalizing (recoverInterruptedOwnerTransfer's "
-            + "!lockHeld branch may have regressed to the pre-phase-1 unlocked-finalize shape)",
+          "reader A never published the owner-transfer lock within 3000ms -- TWO regressions can "
+            + "produce this and the message names both: (a) the unlocked branch is not acquiring a "
+            + "lock before finalizing (recoverInterruptedOwnerTransfer's !lockHeld branch may have "
+            + "regressed to the pre-phase-1 unlocked-finalize shape), or (b) the lock's atomic "
+            + "publish has been reverted to the two-step open+write shape, in which case this hook "
+            + "-- which waits on link() -- never fires even though the lock is being taken",
         );
         const bPromise = fileStore.readOwnerRecord(runDir);
 
@@ -4348,7 +4469,21 @@ async function observeCrashMatrix(stage: (gap: number) => Promise<string>): Prom
     const recovery = await observeRecovery(forRecovery);
     const after = await crashSnapshot(forRecovery);
 
-    lines.push(`${label} | ${staged} | resume=${resume} | recovery=${recovery} | after ${after}`);
+    // afterResume is what the resume attempt ITSELF left on disk, and it is the enforcement the
+    // scoped re-review's Imp-2 asked for: the `after` column below is taken from `forRecovery`, a
+    // SECOND copy that only ever ran observeRecovery, so before this line nothing in the tree
+    // pinned the state an accepted resume ends at. The justification for amending gaps 05..13
+    // (human rulings 51/54) rests entirely on that state, and a justification with no guard is the
+    // exact shape this repository keeps having to fix.
+    //
+    // Safe to assert as a fixed string: crashSnapshot renders only presence and epoch — which files
+    // exist, which epoch each carries, whether the marker parses, which pendings remain. No
+    // wall-clock field reaches it, so this cannot become a self-falsifying assertion the way a
+    // lastAffirmedAt comparison would.
+    lines.push(
+      `${label} | ${staged} | resume=${resume} | afterResume ${await crashSnapshot(forResume)} `
+        + `| recovery=${recovery} | after ${after}`,
+    );
   }
 
   return lines;
