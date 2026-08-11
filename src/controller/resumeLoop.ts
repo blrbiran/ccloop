@@ -186,8 +186,23 @@ export async function resumeLoop(
   let runState;
   let contract;
   try {
-    [ownerRecord, ownerTransfer, reconciliation, runState, contract] = await Promise.all([
-      readOwnerRecord(runDir),
+    // Package 2 whole-branch review, Lane 1 finding I-4. readOwnerRecord is awaited FIRST, on its
+    // own, and the rest are read only afterwards. It is the one read here that is not a read: it
+    // runs recoverInterruptedOwnerTransfer, which takes the transfer lock, reads the marker and
+    // performs the transaction's three renames. Issued inside the same Promise.all, the unguarded
+    // readReconciliationRecord starts in the same tick and does not wait for that recovery, so a
+    // run interrupted between rename #2 (owner-record.json) and rename #3
+    // (reconciliation-record.json) — a real gap in finalizeOrder — was read mid-transaction: the
+    // third file was still absent, the ENOENT hit the catch below, and the run was refused with
+    // "cannot read run artifacts" although nothing was wrong with it that the recovery already in
+    // flight was not about to fix. It healed on the NEXT resume, which is what hid this.
+    //
+    // Sequencing adds no guarantee and no new refusal; it only lets the reads that follow observe
+    // what the recovery committed. It also matches the division of labour leaseGate already has
+    // with readOwnerRecordWithoutRecovery: the path that goes on to claim is the one that performs
+    // recovery, and everyone else reads what it published.
+    ownerRecord = await readOwnerRecord(runDir);
+    [ownerTransfer, reconciliation, runState, contract] = await Promise.all([
       readOwnerTransferRecord(runDir),
       readReconciliationRecord(runDir),
       readRunState(runDir),
