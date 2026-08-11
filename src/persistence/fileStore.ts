@@ -982,18 +982,35 @@ async function discardLockStaging(stagingPath: string): Promise<void> {
 //      only consumer (parsePid's liveness probe) stay exactly as they are — no format change, and
 //      tryRecoverStaleOwnerTransferLock is not touched (point B is unruled; human ruling 50 stands).
 // What it does NOT cover is named in the report: the stat and the unlink are still two syscalls, so
-// a theft landing between them is undetectable here, and inode numbers are reused after deletion.
+// a theft landing between them is undetectable here.
 //
-// MUST NOT THROW. release() is called from four `finally` blocks, so a rejection here would replace
+// BOTH HALVES OF THE COMPARISON ARE LOAD-BEARING. `ino` alone identifies a file only WITHIN one
+// filesystem; the pair (dev, ino) is what identifies it globally, and dropping `dev` would let a
+// same-numbered inode on a different device pass as ours. That half is pinned by its own test —
+// the review's mutation F (drop `dev`, keep `ino`) passed the whole suite, which is this
+// repository's signature root-cause shape: an assertion with no enforcement behind it.
+//
+// MUST NOT THROW. release() is called from five `finally` blocks (the fifth reaches it through the
+// same-prefix sibling acquireOwnerTransferLockForReconciliation), so a rejection here would replace
 // whatever error is already in flight — the reason ruling 62 chose "don't delete, don't throw,
-// record an event". Both fstat and stat are swallowed into `false`: unreadable is not ours.
-async function lockPathStillHoldsPublishedInode(handle: FileHandle, lockPath: string): Promise<boolean> {
+// record an event". Every errno from either stat is swallowed into a non-"ours" verdict.
+//
+// WHY A VERDICT RATHER THAN A BOOLEAN (review M-2): the event's `detail` is an audit line, and a
+// single sentence covering all three outcomes was a false statement in two of them — it claimed the
+// lock was "left in place" when the path had no file at all. Each branch now states only what is
+// true of it.
+type LockReleaseVerdict = "ours" | "gone" | "foreign" | "unverified";
+
+async function classifyLockAtRelease(handle: FileHandle, lockPath: string): Promise<LockReleaseVerdict> {
   try {
     const published = await handle.stat();
     const onDisk = await stat(lockPath);
-    return onDisk.dev === published.dev && onDisk.ino === published.ino;
-  } catch {
-    return false;
+
+    return onDisk.dev === published.dev && onDisk.ino === published.ino ? "ours" : "foreign";
+  } catch (error) {
+    // ENOENT can only come from the path stat — fstat on an open handle answers EBADF, never
+    // ENOENT — so it means exactly one thing: the lock this process published is already off disk.
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "gone" : "unverified";
   }
 }
 
@@ -1001,12 +1018,25 @@ async function lockPathStillHoldsPublishedInode(handle: FileHandle, lockPath: st
 // writeBoundaryArtifacts: this is the audit half of a protective refusal, and an unwritable
 // events.jsonl (ENOSPC / EACCES / directory already removed) must not turn a refusal-to-delete into
 // a thrown error out of a `finally`. The refusal itself stands without the line.
-async function recordSkippedForeignLockRelease(runDir: string): Promise<void> {
+//
+// The three details are deliberately distinct and each is true of its own branch only. "nothing was
+// deleted" is the one claim common to all three, and it is the claim that matters: this release did
+// not remove a file.
+const SKIPPED_RELEASE_DETAILS: Record<Exclude<LockReleaseVerdict, "ours">, string> = {
+  gone: `${OWNER_TRANSFER_LOCK_FILE} was already off disk at release; nothing was deleted`,
+  foreign: `${OWNER_TRANSFER_LOCK_FILE} no longer holds the inode this process published; it was left in place`,
+  unverified: `${OWNER_TRANSFER_LOCK_FILE} could not be checked against the inode this process published; nothing was deleted`,
+};
+
+async function recordSkippedLockRelease(
+  runDir: string,
+  verdict: Exclude<LockReleaseVerdict, "ours">,
+): Promise<void> {
   try {
     await appendEvent(runDir, {
       type: "owner_transfer_lock_release_skipped",
       at: new Date().toISOString(),
-      detail: `${OWNER_TRANSFER_LOCK_FILE} no longer holds the inode this process published; left in place`,
+      detail: SKIPPED_RELEASE_DETAILS[verdict],
     });
   } catch {
     // see above
@@ -1090,11 +1120,11 @@ async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () =
         release: async () => {
           // Before the close, because the check is an fstat on this handle and a closed handle
           // cannot answer it. The close itself keeps its original position ahead of the unlink.
-          const stillOurs = await lockPathStillHoldsPublishedInode(handle, lockPath);
+          const verdict = await classifyLockAtRelease(handle, lockPath);
           await handle.close();
 
-          if (!stillOurs) {
-            await recordSkippedForeignLockRelease(runDir);
+          if (verdict !== "ours") {
+            await recordSkippedLockRelease(runDir, verdict);
             return;
           }
 

@@ -3516,6 +3516,220 @@ describe("the owner-transfer lock's release only deletes the lock this process p
   });
 });
 
+// Package 2 fix round under HUMAN RULING 64, review findings M-5 and M-2. Both describes below
+// exist because the review MEASURED a hole, not because a hole was argued for.
+//
+// M-5: the reviewer's surviving mutation F deleted the `dev` half of the identity comparison
+// (`onDisk.dev === published.dev &&`) and the whole suite stayed green — 31 files / 535 tests,
+// exit 0. `ino` alone identifies a file only within one filesystem, so the surviving half of the
+// comparison was doing real work with nothing enforcing it: this repository's signature shape.
+//
+// HOW THE CROSS-DEVICE CASE IS PRODUCED, stated plainly because it is the load-bearing caveat: NOT
+// by mounting a second filesystem. A same-inode-different-device collision cannot be staged on one
+// mount, and a test that silently could not produce its own precondition would be the always-green
+// criterion that is worse than none. The device number is injected instead — the local
+// vi.doMock seam wraps `stat` and returns the REAL Stats for the lock path with `dev` shifted by
+// one, leaving `ino` untouched. What that pins is the comparison: given an on-disk file whose inode
+// number matches but whose device does not, release() must refuse. What it does NOT pin is any
+// claim about which kernels or mounts can produce that state — see the fix-round report.
+describe("the owner-transfer lock's release compares the device as well as the inode number", () => {
+  async function readEventTypes(runDir: string): Promise<string[]> {
+    try {
+      return (await readFile(join(runDir, "events.jsonl"), "utf8"))
+        .split("\n")
+        .filter((line) => line !== "")
+        .map((line) => (JSON.parse(line) as { type: string }).type);
+    } catch {
+      return [];
+    }
+  }
+
+  async function lockExists(lockPath: string): Promise<boolean> {
+    try {
+      await stat(lockPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // devShift 0 is the must-hit control arm: the SAME wrapper, the same extra call, no shift. Its
+  // job is to prove the wrapper itself is not what makes release() refuse.
+  async function claimWithShiftedLockDevice(
+    runDir: string,
+    devShift: number,
+  ): Promise<{ outcome: string; shifted: number }> {
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    let shifted = 0;
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        // Narrow on purpose: `stat` has exactly one caller in src/ (the identity check itself), and
+        // it passes a plain path. The returned object keeps the real Stats prototype and every real
+        // field — only `dev` moves — so nothing downstream can tell it apart from a genuine stat of
+        // a file that lives on another device.
+        stat: async (path: string) => {
+          const real = await actual.stat(path);
+
+          if (path !== lockPath) {
+            return real;
+          }
+
+          shifted += 1;
+          const relocated = Object.assign(Object.create(Object.getPrototypeOf(real) as object), real) as typeof real;
+          relocated.dev = real.dev + devShift;
+          return relocated;
+        },
+      };
+    });
+
+    try {
+      const fileStore = await import("../../src/persistence/fileStore.js");
+      const outcome = await fileStore
+        .claimOwnerRecordWithPrecondition(runDir, ownerRecord(), ownerRecord({ currentProcessInstanceId: "pid:222" }))
+        .then(() => "completed", (error: unknown) => `threw ${String(error)}`);
+
+      return { outcome, shifted };
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  }
+
+  it("refuses to delete a lock whose inode number matches but whose device does not", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    await writeOwnerRecord(runDir, ownerRecord());
+
+    const { outcome, shifted } = await claimWithShiftedLockDevice(runDir, 1);
+
+    // Anti-vacuity: one identity check happens per release, so the injection must have fired
+    // exactly once. A seam that stopped matching the lock path would make the rest pass on a file
+    // that was never relocated at all.
+    expect(shifted).toBe(1);
+
+    // The requirement. Under the review's mutation F — `ino` compared, `dev` dropped — the inode
+    // number still matches and this reads { lockKept: false, events: [] }.
+    expect({ outcome, lockKept: await lockExists(lockPath), events: await readEventTypes(runDir) }).toEqual({
+      outcome: "completed",
+      lockKept: true,
+      events: ["owner_transfer_lock_release_skipped"],
+    });
+  });
+
+  it("still deletes its own lock when the same wrapper leaves the device alone", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    await writeOwnerRecord(runDir, ownerRecord());
+
+    const { outcome, shifted } = await claimWithShiftedLockDevice(runDir, 0);
+
+    // The must-hit half: same wrapper, same extra stat, shift of zero. Without this arm, the test
+    // above is equally satisfied by a release() that refuses everything, and by a wrapper that
+    // corrupts the Stats object in some way unrelated to `dev`.
+    expect({ shifted, outcome, lockKept: await lockExists(lockPath), events: await readEventTypes(runDir) }).toEqual({
+      shifted: 1,
+      outcome: "completed",
+      lockKept: false,
+      events: [],
+    });
+  });
+});
+
+// M-2: the refusal event's `detail` was one sentence for every branch, and in the branch where the
+// lock path has no file at all it claimed the lock was "left in place" — a false statement written
+// into an audit line, whose entire value is that it can be believed. The detail is now per-branch.
+//
+// WHY THIS BRANCH STILL RECORDS AN EVENT AT ALL, since that is a semantic question and not a
+// wording one: ruling 62 says the check failing "including cannot be read" is recorded, and this is
+// the cannot-be-read case. It also earns its line — a lock that has vanished while this process was
+// holding it means something removed a live holder's lock, which is the very shape C-1 is about.
+// Recording it was not changed here; only the sentence was.
+describe("the owner-transfer lock's release reports a vanished lock as vanished, not as left in place", () => {
+  async function readEvents(runDir: string): Promise<Array<{ type: string; detail: string }>> {
+    try {
+      return (await readFile(join(runDir, "events.jsonl"), "utf8"))
+        .split("\n")
+        .filter((line) => line !== "")
+        .map((line) => JSON.parse(line) as { type: string; detail: string });
+    } catch {
+      return [];
+    }
+  }
+
+  it("records that nothing was deleted, and never claims the lock was left in place", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    const ownerRecordPath = join(runDir, "owner-record.json");
+    await writeOwnerRecord(runDir, ownerRecord());
+    let removals = 0;
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        // The same seam the steal test uses, minus the republish: the lock is removed and NOTHING
+        // takes its place, so release() finds ENOENT rather than a foreign inode.
+        rename: async (...args: Parameters<typeof actual.rename>) => {
+          const result = await actual.rename(...args);
+
+          if (String(args[1]) === ownerRecordPath) {
+            await actual.unlink(lockPath);
+            removals += 1;
+          }
+
+          return result;
+        },
+      };
+    });
+
+    let outcome: string;
+
+    try {
+      const fileStore = await import("../../src/persistence/fileStore.js");
+      outcome = await fileStore
+        .claimOwnerRecordWithPrecondition(runDir, ownerRecord(), ownerRecord({ currentProcessInstanceId: "pid:222" }))
+        .then(() => "completed", (error: unknown) => `threw ${String(error)}`);
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+
+    // Anti-vacuity, and the fixture's own premise: the lock really was removed mid-span, and it
+    // really is absent when release() runs.
+    expect({ removals, lockPresent: await lockExists(lockPath) }).toEqual({ removals: 1, lockPresent: false });
+
+    // The requirement. The old single-sentence detail read
+    // "... no longer holds the inode this process published; left in place" here, which is false
+    // twice over: nothing holds that path, and nothing was left in place.
+    expect({ outcome, events: await readEvents(runDir) }).toEqual({
+      outcome: "completed",
+      events: [
+        {
+          type: "owner_transfer_lock_release_skipped",
+          at: expect.any(String) as unknown as string,
+          detail: ".owner-transfer.lock was already off disk at release; nothing was deleted",
+        },
+      ],
+    });
+  });
+
+  async function lockExists(lockPath: string): Promise<boolean> {
+    try {
+      await stat(lockPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+});
+
 describe("claimOwnerRecordWithPrecondition", () => {
   it("writes the next record when the precondition matches", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
