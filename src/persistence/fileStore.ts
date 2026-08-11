@@ -1,4 +1,5 @@
-import { access, appendFile, link, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { access, appendFile, link, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { LoopContract } from "../contract/schema.js";
@@ -963,6 +964,55 @@ async function discardLockStaging(stagingPath: string): Promise<void> {
   }
 }
 
+// The identity half of C-1, fixed under HUMAN RULING 62. release() used to unlink `lockPath`
+// unconditionally: whatever file bore that name at that instant was deleted, whether or not it was
+// the file this holder published. Measured on `dbac288` (pointB-design.md §6.1) — a holder whose
+// lock had been stolen and rebuilt by someone else deleted the NEW holder's lock on its way out.
+//
+// WHICH IDENTITY, and why this one rather than the lock record's own `holderProcessInstanceId`
+// (which is what the earlier prototype compared): the answer is the inode this process published,
+// obtained by fstat on the handle acquireOwnerTransferLock is already holding open. Three reasons.
+//   1. `pid:<pid>` cannot tell two successive locks of the SAME process apart — a stale release from
+//      acquisition #1 would still match acquisition #2's record and delete it. The inode can: every
+//      acquisition stages into a fresh buildAtomicTempPath file, so every published lock is a
+//      distinct inode, and a stale release refuses.
+//   2. It compares what was actually published, not what the file claims about itself, so a lock
+//      whose content is corrupt, truncated or forged is simply "not ours" without a parse step.
+//   3. It needs nothing from the on-disk record, so the deliberately weak `pid:<pid>` form and its
+//      only consumer (parsePid's liveness probe) stay exactly as they are — no format change, and
+//      tryRecoverStaleOwnerTransferLock is not touched (point B is unruled; human ruling 50 stands).
+// What it does NOT cover is named in the report: the stat and the unlink are still two syscalls, so
+// a theft landing between them is undetectable here, and inode numbers are reused after deletion.
+//
+// MUST NOT THROW. release() is called from four `finally` blocks, so a rejection here would replace
+// whatever error is already in flight — the reason ruling 62 chose "don't delete, don't throw,
+// record an event". Both fstat and stat are swallowed into `false`: unreadable is not ours.
+async function lockPathStillHoldsPublishedInode(handle: FileHandle, lockPath: string): Promise<boolean> {
+  try {
+    const published = await handle.stat();
+    const onDisk = await stat(lockPath);
+    return onDisk.dev === published.dev && onDisk.ino === published.ino;
+  } catch {
+    return false;
+  }
+}
+
+// Swallowed by contract, same shape and same reason as the two appendEvent calls in
+// writeBoundaryArtifacts: this is the audit half of a protective refusal, and an unwritable
+// events.jsonl (ENOSPC / EACCES / directory already removed) must not turn a refusal-to-delete into
+// a thrown error out of a `finally`. The refusal itself stands without the line.
+async function recordSkippedForeignLockRelease(runDir: string): Promise<void> {
+  try {
+    await appendEvent(runDir, {
+      type: "owner_transfer_lock_release_skipped",
+      at: new Date().toISOString(),
+      detail: `${OWNER_TRANSFER_LOCK_FILE} no longer holds the inode this process published; left in place`,
+    });
+  } catch {
+    // see above
+  }
+}
+
 // Package 2 whole-branch review, Critical C-1, fixed under human ruling 50 (option O1(a): make the
 // publish atomic; do NOT touch tryRecoverStaleOwnerTransferLock, which is open point B).
 //
@@ -993,8 +1043,11 @@ async function discardLockStaging(stagingPath: string): Promise<void> {
 // carries the same statement in machine-readable form ("os": ["darwin", "linux"]).
 //
 // WHAT IS DELIBERATELY UNCHANGED: everything after an EEXIST (the tryRecoverStale... call, the
-// two-iteration loop, OwnerTransferLockBusyError), the non-EEXIST rethrow, and `release()` — the
-// last two by explicit instruction, because the still-open half of C-1 lives there.
+// two-iteration loop, OwnerTransferLockBusyError) and the non-EEXIST rethrow, by explicit
+// instruction. `release()` was the still-open half of C-1 and is no longer unchanged: human ruling
+// 62 gave it the identity check described above lockPathStillHoldsPublishedInode. The acquire path
+// here is still byte-identical — the check costs no I/O before the publish and adds no statement
+// between the publish and the return, which is the shape the scoped re-review's Imp-1 named.
 async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () => Promise<void> }> {
   const { lockPath } = getOwnerTransferPaths(runDir);
 
@@ -1035,7 +1088,16 @@ async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () =
 
       return {
         release: async () => {
+          // Before the close, because the check is an fstat on this handle and a closed handle
+          // cannot answer it. The close itself keeps its original position ahead of the unlink.
+          const stillOurs = await lockPathStillHoldsPublishedInode(handle, lockPath);
           await handle.close();
+
+          if (!stillOurs) {
+            await recordSkippedForeignLockRelease(runDir);
+            return;
+          }
+
           await safeUnlink(lockPath);
         },
       };

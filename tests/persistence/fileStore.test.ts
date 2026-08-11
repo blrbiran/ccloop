@@ -3383,6 +3383,139 @@ describe("a failure to clear the lock's publish staging file never costs the cal
   });
 });
 
+// Package 2, the identity half of C-1, HUMAN RULING 62. Before this guard, release() unlinked
+// `.owner-transfer.lock` unconditionally, so a holder whose lock had already been stolen and
+// republished by someone else deleted THE NEW HOLDER'S lock on its way out — measured on dbac288
+// (pointB-design.md §6.1), and covered by exactly zero tests: a prototype of the fix passed the
+// whole suite unchanged, which is why ruling 62 required a guardrail alongside the fix.
+//
+// WHAT IS ASSERTED is the ruling's three-part behavior on the one square it names — the lock at
+// `lockPath` is not the one this process published: the lock STAYS ON DISK with the other holder's
+// bytes intact, release() does NOT throw (it runs in four `finally` blocks, where a rejection would
+// replace the error already in flight), and the refusal is VISIBLE as an event.
+//
+// THE FOREIGN LOCK DELIBERATELY NAMES THIS PROCESS'S OWN PID. A second acquisition by this same
+// process writes exactly that record, so this fixture is also the same-process-reentrancy square,
+// and it is what makes the test kill the weaker identity check the earlier prototype used
+// (`holderProcessInstanceId === \`pid:${process.pid}\``): under that check the record matches, the
+// unlink goes ahead, and the other holder's lock is gone.
+//
+// HOW the theft is staged, without touching production code: the same local vi.doMock +
+// dynamic-import seam the tests above use. `rename` to owner-record.json is the last write inside
+// claimOwnerRecordWithPrecondition's lock span, so replacing the lock file the instant it resolves
+// puts a foreign lock in place while this process still believes it holds one, and release() runs
+// next in the `finally`.
+describe("the owner-transfer lock's release only deletes the lock this process published", () => {
+  const FOREIGN_LOCK_CONTENTS = JSON.stringify(
+    { holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-08-11T00:00:00.000Z" },
+    null,
+    2,
+  );
+
+  async function readEventTypes(runDir: string): Promise<string[]> {
+    try {
+      return (await readFile(join(runDir, "events.jsonl"), "utf8"))
+        .split("\n")
+        .filter((line) => line !== "")
+        .map((line) => (JSON.parse(line) as { type: string }).type);
+    } catch {
+      return [];
+    }
+  }
+
+  async function readLockOrGone(lockPath: string): Promise<string> {
+    try {
+      return await readFile(lockPath, "utf8");
+    } catch {
+      return "GONE";
+    }
+  }
+
+  // `steal: false` is the must-hit control arm: identical machinery, identical seam, no theft.
+  async function claimWithOptionalTheft(
+    runDir: string,
+    steal: boolean,
+  ): Promise<{ outcome: string; thefts: number }> {
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    const ownerRecordPath = join(runDir, "owner-record.json");
+    let thefts = 0;
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        rename: async (...args: Parameters<typeof actual.rename>) => {
+          const result = await actual.rename(...args);
+
+          if (steal && String(args[1]) === ownerRecordPath) {
+            await actual.unlink(lockPath);
+            await actual.writeFile(lockPath, FOREIGN_LOCK_CONTENTS);
+            thefts += 1;
+          }
+
+          return result;
+        },
+      };
+    });
+
+    try {
+      const fileStore = await import("../../src/persistence/fileStore.js");
+      const outcome = await fileStore
+        .claimOwnerRecordWithPrecondition(runDir, ownerRecord(), ownerRecord({ currentProcessInstanceId: "pid:222" }))
+        .then(() => "completed", (error: unknown) => `threw ${String(error)}`);
+
+      return { outcome, thefts };
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  }
+
+  it("leaves a lock it no longer owns on disk, records the refusal, and never throws out of the finally", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    await writeOwnerRecord(runDir, ownerRecord());
+
+    const { outcome, thefts } = await claimWithOptionalTheft(runDir, true);
+
+    // Anti-vacuity first: a seam that stopped firing would make every assertion below pass while
+    // observing nothing — the broken-probe failure mode this repository keeps hitting.
+    expect(thefts).toBe(1);
+
+    // Ruling 62's three parts, asserted together so a fix that satisfies only some of them fails
+    // here. Against the unconditional unlink the lock reads "GONE".
+    expect({ outcome, lock: await readLockOrGone(lockPath), events: await readEventTypes(runDir) }).toEqual({
+      outcome: "completed",
+      lock: FOREIGN_LOCK_CONTENTS,
+      events: ["owner_transfer_lock_release_skipped"],
+    });
+
+    // The claim's own effect still happened: the guard protects the other holder's lock, it does
+    // not abandon this caller's work.
+    expect((await readOwnerRecord(runDir)).currentProcessInstanceId).toBe("pid:222");
+  });
+
+  it("still deletes the lock, and records nothing, when the lock is the one this process published", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    await writeOwnerRecord(runDir, ownerRecord());
+
+    const { outcome, thefts } = await claimWithOptionalTheft(runDir, false);
+
+    // The must-hit half of the pair: a guard that refused everything would leave the lock behind
+    // here, and every later owner-transfer operation on this run would fail as busy. Without this
+    // arm the test above is also satisfied by "release() never unlinks anything".
+    expect({ thefts, outcome, lock: await readLockOrGone(lockPath), events: await readEventTypes(runDir) }).toEqual({
+      thefts: 0,
+      outcome: "completed",
+      lock: "GONE",
+      events: [],
+    });
+  });
+});
+
 describe("claimOwnerRecordWithPrecondition", () => {
   it("writes the next record when the precondition matches", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-fs-"));
