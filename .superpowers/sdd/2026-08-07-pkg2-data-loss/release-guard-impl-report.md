@@ -99,11 +99,21 @@ async function recordSkippedForeignLockRelease(runDir: string): Promise<void> {
 ⇒ `release()` 唯一还能抛的语句仍然是**改动前就存在的那两条**：`handle.close()` 与 `safeUnlink(lockPath)`。
 **我没有增加，也没有减少 `release()` 的可抛面**（`safeUnlink` 对非 ENOENT 仍然重抛，未动）。
 
-`release()` 的四个调用点**全部在 `finally` 里**，都没动：`fileStore.ts` 的
-`recoverInterruptedOwnerTransfer`、`writeOwnerTransferArtifacts`、`claimOwnerRecordWithPrecondition`、
-`updateOwnerRecordWithPrecondition`。
-（⚠️ **对任务书 §2.4 的一处校正**：任务书说「两处 `finally`」，**现测是四处** ——
-`pointB-design.md` §6.3 点名的是其中两处。这不改变任何结论，只是把数字更正过来。）
+*** ⚠️ 本段的数字是错的，人裁 64／评审 M-4 已更正；订正见 `release-guard-fixround-report.md` §3。
+下面保留原文不删，只在此标明：正确答案是 **5 处**，不是 4 处。 ***
+
+> ~~`release()` 的四个调用点~~ **全部在 `finally` 里**，都没动：`fileStore.ts` 的
+> `recoverInterruptedOwnerTransfer`、`writeOwnerTransferArtifacts`、`claimOwnerRecordWithPrecondition`、
+> `updateOwnerRecordWithPrecondition`。
+> （⚠️ **对任务书 §2.4 的一处校正**：任务书说「两处 `finally`」，~~**现测是四处**~~ ——
+> `pointB-design.md` §6.3 点名的是其中两处。这不改变任何结论，只是把数字更正过来。）
+
+**订正后的事实**：**5 处**，全部形如 `} finally { await …release(); }`，
+`fileStore.ts:546 / 1291 / 1346 / 1367 / 1418`。我上面漏掉的是 **546** ——
+`preserveSuccessfulReconciliationIfNeeded` 经**同前缀兄弟符号**
+`acquireOwnerTransferLockForReconciliation` 间接持锁的那条路径，
+调用形式是 `acquisition.lock.release()` 而不是 `lock.release()`，我上一轮的检索面没盖到它。
+**行为上无影响**（同样是单次 `finally` release，同样受新守卫保护），但数字是错的，照实订正。
 
 ## 2. §3 的设计决策 —— 我选了哪种身份判据，为什么够，同进程重入这一格的行为
 
