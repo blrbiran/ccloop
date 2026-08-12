@@ -1,8 +1,104 @@
-# ccloop Handoff — **L3 已发布；包 3、包 2 已开门（`GATE-PKG2`，C-1 降级未关闭）；包 1（L5 spec）仍待修复环 2、不具备开门条件；待裁点 A／B／C 全部未裁**
+# ccloop Handoff — **包 2 已开门（`GATE-PKG2`，C-1 降级未关闭）；门后 `release()` 身份校验已做完并并入；待裁点 A／B／C 全部未裁（B 的措辞已固化）；包 1 仍不具备开门条件**
 
 ---
 
-# 【最新】2026-08-11 —— **本节取代下方一切状态描述**
+# 【最新】2026-08-12 —— **本节取代下方一切状态描述**
+
+> ⚠️ **一律自查，别信本文。** **两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用；
+> HEAD／笔数／测试数／远端一律现跑** —— **提交本文这个动作本身就会改 HEAD 与笔数**，所以本文不写死它们。
+
+## 先跑这些，以输出为准
+
+```bash
+cd /Users/biran/code/skills/loop/ccloop
+git log --merges --format='%h %cd %s'   # 末笔应仍是 GATE-PKG2（86d3bd6），其下 GATE-PKG3（e42e062）
+git ls-remote origin refs/heads/main    # 一律现跑：已被推进 12 次，两个方向都腐坏过
+git status --short; git worktree list; git branch -vv
+export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm test -- --run
+```
+
+⚠️ **验证性命令一律走 `rtk proxy`**（默认改写会把输出折叠成假计数）。
+⚠️ **`git status` 的 `ahead/behind` 是缓存的 remote-tracking ref，不是远端** —— 判断远端必须 `git ls-remote`。
+**上一会话收口时的实测**：`main` 领先远端若干笔、**控制器全程未 push**；远端仍停在门那一笔。**现跑核实，别信这句。**
+
+## 唯一可信进度源
+
+`.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **现为 24 节（含 24.1／24.2），人裁 10–67 全在里面**。
+⚠️ 该目录 `.gitignore` 是 `*`，产物只能 `git add -f` 入库。
+上一会话新增的一手材料（**都在同目录，不要重新推导**）：
+`pointB-ruling-package.md`（待裁点 B 的裁决包，**门后重测版**）、
+`release-guard-impl-brief.md` / `release-guard-impl-report.md` / `release-guard-review-brief.md` /
+`release-guard-review.md` / `release-guard-fixround-report.md` / `release-guard-rereview.md`。
+
+## 上一会话做完了什么（**都不要重做**）
+
+1. **待裁点 B 的裁决包**（台账 §23、材料 `pointB-ruling-package.md`）—— 三条**现测**结论：
+   两个失败开放出口在 HEAD 上仍在且第二个更宽；**B 的原文实测盖不住第二出口**；
+   *** **把措辞扩到「关掉全部非 liveness 出口」，判据增量成本 = 0**（两种变异推翻同一个 3 个 `it()` 块的集合）。 ***
+   ⚠️ **旧材料 `pointB-design.md` 的行号 785/1217/1424 已腐坏**（现为 844/1276/1483），**测试名与集合未变**。
+2. **人裁 61：B 不裁，但措辞已固化**（权威措辞见台账 §23.3），**并把「待裁点 C 的逃生口设计是裁 B 的前置条件」记进台账**。
+3. **`release()` 身份校验**（人裁 62–67，台账 §24／§24.2）：走满「实施者 → 换人评审 → 修复环 → **第三人** scoped 再评审 →
+   控制器亲验 → `--ff-only`」。*** **判据是「本进程发布的那个 inode」（`dev`+`ino`），不是 `pid:<pid>`** ***
+   —— pid 判据分不清同一进程先后两把锁。校验不过 ⇒ **不删、不抛、记事件**。
+   **控制器亲验**：`31 files / 538 tests` 全绿、三码 0、`RUN` 路径已核。
+
+## 仍然开着（**接手前先看这张表**）
+
+| # | 项 | 要点 |
+|---|---|---|
+| 1 | **C-1 降级，未关闭** | `tryRecoverStaleOwnerTransferLock` 的**两个**失败开放出口**逐字节未动**。**不许在任何地方写成「C-1 已修复」** |
+| 2 | **待裁点 B** | **措辞已固化、B 本身仍未裁**。**裁它之前先要有 C 的逃生口设计**（人裁 61 已记）。材料：`pointB-ruling-package.md` §5／§7 |
+| 3 | **待裁点 A／C** | A 从未解封；C 有设计材料（`pointB-design.md` §5，E1–E4 **一个原型都没做**） |
+| 4 | **包 1 的修复环 2** | 人裁 9，**另一条线，别读串**。1 Critical / 6 Important 未修 ⇒ **包 1 不具备开门条件** |
+| 5 | `SweepOptions.stderr` 契约的测试半边 | 人裁 11，等包 1 修复环 2 之后 |
+| 6 | *** **N-2（上一会话新引入）** *** | `unverified` 那条事件 detail **零判据钉住**（换哨兵值 538 全绿）。*** **与它被召集来修的缺陷是同一个形状** ***；路径今天不可达 ⇒ **人裁 66 挂账、不许记成已解决** |
+| 7 | M-1／M-3／`foreign` 文案 | 均挂账：新事件类型触到 `validation/v1/lib/evidence.ts` 的 `allowedEventTypes`（今天不可达）／二次 release 的虚假事件／`foreign` detail 同样零判据 |
+| 8 | **人裁 53 第 3 件** | `fileStore.test.ts` 那对**逐字节相同的重复测试块**仍在（上一会话现测确认：同一标题红两次）。**删重复 = 动既有判据，需单独授权** |
+| 9 | **遗留物** | 旧分支 `backup/evidence-first-v1-…` 与 `docs/pkg3-errata`；孤儿目录 `.worktrees/pkg2-data-loss`。**人裁 44 明令记录不处理** |
+| 10 | **worktree ＋ 分支** | `.worktrees/pkg2-release-guard` ＋ `feat/pkg2-release-guard`（已并入 `main`）。**删除需人单独授权**；删前先清点未跟踪产物并逐字节比对，**用 `-d` 不用 `-D`** |
+
+## 上一会话换来的、**下一位直接用**的教训
+
+1. *** **「按符号名锚定」不等于安全 —— 同前缀兄弟符号会骗人。** *** `acquireOwnerTransferLockForReconciliation`
+   在**同一轮里骗过了两个人**（控制器一次、第一评审员一次，**两次都是自曝**），与 `pointB-design.md` §8.1 是同一种错。
+   **解法（第三人做对的）**：提取器**断言签名恰好命中一次**，再用「**全文件 diff 仅 N 个 hunk**」作全称证明。
+2. *** **测量面本身要先验活。** *** 用 `git archive` 副本跑全套件，**未变异的 sanity 就红 2 条**（副本**没有 `.git`**）
+   ⇒ 该面数字全部作废。**要在副本里跑全套件就用 `git clone --local`**（还不进 `git worktree` 注册表，删它不需要授权）；
+   只跑单文件/探针则 archive 副本够用。
+3. **旧材料的结论可能仍成立，而它的行号已经腐坏** —— 三轮修复顶掉了 `pointB-design.md` 的全部行号。**引用旧数字前先重测。**
+4. **评审员的结论同样要验，而且验得出东西**：第三人**证明了对照臂是承重的**（把 verdict 改成恒 `foreign`，对照臂开火），
+   并自己证了「两个操作数来源不同」（`handle.stat()` 不经模块 mock）⇒ 判据非自指。**这比采信强。**
+5. **具名例外仍是 7 个**（13/14/17/37/48/51/56）—— 上一会话**没有开第八个**。**下一位若要开，先问这个仓库为什么需要这么多例外。**
+
+## ⚠️ 铁律（上一会话又各咬了一次）
+
+**验证跑绝不过滤**（`grep`/`tail`/`sed` 同罪，过滤显示与过滤落盘同罪）；***坏探针不能证明「不存在」***（先用已知命中的对照验活）；
+***读代码的机械论证不等于实测***；**不接受实施者自证，评审员的结论同样要验**；
+***finding 与它的「处置建议」是两回事***；**变异必须证明还原**（同时验 `git diff` 与 `git diff --cached` 为 0 字节，
+**最佳做法：在 `git clone --local` 或 `git archive` 出的副本里做，工作树全程不脏**）。
+
+## ⚠️ 仍需人单独授权的四件
+
+**开门／合并／删分支或 worktree／push** —— 各需单独授权。**控制器全程不许 push。**
+**非门合并一律 `--ff-only`**（造 merge commit 会毁掉门锚点）；**开门那一笔必须是 merge、结论写在主题行**。
+⚠️ **有 worktree 且其分支将来要 ff 并入时，台账只写 worktree 副本、主仓库不得领先。**
+
+## 建议调用的 skills
+
+| skill | 何时 | 注意 |
+|---|---|---|
+| `superpowers:brainstorming` | 要设计 C 的逃生口时（**这是裁 B 的前置条件**） | **不要重开包 2 已定的方向**；E1–E4 的候选已在 `pointB-design.md` §5.3，**先读再问** |
+| `superpowers:subagent-driven-development` | 任何实施 | 「实施者 → **换人**评审 → 修复环 → **再换人** scoped 评审」。**按改动落点决定派谁，不是按流程凑人头** |
+| `superpowers:requesting-code-review` | 每轮 | brief 必写：不接受实施者自证／findings 带可构造场景／**锚点用符号名但要防同前缀兄弟**／落盘协议／***允许临时变异但必须证明还原***／**finding 与处置建议分开写** |
+| `superpowers:receiving-code-review` | 拿到结论时 | **评审员的结论同样要验**；读完 finding 一定要读它的处置建议再派工 |
+| `superpowers:verification-before-completion` | 声称「通过/完成」前 | 复跑全套件 ＋ typecheck ＋ build，`rtk proxy`，**未过滤、整份读回**，核 vitest 首行 `RUN` 路径；**探针先验活** |
+| `superpowers:systematic-debugging` | 撞到名单外失败 | 允许的 flake 只有 (B)/(F)；**另有三条已挂账按完整测试名比对、不要重新调查** |
+| `superpowers:using-git-worktrees` | 需要隔离工作区时 | ⚠️ **`EnterWorktree` 默认基点是 `origin/<default-branch>`，会丢掉未推送的本地提交** —— 必须 `git worktree add <path> -b <branch> HEAD`；**建完立刻 `npm ci`** |
+| `superpowers:finishing-a-development-branch` | 合并／开门时 | 见上一节四件授权 |
+
+---
+
+# 【已过期，保留作历史】2026-08-11
 
 > ⚠️ **一律自查，别信本文。** **两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用；HEAD／笔数／测试数／远端一律现跑。**
 > ⚠️ **本文不写死 HEAD** —— 提交本文这个动作本身就会改它。
