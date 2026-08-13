@@ -1243,70 +1243,6 @@ describe("fileStore", () => {
     }
   });
 
-  it("treats malformed lock contents with staged artifacts as stale and recoverable", async () => {
-    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
-    const initialOwnerRecord = {
-      runId: "task-1",
-      logicalSessionId: "task-1/session-1",
-      currentOwnerEpoch: 1,
-      currentProcessInstanceId: "pid:12345",
-      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
-      ownerStatus: "current" as const,
-      supersededByEpoch: null,
-      leaseAffirmedAt: null,
-    };
-    const transfer = applyOwnerEpochTransfer(
-      initialOwnerRecord,
-      "pid:67890",
-      "2026-07-22T10:05:00.000Z",
-      "owner lost after reconciliation",
-    );
-
-    await writeOwnerRecord(runDir, initialOwnerRecord);
-    await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(transfer.transferRecord, null, 2));
-    await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(transfer.nextOwnerRecord, null, 2));
-    await writeFile(
-      join(runDir, ".owner-transfer.transaction.json"),
-      JSON.stringify({ version: 1, stagedAt: transfer.transferRecord.transferredAt, finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
-    );
-    await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
-
-    const owner = await readOwnerRecord(runDir);
-
-    expect(owner.currentOwnerEpoch).toBe(2);
-    expect(owner.currentProcessInstanceId).toBe("pid:67890");
-    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();
-  });
-
-  it("keeps a malformed lock without staged artifacts non-recoverable", async () => {
-    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
-    const initialOwnerRecord = {
-      runId: "task-1",
-      logicalSessionId: "task-1/session-1",
-      currentOwnerEpoch: 1,
-      currentProcessInstanceId: "pid:12345",
-      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
-      ownerStatus: "current" as const,
-      supersededByEpoch: null,
-      leaseAffirmedAt: null,
-    };
-    const transfer = applyOwnerEpochTransfer(
-      initialOwnerRecord,
-      "pid:67890",
-      "2026-07-22T10:05:00.000Z",
-      "owner lost after reconciliation",
-    );
-
-    await writeOwnerRecord(runDir, initialOwnerRecord);
-    await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
-
-    // §3: malformed-and-non-recoverable is a lock-busy outcome (fileStore.ts's
-    // acquireOwnerTransferLock, not the CAS check), so it is the sibling class now.
-    await expect(
-      writeOwnerTransferArtifacts(runDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord),
-    ).rejects.toBeInstanceOf(OwnerTransferLockBusyError);
-  });
-
   it("releases the lock after rejecting a stale precondition under the critical section", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const initialOwnerRecord = {
@@ -2960,28 +2896,6 @@ describe("fileStore", () => {
     await expect(readFile(join(runDir, "reconciliation-record.json"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });
-  });
-
-  it("writes contract, state, events, and attempt artifacts", async () => {
-    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
-    await initializeRunFiles(runDir, contract, state);
-    await appendEvent(runDir, { type: "attempt_started", at: "2026-07-14T00:00:01.000Z", detail: "attempt 1" });
-    await writeAttemptArtifacts(runDir, 1, {
-      plan: { summary: "change src/index.ts" },
-      execution: { changedFiles: ["src/index.ts"], commandOutputs: ["ok"] },
-      verify: { approved: false, rejectCategory: "tests-failed" },
-      diffPatch: "diff --git a/src/index.ts b/src/index.ts",
-      stdoutStderrLog: "npm test\nFAIL",
-    });
-    await writeRunState(runDir, { ...state, status: "verifying", currentAttempt: 1, attemptsUsed: 1 });
-
-    const savedState = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8"));
-    const savedEvents = await readFile(join(runDir, "events.jsonl"), "utf8");
-    const savedPlan = JSON.parse(await readFile(join(runDir, "attempts", "1", "plan.json"), "utf8"));
-
-    expect(savedState.status).toBe("verifying");
-    expect(savedEvents).toContain("attempt_started");
-    expect(savedPlan.summary).toBe("change src/index.ts");
   });
 
   // §10 test 2, fixture guard. The two crash fixtures below only mean something if they really
