@@ -1999,3 +1999,91 @@ Lane 2 的基线 `TEST_EXIT=1`，两条红：flake (B)（名单内）＋
 
 *** **人裁 67：先亲验、再 `--ff-only` 并入。** *** 已执行。
 ⚠️ **C-1 仍是降级、未关闭；待裁点 A／B／C 全部未裁；包 1 的修复环 2 未开。本节一条都没关它们。**
+
+--------------------------------------------------------------------------------
+25. 门后第二轮 —— 清理（人裁 68）＋ 人裁 53 第 3 件（重复测试块）
+--------------------------------------------------------------------------------
+
+25.1 现跑核实 —— **`origin/main` 的第 13 次移动**
+--------------------------------------------------------------------------------
+
+接手时现跑（`rtk proxy`，未过滤）：`git log --merges` 末笔仍 `86d3bd6`（GATE-PKG2）、其下 `e42e062`（GATE-PKG3）；
+HEAD `df91c66`；`86d3bd6..HEAD` = 10 笔；工作树干净。
+
+*** **`git ls-remote origin` = `df91c66` —— 远端已等于本地 HEAD。** ***
+⇒ §23.1 与 handoff 记的「远端仍停在 `86d3bd6`、本地领先、控制器未 push」**已腐坏**。
+这是 `origin/main` 的**第 13 次会话外移动**（第 12 次记在 §22.10）。**本会话控制器同样从未 push。**
+**再次坐实：`git status` 的 ahead/behind 是缓存 ref，判断远端只能 `git ls-remote`。**
+
+**主仓库根基线**（`ECC_GATEGUARD=off DISABLE_OMC=1`，`rtk proxy zsh` 跑落盘脚本，未过滤整份读回，
+`RUN` 路径已核 = **主仓库根**）：`Test Files 31 passed (31)` ／ `Tests 538 passed (538)`，无 skipped，
+`TEST_EXIT=0` ／ `TSC_EXIT=0` ／ `BUILD_EXIT=0`。**本轮零 flake —— 不构成 (B)/(F) 消失的证据。**
+
+25.2 人裁 68 —— 清理（worktree ／ 分支 ／ 孤儿目录）
+--------------------------------------------------------------------------------
+
+*** **人裁 68。2026-08-13。「1. 删分支和 worktree」＋ 采纳控制器建议：孤儿目录删、两条旧分支留。** ***
+
+删前清点（全部现跑）：
+- `.worktrees/pkg2-release-guard`：`git status --porcelain --ignored=matching` 只有 `.omc/`、`dist/`、`node_modules/`
+  三个忽略目录，**零未跟踪产物**；`git diff --stat main..HEAD` 只有 `docs/handoff/handoff.md`
+  ⇒ **worktree 分支严格落后 `main`，无任何独一份内容**；`git merge-base --is-ancestor add8370 main` = 真。
+- 孤儿目录 `.worktrees/pkg2-data-loss`（12K，不在 `git worktree list` 里）：`find` 全量列出 = 只有
+  `.ccmem/context-*.md` 与 `.omc/state/…/hud-state.json`（2026-08-09 那次会话的工具残留）
+  ⇒ **无源码、无台账、无 `.git`**。
+
+已执行：`git worktree remove`（退出码 0）＋ `git branch -d feat/pkg2-release-guard`（**`-d` 不是 `-D`**，`was add8370`）＋
+`rm -rf .worktrees/pkg2-data-loss`。复验：`git worktree list` 只剩主仓库、`.worktrees/` 已空、工作树干净、
+**HEAD 与 `git log --merges` 末笔均未变**。
+**两条旧分支 `backup/evidence-first-v1-…` 与 `docs/pkg3-errata` 按建议保留**（留着零成本、删除不可逆）。
+
+25.3 人裁 53 第 3 件 —— 重复测试块已删；**并更正：是 3 个 `it()`，不是 1 个**
+--------------------------------------------------------------------------------
+
+*** **更正 §22.5 第 3 件：`fileStore.test.ts` 的逐字节重复不是「一对」，是三对（3 个 `it()`）。** ***
+§22.5 只记了 `treats malformed lock contents with staged artifacts as stale and recoverable` 一条，
+**漏了与它同在一个 66 行连续区里的 `keeps a malformed lock without staged artifacts non-recoverable`，
+以及另一处 24 行区里的 `writes contract, state, events, and attempt artifacts`**。原措辞保留不删。
+
+**测定（机械，不靠肉眼）**：
+- 重复区**精确范围**由脚本从锚点双向扩展求最大连续相同段：A=812–877 / B=1244–1309（66 行，2681 字节，sha256 相同）；
+  A=1848–1871 / B=2963–2986（24 行，1209 字节，sha256 相同）。同一脚本带**必命中反例** sanity（两个不同标题必须报 false）。
+- **作用域判定用 `ts.createSourceFile` 走 AST，不用花括号配平探针**（后者在 §24 骗过评审员）：
+  三对**全部落在同一条 `describe:fileStore` 链**下，「同名但不同 `describe`」**零命中** ⇒ 三对都是真冗余。
+- *** **提取器自证覆盖完整：AST 数出 87 个 `it()` 调用点，与 vitest 对该文件报的 87 逐一相等。** ***
+
+**承重证明（在 `git clone --local` 副本里做，红线代码只在副本里碰）**：
+未变异 sanity 先验活（副本 87/87 全绿）。随后**同一行的两个反向变异**分别只弄红一边：
+
+| 变异（`fileStore.ts` 的 `if (!hasStagedArtifacts) {`） | 红的标题 | 红在哪两行 | 红法 |
+|---|---|---|---|
+| → `if (true) {` | `treats malformed … recoverable` | **844 与 1276** | 断言 `expected 1 to be 2` |
+| → `if (false) {` | `keeps a malformed … non-recoverable` | **875 与 1307** | 断言 `.rejects.toBeInstanceOf(OwnerTransferLockBusyError)` |
+| plan.json 写入注入 `summary:"MUTATED"` | `writes contract, state, events, and attempt artifacts` | **1869 与 2984** | 断言 `expected 'MUTATED' to be …` |
+
+⇒ **两份都在跑、两份都承重、且都红在断言上**（不是异常/超时 —— 与本仓库根因形状相反的正面样本）。
+两次变异后 `git checkout --` 还原，**`git diff` 与 `git diff --cached` 均实测 0 字节**；副本 status 只剩控制器建的
+`node_modules` 符号链接。**主仓库工作树全程未动。**
+
+**删法**：因两份逐字节相同，`Edit` 的唯一性前提不成立 ⇒ 改用按行范围删除的脚本，并**断言「删掉的范围与保留的范围逐字节相等」**
+才落盘（不等则 abort）。删后 `git diff --stat` = **86 deletions(-)，零 insertions ⇒ 「没动别的」的全称证明**。
+AST 复查：84 个 `it()`、重复归零。
+
+**控制器亲验**（未过滤整份读回，`RUN` 路径 = 主仓库根）：`31 passed (31)` ／ **`535 passed (535)`**
+（538 − 3，`fileStore.test.ts` 87→84），无 skipped，三码 0。提交 `771dabe`。
+
+25.4 控制器自曝 —— 又一次过滤了验证跑
+--------------------------------------------------------------------------------
+
+删后第一次全套件跑，控制器**给它接了 `| tail -80`**，违反「验证跑绝不过滤」（`grep`/`tail`/`sed` 同罪）——
+**而且就在自己复述完这条铁律之后**。虽然被截掉的是前半段文件列表、汇总行与三个退出码都还在，
+按仓库口径**过滤过的跑一律不作数**：已当场整份重跑，上一节的数字取自**未过滤的那一次**。
+⇒ **本仓库过滤类违规累计再 +1，仍然全部咬在控制器身上。**
+
+25.5 本节**没有**关掉的
+--------------------------------------------------------------------------------
+
+**C-1 仍是降级、未关闭**（`tryRecoverStaleOwnerTransferLock` 两个失败开放出口逐字节未动 —— 本节的变异只在副本里）；
+**待裁点 A／B／C 全部未裁**（B 的措辞已在 §23.3 固化，仍卡在「C 的逃生口设计」这个前置条件上）；
+**包 1 的修复环 2 未开**；`SweepOptions.stderr` 契约的测试半边未动；
+**N-2（§24.2 新引入的存活变异）／M-1／M-3／`foreign` 文案** 一律仍挂账，**不得记成已解决**。
