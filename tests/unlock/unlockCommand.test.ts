@@ -74,7 +74,7 @@ describe("unlockOwnerTransferLock", () => {
 
       const { code, out, err } = await run(runDir);
 
-      expect(await lockExists(runDir)).toBe(true);
+      expect(await lockExists(runDir), "the lock of a LIVE holder was deleted").toBe(true);
       expect(code).toBe(1);
       expect(out).toEqual([]);
       expect(err[0]).toBe(`refused  pid ${process.pid} is alive`);
@@ -92,7 +92,7 @@ describe("unlockOwnerTransferLock", () => {
 
       // The credential was correct and the answer is still no. This is the assertion that would
       // fail first if someone ever wires --force straight to the unlink.
-      expect(await lockExists(runDir)).toBe(true);
+      expect(await lockExists(runDir), "--force deleted the lock of a LIVE holder").toBe(true);
       expect(code).toBe(1);
       expect(err[0]).toBe(`refused  pid ${process.pid} is alive`);
     });
@@ -132,7 +132,7 @@ describe("unlockOwnerTransferLock", () => {
 
     const { code, out, err } = await run(runDir);
 
-    expect(await lockExists(runDir)).toBe(false);
+    expect(await lockExists(runDir), "a DEAD holder's lock was left behind").toBe(false);
     expect(code).toBe(0);
     expect(out).toEqual([`removed  holder=pid:${DEAD_PID} was not alive`]);
     expect(err).toEqual([]);
@@ -167,7 +167,7 @@ describe("unlockOwnerTransferLock", () => {
 
         const { code, out, err } = await run(runDir);
 
-        expect(await lockExists(runDir)).toBe(true);
+        expect(await lockExists(runDir), "a lock the code refuses to interpret was deleted anyway").toBe(true);
         expect(code).toBe(1);
         expect(out).toEqual([]);
         expect(err[0]).toContain(firstLine);
@@ -183,7 +183,7 @@ describe("unlockOwnerTransferLock", () => {
 
         const { code, out, err } = await run(runDir, { expectedDigest: digest });
 
-        expect(await lockExists(runDir)).toBe(false);
+        expect(await lockExists(runDir), "--force with a matching digest failed to remove the lock").toBe(false);
         expect(code).toBe(0);
         expect(err).toEqual([]);
         // The forced removal must not be reportable as an ordinary one: an operator reading a log
@@ -199,7 +199,7 @@ describe("unlockOwnerTransferLock", () => {
 
         const { code, out, err } = await run(runDir, { expectedDigest: staleDigest });
 
-        expect(await lockExists(runDir)).toBe(true);
+        expect(await lockExists(runDir), "--force with a STALE digest deleted the lock").toBe(true);
         expect(code).toBe(1);
         expect(out).toEqual([]);
         expect(err[0]).toContain("--expect does not match the lock on disk");
@@ -221,7 +221,7 @@ describe("unlockOwnerTransferLock", () => {
 
     const { code, err } = await run(runDir, { expectedDigest: digestOfTheOldLock });
 
-    expect(await lockExists(runDir)).toBe(true);
+    expect(await lockExists(runDir), "a digest computed before the lock changed still authorized a delete").toBe(true);
     expect(code).toBe(1);
     expect(err.join("\n")).toContain("--expect does not match the lock on disk");
     // And the file that survived is the NEW one, byte for byte, not a rewritten copy of anything.
@@ -244,7 +244,7 @@ describe("unlockOwnerTransferLock", () => {
 
     const { code, err } = await run(runDir, { expectedDigest: digestOfTheOldLock });
 
-    expect(await lockExists(runDir)).toBe(true);
+    expect(await lockExists(runDir), "the lock of a LIVE holder was deleted").toBe(true);
     expect(code).toBe(1);
     expect(err[0]).toBe(`refused  pid ${process.pid} is alive`);
     expect(err.join("\n")).not.toContain("--expect");
