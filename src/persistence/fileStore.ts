@@ -649,7 +649,10 @@ const OWNER_RECORD_PENDING_FILE = ".owner-record.pending.json";
 const OWNER_TRANSFER_PENDING_FILE = ".owner-transfer.pending.json";
 const RECONCILIATION_RECORD_PENDING_FILE = ".reconciliation-record.pending.json";
 const OWNER_TRANSFER_MARKER_FILE = ".owner-transfer.transaction.json";
-const OWNER_TRANSFER_LOCK_FILE = ".owner-transfer.lock";
+// Exported for the sweep's presence-only probe (human ruling 70, board C-a). The name is all it
+// is allowed to have: the probe asks whether this path exists and nothing else, so exporting the
+// constant is what keeps a second, drifting copy of the filename out of src/sweep.
+export const OWNER_TRANSFER_LOCK_FILE = ".owner-transfer.lock";
 const OWNER_TRANSFER_MARKER_TEMP_FILE = ".owner-transfer.transaction.tmp";
 const OWNER_RECORD_PENDING_TEMP_FILE = ".owner-record.pending.tmp";
 const OWNER_TRANSFER_PENDING_TEMP_FILE = ".owner-transfer.pending.tmp";

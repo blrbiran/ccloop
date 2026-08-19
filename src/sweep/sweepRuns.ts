@@ -12,6 +12,7 @@
 import { scanRuns as defaultScan, defaultScanDeps } from "../registry/scanRuns.js";
 import type { ScanDeps, ScanRow } from "../registry/scanRuns.js";
 import { scanRootFailureDetail } from "../registry/renderRuns.js";
+import { defaultLockPresence } from "./lockPresence.js";
 import type { RunObservation } from "../registry/observeRun.js";
 import { ResumeNotEligibleError, resumeLoop } from "../controller/resumeLoop.js";
 import type { ResumeLoopOptions } from "../controller/resumeLoop.js";
@@ -78,6 +79,10 @@ export type SweepDeps = {
   scan?: (root: string, deps: ScanDeps) => Promise<ScanRow[]>;
   scanDeps?: ScanDeps;
   resume?: (runDir: string, adapter: RuntimeAdapter, options?: ResumeLoopOptions) => Promise<RunState>;
+  // Presence only, and injected for the same reason `scan` is: it is the sweep's only filesystem
+  // access under a run directory, so keeping it a dependency is what keeps sweepRuns itself the
+  // pure function §3 #1 describes.
+  lockPresence?: (runDir: string) => Promise<boolean>;
 };
 
 export type SweepOptions = {
@@ -111,6 +116,7 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
   const scan = deps?.scan ?? defaultScan;
   const scanDeps = deps?.scanDeps ?? defaultScanDeps;
   const resume = deps?.resume ?? resumeLoop;
+  const lockPresence = deps?.lockPresence ?? defaultLockPresence;
 
   const rows = await scan(options.root, scanDeps);
 
@@ -147,6 +153,32 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
       `(an observed field, not a decision that the run may be resumed), ` +
       `will attempt at most ${options.maxRuns}, adapter=${options.adapterName}`,
   );
+
+  // Human ruling 70, board C-b. Over `rows`, NOT `candidates`, and the difference is the whole
+  // point: a run whose owner-transfer.json never landed is not a candidate, is not counted in the
+  // banner, and — measured, pointC-design.md §4.1/§8.5 — is reported by nothing else this tool
+  // prints. A candidate holding the same lock is already loud, as a `refused` report line below.
+  // Reporting is a property of what is on disk; candidacy is a different question.
+  //
+  // Sorted for the same reason the candidate list is: scanRuns contains no sort, so row order is
+  // whatever readdir returned, and an operator diffing two sweeps of an unchanged tree would see
+  // the lines move. The probe runs after the sort so the calls are ordered too.
+  //
+  // Sequential rather than Promise.all: the note lines are this wave's own output and §8's
+  // one-line-per-thing contract reads them in order, which a concurrent map would not preserve.
+  const lockedRowPaths = rows
+    .filter((row): row is RunObservation => row.kind === "run")
+    .map((row) => row.path)
+    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+
+  for (const path of lockedRowPaths) {
+    if (await lockPresence(path)) {
+      options.stderr(
+        `note  ${path}  owner_transfer_lock_present  a transfer lock is on disk; `
+          + `this sweep does not read it and makes no claim about whether its holder is alive`,
+      );
+    }
+  }
 
   const adapter = options.createAdapter();
 

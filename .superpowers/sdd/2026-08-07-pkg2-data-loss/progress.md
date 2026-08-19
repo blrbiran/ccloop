@@ -2347,3 +2347,59 @@ presence-only **两种形态各一行 note**，形态 2 的 `refused` 行与 tal
 ⚠️ **边界，控制器不外推**：本裁只解 E3 这一件。人裁 11 本身**仍然有效**——
 `SweepOptions.stderr` 契约的测试半边**仍在包 2 范围外**，仍等包 1 修复环 2。
 E3 若发现自己在"补那个契约缺失的测试半边"，**要停下来重新问**，不得借本裁扩权。
+
+25.12 E3 已落 —— presence-only 的锁存在性报告（人裁 70 的 C-a／C-b／C-c）
+--------------------------------------------------------------------------------
+
+*** **E3 实现完成，TDD，先红后绿。** *** 落地形状与 §8.1 实测的原型一致。
+
+**改了什么（三处）**：
+  1. `src/persistence/fileStore.ts:652` —— `OWNER_TRANSFER_LOCK_FILE` 加 `export` ＋ 三行说明。
+     **这是本次对 fileStore.ts 的全部改动。**
+  2. `src/sweep/lockPresence.ts`（**新文件**）—— `defaultLockPresence`，只 `access()`，
+     **不 read、不 parse、不取身份、不判存活**；catch 里一律 `false`（含 EACCES，
+     否则一个不可读目录就能停掉一次 §7 说只有根才能停的 sweep）。
+  3. `src/sweep/sweepRuns.ts` —— `SweepDeps` 加 `lockPresence?`；banner 之后、`createAdapter()` 之前，
+     **遍历 `rows`（不是 `candidates`）、按路径排序后**逐个探测，命中就发一行
+     `note  <path>  owner_transfer_lock_present  …`。
+
+**两个 §8.6 点名要显式决定的决定，已决定并各有测试**：
+  ① **落点** = banner 之后、`createAdapter()` 之前（notes 属于"开跑前盘上是什么样"这一侧）；
+     新增测试 `prints the banner, then the lock notes, then constructs the adapter` 钉住三段顺序。
+  ② **排序** = 按路径排，与 candidates 同一个比较器。理由不是洁癖：`scanRuns` 全无排序，
+     行序就是 readdir 序，不排的话同一棵没变的树两次 sweep 会打出不同顺序的行。
+     新增测试把行**故意逆序**喂进去。
+  ③ **C-c** 不加 `RUN_MARKER_FILES` —— 按裁决，未改一字。
+
+*** **新增 9 条测试，既有测试一条未改。** *** （`tests/sweep/sweepRuns.test.ts` 4 条
+＋ 新文件 `tests/sweep/lockPresence.test.ts` 5 条。）
+  ⚠️ **对 §8.4 的重要澄清**：那里说的「10 条具名红」是**「若 note 真触发会红谁」**的清单，
+  是把探测强制 `return true` 量出来的。**用真探测时既有夹具一把锁都没有**（46 次探测零 PRESENT），
+  所以 E3 实际需要的顺应式改动是 **0 条**。人裁 71 事后看没用上，但当时问是对的。
+  **唯一动到的既有测试基础设施**是 `sweepRuns.test.ts` 的 harness 多了一个可注入的探测参数，
+  **默认「哪儿都没锁」** —— 顺带修掉了 §8.4 量出来的一个真问题：
+  今天那些测试会对不存在的 `/fake/root/...` 发真 syscall。
+  **`lockPresence.test.ts` 就是 §8.6 第 3 条要求的「盘上真有锁」的测试**，
+  其中「坏 JSON 仍答 present」「零字节仍答 present」两条**钉死了「不 parse」**。
+
+**验证（主仓库根，未过滤整份读回，`RUN` 路径已核）**：
+  `32 files / **545 tests**` 全绿零 skipped（**545 = 536 ＋ 9**）；`typecheck` rc=0；`build` rc=0。
+  **红线独立复验**：`tryRecoverStaleOwnerTransferLock` 与 HEAD **逐字节一致**（两侧同为 970 字节；
+  ⚠️ 这个字节数用的是本轮自己的截取边界，**与台账早先记的 967 不是同一把尺，不要跨会话比数字**）。
+  **判据 (a)/(b) 在成品上重跑**：`readFile`／`readFileSync` 命中文件数零变化；
+  `src/` 下唯一新增的关注标识符仍是 `lockPresence.ts` 里的一个 `access`；
+  `JSON` 23→24 的那一处**新增在测试文件里**（`lockPresence.test.ts` 用 `JSON.stringify` 造夹具），
+  **生产侧没有第二套 JSON 读取实现**。`sweepRuns.ts` 的 import 仍无 fs／path，关注标识符集合仍为空。
+
+**端到端（成品 dist，§8.5 同一夹具）**：形态 1 与形态 2 **各一行 note**，
+形态 2 的 `refused` 行与 tally 行 `1 attempted, 0 succeeded, 1 refused, 0 errored (quota 0/2)`
+**逐字不变**，exit 0。⇒ *** **形态 1 从"一个字不报"变成"报了"。这是 E3 买到的全部东西，已交付。** ***
+
+**下一件事**：**E1 另起一轮**（删除面，走「实施者 → 换人评审 → 修复环 → 再换人 scoped 评审」），
+*** **开工前先向人复核 C-d** ***（材料含 §8.5 的新事实：`{not json` ＋ 无 staged artifacts 的坏锁
+**永久留在盘上**，而 fail-closed 的 `unlock` 恰在这一格拒绝服务）。**E1 之后才轮到 B**（人裁 61）。
+
+**仍然开着（一条都没关）**：**C-1 仍是降级、未关闭**（两个失败开放出口逐字节未动）；
+**A／B 未裁**；**包 1 修复环 2 未开** ⇒ 包 1 不具备开门条件；
+`SweepOptions.stderr` 契约的测试半边**仍按人裁 11 冻着**（人裁 71 只解 E3 那一件，未解冻它）；
+**N-2／M-1／M-3／`foreign` 文案**一律仍挂账，**不得记成已解决**。

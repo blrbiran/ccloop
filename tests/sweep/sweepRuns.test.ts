@@ -101,6 +101,7 @@ function harness(
   rows: ScanRow[],
   resume: (runDir: string, adapter: RuntimeAdapter, options?: ResumeLoopOptions) => Promise<RunState>,
   overrides: Partial<SweepOptions> = {},
+  lockPresence?: (runDir: string) => Promise<boolean>,
 ): Harness {
   const resumeCalls: string[] = [];
   const stdoutLines: string[] = [];
@@ -130,6 +131,11 @@ function harness(
       resumeCalls.push(runDir);
       return resume(runDir, adapter, resumeOptions);
     },
+    // Defaulted to "no lock under any row" rather than left undefined on purpose: the production
+    // default probes the real filesystem, and ROOT is a path that does not exist, so every test in
+    // this file would issue real syscalls against /fake/root to be told what this stub says
+    // directly. Tests that are about the probe pass their own.
+    lockPresence: lockPresence ?? (() => Promise.resolve(false)),
   };
 
   return {
@@ -656,5 +662,127 @@ describe("sweepRuns", () => {
       `note  ${ROOT}/run-1  reconciliation_write_abandoned  ${abandonDetail}`,
       `${ROOT}/run-1\terror\t${throwMessage}`,
     ]);
+  });
+  // ---------------------------------------------------------------------------------------------
+  // Human ruling 70 (pointC-design.md §7), boards C-a and C-b: report that an owner-transfer lock
+  // is ON DISK, by PRESENCE ONLY.
+  //
+  // C-a picked presence-only over the two paths measured in §4.1 for a specific reason: probing
+  // only for existence needs no reader for this file, so it creates no second JSON reading
+  // implementation (spec §7.2), and it never touches tryRecoverStaleOwnerTransferLock, the
+  // function human ruling 50 froze. The probe is an INJECTED dependency, the same shape `scan`
+  // already has, so sweepRuns itself still reads no file under any run directory (§3 #1).
+  //
+  // C-b decided this walks `rows`, not `candidates`, and the reason is measured rather than
+  // argued (pointC-design.md §4.1 judgment 2, §8.5 end to end): a run whose owner-transfer.json
+  // never landed and whose lock is unrecoverable — "shape 1" — is reported by NOTHING today.
+  // `ccloop sweep` does not count it, and `ccloop ls` prints its row without one word about a
+  // lock. A run that IS a candidate — "shape 2" — is already loud, as a `refused` report line.
+  // Shape 1's visibility is the entire purchase here, and it is only reachable by traversing
+  // every row.
+  // ---------------------------------------------------------------------------------------------
+
+  it("reports a lock on disk for every run row, whether or not the row is a candidate", async () => {
+    // run-1 is shape 2 (a candidate, locked), run-2 is shape 1 (not a candidate, locked), and
+    // run-3 is a candidate with no lock. Reporting keyed off candidacy would print run-1 and skip
+    // run-2 — which is exactly today's blind spot — and reporting keyed off nothing at all would
+    // print run-3 too.
+    const rows: ScanRow[] = [
+      runRow(`${ROOT}/run-1`, ELIGIBLE),
+      runRow(`${ROOT}/run-2`, { kind: "absent" }),
+      runRow(`${ROOT}/run-3`, ELIGIBLE),
+    ];
+    const locked = new Set([`${ROOT}/run-1`, `${ROOT}/run-2`]);
+
+    const h = harness(rows, () => Promise.resolve(finishedState), {}, (runDir) =>
+      Promise.resolve(locked.has(runDir)),
+    );
+
+    const exitCode = await sweepRuns(h.options, h.deps);
+
+    expect(exitCode).toBe(0);
+    // The banner is stderr line 0; the two notes follow it, and nothing else joins them — run-3
+    // has no lock and must contribute no line at all.
+    expect(h.stderrLines.slice(1)).toEqual([
+      `note  ${ROOT}/run-1  owner_transfer_lock_present  a transfer lock is on disk; `
+        + `this sweep does not read it and makes no claim about whether its holder is alive`,
+      `note  ${ROOT}/run-2  owner_transfer_lock_present  a transfer lock is on disk; `
+        + `this sweep does not read it and makes no claim about whether its holder is alive`,
+    ]);
+    // A lock does not change what is attempted: run-2 is still not a candidate, and run-1 and
+    // run-3 are still both resumed. The report is an observation, not a gate.
+    expect(h.resumeCalls).toEqual([`${ROOT}/run-1`, `${ROOT}/run-3`]);
+  });
+
+  it("orders the lock notes by path, so the same disk state prints the same lines every time", async () => {
+    // scanRuns contains no sort at all — row order is whatever readdir returned — so without a
+    // sort here the note order varies between machines and between runs on one machine. The rows
+    // are handed in deliberately out of order; a loop that printed them as they arrive fails.
+    const rows: ScanRow[] = [
+      runRow(`${ROOT}/run-3`, ELIGIBLE),
+      runRow(`${ROOT}/run-1`, { kind: "absent" }),
+      runRow(`${ROOT}/run-2`, { kind: "absent" }),
+    ];
+
+    const h = harness(rows, () => Promise.resolve(finishedState), {}, () => Promise.resolve(true));
+
+    await sweepRuns(h.options, h.deps);
+
+    expect(h.stderrLines.slice(1).map((line) => line.split("  ")[1])).toEqual([
+      `${ROOT}/run-1`,
+      `${ROOT}/run-2`,
+      `${ROOT}/run-3`,
+    ]);
+  });
+
+  it("probes run rows only — an issue row names a directory, not a run", async () => {
+    // A directory_unreadable row is the scan reporting that it could not look inside; there is no
+    // run there to hold a lock, and probing it would be one more failed syscall per unreadable
+    // directory on every sweep.
+    const probed: string[] = [];
+    const rows: ScanRow[] = [
+      runRow(`${ROOT}/run-1`, ELIGIBLE),
+      { kind: "directory_unreadable", path: `${ROOT}/locked-dir`, detail: "EACCES" },
+      { kind: "depth_truncated", path: `${ROOT}/deep` },
+    ];
+
+    const h = harness(rows, () => Promise.resolve(finishedState), {}, (runDir) => {
+      probed.push(runDir);
+      return Promise.resolve(false);
+    });
+
+    await sweepRuns(h.options, h.deps);
+
+    expect(probed).toEqual([`${ROOT}/run-1`]);
+  });
+
+  it("prints the banner, then the lock notes, then constructs the adapter", async () => {
+    // §8/§12's ordering (banner before adapter) is unchanged by this wave, and the notes belong
+    // on the banner's side of it: they describe what was found on disk before anything was
+    // started, which is the same question `--adapter claude` is being approved against.
+    const order: string[] = [];
+    const rows: ScanRow[] = [runRow(`${ROOT}/run-1`, ELIGIBLE)];
+
+    const h = harness(
+      rows,
+      () => Promise.resolve(finishedState),
+      {
+        createAdapter: () => {
+          order.push("createAdapter");
+          return inertAdapter;
+        },
+        stderr: (line) => order.push(`stderr:${line}`),
+      },
+      () => Promise.resolve(true),
+    );
+
+    await sweepRuns(h.options, h.deps);
+
+    expect(order[0]?.startsWith("stderr:sweep: 1 run(s)")).toBe(true);
+    expect(order[1]).toBe(
+      `stderr:note  ${ROOT}/run-1  owner_transfer_lock_present  a transfer lock is on disk; `
+        + `this sweep does not read it and makes no claim about whether its holder is alive`,
+    );
+    expect(order[2]).toBe("createAdapter");
   });
 });
