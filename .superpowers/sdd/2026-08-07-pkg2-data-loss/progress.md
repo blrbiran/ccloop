@@ -2113,3 +2113,106 @@ AST 复查：84 个 `it()`、重复归零。
 **下一步（未做）**：① E3 弱化版代价（注意 registry **结构上读不到**这把锁，`pickReader` 对不在 `OBSERVED_FILES`
 里的路径抛）；② E1 代价（**它删锁 ⇒ 必须带身份/存活判据，否则等于开一个新的偷锁面**）；③ E4 的端到端否证。
 **三项齐了本文才够格当裁 C 的裁决包；C 裁完才轮到 B（人裁 61 的顺序）。**
+
+25.7 待裁点 C —— §4 三项实测代价做完；裁决包够格了
+--------------------------------------------------------------------------------
+
+材料：`pointC-design.md`（**§4 已完成**，标题与 §0 已同步更新）。**生产代码零改动。**
+**不重开方向**：E1–E4 仍出自 `pointB-design.md` §5.3，E2 已由人裁 69 下桌，本轮只补实测代价。
+
+**基线**（主仓库根，未过滤整份读回，`RUN` 路径已核）：`31 files / 535 tests` 全绿零 skipped、
+`typecheck` rc=0、`build` rc=0。
+
+**方法自证（承重，先证工具活的再信结论）**：
+  ① 副本 = `git clone --local` ＋ 主仓库 `node_modules` 符号链接。**未变异 sanity 先验活**：
+     `534 绿 ＋ 唯一红 = 名单内 flake (B)`，**隔离复跑 2/2 绿**（2705ms／2589ms），与台账记载逐字对上。
+  ② 提取器 = `ts.createSourceFile` 标识符扫描，扫 `src/`＋`tests/` 共 **61 个 `.ts`**，
+     **无一文件标识符计数为 0**；同一次扫描在 `sweepRuns.ts` 找到 `isObservedEligible` 两处真命中，
+     却**没把该文件第 100 行注释里的 `OBSERVED_FILES` 计为命中** ⇒ 覆盖该文件且只认标识符。
+  ③ **变异全部只在副本里**，四轮（A1／A2／C／D／E4）还原后 `git diff` 与 `git diff --cached`
+     **均 0 字节**；主仓库全程 `git status --porcelain` 空。
+
+**① E3 弱化版代价 —— 实测**
+  `.owner-transfer.lock` 字面量全仓 45 处，**`src/` 下仅 1 处**（`fileStore.ts:652` 常量）；
+  `pickReader` 的 `default:` 抛 ⇒ **registry 结构上读不到这把锁**，现测成立。
+  *** **最贵的一条判据**：这把锁今天**唯一的读取实现**在 `tryRecoverStaleOwnerTransferLock` 内部
+  （`fileStore.ts:906`／`:916`）—— **人裁 50 的红线**。而 `readObservedFile.ts:25-28` 自陈的 spec §7.2
+  正是「不许存在第二套 JSON 读取实现」⇒ 绑读取器的三条路每条都要人拍板。 ***
+  变异 A1（行契约 3→4）：**typecheck 4 错 ＋ 套件 5 红**，全部具名，全在 L2 行契约上；
+  `ObservedFileSpec` 类型**无需改动**（锁内容两个 string，落在现有 `FieldType` 域内）。
+  变异 A2（叠加 sweep 只报告、遍历 `rows`）：**增红 0 条** ⇒ *** **sweep 的 stderr 契约松到
+  「新增一条 note 行不碰任何测试」——便宜，但也没有测试会在它将来失效时红。** ***
+  ⚠️ A2 那一跑的第 6 条红是 **§2 那条已挂账的名单外失败**
+  （`persists phase usage evidence…`，`ENOENT … attempts/1/plan.json`），按完整测试名与失败形态对上，
+  **不重新调查**；另有机械不可达证明（`sweepRuns` 调用点不含该文件）＋ 隔离 2/2 绿（793ms／630ms）。
+  *** **收窄一条此前的说法（重要）**：「死锁的 run 进不了 sweep 候选集」**只对形态 1 成立**。
+  `ccloop sweep`／`ccloop ls` 现跑两形态：**形态 2**（资格齐全＋坏锁）**今天就已经响亮**
+  （`refused  owner-transfer lock busy`）；**形态 1**（`owner-transfer.json` 从未落盘＋坏锁）
+  **一个字都不报**。⇒ E3 弱化版真正买到的是**形态 1 的可见性**，且要求遍历 `rows` 而非 `candidates`。
+  两个形态在 `ccloop ls` 里都被列出，但**两行都不含一个字提到那把锁**。 ***
+
+**② E1 代价 —— 实测**
+  身份／存活原语全称扫描：`parsePid`（`fileStore.ts:882`）与 `isProcessActive`（`:887`）**均 module-private**，
+  **唯一调用点都在红线函数内**（`:917`／`:919`）；`safeUnlink`、`acquireOwnerTransferLock` 亦 module-private；
+  强身份 `buildProcessInstanceId`（`processIdentity.ts:9`）**已导出，但锁记录不记它**。
+  *** **变异 C（实测，不是推理）**：只把锁记录的身份从弱形式 `pid:<pid>` 换成强形式
+  `buildProcessInstanceId()` —— **一行、typecheck 零错、红线函数一行未动** —— 打红 **3 条**，
+  全是互斥性崩塌：两个并发读者**都**完成事务（renameCount 4 而非 2）；输家**没被挡住**（放弃 0 次而非 1 次）；
+  输家**对着活锁发布了**（`loserReachedItsOwnPublish` true）。
+  机制：`parsePid` 的 `/^pid:(\d+)$/` 对强形式返回 `null` ⇒ 存活守卫整条被跳过 ⇒ 直落 `safeUnlink`
+  ⇒ **红线函数变成无条件偷锁器**。`fileStore.ts:724-726` 的注释预写过这件事，本轮把它升级为实测。 ***
+  ⇒ **E1 的存活判据只能是裸 pid 的 `process.kill(pid,0)`**，与 C-1 两个失败开放出口**共用同一套判据**；
+  `acquiredAt` 是时钟，人裁 69 已排除。
+  变异 D（新增 `unlock` 命令 ＋ fail-closed 判据，复用同文件内原语、不另起第二套实现）：
+  *** **typecheck 零错、套件 535/535 全绿、零处测试钉住命令集或那句报错文案。** ***
+  端到端五情形全部按设计行为（absent／removed／refused×3）。
+  *** **判据分歧（要人拍板）**：E1 是 fail-CLOSED（读不懂就拒删），红线函数在同样两种情形下是
+  failure-OPEN（身份认不出 ⇒ 偷锁；JSON 抛且有 staged artifacts ⇒ 偷锁）
+  ⇒ **同一把坏锁，`ccloop unlock` 拒绝、而正常转移路径会把它抢走。** ***
+
+**③ E4 端到端否证 —— 实测（§1 欠的那一步已补）**
+  夹具走 **C 的真实死锁轨迹**（按 `seedEligibleRun` 造资格齐全的 run ＋ 永不可回收的坏锁）：
+  resume 过了全部读与资格判定 → claim → EEXIST → 红线函数拒绝回收 → `OwnerTransferLockBusyError`
+  → 重试耗尽 → `resume_denied`，锁留在盘上，exit 1。
+  噪声底先测（基线连跑两次）：差异只有标签／临时路径／时间戳三处。
+  加 E4 后重建重跑，四份输出（base×2、E4×2）规范化后
+  *** **md5 全等 `653ab5b85434dc568dc8368a67d6b9b2`、长度全为 636B** ***；
+  未规范化时唯一差异 `events.jsonl` 字节数被路径长度**算术完全解释**（`size − len(runDir)` 四份全等 229）。
+  ⇒ *** **E4 空转，端到端坐实。建议从逃生口候选里划掉。** ***
+
+**残余（裁 B 时原样复述，本轮补了两处精确边界）**
+  1. **resume 路径今天并不静默** —— stderr 有 `owner-transfer lock busy`、events 有 `resume_denied`。
+     pointC-design §2 说的「静默」是**读路径**（`recoverInterruptedOwnerTransfer` 未持锁分支的
+     `catch { return; }`），**不是这条 resume claim**，不要混。
+  2. **真正静默的是形态 1**：`ccloop sweep` 一个字不报，`ccloop ls` 的行里没有一个字提到锁。
+
+**控制器本轮自己的一处探针缺陷 —— 如实记下，不掩饰**
+  控制器一度断言「handoff 那条『该目录 `.gitignore` 是 `*`』与现跑不符」。*** **该断言是错的，已撤回。** ***
+  两个坏探针叠加：① `rtk proxy ls .superpowers/` **不显示点文件**，于是没看见
+  `.superpowers/sdd/.gitignore`（它比 pkg2 目录高一层，不在目录内 —— 控制器只在目录内找过）；
+  ② `git check-ignore` 对**已跟踪**文件本就返回 rc=1，**它不能用来判断忽略规则**，
+  而控制器恰好拿两个已跟踪文件（`progress.md`／`pointC-design.md`）去探。
+  **现跑坐实**：`cat .superpowers/sdd/.gitignore` = `*`；拿一个**未跟踪**的新路径去探，
+  `git check-ignore -v` 输出 `.superpowers/sdd/.gitignore:1:*`、rc=0。
+  ⇒ *** **原说法完全正确：该目录下的新产物必须 `git add -f`。handoff 无需改动。** ***
+  **教训（与本仓库既有铁律同形）**：*** 坏探针不能证明「不存在」 *** —— 判断忽略规则要用**未跟踪**路径去探，
+  列目录要用能显示点文件的方式，且**父目录的 `.gitignore` 同样管辖子目录**。
+
+**仍然开着（一条都没关）**
+  **C-1 仍是降级、未关闭**（两个失败开放出口逐字节未动，本轮变异只在副本里）；
+  **待裁点 C 本身仍未裁**（材料齐了，`pointC-design.md` §5 是待人拍的六块板）；
+  **A／B 未裁**（B 的措辞在 §23.3 固化，前置是 C，人裁 61 的顺序未变）；
+  **包 1 修复环 2 未开**；`SweepOptions.stderr` 契约的测试半边未动；
+  **N-2／M-1／M-3／`foreign` 文案**一律仍挂账，**不得记成已解决**。
+
+**控制器本轮的第二处违规 —— 如实记下**
+  *** **控制器在收口的验证跑上接了 `| tail -25`，违反「验证跑绝不过滤（`grep`/`tail`/`sed` 同罪）」。** ***
+  与上一会话（§25.4）**同一条铁律、同一种犯法方式**，**连续两会话第二次**。
+  **处置照旧**：当场整份重跑，未过滤、整份读回 ——
+  `31 files / 535 tests` 全绿、零 skipped、`RUN` 路径 = 主仓库根；`typecheck` rc=0；`build` rc=0。
+  **下一位注意**：这条规矩在本仓库已被违反两次，**复述它不等于遵守它**；
+  收口那一跑最容易犯，因为「只想看最后几行」。
+
+**收口验证（本节所有文档改动之后）**
+  全套件 `31 files / 535 tests` 全绿零 skipped、`typecheck` rc=0、`build` rc=0，**三码 0**。
+  本节**零生产代码改动**，改的只有 `pointC-design.md` 与本台账。
