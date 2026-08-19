@@ -2444,3 +2444,36 @@ staged-artifacts 判据 ⇒ 在删除面上再造一套判据，与 C-a「把判
 **A／B 未裁**；**包 1 修复环 2 未开** ⇒ 包 1 不具备开门条件；
 `SweepOptions.stderr` 契约的测试半边**仍按人裁 11 冻着**；
 **N-2／M-1／M-3／`foreign` 文案**一律仍挂账，**不得记成已解决**。
+
+25.14 人裁 73 —— `--force` 的凭证 = 锁文件内容的 sha256（五格统一）
+--------------------------------------------------------------------------------
+
+*** **人裁 73。2026-08-20。「B. 改成锁文件内容的 sha256」。** ***
+形状：`ccloop unlock <runDir> --force --expect <sha256>`。敲错就拒；**盘上变了也拒**（顺带堵住 TOCTOU）。
+
+**为什么这个板必须单独拍（不是细节）**：C-d 原文是「真要删给 `--force`，且要求人把 **holder id** 敲进去」，
+而人裁 72 刚认定的**唯一永久死局格**（`{not json` ＋ 无 staged artifacts）*** **恰恰是读不出 holder id 的那一格** ***。
+⇒ 照字面实现，`--force` 在那一格无法使用，fail-closed 会变成**绝对**死锁 ——
+而**人选 A 的理由正是「`--force` 的代价只是多敲一次命令」**。⇒ 它牵着人裁 72 的成立前提。
+全仓搜过（`pointC-design.md` ＋ 本台账）：`--force` 的凭证形状**此前从未被设计过**，只有 §7 表里那半句。
+
+**控制器给的理由（人采纳）**：C-d 要 holder id 的**目的**是让人证明自己看过现场，不是 holder id 本身。
+sha256 对**五格一律成立**（含那个永久死局格），且*** **连 parse 都不需要** *** ——
+与 C-a 的 presence-only 是同一条原则：**把判断整个移出代码，代码只陈述事实**。
+`refused` 行直接打出算好的完整命令 ⇒ 落实人裁 72 随附的那半句（成本压到接近零）。
+**被否掉的两条**：(A) 该格免凭证 —— 唯一真正需要 force 的格恰是凭证最弱的格，「人证明看过现场」在最危险处落空；
+(C) 双凭证形式 —— 是 (B) 的更贵版本，换来两套凭证语法与翻倍的测试矩阵。
+
+⚠️ **边界，控制器不外推**：本裁只定**凭证形式**。C-d 的 fail-closed 取向仍是人裁 72，未变。
+
+**E1 的落点（据此确定，本节记下以便评审对照）**：
+  1. `src/persistence/fileStore.ts` —— *** **只加 `export`，零行为改动** ***：`parsePid`、`isProcessActive`、
+     `type OwnerTransferLockRecord`。**红线函数 `tryRecoverStaleOwnerTransferLock` 一行不动**，收口逐字节复验。
+     （与 E3 同形：E3 也只给 `OWNER_TRANSFER_LOCK_FILE` 加了 export，逻辑全在新模块。）
+  2. `src/unlock/inspectLock.ts`（**新**）—— 纯**判定**，返回五格的 discriminated union，**不删任何东西**。
+     复用 1 的两个原语 ⇒ **不另起第二套存活实现**（判据 5 的硬约束）。
+  3. `src/unlock/unlockCommand.ts`（**新**）—— 判定 → 删/不删、输出、exit。*** **删除动作只此一处** ***。
+  4. `src/cli.ts` —— `ParsedArgs` 加 `unlock`；命令守卫与 `expected …` 文案加 `unlock`；main 里 dispatch。
+
+**测试（人裁 70 的 C-e）**：五格逐一钉住；*** **「活 pid ⇒ 锁仍在」是承重那条** ***，带 anti-vacuity
+（先断言锁确实被造出来，再断言它还在）；红证走 `git clone --local` 副本拆守卫，确认它红且失败信息点名原因。
