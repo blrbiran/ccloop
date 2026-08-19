@@ -274,6 +274,9 @@ E3 是只读、纯新增；E1 开的是**删除**面，按仓库既有做法要�
 
 ### ⚠️ 下一位必须先做的一件事（不是可选）
 
+> *** **【2026-08-19 更新】这件事已经做完了 —— 实测见 §8，三条判据全部成立。**
+> **不要重做本节要求的实测；但 §8.4／§8.6 收窄了代价，开工前必读。** ***
+
 *** **presence-only 这条路本轮没有实测。** *** §4.1 实测的是 A1（进 `OBSERVED_FILES`）与 A2（读 holder 后报告）；
 presence-only 是控制器从测量里**推**出来的第三条路，**按本仓库口径目前只是机械论证**。
 ⇒ **动手实现之前先测它**：至少要证 (a) 不需要任何新的 JSON 读取实现；(b) `sweepRuns` 本体仍不读文件；
@@ -294,3 +297,135 @@ presence-only 是控制器从测量里**推**出来的第三条路，**按本仓
 依据是 §4.2 的变异 C：今天没人写强身份，所以**不是活缺陷**；但下一个「顺手统一身份形式」的人会引爆它。
 **纯新增测试、不碰红线、不碰生产代码。** 控制器当时说了「要不要做请单独说」，
 人的整体同意涵盖了它 —— **开工前顺带确认一句即可。**
+
+---
+
+## 8. presence-only 的实测（2026-08-19，人裁 70 之后）
+
+> §7 明令「动手实现之前先测它」。本节是那次实测。**结论：三条判据全部成立，
+> 但判据 (c) 的答案是两个数，不是一个 —— 只报第一个会严重误导下一位。**
+
+### 8.0 方法与自证
+
+**基线**（主仓库根，未过滤整份读回，`RUN` 路径已核）：`31 files / 535 tests` 全绿、零 skipped；
+`typecheck` rc=0；`build` rc=0。
+
+**变异环境**：`git clone --local` 副本 ＋ 主仓库 `node_modules` 符号链接。
+**未变异 sanity 先验活**：副本 `534 绿 ＋ 唯一红 = 名单内 flake (B)`
+（`evidence.test.ts > run-scenario CLI > records env names only and tracks descendants rooted at
+the spawned pid`，`Test timed out in 5000ms`），**隔离复跑 2/2 绿**（2454ms／2194ms）——
+与台账对 (B) 的记载（全套件并行负载下超时、隔离连过）逐字对上。
+
+**提取器验活（承重）**：`ts.createSourceFile` 标识符扫描。先用构造样本自证：
+同一次扫描**不把注释里的 `readFile` 计为命中**、却**把第 3 行真代码里的 `JSON` 计为命中**。
+扫描面 `src/` ＋ `tests/`：基线 **61 个 `.ts`**（变异后 62），**无一文件标识符计数为 0**。
+
+**还原**：变异只在副本里；副本与主仓库的 `git diff` 与 `git diff --cached` **均为 0 字节**
+（原始字节，走 `rtk proxy` 取，**不经过滤层** —— 过滤层会把空 diff 报成 1 字节，本轮当场发现并改正）；
+主仓库 `status --porcelain` 空、HEAD 与两个门锚点未动。
+
+### 8.1 变异 P 的形状（就是 C-a 裁的第三条路）
+
+- `SweepDeps` 新增 `lockPresence?: (runDir: string) => Promise<boolean>`；
+  默认实现放在新模块 `src/sweep/lockPresence.ts`（**与 `defaultScan`／`defaultScanDeps` 住在
+  `registry/scanRuns.ts` 同形**）。
+- 默认实现 = `access(join(runDir, OWNER_TRANSFER_LOCK_FILE))` —— **只探存在性，不 read、不 parse、
+  不取 holder、不判存活**。
+- `fileStore.ts:652` 的 `OWNER_TRANSFER_LOCK_FILE` 加 `export`（**红线函数一行未动**；
+  代价是这一个词，收益是不产生第 46 处会漂移的字面量）。
+- `sweepRuns` 本体：banner 之后、`createAdapter()` 之前，**遍历 `rows`（不是 `candidates`）**，
+  对每个 `kind === "run"` 的行调一次注入的 dep。
+
+### 8.2 判据 (a) —— **成立**：不需要任何新的 JSON 读取实现
+
+全仓 61→62 个 `.ts` 的标识符**集合前后对比**：
+
+| 标识符 | 基线命中文件数 | 变异后 | 新增 |
+|---|---|---|---|
+| `JSON` | 23 | 23 | 无 |
+| `readFile` | 17 | 17 | 无 |
+| `readFileSync` | 1 | 1 | 无 |
+| `stat`／`lstat`／`readdir`／`open` | 5／4／7／2 | 同 | 无 |
+| `access` | 8 | **9** | *** `src/sweep/lockPresence.ts` *** |
+
+*** **全仓唯一新增的关注标识符是一个 `access`** *** —— 存在性 syscall，不读内容。
+⇒ **spec §7.2 未被触发**（不存在第二套 JSON 读取实现）；**人裁 50 的红线函数逐字节未动**；
+registry（`readObservedFile.ts`／`OBSERVED_FILES`）**零改动**（`git diff` 全程只有 2 个文件）。
+
+### 8.3 判据 (b) —— **成立**：`sweepRuns` 本体仍不读文件
+
+`sweepRuns.ts` 的 import 全称清单：**11 条全是仓内相对路径模块**，
+**没有 `node:fs`、没有 `node:fs/promises`、没有 `node:path`**；关注标识符集合**为空**。
+
+⚠️ **诚实边界**：sweep 这条路径整体上现在确实会在 run 目录下发一次 `access()`。
+§3 #1 的原句是「reads no file under any run directory」—— `access()` 不读文件内容，
+且 `scan` 早就通过注入的 dep 在 run 目录下**真读文件**；这条不变量约束的是
+**`sweepRuns.ts` 这个模块的纯度**，presence 探测与 `scan` 完全同形。
+**这一点是人裁 70 的 C-a 已经预先裁过的，本节只是把它从论证变成实测。**
+
+### 8.4 判据 (c) —— **两个数，只报一个会误导**
+
+**① 变异 P 原样落地**：`typecheck` **0 错**，套件 **535/535 全绿、零红**。
+（对照 §4.1 的 A1：4 个 typecheck 错 ＋ 5 条具名红。）
+
+*** **② 但那是因为正分支一次都没被执行过。** *** 仪表化统计全套件的每一次探测：
+**共 46 次探测，`PRESENT` = 0** —— **全套件没有任何夹具在 sweep 的根下放过一把锁**。
+（其中 42 次落在 `/fake/root/...`：`sweepRuns.test.ts` 的 harness 只注入 `scan`、
+不注入探测 dep，于是真的对不存在的路径发了 `access`。）
+
+**③ 把探测强制 `return true` 后重跑：10 条具名红，横跨 2 个文件。**
+
+`tests/sweep/sweepRuns.test.ts`（7 条）：
+1. `sweepRuns > prints the banner before constructing the adapter`
+2. `sweepRuns > prints the banner with the eligible count and the quota before constructing the adapter`
+3. `sweepRuns > prints one tab-aligned report line per attempted run and a summary line`
+4. `sweepRuns > folds a multi-line detail so one attempted run stays one report line`
+5. `sweepRuns > routes a cannot-read-run-artifacts refusal to stderr as an error, not to stdout as a refusal`
+6. `sweepRuns > prints a reconciliation_write_abandoned note on stderr without changing the run outcome`
+7. `sweepRuns > keeps the abandonment note on stderr even when the run throws afterwards`
+
+`tests/registry/zeroWrite.test.ts`（3 条）：
+8. `sweep write surface > appends exactly resume_requested and resume_denied to a gate-refused run and leaves the non-eligible run byte-identical`
+9. `sweep write surface > routes a real unreadable-artifacts refusal out of resumeLoop to stderr as one error line`
+10. `sweep write surface > finalizes a staged three-file transaction during sweep and admits the run afterwards`
+
+⇒ *** **收窄 §4.1／A2 的结论：sweep 的 stderr 契约并不松。** ***
+A2 当时零新红，是因为它加的那条 note 在测试语料里**同样没被触发过**；
+这些测试用的是**逐字相等**断言（`stderrLines` / `order[]`），
+**任何真的落到 stderr 上的新行都会撞红它们**。
+⇒ *** **E3 的真实代价 = 10 条具名测试必须被有意识地修改**（它们各自钉的是
+「banner 之后 stderr 上不再有别的东西」这件事）。 ***
+
+### 8.5 端到端 —— presence-only 确实买到了形态 1 的可见性
+
+同一夹具、两种形态（**形态 1** = 无 `owner-transfer.json` ＋ 坏锁 `{not json`；
+**形态 2** = 资格齐全 ＋ 同样的坏锁），**未变异 dist** 与 **变异 dist** 各跑一次
+`ccloop sweep --adapter scripted --max-runs 2`：
+
+| | 形态 1（`shape1-no-transfer`） | 形态 2（`shape2-eligible`） |
+|---|---|---|
+| **未变异** | *** **一个字不报** *** | `refused  owner-transfer lock busy: OwnerTransferLockBusyError` |
+| **presence-only** | *** **`note … owner_transfer_lock_present`** *** | 同上 note ＋ 原样保留的 `refused` 行 |
+
+两次 **exit 均为 0**，报告行与 tally 行（`1 attempted, 0 succeeded, 1 refused, 0 errored (quota 0/2)`）
+**逐字不变**。⇒ §4.1 判据 2 里「E3 弱化版真正买到的是形态 1 的可见性」**由推论升级为实测**。
+
+### 8.6 给实现者的三条（都是本轮测出来的，不是推的）
+
+1. *** **note 行的落点位置本身被测试钉住。** *** 上表第 1／2 条钉的是
+   「banner 之后紧接着就是 `createAdapter`」。放在两者之间就会撞红它们 ⇒
+   **要么放到 `createAdapter()` 之后，要么改这两条测试并把理由写进测试。必须显式决定。**
+2. *** **遍历 `rows` 没有排序。** *** `candidates` 有排序、`rows` 没有 ⇒ note 行按 readdir 顺序出。
+   实测输出里已经看到 `run-2` 排在 `run-1` 前面。**排不排序是个必须显式做的决定。**
+3. *** **单元测试必须注入探测 dep，并且必须新增一条「盘上真有锁」的测试。** ***
+   今天 `sweepRuns.test.ts` 不注入 ⇒ 会对 `/fake/root` 真的发 syscall；
+   而 46 次探测零 `PRESENT` 这件事说明：**不专门造一把盘上的锁，这个面就是无人看守的**
+   —— 与 §4.2 变异 D 的教训同形。
+
+### 8.7 本轮的一次犯规（记账，不掩饰）
+
+控制器在跑仪表化那一趟时给全套件接了 `| tail -0`，**把整份验证输出丢弃**。
+这是「验证跑绝不过滤」这条铁律**连续第三个会话被违反**。
+**处置照旧**：当场声明、整份重跑，以重跑的输出为准（535/535 全绿）。
+另有一处同源问题当场发现并改正：`git diff | wc -c` 走的是 rtk 过滤层，
+**把 0 字节的空 diff 报成 1 字节** ⇒ 还原证明一律改走 `rtk proxy git`。
