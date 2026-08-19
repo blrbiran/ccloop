@@ -2477,3 +2477,64 @@ sha256 对**五格一律成立**（含那个永久死局格），且*** **连 pa
 
 **测试（人裁 70 的 C-e）**：五格逐一钉住；*** **「活 pid ⇒ 锁仍在」是承重那条** ***，带 anti-vacuity
 （先断言锁确实被造出来，再断言它还在）；红证走 `git clone --local` 副本拆守卫，确认它红且失败信息点名原因。
+
+25.15 E1 已落（实施者自证，未经评审）—— `ccloop unlock`，fail-closed
+--------------------------------------------------------------------------------
+
+⚠️ *** **本节是实施者的自述，不是结论。评审环未走完之前不得当成已通过。** ***
+（换人评审已派：TypeScript 落点与删除面／安全落点各一，报告落 `E1-review-typescript.md`／`E1-review-security.md`。）
+
+**改了什么（四处）**：
+  1. `src/persistence/fileStore.ts` —— *** **只加三个 `export`，零行为改动** ***：
+     `parsePid`、`isProcessActive`、`type OwnerTransferLockRecord`。各附了为什么是导出而非重写的理由。
+  2. `src/unlock/inspectLock.ts`（**新**）—— `inspectOwnerTransferLock` 只**分类**，**从不删**。
+     六个状态：`absent`／`dead`／`alive`／`unrecognized-holder`／`unparseable`／`file-unreadable`。
+     *** **第六个是设计时没有的**：`readFile` 本身失败（EACCES 等）⇒ **拿不到字节 ⇒ 算不出 digest ⇒ 唯一没有 `--force` 出路的一格**。
+     诚实报出来，而不是伪造一个替代凭证。 ***
+  3. `src/unlock/unlockCommand.ts`（**新**）—— *** **全命令唯一一处 `unlink`** ***。
+  4. `src/cli.ts` —— `ParsedArgs` 加 `unlock`；命令守卫与 `expected …` 文案加 `unlock`；main 里 dispatch。
+
+**两个决定，各有理由与测试**：
+  ① *** **活 pid 绝不删，`--force` 也不行** *** —— 存活检查放在**凭证检查之前**，且该拒绝**故意不打 `--force` 提示行**，
+     改打「等 pid N 退出」。理由：逃生口是给**永久卡死**的锁用的，而活锁不是永久卡死（持有者退出就没了）。
+     这是对 C-e「钉死活 pid 绝不删」的**最保守读法**；⚠️ **若人要 `--force` 能破活锁，需另裁**，控制器不外推。
+  ② **凭证形式**（人裁 73）—— `--force --expect <sha256>`，digest 算的是**文件原始字节**（`readFile` 不带 encoding），
+     实测与运维手敲 `shasum -a 256` 逐字符相等（两格各验一次）。
+
+**测试：新增 33 条，既有测试一条未改。**
+（`tests/unlock/inspectLock.test.ts` 9 ＋ `tests/unlock/unlockCommand.test.ts` 14 ＋ `tests/cli/cli.test.ts` 10。）
+
+*** **红证（承重，两个变异，都在 `git clone --local` 副本里，未变异 sanity 先验活 23 绿）**：
+  **变异 U1「有人把存活守卫拆了」**（`alive` 并进 `dead` 的删除路径）⇒ **typecheck 仍 0 错**，
+  **4 条红**，全在「a live holder's lock is never removed」那个 describe 下。
+  **变异 U2「有人给 `--force` 开了破活锁的口子」**（alive 分支里 digest 匹配就删）⇒ **typecheck 仍 0 错**，
+  *** **恰好红 1 条** *** —— 就是专为它写的那条。⇒ **证明那条测试不冗余：U1 红 4 条，U2 只有它能拦。** ***
+
+⚠️ *** **本轮自查出的一个测试缺陷，已修**：U1 第一次跑时失败信息是 `expected false to be true`，
+**没有点名原因** —— 按 §25.10 立的标准（钉桩测试的失败信息必须点名原因）这不合格。
+给 8 条落盘断言补了消息后重跑：现在报 `the lock of a LIVE holder was deleted`／`--force deleted the lock of a LIVE holder`。 ***
+
+**还原**：副本 `git diff` 与 `git diff --cached` **均 0 字节**（原始字节，走 `rtk proxy git`）。
+**红线独立复验**：`tryRecoverStaleOwnerTransferLock` 与改动前**逐字节一致**（两侧同为 970 字节，`diff` rc=0；
+⚠️ 970 用的是本轮自己的截取边界，与 §25.12 恰好同尺，但**仍不要跨会话比数字**）。
+
+**验证**（主仓库根，未过滤整份读回，`RUN` 路径已核）：
+`34 files / **578 tests**` 全绿零 skipped（**578 = 545 ＋ 33**）；`typecheck` rc=0；`build` rc=0 ⇒ 三码 0。
+
+**端到端（成品 dist，五格 ＋ force 路径）**：默认路径五格逐字对上 §4.2 原型的输出（新增第二行提示）；
+`--force` 用打印出来的命令行原样粘贴 ⇒ 两格各删成功，输出是 `removed  forced past …`（**与判据授权的删除措辞不同**，日志可区分）；
+**活 pid ＋ 正确 digest ⇒ 仍 `refused`，锁仍在盘上**；**过期 digest ⇒ 拒，锁仍在**。
+
+*** **⚠️ 本轮犯规两条（记账，都是探针坏了，不是实现坏了）**：
+  ① 端到端第一版把**上一次 bash 调用的 `$$`** 写进「活 pid」夹具 —— 那个 shell 早退出了，
+     于是命令**正确地**判它死并删除，而我的断言把它印成 `*** RULING 70 C-e VIOLATED ***`。
+     **假警报，整段作废重做**：改用后台 `sleep` 的真 pid，并在**断言时刻**再 `kill -0` 核一次活着。
+     ⇒ **台账「坏探针不能证明不存在」这条，反过来也成立：坏探针也不能证明「违规」。**
+  ② `cp` 在本机有 `-i` alias，交互提示无人应答 ⇒ **文件根本没覆盖**，那一趟变异跑的是旧测试文件、结论作废。
+     改走 `cat A > B` 并用 `diff` 现证拷贝到位后重跑。⇒ **「命令跑了」不等于「命令生效了」。** ***
+
+**仍然开着（一条都没关）**：**C-1 仍是降级、未关闭**（两个失败开放出口逐字节未动 —— E1 与它的判据分歧
+是**有意写进两个方向**的，见 `unlockCommand.ts` 头部注释，不是被 E1 解决了）；
+**A／B 未裁**；**包 1 修复环 2 未开** ⇒ 包 1 不具备开门条件；
+`SweepOptions.stderr` 契约的测试半边仍按人裁 11 冻着；
+**N-2／M-1／M-3／`foreign` 文案**一律仍挂账，**不得记成已解决**。
