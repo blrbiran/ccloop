@@ -3193,6 +3193,84 @@ describe("the owner-transfer lock is published atomically, never as an empty fil
   });
 });
 
+// Human ruling 70's separately-confirmed addendum (pointC-design.md §7, "另一件事：范围之外"),
+// confirmed on 2026-08-19: turn fileStore.ts:724-726's "do not 'unify' it with this one" comment
+// into an ENFORCED invariant. A pure test addition — it touches no production code and no red line.
+//
+// WHY this deserves a test of its own, measured rather than argued (pointC-design.md §4.2,
+// mutation C): replacing acquireOwnerTransferLock's weak `pid:<pid>` holder with the strong
+// buildProcessInstanceId() form is a ONE-LINE change that typechecks with ZERO errors — and it
+// turns tryRecoverStaleOwnerTransferLock, the function human ruling 50 froze byte-for-byte, into an
+// UNCONDITIONAL LOCK STEALER. parsePid's /^pid:(\d+)$/ returns null for the strong form, so the
+// `pid !== null && isProcessActive(pid)` guard is skipped entirely and the path falls through to
+// safeUnlink. Three tests DO go red under that mutation today, but they report it as
+// "renameCount 4 instead of 2", as a loser that was never blocked, and as a loser that published
+// against a live lock — not one of them names the cause. This one names it, so the next person who
+// tidies the two identity forms into one learns from a failure message why they must not.
+describe("the owner-transfer lock's holder stays in the weak pid form its liveness guard can parse", () => {
+  it("publishes holderProcessInstanceId as `pid:<pid>` for this live process, never the strong instance id", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    const current = ownerRecord();
+    await writeOwnerRecord(runDir, current);
+
+    // Read SYNCHRONOUSLY at the publishing link, for the same reason the sibling test above does:
+    // the lock is released before the call returns, so there is no later instant to read it at.
+    const published: string[] = [];
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        link: async (...args: Parameters<typeof actual.link>) => {
+          const result = await actual.link(...args);
+          if (String(args[1]) === lockPath) {
+            published.push(readFileSync(lockPath, "utf8"));
+          }
+          return result;
+        },
+      };
+    });
+
+    try {
+      const fileStore = await import("../../src/persistence/fileStore.js");
+      await fileStore.claimOwnerRecordWithPrecondition(
+        runDir,
+        current,
+        ownerRecord({ currentProcessInstanceId: "pid:222" }),
+      );
+
+      // Anti-vacuity, and load-bearing: a wrapper that stopped seeing the lock path would leave
+      // `published` empty and make every assertion below vacuously true — the broken-probe failure
+      // mode this repository keeps hitting. Exactly one lock publish happens in this call.
+      expect(published).toHaveLength(1);
+
+      const holder = (JSON.parse(published[0] ?? "{}") as { holderProcessInstanceId?: string })
+        .holderProcessInstanceId;
+
+      // The invariant itself, stated as the guard reads it: parsePid's own regex, and the pid it
+      // extracts must be THIS process — a holder that parses but names someone else would let a
+      // live holder's lock be judged against the wrong process.
+      expect(holder).toMatch(/^pid:\d+$/);
+      expect(Number.parseInt(String(holder).slice("pid:".length), 10)).toBe(process.pid);
+
+      // The premise that makes the invariant matter, asserted rather than assumed: the strong form
+      // is NOT accepted by that regex, which is exactly why unifying the two forms disarms the
+      // liveness guard. If this line ever fails, the invariant has to be re-derived — do not
+      // relax it, because its failing means the two forms have converged and the reasoning above
+      // no longer describes the code.
+      expect(buildProcessInstanceId()).not.toMatch(/^pid:\d+$/);
+      expect(holder).not.toBe(buildProcessInstanceId());
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  });
+});
+
+
 // Package 2 fix round 3, the scoped re-review's Imp-1 — a defect THIS fix round introduced and the
 // guard that keeps it from coming back. Making the publish atomic put a throwing statement between
 // the publish and the return: `safeUnlink(stagingPath)` rethrows every errno that is not ENOENT, so

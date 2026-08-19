@@ -2295,3 +2295,43 @@ presence-only **两种形态各一行 note**，形态 2 的 `refused` 行与 tal
 **仍然开着（一条都没关）**：**C-1 仍是降级、未关闭**（两个失败开放出口逐字节未动）；
 **A／B 未裁**；**包 1 修复环 2 未开**；`SweepOptions.stderr` 契约的测试半边未动；
 **N-2／M-1／M-3／`foreign` 文案**一律仍挂账，**不得记成已解决**。
+
+25.10 `^pid:\d+$` 钉桩测试 —— 已落（人于 2026-08-19 单独确认「做」）
+--------------------------------------------------------------------------------
+
+*** **范围之外那一条已获人单独确认并落地。纯新增测试，零生产代码改动。** ***
+把 `fileStore.ts:724-726` 的「do not "unify" it with this one」注释升级成**被强制的不变量**。
+
+**落点**：`tests/persistence/fileStore.test.ts` 新增一个顶层 describe
+（`the owner-transfer lock's holder stays in the weak pid form its liveness guard can parse`），
+**与既有的「原子发布」那条测试同形** —— 同一个本地 `vi.doMock("node:fs/promises")` 缝、
+在发布用的 `link` 那一刻**同步**读回锁文件、同一条 anti-vacuity 断言（`published` 必须恰好 1 条）。
+驱动用 `claimOwnerRecordWithPrecondition`，**不碰红线、不碰共享 mock 工厂**。
+
+**断言三层**：① holder 匹配 `/^pid:\d+$/`（就是 `parsePid` 自己的正则）；
+② 抽出的 pid **等于本进程**；③ **前提也断言、不假设** —— `buildProcessInstanceId()`
+**不**匹配那条正则，这正是「统一两种身份形式会解除存活守卫」的原因。
+该前提若将来失败，**要重新推导不变量，不许放松断言**。
+
+*** **红证（承重，不是走过场）**：在 `git clone --local` 副本里施加 §4.2 的变异 C
+（`holderProcessInstanceId` 换成 `buildProcessInstanceId()`）后，**typecheck 仍 0 错**，
+而本测试**红**，失败信息 **直接点名原因**：`expected 'pid:12720:1787154059514' to match /^pid:\d+$/`。 ***
+⇒ 这正是它存在的理由：既有那 3 条测试也会红，但它们报的是
+`renameCount 4 而非 2`／输家没被挡住／输家对着活锁发布 —— **没有一条说出原因**。
+
+**还原**：变异只在副本里；还原后副本 `git diff` 与 `git diff --cached` **均 0 字节**（原始字节）。
+
+**收口验证**（主仓库根，未过滤整份读回，`RUN` 路径已核）：
+`31 files / **536 tests**` 全绿零 skipped（**536 = 535 ＋ 本条**）；`typecheck` rc=0；`build` rc=0。
+
+*** **⚠️ 仍挂着、需要人明说的一件（控制器不外推）**：`E3 要改的 10 条测试` 与 **人裁 11** 撞面 ——
+人裁 11（本台账 §153-156）判「`SweepOptions.stderr` 契约的**测试半边**不在包 2 范围内，
+理由是其规范半边归包 1 spec、而包 1 spec 正被人裁 9 冻着」；
+而 §8.4 实测出 sweep 的 stderr 被 10 条逐字相等断言钉死，**E3 加那行 note 必然要改它们**。
+两种读法：(a) 只是顺应式改既有断言 ⇒ 不触人裁 11；(b) 动它们就是在动那个契约的测试半边 ⇒ E3 得等包 1。
+**控制器倾向 (a)，但拒绝自行认定 —— 自己选 (a) 等于自己给自己开范围。E3 开工前需人明说。** ***
+
+**其余不变**：C-d 复核留到 E1 那轮开工前（材料含 §8.5 的新事实：`{not json` ＋ 无 staged artifacts
+的坏锁**永久留在盘上**，而 fail-closed 的 `unlock` 恰在这一格拒绝服务）；
+**C-1 仍是降级、未关闭**；**N-2／M-1／M-3／`foreign` 文案**维持人裁 66 挂账，**不得记成已解决**；
+**包 1 修复环 2 未开** ⇒ 包 1 不具备开门条件。
