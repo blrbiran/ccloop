@@ -273,6 +273,95 @@ async function seedSweepRoot(): Promise<{ root: string; runDir: string; adapterC
   return { root, runDir, adapterConfigPath };
 }
 
+describe("parseArgs unlock", () => {
+  // `unlock` takes a positional run directory like `ls` does, but unlike `ls` it also carries a
+  // flag that TAKES A VALUE (--expect). "the first token that is not --prefixed" — the rule `ls`
+  // uses — would happily read the digest as the run directory when --expect comes first, and then
+  // delete a lock in whatever directory that string named. So the positional has to be found by
+  // walking the flags, and these tests pin that it is.
+  it("parses a positional run directory", () => {
+    expect(parseArgs(["unlock", "/tmp/some-run"])).toEqual({
+      command: "unlock",
+      runDir: "/tmp/some-run",
+      force: false,
+    });
+  });
+
+  it("parses --force with its --expect credential", () => {
+    expect(parseArgs(["unlock", "/tmp/some-run", "--force", "--expect", "abc123"])).toEqual({
+      command: "unlock",
+      runDir: "/tmp/some-run",
+      force: true,
+      expectedDigest: "abc123",
+    });
+  });
+
+  it("does not mistake the --expect value for the run directory when the flag comes first", () => {
+    expect(parseArgs(["unlock", "--force", "--expect", "abc123", "/tmp/some-run"])).toEqual({
+      command: "unlock",
+      runDir: "/tmp/some-run",
+      force: true,
+      expectedDigest: "abc123",
+    });
+  });
+
+  it("refuses --force with no credential (human ruling 73)", () => {
+    // The credential is the whole of what --force means here. Accepting a bare --force would
+    // reinstate exactly the escape hatch ruling 73 declined to build: one that proves nothing
+    // about whether the operator ever looked at the lock.
+    expect(() => parseArgs(["unlock", "/tmp/some-run", "--force"])).toThrow(/--expect/);
+  });
+
+  it("refuses --expect with no --force, rather than silently ignoring it", () => {
+    expect(() => parseArgs(["unlock", "/tmp/some-run", "--expect", "abc123"])).toThrow(/--force/);
+  });
+
+  it("throws when the run directory is missing", () => {
+    expect(() => parseArgs(["unlock"])).toThrow();
+    expect(() => parseArgs(["unlock", "--force", "--expect", "abc123"])).toThrow();
+  });
+
+  it("does not require --adapter, --adapter-config, or --contract", () => {
+    expect(() => parseArgs(["unlock", "/tmp/some-run"])).not.toThrow();
+  });
+
+  it("names unlock in the unknown-command message", () => {
+    expect(() => parseArgs(["nonsense"])).toThrow(/unlock/);
+  });
+});
+
+describe("main unlock", () => {
+  it("exits 0 and reports absence for a run directory with no lock", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-cli-unlock-"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await main(["unlock", runDir])).toBe(0);
+      expect(log).toHaveBeenCalledWith("absent   no owner-transfer lock present");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("exits 1 and leaves a live holder's lock on disk", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-cli-unlock-"));
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    await writeFile(
+      lockPath,
+      JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-08-20T00:00:00.000Z" }),
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await main(["unlock", runDir])).toBe(1);
+      expect(error).toHaveBeenCalledWith(`refused  pid ${process.pid} is alive`);
+    } finally {
+      error.mockRestore();
+    }
+    // The point of the whole command, asserted through the real CLI entry point and not just the
+    // module beneath it.
+    await expect(readFile(lockPath, "utf8")).resolves.toContain(`pid:${process.pid}`);
+  });
+});
+
 describe("parseArgs sweep", () => {
   it("parses --root, --adapter, --adapter-config and --max-runs", () => {
     expect(

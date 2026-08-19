@@ -685,7 +685,11 @@ type OwnerTransferPaths = {
   reconciliationPendingTempPath: string;
 };
 
-type OwnerTransferLockRecord = {
+// Exported for `ccloop unlock` (human ruling 70 board C-d, held fail-closed by ruling 72). The
+// unlock command reads this file with its own reader rather than through the redline function,
+// which human ruling 50 froze and which DELETES what it reads — a command whose whole job is to
+// refuse must not call it. Sharing the shape is what keeps the two readers describing one file.
+export type OwnerTransferLockRecord = {
   holderProcessInstanceId: string;
   acquiredAt: string;
 };
@@ -882,12 +886,18 @@ function sameOwnerRecord(left: OwnerRecord, right: OwnerRecord): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function parsePid(processInstanceId: string): number | null {
+// parsePid and isProcessActive are exported for `ccloop unlock` (human ruling 70, board C-e), and
+// exporting rather than reimplementing is the whole point. pointC-design.md §4.2 mutation C
+// measured what a second, "upgraded" identity notion does here: /^pid:(\d+)$/ stops matching, the
+// liveness guard below is skipped, and tryRecoverStaleOwnerTransferLock becomes an unconditional
+// lock stealer. A separate liveness implementation inside the unlock command would be free to
+// drift into that same failure, on the one command whose purpose is to not delete live locks.
+export function parsePid(processInstanceId: string): number | null {
   const match = /^pid:(\d+)$/.exec(processInstanceId);
   return match === null ? null : Number.parseInt(match[1], 10);
 }
 
-function isProcessActive(pid: number): boolean {
+export function isProcessActive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;

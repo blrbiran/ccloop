@@ -11,6 +11,7 @@ import { SubprocessClaudeAdapter } from "./runtime/claude/subprocessClaudeAdapte
 import { ScriptedAdapter } from "./runtime/scriptedAdapter.js";
 import type { RuntimeAdapter } from "./runtime/types.js";
 import { sweepRuns } from "./sweep/sweepRuns.js";
+import { unlockOwnerTransferLock } from "./unlock/unlockCommand.js";
 
 export type ParsedArgs =
   | {
@@ -37,7 +38,11 @@ export type ParsedArgs =
       command: "ls";
       root: string;
       json: boolean;
-    };
+    }
+  // The credential rides in the type, not alongside it: `force: true` without a digest cannot be
+  // represented, so unlockOwnerTransferLock needs no runtime check for the combination human
+  // ruling 73 forbids. The refusal happens once, in parseArgs, where the operator typed it.
+  | ({ command: "unlock"; runDir: string } & ({ force: false } | { force: true; expectedDigest: string }));
 
 type ScriptedAdapterConfig = {
   frames: ConstructorParameters<typeof ScriptedAdapter>[0];
@@ -61,8 +66,70 @@ export function parseArgs(argv: string[]): ParsedArgs {
     return { command, root, json };
   }
 
+  // `unlock` (human ruling 70, board C-d) also takes a positional run directory and needs neither
+  // adapter nor contract, so it is handled here beside `ls` rather than through the flag/value
+  // pairing below. It cannot reuse `ls`'s "first token that is not --prefixed" rule, though: this
+  // command has a flag that TAKES A VALUE, and `unlock --force --expect <digest> <runDir>` would
+  // make that rule read the digest as the run directory — and then delete a lock in whatever
+  // directory that string happened to name. Hence the explicit walk.
+  if (command === "unlock") {
+    const rest = argv.slice(1);
+    let runDir: string | undefined;
+    let force = false;
+    let expectedDigest: string | undefined;
+
+    for (let index = 0; index < rest.length; index += 1) {
+      const token = rest[index]!;
+
+      if (token === "--force") {
+        force = true;
+        continue;
+      }
+
+      if (token === "--expect") {
+        const value = rest[index + 1];
+        // A missing value, or the next flag standing where the digest should be, is a typo — and
+        // taking "--force" as the digest would produce a credential that never matches, refusing
+        // for the wrong stated reason.
+        if (value === undefined || value.startsWith("--")) {
+          throw new Error("--expect requires a sha256 digest of the lock file");
+        }
+        expectedDigest = value;
+        index += 1;
+        continue;
+      }
+
+      if (token.startsWith("--")) {
+        throw new Error(`unknown flag ${token}`);
+      }
+
+      if (runDir !== undefined) {
+        throw new Error("expected exactly one run directory");
+      }
+      runDir = token;
+    }
+
+    if (!runDir) {
+      throw new Error("missing required run directory argument");
+    }
+
+    if (force && expectedDigest === undefined) {
+      throw new Error("--force requires --expect <sha256 of the lock file>");
+    }
+
+    if (!force && expectedDigest !== undefined) {
+      // Refused rather than ignored: silently dropping a credential the operator typed would let
+      // a mistyped `--force` read as a successful forced removal that never happened.
+      throw new Error("--expect is only meaningful together with --force");
+    }
+
+    return expectedDigest === undefined
+      ? { command, runDir, force: false }
+      : { command, runDir, force: true, expectedDigest };
+  }
+
   if (command !== "run" && command !== "resume" && command !== "sweep") {
-    throw new Error("expected `run`, `resume`, `sweep`, or `ls` command");
+    throw new Error("expected `run`, `resume`, `sweep`, `ls`, or `unlock` command");
   }
 
   const values = new Map<string, string>();
@@ -208,6 +275,28 @@ export async function main(argv: string[]): Promise<number> {
       const result = toScanResult(rows);
       console.log(parsed.json ? JSON.stringify(result, null, 2) : renderScanTable(result));
       return 0;
+    }
+
+    // `unlock` returns here for the same reason `ls` does: it runs no loop, so the succeeded/failed
+    // -> 0/2 mapping below has nothing to say about it. Its codes are its own — 0 when the lock is
+    // gone or was never there, 1 for every refusal (human ruling 72's fail-closed).
+    if (parsed.command === "unlock") {
+      return await unlockOwnerTransferLock(
+        parsed.force
+          ? {
+              runDir: parsed.runDir,
+              force: true,
+              expectedDigest: parsed.expectedDigest,
+              stdout: (line) => console.log(line),
+              stderr: (line) => console.error(line),
+            }
+          : {
+              runDir: parsed.runDir,
+              force: false,
+              stdout: (line) => console.log(line),
+              stderr: (line) => console.error(line),
+            },
+      );
     }
 
     // `sweep` returns HERE — before loadAdapter, not merely before the two `? 0 : 2` mappings
