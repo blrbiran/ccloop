@@ -25,8 +25,8 @@
 // when that process exits. So the live case is checked before the credential is even considered,
 // and the refusal deliberately prints no --force line to copy.
 
-import { unlink } from "node:fs/promises";
-import { inspectOwnerTransferLock, ownerTransferLockPath } from "./inspectLock.js";
+import { stat, unlink } from "node:fs/promises";
+import { type LockIdentity, inspectOwnerTransferLock, ownerTransferLockPath } from "./inspectLock.js";
 
 export type UnlockOptions = {
   runDir: string;
@@ -39,6 +39,49 @@ export type UnlockOptions = {
   // rejection structural rather than a second runtime check that could be forgotten.
   | { force: true; expectedDigest: string }
 );
+
+// The deletion re-checks WHICH FILE the name holds, not merely that a name is there. Both
+// independent reviews of this command found the same defect: the inspection reads the lock, and the
+// unlink that followed named only the path. Between the two, a legitimate concurrent recovery can
+// reclaim a dead holder's lock and publish a fresh, LIVE one at the same name — and this command
+// would then delete it while reporting `removed  holder=... was not alive`, a false statement about
+// a live holder's lock.
+//
+// This is the bug class human ruling 62 already fixed once, for release(): it "used to unlink
+// `lockPath` unconditionally: whatever file bore that name at that instant was deleted", measured on
+// `dbac288`. The technique is the one recorded there — compare (dev, ino), both halves load-bearing
+// because an inode number identifies a file only within one filesystem.
+//
+// WHAT THIS DOES NOT DO, stated because the same comment in fileStore states it: the stat and the
+// unlink are still two syscalls, so a replacement landing between THEM is undetectable. The window
+// goes from "the whole inspection" down to "two adjacent syscalls". It is not closed.
+export async function removeLockIfUnchanged(
+  lockPath: string,
+  identity: LockIdentity,
+): Promise<"removed" | "changed" | "gone" | "unremovable"> {
+  let onDisk;
+  try {
+    onDisk = await stat(lockPath);
+  } catch (error) {
+    // Already off disk is not a failure to report as one: someone else cleared it, which is the
+    // outcome this command wanted anyway.
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "gone" : "unremovable";
+  }
+
+  if (onDisk.dev !== identity.dev || onDisk.ino !== identity.ino) {
+    return "changed";
+  }
+
+  try {
+    await unlink(lockPath);
+  } catch {
+    // Nothing was deleted, and a rejection escaping a delete path would be reported as "the command
+    // crashed" rather than "the lock is still there" — which is the fact the operator needs.
+    return "unremovable";
+  }
+
+  return "removed";
+}
 
 function forceLine(runDir: string, digest: string): string {
   // Human ruling 72 attached this to the fail-closed decision: the refusal hands over a command
@@ -71,7 +114,11 @@ export async function unlockOwnerTransferLock(options: UnlockOptions): Promise<n
   }
 
   if (inspection.state === "dead") {
-    await unlink(ownerTransferLockPath(runDir));
+    const outcome = await removeLockIfUnchanged(ownerTransferLockPath(runDir), inspection.identity);
+    if (outcome !== "removed") {
+      return reportFailedRemoval(outcome, stdout, stderr);
+    }
+
     stdout(`removed  holder=${inspection.holder} was not alive`);
     return 0;
   }
@@ -79,7 +126,12 @@ export async function unlockOwnerTransferLock(options: UnlockOptions): Promise<n
   const refusal =
     inspection.state === "unrecognized-holder"
       ? `refused  unrecognized holder identity: ${inspection.holder}`
-      : `refused  lock unreadable: ${inspection.reason}`;
+      : inspection.state === "liveness-unknown"
+        ? // Distinct from both neighbours on purpose. "unreadable" would be a false statement — the
+          // record parsed fine and named a holder; what failed was the probe. An operator told the
+          // wrong reason looks for the wrong fix.
+          `refused  cannot determine whether pid ${inspection.pid} is alive: ${inspection.reason}`
+        : `refused  lock unreadable: ${inspection.reason}`;
 
   if (!options.force) {
     stderr(refusal);
@@ -93,14 +145,43 @@ export async function unlockOwnerTransferLock(options: UnlockOptions): Promise<n
     return 1;
   }
 
-  await unlink(ownerTransferLockPath(runDir));
+  const outcome = await removeLockIfUnchanged(ownerTransferLockPath(runDir), inspection.identity);
+  if (outcome !== "removed") {
+    return reportFailedRemoval(outcome, stdout, stderr);
+  }
+
   // Deliberately not the shape the criterion-authorized removal prints. An operator reading a log
   // has to be able to tell "the liveness criterion authorized this" from "a human overrode it",
   // and a shared wording would erase that distinction at exactly the place it matters most.
   stdout(
     inspection.state === "unrecognized-holder"
       ? `removed  forced past unrecognized holder identity: ${inspection.holder}`
-      : "removed  forced past unreadable lock contents",
+      : inspection.state === "liveness-unknown"
+        ? `removed  forced past undetermined liveness of pid ${inspection.pid}`
+        : "removed  forced past unreadable lock contents",
   );
   return 0;
+}
+
+// `gone` is the only one of the three that is not a refusal: the lock this command was asked to
+// clear is off disk, which is what the operator wanted. It still must not print `removed`, because
+// this invocation did not remove it and an audit line saying otherwise would be false.
+function reportFailedRemoval(
+  outcome: "changed" | "gone" | "unremovable",
+  stdout: (line: string) => void,
+  stderr: (line: string) => void,
+): number {
+  if (outcome === "gone") {
+    stdout("absent   the lock was already off disk by the time it would have been removed");
+    return 0;
+  }
+
+  if (outcome === "changed") {
+    stderr("refused  the lock changed on disk between being read and being removed");
+    stderr("         the file now at that name is not the one that was inspected; nothing was deleted");
+    return 1;
+  }
+
+  stderr("refused  the lock could not be removed; nothing was deleted");
+  return 1;
 }

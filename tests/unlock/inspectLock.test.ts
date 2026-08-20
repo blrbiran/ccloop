@@ -17,7 +17,7 @@
 // implementation here would be free to drift into exactly that failure.
 
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -54,11 +54,15 @@ describe("inspectOwnerTransferLock", () => {
       JSON.stringify({ holderProcessInstanceId: `pid:${DEAD_PID}`, acquiredAt: "2026-08-20T00:00:00.000Z" }),
     );
 
+    const onDisk = await stat(join(runDir, OWNER_TRANSFER_LOCK_FILE));
     expect(await inspectOwnerTransferLock(runDir)).toEqual({
       state: "dead",
       holder: `pid:${DEAD_PID}`,
       pid: DEAD_PID,
       digest,
+      // Carried so the deletion can re-check that the file it is about to unlink is still the file
+      // this inspection looked at. Without it the "dead" verdict authorizes a path, not a file.
+      identity: { dev: onDisk.dev, ino: onDisk.ino },
     });
   });
 
@@ -69,11 +73,13 @@ describe("inspectOwnerTransferLock", () => {
       JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-08-20T00:00:00.000Z" }),
     );
 
+    const onDisk = await stat(join(runDir, OWNER_TRANSFER_LOCK_FILE));
     expect(await inspectOwnerTransferLock(runDir)).toEqual({
       state: "alive",
       holder: `pid:${process.pid}`,
       pid: process.pid,
       digest,
+      identity: { dev: onDisk.dev, ino: onDisk.ino },
     });
   });
 
@@ -89,14 +95,24 @@ describe("inspectOwnerTransferLock", () => {
       JSON.stringify({ holderProcessInstanceId: holder, acquiredAt: "2026-08-20T00:00:00.000Z" }),
     );
 
-    expect(await inspectOwnerTransferLock(runDir)).toEqual({ state: "unrecognized-holder", holder, digest });
+    const onDisk = await stat(join(runDir, OWNER_TRANSFER_LOCK_FILE));
+    expect(await inspectOwnerTransferLock(runDir)).toEqual({
+      state: "unrecognized-holder",
+      holder,
+      digest,
+      identity: { dev: onDisk.dev, ino: onDisk.ino },
+    });
   });
 
   it("answers unrecognized-holder when the record parses but carries no holder at all", async () => {
     const runDir = await makeRunDir();
     const digest = await writeLock(runDir, JSON.stringify({ acquiredAt: "2026-08-20T00:00:00.000Z" }));
 
-    expect(await inspectOwnerTransferLock(runDir)).toEqual({ state: "unrecognized-holder", holder: "", digest });
+    expect(await inspectOwnerTransferLock(runDir)).toMatchObject({
+      state: "unrecognized-holder",
+      holder: "",
+      digest,
+    });
   });
 
   it("answers unparseable for a lock that is not JSON — the permanently stranded cell", async () => {
@@ -129,6 +145,55 @@ describe("inspectOwnerTransferLock", () => {
     const digest = await writeLock(runDir, "null");
 
     expect(await inspectOwnerTransferLock(runDir)).toMatchObject({ state: "unparseable", digest });
+  });
+
+  describe("liveness that cannot be determined is its own answer, not a guess in either direction (human ruling 74)", () => {
+    // fileStore's isProcessActive collapses every non-ESRCH outcome of process.kill into "alive".
+    // That is the safe collapse for the redline recovery function, which must never steal a lock it
+    // is unsure about. It is the WRONG collapse for this command: the reviewers measured that it
+    // makes a pid:0 or overflow-pid lock refuse forever, --force included, because unlockCommand
+    // checks `alive` BEFORE it considers the credential. So this module keeps the third outcome
+    // instead of folding it away. The syscall is the same one; only the collapsing is dropped.
+
+    it("answers liveness-unknown for pid 0, which names the caller's own process group, not a holder", async () => {
+      // process.kill(0, 0) does not throw — it signals the caller's process group. Reading that as
+      // "the holder is alive" is a false positive with no escape hatch behind it.
+      const runDir = await makeRunDir();
+      const digest = await writeLock(
+        runDir,
+        JSON.stringify({ holderProcessInstanceId: "pid:0", acquiredAt: "2026-08-20T00:00:00.000Z" }),
+      );
+
+      const inspection = await inspectOwnerTransferLock(runDir);
+
+      expect(inspection).toMatchObject({ state: "liveness-unknown", holder: "pid:0", pid: 0, digest });
+      expect((inspection as { reason: string }).reason).not.toBe("");
+    });
+
+    it("answers liveness-unknown for a pid too large to be one", async () => {
+      // process.kill throws a TypeError here, not an errno — and a TypeError is emphatically not
+      // evidence that a process is running.
+      const runDir = await makeRunDir();
+      const digest = await writeLock(
+        runDir,
+        JSON.stringify({ holderProcessInstanceId: "pid:99999999999999999999", acquiredAt: "2026-08-20T00:00:00.000Z" }),
+      );
+
+      expect(await inspectOwnerTransferLock(runDir)).toMatchObject({ state: "liveness-unknown", digest });
+    });
+
+    it("still answers alive for a process that really is running, and dead for one that is not", async () => {
+      // Anti-vacuity for the two tests above: if the classifier had simply started answering
+      // "unknown" for everything, they would both pass and mean nothing.
+      const live = await makeRunDir();
+      await writeLock(live, JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "x" }));
+      expect((await inspectOwnerTransferLock(live)).state).toBe("alive");
+
+      const gone = await makeRunDir();
+      expect(() => process.kill(DEAD_PID, 0)).toThrow();
+      await writeLock(gone, JSON.stringify({ holderProcessInstanceId: `pid:${DEAD_PID}`, acquiredAt: "x" }));
+      expect((await inspectOwnerTransferLock(gone)).state).toBe("dead");
+    });
   });
 
   it("answers file-unreadable — the one state with no digest and therefore no --force route", async () => {

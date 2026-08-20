@@ -16,12 +16,12 @@
 // never created — it would be asserting nothing at all.
 
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OWNER_TRANSFER_LOCK_FILE } from "../../src/persistence/fileStore.js";
-import { unlockOwnerTransferLock } from "../../src/unlock/unlockCommand.js";
+import { removeLockIfUnchanged, unlockOwnerTransferLock } from "../../src/unlock/unlockCommand.js";
 
 const DEAD_PID = 999999;
 
@@ -61,6 +61,152 @@ async function run(runDir: string, force?: { expectedDigest: string }): Promise<
   );
   return { code, out, err };
 }
+
+describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just the path", () => {
+  // Human ruling 62 fixed this exact bug class once already, in release(): it "used to unlink
+  // `lockPath` unconditionally: whatever file bore that name at that instant was deleted", measured
+  // on `dbac288` — a holder deleted the NEW holder's lock on its way out. Both independent reviews
+  // of this command found the same shape here: `inspectOwnerTransferLock` reads the file, and the
+  // unlink that follows names only the path. In between, a legitimate concurrent recovery can
+  // reclaim a dead holder's lock and publish a fresh, LIVE one at the same name.
+  //
+  // The residual window is named rather than papered over: the stat and the unlink are still two
+  // syscalls, so a theft landing between THEM is undetectable — the same residue fileStore's own
+  // comment records for release(). This narrows the window from "the whole inspection" to "two
+  // adjacent syscalls"; it does not close it.
+
+  it("removes the lock when the name still holds the very file that was inspected", async () => {
+    const runDir = await makeRunDir();
+    await seedLock(runDir, "{not json");
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+    const onDisk = await stat(lockPath);
+
+    expect(await removeLockIfUnchanged(lockPath, { dev: onDisk.dev, ino: onDisk.ino })).toBe("removed");
+    expect(await lockExists(runDir), "the inspected file was not removed").toBe(false);
+  });
+
+  it("refuses when the name now holds a DIFFERENT file, and leaves that file alone", async () => {
+    const runDir = await makeRunDir();
+    await seedLock(runDir, "{not json");
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+    const inspected = await stat(lockPath);
+
+    // What a concurrent recovery does: reclaim the stale lock and publish a fresh one at the same
+    // name. Same path, different inode.
+    await unlink(lockPath);
+    await seedLock(runDir, JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "later" }));
+    const republished = await stat(lockPath);
+    expect(republished.ino, "the fixture failed to produce a different file").not.toBe(inspected.ino);
+
+    expect(await removeLockIfUnchanged(lockPath, { dev: inspected.dev, ino: inspected.ino })).toBe("changed");
+    expect(await lockExists(runDir), "a lock that was NOT the inspected file was deleted").toBe(true);
+  });
+
+  it("reports gone rather than throwing when the lock left on its own", async () => {
+    const runDir = await makeRunDir();
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+
+    expect(await removeLockIfUnchanged(lockPath, { dev: 1, ino: 1 })).toBe("gone");
+  });
+
+  it("reports unremovable rather than throwing when the name holds something unlink cannot take", async () => {
+    // A directory at the lock's name reaches this function only if an inspection somehow classified
+    // it; the command's own read refuses it earlier with EISDIR. Pinned anyway, because an
+    // unhandled rejection out of a delete path is the kind of failure that gets reported as "the
+    // command crashed" rather than "nothing was deleted".
+    const runDir = await makeRunDir();
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+    await mkdir(lockPath);
+    const onDisk = await stat(lockPath);
+
+    expect(await removeLockIfUnchanged(lockPath, { dev: onDisk.dev, ino: onDisk.ino })).toBe("unremovable");
+  });
+});
+
+describe("the dead-holder path refuses once the file underneath it has been replaced", () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.doUnmock("../../src/unlock/inspectLock.js");
+  });
+
+  it("does not delete a lock that is no longer the file the inspection read", async () => {
+    const runDir = await makeRunDir();
+    // On disk: a live holder's lock, published by the concurrent recovery that won the race.
+    await seedLock(
+      runDir,
+      JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-08-20T00:00:01.000Z" }),
+    );
+
+    // The inspection that ran a moment earlier saw the previous, dead-holder file. Its identity no
+    // longer matches anything on disk — which is exactly the state the race produces.
+    const actual = await import("../../src/unlock/inspectLock.js");
+    // Before doMock, not after: this file imports unlockCommand statically at the top, so without
+    // the reset the dynamic import below hands back the already-cached module that closed over the
+    // real inspection — and the test would pass or fail for reasons unrelated to what it pins.
+    vi.resetModules();
+    vi.doMock("../../src/unlock/inspectLock.js", () => ({
+      ...actual,
+      inspectOwnerTransferLock: async () => ({
+        state: "dead" as const,
+        holder: `pid:${DEAD_PID}`,
+        pid: DEAD_PID,
+        digest: "irrelevant-to-the-dead-path",
+        identity: { dev: 0, ino: 0 },
+      }),
+    }));
+    const { unlockOwnerTransferLock: freshlyLoaded } = await import("../../src/unlock/unlockCommand.js");
+
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await freshlyLoaded({
+      runDir,
+      force: false,
+      stdout: (line) => out.push(line),
+      stderr: (line) => err.push(line),
+    });
+
+    expect(await lockExists(runDir), "a live holder's republished lock was deleted by the dead path").toBe(true);
+    expect(code).toBe(1);
+    expect(out).toEqual([]);
+    expect(err[0]).toContain("changed on disk");
+  });
+});
+
+describe("liveness that cannot be determined refuses, but keeps the escape hatch (human ruling 74)", () => {
+  // The reviewers measured that folding "cannot tell" into "alive" produces locks with NO way out:
+  // `alive` is checked before the credential, so pid:0 and overflow-pid locks refused even a
+  // correct --force. The redline recovery function strands them too, since it shares the collapse.
+  // Refusing by default is right; refusing without a hatch is what human ruling 74 undid.
+  const cases = [
+    { name: "pid 0, which names the caller's own process group", holder: "pid:0" },
+    { name: "a pid too large to be one", holder: "pid:99999999999999999999" },
+  ];
+
+  for (const { name, holder } of cases) {
+    it(`refuses ${name} by default, and offers a --force line`, async () => {
+      const runDir = await makeRunDir();
+      const digest = await seedLock(runDir, JSON.stringify({ holderProcessInstanceId: holder, acquiredAt: "x" }));
+
+      const { code, err } = await run(runDir);
+
+      expect(await lockExists(runDir), "a lock of undetermined liveness was deleted by default").toBe(true);
+      expect(code).toBe(1);
+      expect(err[0]).toContain("cannot determine whether");
+      expect(err.join("\n")).toContain(`--force --expect ${digest}`);
+    });
+
+    it(`lets --force with a matching digest clear ${name}`, async () => {
+      const runDir = await makeRunDir();
+      const digest = await seedLock(runDir, JSON.stringify({ holderProcessInstanceId: holder, acquiredAt: "x" }));
+
+      const { code, out } = await run(runDir, { expectedDigest: digest });
+
+      expect(await lockExists(runDir), "human ruling 74's escape hatch did not open").toBe(false);
+      expect(code).toBe(0);
+      expect(out[0]).toContain("forced");
+    });
+  }
+});
 
 describe("unlockOwnerTransferLock", () => {
   describe("a live holder's lock is never removed — not by the default path, not by --force", () => {

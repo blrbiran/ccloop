@@ -23,21 +23,64 @@
 // not a copy.
 
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  OWNER_TRANSFER_LOCK_FILE,
-  type OwnerTransferLockRecord,
-  isProcessActive,
-  parsePid,
-} from "../persistence/fileStore.js";
+import { OWNER_TRANSFER_LOCK_FILE, type OwnerTransferLockRecord, parsePid } from "../persistence/fileStore.js";
+
+// WHICH FILE, not which path. Every state that can authorize a deletion carries the (dev, ino) of
+// the file this inspection actually read, so the deletion can re-check that the name still holds
+// that same file. Human ruling 62 fixed the identical bug class in release(): it "used to unlink
+// `lockPath` unconditionally: whatever file bore that name at that instant was deleted", measured
+// on `dbac288`. `dev` is load-bearing alongside `ino` for the reason recorded there — an inode
+// number identifies a file only within one filesystem.
+export type LockIdentity = { dev: number; ino: number };
+
+// Three outcomes, not two. fileStore's isProcessActive collapses every non-ESRCH result into
+// "alive", which is the correct collapse THERE — the redline recovery function must never steal a
+// lock it is unsure about. It is the wrong collapse here (human ruling 74): unlockCommand consults
+// `alive` before it consults the credential, so a false "alive" produces a lock with no escape
+// hatch at all. Measured cases: `pid:0` (kill(0, 0) signals the caller's own process group and does
+// not throw), a pid too large to be one (TypeError, not an errno), and a pid owned by another user
+// (EPERM). None of those is evidence that the holder is running.
+//
+// This is the SAME syscall fileStore uses, called the same way. What is not reused is the collapse
+// — which is what judgement 5 of pointC-design.md §4.2 forbids reimplementing, and this does not:
+// the liveness question is still `process.kill(pid, 0)` and the identity form is still parsePid's.
+export type LivenessVerdict =
+  | { verdict: "alive" }
+  | { verdict: "dead" }
+  | { verdict: "unknown"; reason: string };
+
+export function classifyHolderLiveness(pid: number): LivenessVerdict {
+  // Guarded before the syscall, because kill(0, ...) is not a query about a process at all: POSIX
+  // gives pid 0 the meaning "every process in the caller's process group". It cannot throw ESRCH,
+  // so it can never answer "dead", and taking its silence for "alive" strands the lock forever.
+  if (pid < 1) {
+    return { verdict: "unknown", reason: `pid ${pid} does not name a process that can be probed` };
+  }
+
+  try {
+    process.kill(pid, 0);
+    return { verdict: "alive" };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") {
+      return { verdict: "dead" };
+    }
+
+    // EPERM (someone else's process), ERR_INVALID_ARG_TYPE / ERR_OUT_OF_RANGE (a number too large
+    // to be a pid), and anything else: the probe failed, which is not the same as it succeeding.
+    return { verdict: "unknown", reason: code ?? (error instanceof Error ? error.message : String(error)) };
+  }
+}
 
 export type LockInspection =
   | { state: "absent" }
-  | { state: "dead"; holder: string; pid: number; digest: string }
-  | { state: "alive"; holder: string; pid: number; digest: string }
-  | { state: "unrecognized-holder"; holder: string; digest: string }
-  | { state: "unparseable"; reason: string; digest: string }
+  | { state: "dead"; holder: string; pid: number; digest: string; identity: LockIdentity }
+  | { state: "alive"; holder: string; pid: number; digest: string; identity: LockIdentity }
+  | { state: "liveness-unknown"; holder: string; pid: number; reason: string; digest: string; identity: LockIdentity }
+  | { state: "unrecognized-holder"; holder: string; digest: string; identity: LockIdentity }
+  | { state: "unparseable"; reason: string; digest: string; identity: LockIdentity }
   // The only state with no digest, and therefore the only one human ruling 73's --force cannot
   // reach: the credential is a hash of the file's bytes, and these bytes are unreachable. Saying
   // so is honest; inventing a substitute credential would be a second, weaker escape hatch.
@@ -53,11 +96,24 @@ export function digestLockContents(contents: Buffer): string {
 
 export async function inspectOwnerTransferLock(runDir: string): Promise<LockInspection> {
   let contents: Buffer;
+  let identity: LockIdentity;
   try {
+    // Opened once and both facts taken from the SAME descriptor: fstat for the identity, then the
+    // bytes. Doing it as stat-then-readFile would leave a window between them in which the name
+    // could come to hold a different file, and the inspection would then report one file's contents
+    // under another file's identity — which is the very confusion the identity exists to prevent.
+    //
     // Read as bytes, not utf8. The digest human ruling 73 gates --force on is a digest of what is
     // ON DISK; hashing a decoded string would hash a lossy re-encoding of it, and the operator
     // computes theirs with shasum over the file.
-    contents = await readFile(ownerTransferLockPath(runDir));
+    const handle = await open(ownerTransferLockPath(runDir), "r");
+    try {
+      const stats = await handle.stat();
+      identity = { dev: stats.dev, ino: stats.ino };
+      contents = await handle.readFile();
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
     const errno = error as NodeJS.ErrnoException;
     if (errno.code === "ENOENT") {
@@ -77,13 +133,23 @@ export async function inspectOwnerTransferLock(runDir: string): Promise<LockInsp
     // function gets from having one catch around both.
     holder = parsed.holderProcessInstanceId ?? "";
   } catch (error) {
-    return { state: "unparseable", reason: error instanceof Error ? error.message : String(error), digest };
+    return {
+      state: "unparseable",
+      reason: error instanceof Error ? error.message : String(error),
+      digest,
+      identity,
+    };
   }
 
   const pid = holder === "" ? null : parsePid(holder);
   if (pid === null) {
-    return { state: "unrecognized-holder", holder, digest };
+    return { state: "unrecognized-holder", holder, digest, identity };
   }
 
-  return { state: isProcessActive(pid) ? "alive" : "dead", holder, pid, digest };
+  const liveness = classifyHolderLiveness(pid);
+  if (liveness.verdict === "unknown") {
+    return { state: "liveness-unknown", holder, pid, reason: liveness.reason, digest, identity };
+  }
+
+  return { state: liveness.verdict === "alive" ? "alive" : "dead", holder, pid, digest, identity };
 }

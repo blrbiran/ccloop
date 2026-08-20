@@ -316,9 +316,12 @@ describe("parseArgs unlock", () => {
     expect(() => parseArgs(["unlock", "/tmp/some-run", "--expect", "abc123"])).toThrow(/--force/);
   });
 
-  it("throws when the run directory is missing", () => {
-    expect(() => parseArgs(["unlock"])).toThrow();
-    expect(() => parseArgs(["unlock", "--force", "--expect", "abc123"])).toThrow();
+  it("throws about the MISSING RUN DIRECTORY, not about something else", () => {
+    // Matched on the message rather than left bare: `parseArgs(["unlock"])` would also throw if the
+    // credential checks ran first, and a bare .toThrow() cannot tell a correct refusal from one
+    // that is right by accident.
+    expect(() => parseArgs(["unlock"])).toThrow(/run directory/);
+    expect(() => parseArgs(["unlock", "--force", "--expect", "abc123"])).toThrow(/run directory/);
   });
 
   it("does not require --adapter, --adapter-config, or --contract", () => {
