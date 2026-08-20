@@ -2538,3 +2538,92 @@ sha256 对**五格一律成立**（含那个永久死局格），且*** **连 pa
 **A／B 未裁**；**包 1 修复环 2 未开** ⇒ 包 1 不具备开门条件；
 `SweepOptions.stderr` 契约的测试半边仍按人裁 11 冻着；
 **N-2／M-1／M-3／`foreign` 文案**一律仍挂账，**不得记成已解决**。
+
+25.16 人裁 74 ＋ E1 修复环 —— 两个独立评审撞出同一条 Critical
+--------------------------------------------------------------------------------
+
+**换人评审两名**（按落点派：TypeScript 正确性／删除面安全），报告落
+`E1-review-typescript.md`／`E1-review-security.md`（已随修复环那笔一起提交）。
+*** **两人独立地命中同一条 Critical，各自用不同方法复现。** ***
+
+### Critical —— 删除只认路径，不认文件（已修）
+
+`inspectOwnerTransferLock` 读锁 → 随后的 `unlink` 只认路径。两者之间，**一次合法的并发回收**
+（`acquire` → EEXIST → `tryRecoverStaleOwnerTransferLock` 见死 pid 回收 → 重新 `link`）
+可以在同一个名字下放上一把**新的、活的**锁 ⇒ 本命令把它删掉，还打印
+`removed  holder=… was not alive` —— **一句关于活锁的假话**。
+
+*** **控制器独立核实的前提（不接受评审员自证）**：`fileStore.ts` 里人裁 62 修 `release()` 的注释
+逐字写着「used to unlink `lockPath` unconditionally: whatever file bore that name at that instant
+was deleted」，**实测于 `dbac288`**。⇒ **这是本仓库撞过的同一个缺陷类，修法现成。** ***
+
+**修法**（照人裁 62 记的技术）：inspect 用 `open()` 拿一个**描述符**，**同一个 fd** 上先 `fstat` 取
+`(dev, ino)` 再读字节（不是 stat-then-readFile —— 那样两者之间还有窗口，会出现「用 A 的身份报告 B 的内容」）；
+新增 `removeLockIfUnchanged` 在 `unlink` 前比对 `(dev, ino)`。`dev` 与 `ino` 两半都承重，理由同人裁 62。
+⚠️ *** **残余窗口照实记，不粉饰**：`stat` 与 `unlink` 仍是两次 syscall，落在**它们之间**的替换探测不到 ——
+与 `fileStore` 给 `release()` 记的残余**同形**。窗口从「整个 inspect」收窄到「两次相邻 syscall」，**没有关闭**。 ***
+
+### 人裁 74 —— 存活判定改成三态（2026-08-20）
+
+*** **人裁 74。「在 E1 里细分 errno」。** ***
+`isProcessActive` 把**非 ESRCH 一律当活着**。那是红线函数的**正确**折叠（不确定就绝不偷锁），
+但在 E1 是**错**的折叠 —— 因为 `alive` 在**凭证之前**被查，于是假阳性的「活」产生了**连 `--force` 都救不了**的锁。
+
+**控制器实测的三格**（对着真的导出函数跑，不是读代码）：
+
+| holder | `parsePid` | 旧 `isProcessActive` | 为什么是假阳性 |
+|---|---|---|---|
+| `pid:0` | 0 | **true** | `kill(0, ·)` 按 POSIX 指的是**调用者自己的进程组**，永远不抛 ⇒ 永远答不出「死」 |
+| `pid:99999999999999999999` | 1e20 | **true** | 抛的是 `TypeError`（`ERR_INVALID_ARG_TYPE`），**不是 errno**，被吞成「活」 |
+| 别的用户的 pid | N | **true** | `EPERM` 非 ESRCH |
+
+⇒ *** **而红线函数用的是同一个判据，所以这些锁对整个系统都是永久死局。** ***
+⇒ **这比人裁 72 认定的那格更糟**：那格在 E1 落地后**其实已经有出路**（`--force` 能清），这几格连出路都没有。
+
+**改法**：`classifyHolderLiveness` 给出**三个**答案 —— `alive`／`dead`／`unknown`（带 reason）。
+`pid < 1` 在 syscall **之前**就归 `unknown`。⚠️ **这不是判据 5 禁的「第二套存活实现」**：
+存活问题仍是 `process.kill(pid, 0)`、身份形式仍是 `parsePid` 的，**被放弃的只是那个折叠**。
+命令层：`liveness-unknown` **默认拒绝，但保留 `--force` 出路**；措辞与两个邻居都不同
+（说「unreadable」是假话 —— 记录解析得好好的，失败的是探测；**告诉运维错误的原因会让他去修错误的东西**）。
+
+### 一条评审 Minor，控制器实测后判定为**误判**
+
+评审称「锁路径是目录时 `unlink` 抛未处理异常」。**实测走完整命令**：`readFile` 先抛 `EISDIR`
+⇒ 落 `file-unreadable` ⇒ 干净拒绝、exit 1、**目录原封不动**，`unlink` 根本到不了。
+（`removeLockIfUnchanged` 仍然把它兜住，理由是「删除路径逃出一个 rejection 会被报成命令崩了，
+而运维需要的事实是『锁还在』」。）⇒ *** **「先验评审员的前提」这条规矩，本轮兑现了一次。** ***
+
+### 红证（两个变异，新副本 `mutant-e1b`，未变异 sanity 先验活 35 绿）
+
+  **T1「把 TOCTOU 防护退回裸路径 `unlink`」** ⇒ typecheck 0 错，*** **恰好红 1 条** ***，
+  失败信息点名：`a live holder's republished lock was deleted by the dead path`。
+  **T2「把三态存活折回两态」** ⇒ typecheck **真的** 0 错（**未过滤确认**），**红 6 条**，
+  点名：`human ruling 74's escape hatch did not open`。
+
+### 表述修正（评审提出，控制器采纳）
+
+§25.13／§25.14 说「`{not json` ＋无 staged ⇒ 锁**永久**留在盘上」——
+*** **那是 E1 落地【之前】的事实。E1 落地后它有出路了（`--force --expect <digest>`）。** ***
+**E1 之后唯一真正无出路的是 `file-unreadable`**（读不到字节 ⇒ 算不出 digest ⇒ `--force` 结构性不可达），
+这一格 §25.15 已记。⚠️ **不改 §25.13／§25.14 原文**（那是裁决当时的记录，改它等于篡改历史），**在此处修正**。
+
+**验证**（主仓库根，**未过滤整份读回**，`RUN` 路径已核）：
+`34 files / **590 tests**` 全绿零 skipped（**590 = 578 ＋ 12**）；`typecheck` rc=0；`build` rc=0。
+**红线独立复验**：`tryRecoverStaleOwnerTransferLock` 仍与改动前**逐字节一致**（970 字节，`diff` rc=0）。
+**还原**：两个副本 `git diff` 与 `git diff --cached` **均 0 字节**（原始字节）；主仓库 status 空；门锚点未动；
+远端仍是 `ls-remote` 现读的那个值，**控制器全程未 push**。
+
+**端到端（成品 dist）**：`pid:0` 与溢出 pid 两格 —— 默认拒绝并打出可复制的 `--force` 行，
+`--force` **删除成功**（`removed  forced past undetermined liveness of pid …`）；
+**真活 pid ＋ 正确 digest ⇒ 仍 `refused`、锁仍在盘上**，探针在**断言时刻**再核一次仍活着。
+
+*** **⚠️ 本轮犯规两条，都是「过滤」（同一条铁律，本会话第一、二次）**：
+  ① 修复环后的全套件跑接了 `| tail -60`，前半份输出被丢弃 —— **当场声明并整份重跑，以重跑为准**。
+  ② 变异 T2 的 typecheck 接了 `| tail -3` 后取 `$?` —— *** **取到的是 `tail` 的返回码** ***，
+     于是「typecheck rc=0」是假的（tsc 其实报了 `TS18046`，是那版变异代码自己写坏了）。
+     **重写成干净变异并未过滤重跑**，这次 rc=0 是真的。
+  ⇒ **管道会同时骗走「输出」和「返回码」两样东西。** ***
+
+**仍然开着（一条都没关）**：**C-1 仍是降级、未关闭**；**A／B 未裁**；**包 1 修复环 2 未开**
+⇒ 包 1 不具备开门条件；人裁 11 仍冻着；**N-2／M-1／M-3／`foreign` 文案**一律仍挂账。
+**下一步**：**再换人 scoped 评审**（只审修复环这一笔），通过后才轮到 B。
