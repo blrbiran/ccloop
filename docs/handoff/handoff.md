@@ -1,8 +1,154 @@
-# ccloop Handoff — **E3 已落（人裁 70 的 C-a／C-b／C-c 全部交付）；下一件事是 E1，但开工前必须先向人复核 C-d；B 在 E1 之后；C-1 仍降级未关闭；包 1 仍不具备开门条件**
+# ccloop Handoff — **E1（`ccloop unlock`）已落并走完一轮评审环；但第二个修复环尚未被任何人评审 ⇒ 不得宣布 E1 通过；之后才轮到 B；C-1 仍降级未关闭；包 1 仍不具备开门条件**
 
 ---
 
-# 【最新】2026-08-20 —— **本节取代下方一切状态描述**
+# 【最新】2026-08-20（**E1 轮**）—— **本节取代下方一切状态描述**
+
+> ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
+> *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数。 ***
+> 需要指代某一笔时**引提交主题行**（可 `git log --grep` 找回），需要指代材料时**引路径**。
+
+## 先跑这些，以输出为准
+
+```bash
+cd /Users/biran/code/skills/loop/ccloop
+git log --merges --format='%h %cd %s'   # 末笔应仍是 GATE-PKG2（86d3bd6），其下 GATE-PKG3（e42e062）
+git ls-remote origin refs/heads/main    # ⚠️ 一律现跑，开工核一次、收尾再核一次（见下方教训 ③）
+git status --short; git worktree list; git branch -vv
+export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm test -- --run
+export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy npm run build
+```
+
+⚠️ **验证性命令一律走 `rtk proxy`**；**判断远端只能 `git ls-remote`** —— `git status` 的 `ahead N` 是缓存 ref。
+⚠️ *** **rtk 的过滤层会骗你**：`git status --porcelain` 空时它打印 `ok`，`git diff | wc -c` 把 0 字节报成 1 字节。
+**任何还原证明／字节比较一律走 `rtk proxy git …`。** ***
+**上一会话实测基线**（主仓库根，未过滤整份读回，`RUN` 路径已核）：`34 files / 593 tests` 全绿零 skipped，三码 0。
+**593 = 545（会话开始）＋ 33（E1 首版）＋ 12（第一个修复环）＋ 3（第二个修复环）。现跑核实。**
+
+## 唯一可信进度源（**引路径，不要重新推导**）
+
+`.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **人裁 10–74 全在里面**。
+*** **本轮新增七节：§25.13／§25.14／§25.15／§25.16／§25.17／§25.18／§25.19。** ***
+⚠️ *** **`.superpowers/sdd/.gitignore` 内容是 `*`** *** —— 该目录下**新产物必须 `git add -f`**。
+⚠️ **判断忽略规则要拿「未跟踪」路径去探**：`git check-ignore` 对**已跟踪**文件返回 rc=1，**不能用**。
+
+| 材料 | 路径 |
+|---|---|
+| 点 C 裁决 ＋ presence-only 实测 | `…/pointC-design.md`（§4.2 五格表／§7 人裁 70／§8 实测） |
+| **E1 的三份评审报告** | `…/E1-review-typescript.md`／`…/E1-review-security.md`／`…/E1-review-scoped-fix.md` |
+| 点 B 裁决包 | `…/pointB-ruling-package.md`（门后重测版，**不要重新推导**） |
+| E1–E4 候选原文 | `…/pointB-design.md` §5.3（⚠️ 该文件行号腐坏过一次） |
+
+## 上一会话做完了什么（**都不要重做**）
+
+1. *** **人裁 72**（§25.13）—— C-d 复核完成：**维持 fail-closed**。 ***
+   C-d 原本是"随整体同意落定、没单独选过"的，这次单独摆出代价问了，附注就此结清。
+2. *** **人裁 73**（§25.14）—— `--force` 的凭证 = **锁文件字节的 sha256**（`--force --expect <sha256>`）。 ***
+   **为什么这个板必须单独拍**：C-d 原文说"把 holder id 敲进去"，而**唯一永久死局格恰恰读不出 holder id**
+   ⇒ 照字面实现，`--force` 在最需要它的地方不可用 ⇒ **动摇人裁 72 的成立前提**。
+3. *** **人裁 74**（§25.16）—— 存活判定在 E1 里**细分 errno**，三态而非两态。 ***
+   `isProcessActive` 把非 ESRCH 一律当"活" ⇒ `pid:0`（`kill(0,·)` 指调用者自己的进程组，永不抛）、
+   溢出 pid（TypeError）、别人的 pid（EPERM）**连 `--force` 都救不了**；
+   ⚠️ **红线函数共用同一判据，所以这些锁对整个系统都是永久死局**（**这条仍开着，见下表**）。
+4. *** **E1 已落**（§25.15）—— `ccloop unlock <runDir> [--force --expect <sha256>]`。 ***
+   `src/persistence/fileStore.ts` 只加三个 `export`（零行为）；`src/unlock/inspectLock.ts` **只分类不删**；
+   `src/unlock/unlockCommand.ts` **持有全命令唯一一处 `unlink`**；`src/cli.ts` 接线。
+   *** **活 pid 绝不删，`--force` 也不行** *** —— 存活检查在凭证之前，该拒绝**故意不打 `--force` 提示行**。
+   ⚠️ **这是对 C-e 的最保守读法；若人要 `--force` 能破活锁，需另裁。**
+5. **评审环走完一整轮**（§25.16／§25.17）：实施者 → 换人评审 ×2 → 修复环 → 再换人 scoped 评审 → 第二个修复环。
+   - *** **Critical（两人独立命中）**：删除只认路径不认文件。 *** 修法照人裁 62 修 `release()` 的 `(dev, ino)` 比对
+     （本仓库**撞过这个缺陷**，实测于 `dbac288`）。**残余照实记了**：`stat` 与 `unlink` 仍是两次 syscall，**窗口收窄不是关闭**。
+   - **scoped 评审 0 Critical**，2 Important 已修：失败的 `close()` 会盖掉一次成功的读；两个 `catch` 丢了 errno。
+6. **人的更正**（§25.19）—— 会话中途那次 push **是人自己手动做的**。
+   §25.18 把它定性成"未经授权"并怀疑到第三位评审 agent 头上，**两条都错，已撤回**。
+
+## ⛔ 下一件事
+
+*** **1. E1 的第二个修复环【尚未被任何人评审过】。** ***
+即 `fix(unlock): stop a failing close from masking a good read, and keep the errno`
+与 `test(unlock): move fs mock cleanup into afterEach so a failure cannot leak it` 这两笔。
+**控制器没有宣布 E1 通过**。**是否再来一轮 scoped 评审，是人的板 —— 先问，别外推。**
+
+**2. E1 之后才轮到 B**（人裁 61）。B 的措辞已在台账 §23.3 固化，*** **不要重新推导** ***；
+裁 B 时**必须原样复述残余**，含两处精确边界：**resume 路径并不静默**（stderr 有
+`owner-transfer lock busy`，events 有 `resume_denied`）；**真正静默的是形态 1**。
+⚠️ **形态 1 的静默已被 E3 部分解决**（sweep 现在会报 note），复述时要说准。
+
+## 仍然开着（**接手前先看这张表**）
+
+| # | 项 | 要点 |
+|---|---|---|
+| 1 | **C-1 降级，未关闭** | `tryRecoverStaleOwnerTransferLock` 的**两个**失败开放出口**逐字节未动**。**不许写成「C-1 已修复」**。⚠️ E1 与它的判据分歧是**有意写进两个方向**的（见 `unlockCommand.ts` 头部注释），**不是被 E1 解决了** |
+| 2 | **E1 第二个修复环未评审** | 见上。**这是唯一挡在 B 前面的事** |
+| 3 | **待裁点 B** | 措辞已固化（§23.3），B 本身仍未裁 |
+| 4 | **待裁点 A** | 从未解封（代价：退役一节 spec ＋ ≥8 条具名判据） |
+| 5 | **包 1 的修复环 2** | 人裁 9，**另一条线，别读串**。1 Critical / 6 Important 未修 ⇒ **包 1 不具备开门条件**。⚠️ 它还**正冻着**下一行 |
+| 6 | `SweepOptions.stderr` 契约的测试半边 | **人裁 11 仍然有效**，等包 1 修复环 2。人裁 71 只解了 E3 那一件 |
+| 7 | *** **假阳性「活」在红线函数里仍未处理** *** | 人裁 74 **只改了 E1**。`pid:0`／溢出 pid 的锁，**红线函数照样回收不了** ⇒ 对转移路径仍是永久死局。**未裁，未挂账到别处，就挂在这里** |
+| 8 | **N-2** | `unverified` 那条事件 detail **零判据钉住**；人裁 66 挂账，**不许记成已解决** |
+| 9 | M-1／M-3／`foreign` 文案 | 均挂账（人裁 66） |
+| 10 | **控制器给人的一条建议（未裁）** | 包 1 修复环 2 的优先级建议提到 B 之前 —— 理由：人裁 11 明文说包 2 有条目正因包 1 spec 被冻而停着 |
+
+## 上一会话换来的、**下一位直接用**的教训
+
+1. *** **管道会同时骗走「输出」和「返回码」两样东西。** ***
+   `tsc … | tail -3` 之后取 `$?`，拿到的是 **tail 的**返回码 —— 上一会话据此报了一次假的 `typecheck rc=0`。
+2. *** **「未变异全绿」不能证明测试基础设施是健康的。** ***
+   实例：`vi.doMock` 的清理写在**测试体末尾**，**断言一失败清理就不执行** ⇒ mock 泄漏 ⇒
+   一条真失败变成两条，**第二条指着无辜的代码**。清理必须放 `afterEach`。
+   （这是「零红有两种意思」的又一变体。）
+3. *** **`ls-remote` 要在会话【结束时】再核一次**，不能只在开工时核 —— **人自己会在会话中途动远端**。 ***
+4. *** **「我无法解释这件事」≠「一定是在场的那个 agent 干的」。** ***
+   归因不足时，把事实报给人并**停在那里**。上一会话在这里翻过车（§25.18→§25.19）。
+   （与「finding 与它的处置建议是两回事」同源：**观察和归因也是两回事**。）
+5. **`cp` 在本机有 `-i` alias** —— 交互提示无人应答时**静默不覆盖**，一整趟变异会跑在旧文件上。
+   用 `cat A > B`，并用 `diff` **现证**拷贝到位。⇒ **「命令跑了」≠「命令生效了」。**
+6. **钉桩测试必须自证能红，且失败信息要点名原因。** `expected false to be true` 不合格；
+   给断言加消息（`expect(x, "…was deleted").toBe(true)`）才合格。上一会话四个红证都按这条做的。
+7. **评审员的 Minor 也要验** —— 上一会话实测推翻了一条（"目录撞 `unlink` 抛异常"：`readFile` 先抛 EISDIR，根本到不了 `unlink`）。
+8. **名单内 flake (B)** = `evidence.test.ts > run-scenario CLI > records env names only and tracks descendants rooted at
+   the spawned pid`（并行负载下 5000ms 超时，隔离复跑连过）。按**完整测试名**比对，不要重新调查。
+
+## ⚠️ 铁律
+
+*** **验证跑绝不过滤（`grep`/`tail`/`sed`/`head` 同罪）。** ***
+**上一会话违反两次**（`| tail -60` 丢了半份全套件输出；`| tail -3` 连返回码一起骗走），
+**均当场声明并整份重跑**。**复述这条不等于遵守它。**
+其余不变：***坏探针不能证明「不存在」，也不能证明「违规」***
+（上一会话拿**上一次 bash 调用的 `$$`** 当"活 pid"，喜提一个假警报；
+**造活进程夹具必须在同一次调用里，且在【断言时刻】再 `kill -0` 核一次**）；
+***读代码的机械论证不等于实测***；**不接受实施者自证，评审员的结论同样要验**；
+***finding 与它的「处置建议」是两回事***；**变异只在 `git clone --local` 副本里，且必须证明还原**
+（`git diff` 与 `git diff --cached` **均 0 字节**，走 `rtk proxy` 取原始字节）。
+
+## ⚠️ 仍需人单独授权的四件
+
+**开门／合并／删分支或 worktree／push** —— 各需单独授权，**不外推**。
+**控制器不许 push。非门合并一律 `--ff-only`；开门那一笔必须是 merge、结论写在主题行。**
+（⚠️ 人**自己**推远端是人的自由，别把它读成异常 —— 见 §25.19。）
+
+## 建议调用的 skills
+
+| skill | 何时 | 注意 |
+|---|---|---|
+| `superpowers:verification-before-completion` | 声称「通过/完成」前 | 复跑全套件 ＋ typecheck ＋ build，`rtk proxy`，**未过滤、整份读回**，核 vitest 首行 `RUN` 路径 |
+| `superpowers:requesting-code-review` | 派评审时 | brief 必写：不接受实施者自证／findings 带**可构造场景**／**锚点防同前缀兄弟**／落盘协议（`git add -f`）／允许临时变异但必须证明还原／**造活进程夹具的规矩** |
+| `superpowers:receiving-code-review` | 拿到结论时 | **评审员的结论同样要验**（上一会话推翻了一条 Minor）；读完 finding 一定要读它的处置建议再派工 |
+| `superpowers:test-driven-development` | 改 E1 或做 B 的实现时 | 先写会红的测试；钉桩类要另外证明它**能红且点名原因** |
+| `superpowers:subagent-driven-development` | 再开评审轮时 | 「实施者 → **换人**评审 → 修复环 → **再换人** scoped 评审」；**按改动落点派人，不是凑人头** |
+| `superpowers:systematic-debugging` | 撞到名单外失败 | 允许的 flake 只有 (B)/(F)；另有 `persists phase usage evidence…` 已按人裁 10 挂账，按完整测试名比对 |
+| `superpowers:brainstorming` | **不需要** | ⚠️ **C 已裁完、E1／E3 已落，方向已定。不要重开 E1–E4 的讨论（E4 已划掉）** |
+| `superpowers:using-git-worktrees` | 需要隔离工作区时 | ⚠️ **`EnterWorktree` 默认基点是 `origin/<default-branch>`，会丢掉未推送的本地提交** —— 必须 `git worktree add <path> -b <branch> HEAD`；**建完立刻 `npm ci`** |
+
+## ⚠️ 预算
+
+CLAUDE.md Rule 6：**每任务 330k／每会话 400k**。
+上一会话（三块人裁 ＋ E1 实现 ＋ 三轮评审 ＋ 两个修复环 ＋ 四个红证）用了 **约 320k**，**贴着每任务上限收尾**。
+**B 那一轮务必独占一个会话。**
+
+---
+
+# 【已过期，保留作历史】2026-08-20（**E3 轮**）
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > **HEAD／笔数／测试数／远端一律现跑** —— *** **提交本文这个动作本身就会改 HEAD 与笔数，所以本文一个当前哈希都不写。** ***
