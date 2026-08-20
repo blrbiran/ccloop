@@ -50,6 +50,27 @@ export type LockRemoval =
   | { outcome: "gone" }
   | { outcome: "unremovable"; reason: string };
 
+// Both catches in removeLockIfUnchanged take their reason through here, so that "the same way" is
+// structural rather than two hand-copies of one expression — copies are how the two catches drifted
+// apart in the first place, and the next edit could split them again just as quietly.
+//
+// String() is NOT total: it throws on an object with a null prototype. A delete path that throws out
+// of its own catch reports "the command crashed" instead of "the lock is still there", which is the
+// substitution this whole function is written to avoid, so the fallback keeps even that case a
+// value. Neither branch is reachable through node:fs, which always rejects with an Error; both are
+// pinned by tests against a mock, because the comments here claim the property.
+function reasonFrom(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  try {
+    return String(error);
+  } catch {
+    return Object.prototype.toString.call(error);
+  }
+}
+
 // The deletion re-checks WHICH FILE the name holds, not merely that a name is there. Both
 // independent reviews of this command found the same defect: the inspection reads the lock, and the
 // unlink that followed named only the path. Between the two, a legitimate concurrent recovery can
@@ -73,15 +94,16 @@ export async function removeLockIfUnchanged(lockPath: string, identity: LockIden
     // Already off disk is not a failure to report as one: someone else cleared it, which is the
     // outcome this command wanted anyway. Every OTHER errno is a failure, and keeps its name.
     //
-    // The reason is taken the same way the unlink catch below takes it, deliberately: a rejection
-    // that is not an Error has no `.message`, and "could not be removed: undefined" is the
-    // uninformative answer this command exists to prevent. One function must not disagree with
-    // itself about whether the value it caught can be trusted.
-    const errno = error as NodeJS.ErrnoException;
-    if (errno.code === "ENOENT") {
+    // Optional-chained, because this catch may be handed something that is not an object at all. It
+    // read `.code` unguarded until a review measured what that costs: a rejection of null threw a
+    // TypeError out of a delete path, which is the "the command crashed" answer the catch below
+    // exists to prevent. One function must not disagree with itself about whether the value it
+    // caught can be trusted.
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
       return { outcome: "gone" };
     }
-    return { outcome: "unremovable", reason: error instanceof Error ? error.message : String(error) };
+
+    return { outcome: "unremovable", reason: reasonFrom(error) };
   }
 
   if (onDisk.dev !== identity.dev || onDisk.ino !== identity.ino) {
@@ -94,7 +116,7 @@ export async function removeLockIfUnchanged(lockPath: string, identity: LockIden
     // Nothing was deleted, and a rejection escaping a delete path would be reported as "the command
     // crashed" rather than "the lock is still there" — which is the fact the operator needs. It is
     // turned into a value rather than swallowed outright, so the reason survives to the output.
-    return { outcome: "unremovable", reason: error instanceof Error ? error.message : String(error) };
+    return { outcome: "unremovable", reason: reasonFrom(error) };
   }
 
   return { outcome: "removed" };

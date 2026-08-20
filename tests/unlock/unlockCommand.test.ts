@@ -134,12 +134,16 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
     // operator; telling them "could not be removed" without saying EACCES / EPERM / EIO leaves them
     // with nothing to act on, which is the failure this project keeps calling a silent one.
     //
-    // BOTH errnos are correct, and matching only one of them would be a platform bug in the test
-    // rather than in the code: unlink(2) on a directory is EPERM on darwin and EISDIR on linux
-    // (Linux's documented, non-POSIX value), and package.json declares both as target platforms.
-    // Asserted through the union rather than dropped, because this is the only assertion here that
-    // reads an errno a real filesystem produced instead of one a mock was told to throw.
-    expect(result).toMatchObject({ outcome: "unremovable", reason: expect.stringMatching(/EPERM|EISDIR/) });
+    // Pinned PER PLATFORM, and both halves are measured rather than one measured and one read out of
+    // a manual page: unlink(2) against a directory answers EPERM on darwin (measured here) and
+    // EISDIR on linux (measured in node:22-alpine), and package.json declares both as targets. A
+    // union of the two would accept the other platform's answer and so would sit quiet through a
+    // real platform regression — and this is the only assertion in this file that reads an errno a
+    // real filesystem produced rather than one a mock was told to throw.
+    expect(result).toMatchObject({
+      outcome: "unremovable",
+      reason: expect.stringMatching(process.platform === "linux" ? /EISDIR/ : /EPERM/),
+    });
   });
 
   it("keeps the errno when the stat that guards the delete fails, instead of collapsing it", async () => {
@@ -186,6 +190,79 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
 
     expect(result).toMatchObject({ outcome: "unremovable", reason: expect.stringContaining("rejected with a string") });
     expect(await lockExists(runDir), "a lock was deleted despite the guard stat failing").toBe(true);
+  });
+
+  it("survives a rejection carrying no properties at all, instead of throwing out of the delete path", async () => {
+    // The stat catch read `.code` off the caught value before anything guarded it, so a rejection of
+    // null threw a TypeError straight out of removeLockIfUnchanged — "the command crashed" instead of
+    // "the lock is still there", which is the substitution the catch below this one exists to prevent.
+    // Not reachable through node:fs, which always rejects with an Error; pinned against a mock for
+    // exactly that reason, because the comment above the catch claims the property.
+    const runDir = await makeRunDir();
+    await seedLock(runDir, "{not json");
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+
+    const actualFs = await import("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actualFs,
+      stat: async () => {
+        throw null;
+      },
+    }));
+    const { removeLockIfUnchanged: freshlyLoaded } = await import("../../src/unlock/unlockCommand.js");
+
+    const result = await freshlyLoaded(lockPath, { dev: 1, ino: 1 });
+
+    expect(result).toMatchObject({ outcome: "unremovable", reason: "null" });
+    expect(await lockExists(runDir), "a lock was deleted despite the guard stat failing").toBe(true);
+  });
+
+  it("still produces a reason when the rejection cannot be turned into a string at all", async () => {
+    // String() is not total — it throws on an object with a null prototype. Taking the reason with a
+    // bare String() therefore trades a bad-but-contained answer for a rejection escaping the catch,
+    // which is the worse of the two. Both catches go through the same helper so that neither can
+    // drift back: this test mocks the stat one, the test below it mocks the unlink one.
+    const runDir = await makeRunDir();
+    await seedLock(runDir, "{not json");
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+
+    const actualFs = await import("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actualFs,
+      stat: async () => {
+        throw Object.create(null);
+      },
+    }));
+    const { removeLockIfUnchanged: freshlyLoaded } = await import("../../src/unlock/unlockCommand.js");
+
+    const result = await freshlyLoaded(lockPath, { dev: 1, ino: 1 });
+
+    expect(result).toMatchObject({ outcome: "unremovable", reason: expect.stringMatching(/\S/) });
+    expect(await lockExists(runDir), "a lock was deleted despite the guard stat failing").toBe(true);
+  });
+
+  it("carries the same guarantee on the unlink side, where the delete has already been authorized", async () => {
+    const runDir = await makeRunDir();
+    await seedLock(runDir, "{not json");
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+    const onDisk = await stat(lockPath);
+
+    const actualFs = await import("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actualFs,
+      unlink: async () => {
+        throw Object.create(null);
+      },
+    }));
+    const { removeLockIfUnchanged: freshlyLoaded } = await import("../../src/unlock/unlockCommand.js");
+
+    const result = await freshlyLoaded(lockPath, { dev: onDisk.dev, ino: onDisk.ino });
+
+    expect(result).toMatchObject({ outcome: "unremovable", reason: expect.stringMatching(/\S/) });
+    expect(await lockExists(runDir), "the lock was removed even though unlink rejected").toBe(true);
   });
 
   it("puts the reason in front of the operator, not just in the return value", async () => {
