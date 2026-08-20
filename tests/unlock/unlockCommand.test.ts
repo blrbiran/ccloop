@@ -130,11 +130,16 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
 
     const result = await removeLockIfUnchanged(lockPath, { dev: onDisk.dev, ino: onDisk.ino });
 
-    expect(result.outcome).toBe("unremovable");
     // The errno is kept, not collapsed into the word "unremovable". This command exists for a human
     // operator; telling them "could not be removed" without saying EACCES / EPERM / EIO leaves them
     // with nothing to act on, which is the failure this project keeps calling a silent one.
-    expect((result as { reason: string }).reason).toContain("EPERM");
+    //
+    // BOTH errnos are correct, and matching only one of them would be a platform bug in the test
+    // rather than in the code: unlink(2) on a directory is EPERM on darwin and EISDIR on linux
+    // (Linux's documented, non-POSIX value), and package.json declares both as target platforms.
+    // Asserted through the union rather than dropped, because this is the only assertion here that
+    // reads an errno a real filesystem produced instead of one a mock was told to throw.
+    expect(result).toMatchObject({ outcome: "unremovable", reason: expect.stringMatching(/EPERM|EISDIR/) });
   });
 
   it("keeps the errno when the stat that guards the delete fails, instead of collapsing it", async () => {
@@ -154,8 +159,32 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
 
     const result = await freshlyLoaded(lockPath, { dev: 1, ino: 1 });
 
-    expect(result.outcome).toBe("unremovable");
-    expect((result as { reason: string }).reason).toContain("EACCES");
+    expect(result).toMatchObject({ outcome: "unremovable", reason: expect.stringContaining("EACCES") });
+    expect(await lockExists(runDir), "a lock was deleted despite the guard stat failing").toBe(true);
+  });
+
+  it("keeps a non-Error rejection readable instead of printing the word undefined", async () => {
+    // The unlink catch below already guards this; the stat catch above it did not, and one function
+    // disagreeing with itself is how "could not be removed: undefined" reaches an operator whose
+    // only job here is to get a stuck run moving. Not reachable through node:fs itself — which is
+    // why it is pinned against a mock rather than left to a comment.
+    const runDir = await makeRunDir();
+    await seedLock(runDir, "{not json");
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+
+    const actualFs = await import("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actualFs,
+      stat: async () => {
+        throw "stat rejected with a string, not an Error";
+      },
+    }));
+    const { removeLockIfUnchanged: freshlyLoaded } = await import("../../src/unlock/unlockCommand.js");
+
+    const result = await freshlyLoaded(lockPath, { dev: 1, ino: 1 });
+
+    expect(result).toMatchObject({ outcome: "unremovable", reason: expect.stringContaining("rejected with a string") });
     expect(await lockExists(runDir), "a lock was deleted despite the guard stat failing").toBe(true);
   });
 
@@ -185,6 +214,39 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
 
     expect(code).toBe(1);
     expect(err.join("\n")).toContain("EACCES");
+    expect(await lockExists(runDir), "the lock was deleted despite the removal having failed").toBe(true);
+  });
+
+  it("puts the unlink's own errno in front of the operator too, not just the stat's", async () => {
+    // The two catches inside removeLockIfUnchanged reach the operator through the same reporter,
+    // but only the stat one was pinned at the output. A mutation that blanked the unlink catch's
+    // reason turned exactly one unit test red and no output test — an asymmetry worth closing,
+    // since the unlink catch is the one that fires when the lock is real and the delete is refused.
+    const runDir = await makeRunDir();
+    const digest = await seedLock(runDir, "{not json");
+
+    const actualFs = await import("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actualFs,
+      unlink: async () => {
+        throw Object.assign(new Error("EIO: i/o error, unlink"), { code: "EIO" });
+      },
+    }));
+    const { unlockOwnerTransferLock: freshlyLoaded } = await import("../../src/unlock/unlockCommand.js");
+
+    const err: string[] = [];
+    const code = await freshlyLoaded({
+      runDir,
+      force: true,
+      expectedDigest: digest,
+      stdout: () => {},
+      stderr: (line) => err.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(err.join("\n")).toContain("EIO");
+    expect(await lockExists(runDir), "the lock was removed even though unlink rejected").toBe(true);
   });
 });
 

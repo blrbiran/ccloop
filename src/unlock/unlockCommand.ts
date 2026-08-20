@@ -40,6 +40,16 @@ export type UnlockOptions = {
   | { force: true; expectedDigest: string }
 );
 
+// The errno is carried, not collapsed into the word "unremovable". This command exists so that a
+// HUMAN can get a stuck run moving again; telling them "could not be removed" while discarding
+// whether it was EACCES, EPERM, EIO or ENOTEMPTY leaves them with nothing to act on — which is the
+// shape this project keeps naming as a silent failure.
+export type LockRemoval =
+  | { outcome: "removed" }
+  | { outcome: "changed" }
+  | { outcome: "gone" }
+  | { outcome: "unremovable"; reason: string };
+
 // The deletion re-checks WHICH FILE the name holds, not merely that a name is there. Both
 // independent reviews of this command found the same defect: the inspection reads the lock, and the
 // unlink that followed named only the path. Between the two, a legitimate concurrent recovery can
@@ -55,16 +65,6 @@ export type UnlockOptions = {
 // WHAT THIS DOES NOT DO, stated because the same comment in fileStore states it: the stat and the
 // unlink are still two syscalls, so a replacement landing between THEM is undetectable. The window
 // goes from "the whole inspection" down to "two adjacent syscalls". It is not closed.
-// The errno is carried, not collapsed into the word "unremovable". This command exists so that a
-// HUMAN can get a stuck run moving again; telling them "could not be removed" while discarding
-// whether it was EACCES, EPERM, EIO or ENOTEMPTY leaves them with nothing to act on — which is the
-// shape this project keeps naming as a silent failure.
-export type LockRemoval =
-  | { outcome: "removed" }
-  | { outcome: "changed" }
-  | { outcome: "gone" }
-  | { outcome: "unremovable"; reason: string };
-
 export async function removeLockIfUnchanged(lockPath: string, identity: LockIdentity): Promise<LockRemoval> {
   let onDisk;
   try {
@@ -72,8 +72,16 @@ export async function removeLockIfUnchanged(lockPath: string, identity: LockIden
   } catch (error) {
     // Already off disk is not a failure to report as one: someone else cleared it, which is the
     // outcome this command wanted anyway. Every OTHER errno is a failure, and keeps its name.
+    //
+    // The reason is taken the same way the unlink catch below takes it, deliberately: a rejection
+    // that is not an Error has no `.message`, and "could not be removed: undefined" is the
+    // uninformative answer this command exists to prevent. One function must not disagree with
+    // itself about whether the value it caught can be trusted.
     const errno = error as NodeJS.ErrnoException;
-    return errno.code === "ENOENT" ? { outcome: "gone" } : { outcome: "unremovable", reason: errno.message };
+    if (errno.code === "ENOENT") {
+      return { outcome: "gone" };
+    }
+    return { outcome: "unremovable", reason: error instanceof Error ? error.message : String(error) };
   }
 
   if (onDisk.dev !== identity.dev || onDisk.ino !== identity.ino) {

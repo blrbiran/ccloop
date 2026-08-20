@@ -209,7 +209,11 @@ describe("inspectOwnerTransferLock", () => {
       // failure after a PERFECTLY GOOD read would be reported as an unreadable lock — and
       // `file-unreadable` is the one state with no digest, hence the one state with no --force
       // route at all. A failed close would take the escape hatch away from a readable lock.
-      const runDir = await mkdtemp(join(tmpdir(), "ccloop-unlock-"));
+      const runDir = await makeRunDir();
+      // Anti-vacuity, the same guard this file applies everywhere it leans on DEAD_PID: if that pid
+      // were alive, the assertion below would be pinning the "alive" path rather than the fact that
+      // a failed close() left the real state alone.
+      expect(() => process.kill(DEAD_PID, 0)).toThrow();
       const contents = JSON.stringify({ holderProcessInstanceId: `pid:${DEAD_PID}`, acquiredAt: "x" });
       await writeFile(join(runDir, OWNER_TRANSFER_LOCK_FILE), contents);
 
