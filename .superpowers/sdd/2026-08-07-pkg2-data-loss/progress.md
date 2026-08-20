@@ -2754,3 +2754,87 @@ F2 第一次跑时红了 **4** 条，多出来那条是 `changed on disk` 那个
 （这与人裁 66／N-2 那条「finding 与它的处置建议是两回事」同源：**观察和归因也是两回事**。）
 
 **处置**：远端保持现状，**不回滚**（本来就是人自己推的）。
+
+25.20 第四位评审（换人，scoped 到修复环 2）＋ 第三个修复环 —— 0 Critical，1 Important／6 Minor 全修
+--------------------------------------------------------------------------------
+
+**人裁 75（流程板）**：*** **修复环 2 再来一轮 scoped 评审，一位换人评审员。** ***
+（handoff 把这块明确留给人；控制器没有外推。）
+**人裁 76（流程板）**：*** **本轮 1 Important ＋ 6 Minor 全修。** ***
+⚠️ **这两条是流程板，不是设计裁决** —— **A／B／C-1 仍未裁，包 1 仍不具备开门条件**。
+
+**派工**：brief 落 `E1-review-fix2-brief.md`，报告落 `E1-review-fix2.md`（两份均 `git add -f`）。
+落点按「这两笔动了错误路径语义 ＋ 改了返回契约 ＋ 动了测试清理位置」派，不是凑人头。
+评审范围 `e6898a7..9868f4c`，其后全是文档，明确排除。
+
+### 评审结论：**0 Critical**，1 Important，6 Minor；判 Ready to merge: Yes
+
+他还独立复验了红线函数与 `86d3bd6` 逐字节一致（970 字节，`diff` rc=0），与控制器结论一致。
+
+**控制器逐条复验了他的前提（不接受评审员自证，同样不接受实施者自证）**：
+  - **I-1 成立**：`toContain("EPERM")` 是**本轮引进的平台依赖** —— 本轮之前那行是可移植的
+    `.toBe("unremovable")`（`git show e6898a7:` 现读核对），而 `package.json` 明写
+    `"os": ["darwin","linux"]`。⚠️ *** **Linux 侧 `EISDIR` 双方都【没有实测】** *** ——
+    本机无可用容器运行时（`docker` 有二进制、`docker info` rc=127）。**评审员自己如实标注了这半条是读文档**，
+    控制器照此记账，**不把它写成测量**。
+  - **6 条 Minor 全部对着代码核实**，无一条是误报。
+  - **控制器独立重跑了他最吃重的那次变异**（把 close 修复回退）：`tests/unlock` 恰好红 1 条，
+    信息直打 `{ state: 'file-unreadable' }` vs `{ state: 'dead' }` ⇒ **新测试确实咬得动**。
+
+### *** 方法论：`diff -r` 不是还原证明 —— 它看不见 index ***
+
+评审员报告里写「restoration proof … 两个 diff 均 0 字节」，**那是主仓库的**；
+他给**副本**的还原证明只有 `diff -r src tests`。控制器接手时实测副本
+`git diff --cached` = **24652 字节**：`docs/handoff/handoff.md` 与 `progress.md`
+以 **staged** 状态停在**基线版本**上 —— `handoff.md` 的 blob 哈希与
+`e6898a7:docs/handoff/handoff.md` **完全相同**（`3228a48…`）。
+⇒ **内容确实来自基线那一版**；`git checkout <sha> -- <path>` 会**顺带写进暂存区**，
+而 `diff -r` 对 index **完全看不见**。
+*** **归因到此为止**：证据只支持「这两份文档在副本里被换成了基线版本并入了暂存区」，
+**不支持**任何关于「跑的是哪条命令、是谁的疏忽」的结论 —— 按 §25.19 的教训，**报事实，停在这里**。 ***
+**危害面**：**零** —— 副本是一次性的，且**生产代码没有被留在变异态**（`diff -r src tests` 与主仓库一致），
+主仓库全程 `git diff`／`git diff --cached` 均 0 字节、HEAD 未动。控制器已把副本 `git checkout HEAD -- .` 还原并现证 0/0。
+⇒ **写进纪律**：*** **副本的还原证明必须是两个 diff 的【字节数】（走 `rtk proxy` 取原始字节），
+`diff -r` 只能作为补充。** ***
+
+### 第三个修复环（本笔：`fix(unlock): stop one function disagreeing with itself…`）
+
+  - **I-1**：改成 `toMatch(/EPERM|EISDIR/)`，**注释里写明两个 errno 各属哪个平台、以及 Linux 侧没实测**。
+  - **N-1（唯一一条动了 src 行为的）**：`removeLockIfUnchanged` 的 **stat catch 信 `errno.message`，
+    而 13 行外的 unlink catch 用 `instanceof Error` 兜底** ⇒ 非 Error 拒绝时操作员读到
+    `could not be removed: undefined`。两个 catch 统一。**先写红测试再改**（TDD）：
+    改之前跑，恰好红 1 条，信息就是 `"reason": undefined`。
+  - **N-2**：新注释段被追加到了 `removeLockIfUnchanged` 的注释块尾部，结果整块悬在 `export type LockRemoval` 上。
+    两块各归其位。
+  - **N-3**：两处 `as { reason: string }` 换 `toMatchObject`（重构时失败信息不再退化成 assertion API 抱怨）。
+  - **N-4**：新 inspection 测试补回本文件的反空转守卫 `expect(() => process.kill(DEAD_PID, 0)).toThrow()`，
+    并改用 `makeRunDir()`。
+  - **N-5**：操作员那条测试补 `lockExists` 前置存在断言（该文件头部自己写了这条纪律）。
+  - **N-6**：新增一条**输出面**测试，盖住 unlink catch 的 reason（此前只钉在返回值上）。
+
+**红证（副本 `clone`，未变异 sanity 先验 40 绿，`RUN` 路径已核）**：
+  **M-A** 回退 N-1 守卫 ⇒ 红 1，`"reason": undefined`；
+  **M-B** 抹掉 unlink catch 的 reason ⇒ **红 2**（单元 ＋ 操作员输出，后者直接打出
+  `refused  the lock could not be removed: ` 这条空理由）⇒ **N-6 的不对称就此关闭**；
+  **M-C** 把 unlink 提到身份守卫之前（「先删后查」，正是人裁 62 那个形状）⇒ **红 11**，
+  其中就有 N-5 新加的那条，信息为 `the lock was deleted despite the removal having failed`。
+⚠️ *** **N-4 那条反空转守卫【没有】红证**：它是结构性守卫，不存在能让它红的生产变异 ——
+据实说明，不假装测过。 ***
+**还原**：副本 `git diff` 与 `git diff --cached` **均 0 字节**（原始字节，走 `rtk proxy`）；
+主仓库同样 0／0；两个门锚点未动；**控制器全程未 push**。
+
+**验证**（主仓库根，**未过滤整份读回**，`RUN` 路径已核）：
+`34 files / **595 tests**` 全绿零 skipped（**595 = 593 ＋ 2**，新增 N-1 与 N-6 各一条）；
+`typecheck` rc=0；`build` rc=0；名单内 flake 一条都没触发。
+**红线复验**：`tryRecoverStaleOwnerTransferLock` 仍 **970 字节、`diff` rc=0**，与 `86d3bd6` 逐字节一致。
+
+### ⛔ 下一件事（**别外推**）
+
+*** **第三个修复环（本笔）同样【尚未被任何人评审过】** *** —— 与上一轮同构：
+**是否再来一轮，是人的板**。⚠️ 但**这一轮的改动面比上一轮更小且更偏测试**
+（唯一的 src 行为改动是 N-1，且它有红证），**控制器把这个事实摆出来，不替人裁**。
+**B 仍在 E1 之后**（人裁 61），措辞已在 §23.3 固化，**不要重新推导**。
+
+**仍然开着（一条都没关）**：**C-1 仍是降级、未关闭**；**A／B 未裁**；**包 1 修复环 2 未开**
+⇒ 包 1 不具备开门条件，人裁 11 仍冻着；**红线函数里的假阳性「活」（`pid:0`／溢出 pid）仍未处理**；
+**N-2／M-1／M-3／`foreign` 文案**一律仍挂账。
