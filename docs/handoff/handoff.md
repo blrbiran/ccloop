@@ -1,8 +1,8 @@
-# ccloop Handoff — **E1（`ccloop unlock`）已落并走完一轮评审环；但第二个修复环尚未被任何人评审 ⇒ 不得宣布 E1 通过；之后才轮到 B；C-1 仍降级未关闭；包 1 仍不具备开门条件**
+# ccloop Handoff — **E1 已走完两轮评审环＋三个修复环；第三个修复环仍未被任何人评审 ⇒ 不得宣布 E1 通过；之后才轮到 B；C-1 仍降级未关闭；包 1 仍不具备开门条件**
 
 ---
 
-# 【最新】2026-08-20（**E1 轮**）—— **本节取代下方一切状态描述**
+# 【最新】2026-08-21（**E1 修复环 3 轮**）—— **本节取代下方一切状态描述**
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数。 ***
@@ -22,20 +22,21 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
 ⚠️ **验证性命令一律走 `rtk proxy`**；**判断远端只能 `git ls-remote`** —— `git status` 的 `ahead N` 是缓存 ref。
 ⚠️ *** **rtk 的过滤层会骗你**：`git status --porcelain` 空时它打印 `ok`，`git diff | wc -c` 把 0 字节报成 1 字节。
 **任何还原证明／字节比较一律走 `rtk proxy git …`。** ***
-**上一会话实测基线**（主仓库根，未过滤整份读回，`RUN` 路径已核）：`34 files / 593 tests` 全绿零 skipped，三码 0。
-**593 = 545（会话开始）＋ 33（E1 首版）＋ 12（第一个修复环）＋ 3（第二个修复环）。现跑核实。**
+**上一会话实测基线**（主仓库根，未过滤整份读回，`RUN` 路径已核）：`34 files / 595 tests` 全绿零 skipped，三码 0。
+**595 = 593 ＋ 2（第三个修复环：非 Error 拒绝一条、unlink errno 输出面一条）。现跑核实。**
 
 ## 唯一可信进度源（**引路径，不要重新推导**）
 
-`.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **人裁 10–74 全在里面**。
-*** **本轮新增七节：§25.13／§25.14／§25.15／§25.16／§25.17／§25.18／§25.19。** ***
+`.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **人裁 10–76 全在里面**。
+*** **本轮新增一节：§25.20**（第四位评审 ＋ 第三个修复环 ＋ 人裁 75／76 两块流程板）。 ***
+⚠️ **人裁 75／76 是【流程板】**（再评审一轮／七条全修），**不是设计裁决** —— A／B／C-1 仍未裁。
 ⚠️ *** **`.superpowers/sdd/.gitignore` 内容是 `*`** *** —— 该目录下**新产物必须 `git add -f`**。
 ⚠️ **判断忽略规则要拿「未跟踪」路径去探**：`git check-ignore` 对**已跟踪**文件返回 rc=1，**不能用**。
 
 | 材料 | 路径 |
 |---|---|
 | 点 C 裁决 ＋ presence-only 实测 | `…/pointC-design.md`（§4.2 五格表／§7 人裁 70／§8 实测） |
-| **E1 的三份评审报告** | `…/E1-review-typescript.md`／`…/E1-review-security.md`／`…/E1-review-scoped-fix.md` |
+| **E1 的四份评审报告** | `…/E1-review-typescript.md`／`…/E1-review-security.md`／`…/E1-review-scoped-fix.md`／`…/E1-review-fix2.md`（brief：`…/E1-review-fix2-brief.md`） |
 | 点 B 裁决包 | `…/pointB-ruling-package.md`（门后重测版，**不要重新推导**） |
 | E1–E4 候选原文 | `…/pointB-design.md` §5.3（⚠️ 该文件行号腐坏过一次） |
 
@@ -61,13 +62,20 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
    - **scoped 评审 0 Critical**，2 Important 已修：失败的 `close()` 会盖掉一次成功的读；两个 `catch` 丢了 errno。
 6. **人的更正**（§25.19）—— 会话中途那次 push **是人自己手动做的**。
    §25.18 把它定性成"未经授权"并怀疑到第三位评审 agent 头上，**两条都错，已撤回**。
+7. *** **第四位评审（换人）＋ 第三个修复环**（§25.20）—— 人裁 75／76 两块流程板。 ***
+   评审 scoped 到修复环 2：**0 Critical，1 Important／6 Minor**，控制器**逐条复验了他的前提**
+   （并独立重跑了他最吃重的那次变异），**七条全修**并各自留了红证。
+   ⚠️ **两处据实标注为「未测量」**：`EPERM`／`EISDIR` 的 **Linux 半边**（本机没有可用容器运行时），
+   以及 N-4 那条**结构性反空转守卫**（不存在能让它红的生产变异）。
 
 ## ⛔ 下一件事
 
-*** **1. E1 的第二个修复环【尚未被任何人评审过】。** ***
-即 `fix(unlock): stop a failing close from masking a good read, and keep the errno`
-与 `test(unlock): move fs mock cleanup into afterEach so a failure cannot leak it` 这两笔。
-**控制器没有宣布 E1 通过**。**是否再来一轮 scoped 评审，是人的板 —— 先问，别外推。**
+*** **1. E1 的第三个修复环【尚未被任何人评审过】。** ***
+即 `fix(unlock): stop one function disagreeing with itself, and make the assertions bite` 这一笔
+（第四位评审的 1 Important ＋ 6 Minor 全修，见 §25.20）。**控制器仍未宣布 E1 通过。**
+**是否再来一轮 scoped 评审，是人的板 —— 先问，别外推。**
+⚠️ 摆事实不替人裁：**这一笔比上一轮更小、更偏测试**，唯一动了 src 行为的是「两个 catch 统一 errno 取法」，
+且它**有红证**（M-A：回退后恰好红 1 条，信息为 `"reason": undefined`）。
 
 **2. E1 之后才轮到 B**（人裁 61）。B 的措辞已在台账 §23.3 固化，*** **不要重新推导** ***；
 裁 B 时**必须原样复述残余**，含两处精确边界：**resume 路径并不静默**（stderr 有
@@ -79,7 +87,7 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
 | # | 项 | 要点 |
 |---|---|---|
 | 1 | **C-1 降级，未关闭** | `tryRecoverStaleOwnerTransferLock` 的**两个**失败开放出口**逐字节未动**。**不许写成「C-1 已修复」**。⚠️ E1 与它的判据分歧是**有意写进两个方向**的（见 `unlockCommand.ts` 头部注释），**不是被 E1 解决了** |
-| 2 | **E1 第二个修复环未评审** | 见上。**这是唯一挡在 B 前面的事** |
+| 2 | **E1 第三个修复环未评审** | 见上。第二个修复环已由第四位评审看过（0 Critical）。**这是唯一挡在 B 前面的事** |
 | 3 | **待裁点 B** | 措辞已固化（§23.3），B 本身仍未裁 |
 | 4 | **待裁点 A** | 从未解封（代价：退役一节 spec ＋ ≥8 条具名判据） |
 | 5 | **包 1 的修复环 2** | 人裁 9，**另一条线，别读串**。1 Critical / 6 Important 未修 ⇒ **包 1 不具备开门条件**。⚠️ 它还**正冻着**下一行 |
@@ -91,6 +99,12 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
 
 ## 上一会话换来的、**下一位直接用**的教训
 
+0. *** **`diff -r` 不是还原证明 —— 它看不见 index。** ***
+   上一会话实测：评审员的变异副本 `diff -r src tests` 与主仓库一致，`git diff --cached` 却有 **24652 字节**
+   （两份文档以 staged 状态停在基线版本，blob 哈希与基线那一版完全相同）。
+   `git checkout <sha> -- <path>` **会顺带写进暂存区**。⇒ **副本的还原证明只认两个 diff 的字节数**
+   （`git diff` 与 `git diff --cached`，走 `rtk proxy` 取原始字节），`diff -r` 只能作补充。
+   ⚠️ 归因**停在证据能支持的地方**：只知道「文档被换成基线版并入了暂存区」，**不知道是哪条命令** —— 别再往下猜。
 1. *** **管道会同时骗走「输出」和「返回码」两样东西。** ***
    `tsc … | tail -3` 之后取 `$?`，拿到的是 **tail 的**返回码 —— 上一会话据此报了一次假的 `typecheck rc=0`。
 2. *** **「未变异全绿」不能证明测试基础设施是健康的。** ***
