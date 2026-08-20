@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import { chmod, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OWNER_TRANSFER_LOCK_FILE } from "../../src/persistence/fileStore.js";
 import { inspectOwnerTransferLock } from "../../src/unlock/inspectLock.js";
 
@@ -193,6 +193,46 @@ describe("inspectOwnerTransferLock", () => {
       expect(() => process.kill(DEAD_PID, 0)).toThrow();
       await writeLock(gone, JSON.stringify({ holderProcessInstanceId: `pid:${DEAD_PID}`, acquiredAt: "x" }));
       expect((await inspectOwnerTransferLock(gone)).state).toBe("dead");
+    });
+  });
+
+  describe("a failing close() must not overwrite a read that already succeeded", () => {
+    afterEach(() => {
+      vi.resetModules();
+      vi.doUnmock("node:fs/promises");
+    });
+
+    it("still reports the real state when the descriptor fails to close", async () => {
+      // The hazard this repo already wrote down for itself: fileStore.ts:776 — "a cleanup failure
+      // must not replace the error the caller needs to see". Here it is worse than losing an error.
+      // The close() sits inside the same try whose catch produces `file-unreadable`, so a close()
+      // failure after a PERFECTLY GOOD read would be reported as an unreadable lock — and
+      // `file-unreadable` is the one state with no digest, hence the one state with no --force
+      // route at all. A failed close would take the escape hatch away from a readable lock.
+      const runDir = await mkdtemp(join(tmpdir(), "ccloop-unlock-"));
+      const contents = JSON.stringify({ holderProcessInstanceId: `pid:${DEAD_PID}`, acquiredAt: "x" });
+      await writeFile(join(runDir, OWNER_TRANSFER_LOCK_FILE), contents);
+
+      const actualFs = await import("node:fs/promises");
+      vi.resetModules();
+      vi.doMock("node:fs/promises", () => ({
+        ...actualFs,
+        open: async (path: string, flags: string) => {
+          const handle = await actualFs.open(path, flags);
+          return {
+            stat: () => handle.stat(),
+            readFile: () => handle.readFile(),
+            // Really closed, so the test leaks no descriptor — and then it reports failure anyway.
+            close: async () => {
+              await handle.close();
+              throw Object.assign(new Error("simulated close failure"), { code: "EIO" });
+            },
+          };
+        },
+      }));
+      const { inspectOwnerTransferLock: freshlyLoaded } = await import("../../src/unlock/inspectLock.js");
+
+      expect(await freshlyLoaded(runDir)).toMatchObject({ state: "dead", holder: `pid:${DEAD_PID}` });
     });
   });
 

@@ -81,7 +81,7 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
     const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
     const onDisk = await stat(lockPath);
 
-    expect(await removeLockIfUnchanged(lockPath, { dev: onDisk.dev, ino: onDisk.ino })).toBe("removed");
+    expect(await removeLockIfUnchanged(lockPath, { dev: onDisk.dev, ino: onDisk.ino })).toEqual({ outcome: "removed" });
     expect(await lockExists(runDir), "the inspected file was not removed").toBe(false);
   });
 
@@ -98,7 +98,7 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
     const republished = await stat(lockPath);
     expect(republished.ino, "the fixture failed to produce a different file").not.toBe(inspected.ino);
 
-    expect(await removeLockIfUnchanged(lockPath, { dev: inspected.dev, ino: inspected.ino })).toBe("changed");
+    expect(await removeLockIfUnchanged(lockPath, { dev: inspected.dev, ino: inspected.ino })).toEqual({ outcome: "changed" });
     expect(await lockExists(runDir), "a lock that was NOT the inspected file was deleted").toBe(true);
   });
 
@@ -106,7 +106,7 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
     const runDir = await makeRunDir();
     const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
 
-    expect(await removeLockIfUnchanged(lockPath, { dev: 1, ino: 1 })).toBe("gone");
+    expect(await removeLockIfUnchanged(lockPath, { dev: 1, ino: 1 })).toEqual({ outcome: "gone" });
   });
 
   it("reports unremovable rather than throwing when the name holds something unlink cannot take", async () => {
@@ -119,7 +119,69 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
     await mkdir(lockPath);
     const onDisk = await stat(lockPath);
 
-    expect(await removeLockIfUnchanged(lockPath, { dev: onDisk.dev, ino: onDisk.ino })).toBe("unremovable");
+    const result = await removeLockIfUnchanged(lockPath, { dev: onDisk.dev, ino: onDisk.ino });
+
+    expect(result.outcome).toBe("unremovable");
+    // The errno is kept, not collapsed into the word "unremovable". This command exists for a human
+    // operator; telling them "could not be removed" without saying EACCES / EPERM / EIO leaves them
+    // with nothing to act on, which is the failure this project keeps calling a silent one.
+    expect((result as { reason: string }).reason).toContain("EPERM");
+  });
+
+  it("keeps the errno when the stat that guards the delete fails, instead of collapsing it", async () => {
+    const runDir = await makeRunDir();
+    await seedLock(runDir, "{not json");
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+
+    const actualFs = await import("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actualFs,
+      stat: async () => {
+        throw Object.assign(new Error("EACCES: permission denied, stat"), { code: "EACCES" });
+      },
+    }));
+    const { removeLockIfUnchanged: freshlyLoaded } = await import("../../src/unlock/unlockCommand.js");
+
+    const result = await freshlyLoaded(lockPath, { dev: 1, ino: 1 });
+
+    expect(result.outcome).toBe("unremovable");
+    expect((result as { reason: string }).reason).toContain("EACCES");
+    expect(await lockExists(runDir), "a lock was deleted despite the guard stat failing").toBe(true);
+
+    vi.resetModules();
+    vi.doUnmock("node:fs/promises");
+  });
+
+  it("puts the reason in front of the operator, not just in the return value", async () => {
+    const runDir = await makeRunDir();
+    await seedLock(runDir, "{not json");
+
+    const actualFs = await import("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actualFs,
+      stat: async () => {
+        throw Object.assign(new Error("EACCES: permission denied, stat"), { code: "EACCES" });
+      },
+    }));
+    const { unlockOwnerTransferLock: freshlyLoaded } = await import("../../src/unlock/unlockCommand.js");
+
+    const err: string[] = [];
+    const digest = createHash("sha256").update(Buffer.from("{not json")).digest("hex");
+    const code = await freshlyLoaded({
+      runDir,
+      force: true,
+      expectedDigest: digest,
+      stdout: () => {},
+      stderr: (line) => err.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(err.join("\n")).toContain("EACCES");
+
+    vi.resetModules();
+    vi.doUnmock("node:fs/promises");
   });
 });
 

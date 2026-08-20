@@ -55,32 +55,41 @@ export type UnlockOptions = {
 // WHAT THIS DOES NOT DO, stated because the same comment in fileStore states it: the stat and the
 // unlink are still two syscalls, so a replacement landing between THEM is undetectable. The window
 // goes from "the whole inspection" down to "two adjacent syscalls". It is not closed.
-export async function removeLockIfUnchanged(
-  lockPath: string,
-  identity: LockIdentity,
-): Promise<"removed" | "changed" | "gone" | "unremovable"> {
+// The errno is carried, not collapsed into the word "unremovable". This command exists so that a
+// HUMAN can get a stuck run moving again; telling them "could not be removed" while discarding
+// whether it was EACCES, EPERM, EIO or ENOTEMPTY leaves them with nothing to act on — which is the
+// shape this project keeps naming as a silent failure.
+export type LockRemoval =
+  | { outcome: "removed" }
+  | { outcome: "changed" }
+  | { outcome: "gone" }
+  | { outcome: "unremovable"; reason: string };
+
+export async function removeLockIfUnchanged(lockPath: string, identity: LockIdentity): Promise<LockRemoval> {
   let onDisk;
   try {
     onDisk = await stat(lockPath);
   } catch (error) {
     // Already off disk is not a failure to report as one: someone else cleared it, which is the
-    // outcome this command wanted anyway.
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "gone" : "unremovable";
+    // outcome this command wanted anyway. Every OTHER errno is a failure, and keeps its name.
+    const errno = error as NodeJS.ErrnoException;
+    return errno.code === "ENOENT" ? { outcome: "gone" } : { outcome: "unremovable", reason: errno.message };
   }
 
   if (onDisk.dev !== identity.dev || onDisk.ino !== identity.ino) {
-    return "changed";
+    return { outcome: "changed" };
   }
 
   try {
     await unlink(lockPath);
-  } catch {
+  } catch (error) {
     // Nothing was deleted, and a rejection escaping a delete path would be reported as "the command
-    // crashed" rather than "the lock is still there" — which is the fact the operator needs.
-    return "unremovable";
+    // crashed" rather than "the lock is still there" — which is the fact the operator needs. It is
+    // turned into a value rather than swallowed outright, so the reason survives to the output.
+    return { outcome: "unremovable", reason: error instanceof Error ? error.message : String(error) };
   }
 
-  return "removed";
+  return { outcome: "removed" };
 }
 
 function forceLine(runDir: string, digest: string): string {
@@ -114,9 +123,9 @@ export async function unlockOwnerTransferLock(options: UnlockOptions): Promise<n
   }
 
   if (inspection.state === "dead") {
-    const outcome = await removeLockIfUnchanged(ownerTransferLockPath(runDir), inspection.identity);
-    if (outcome !== "removed") {
-      return reportFailedRemoval(outcome, stdout, stderr);
+    const removal = await removeLockIfUnchanged(ownerTransferLockPath(runDir), inspection.identity);
+    if (removal.outcome !== "removed") {
+      return reportFailedRemoval(removal, stdout, stderr);
     }
 
     stdout(`removed  holder=${inspection.holder} was not alive`);
@@ -145,9 +154,9 @@ export async function unlockOwnerTransferLock(options: UnlockOptions): Promise<n
     return 1;
   }
 
-  const outcome = await removeLockIfUnchanged(ownerTransferLockPath(runDir), inspection.identity);
-  if (outcome !== "removed") {
-    return reportFailedRemoval(outcome, stdout, stderr);
+  const removal = await removeLockIfUnchanged(ownerTransferLockPath(runDir), inspection.identity);
+  if (removal.outcome !== "removed") {
+    return reportFailedRemoval(removal, stdout, stderr);
   }
 
   // Deliberately not the shape the criterion-authorized removal prints. An operator reading a log
@@ -167,21 +176,22 @@ export async function unlockOwnerTransferLock(options: UnlockOptions): Promise<n
 // clear is off disk, which is what the operator wanted. It still must not print `removed`, because
 // this invocation did not remove it and an audit line saying otherwise would be false.
 function reportFailedRemoval(
-  outcome: "changed" | "gone" | "unremovable",
+  removal: Exclude<LockRemoval, { outcome: "removed" }>,
   stdout: (line: string) => void,
   stderr: (line: string) => void,
 ): number {
-  if (outcome === "gone") {
+  if (removal.outcome === "gone") {
     stdout("absent   the lock was already off disk by the time it would have been removed");
     return 0;
   }
 
-  if (outcome === "changed") {
+  if (removal.outcome === "changed") {
     stderr("refused  the lock changed on disk between being read and being removed");
     stderr("         the file now at that name is not the one that was inspected; nothing was deleted");
     return 1;
   }
 
-  stderr("refused  the lock could not be removed; nothing was deleted");
+  stderr(`refused  the lock could not be removed: ${removal.reason}`);
+  stderr("         nothing was deleted");
   return 1;
 }

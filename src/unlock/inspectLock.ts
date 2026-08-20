@@ -112,7 +112,15 @@ export async function inspectOwnerTransferLock(runDir: string): Promise<LockInsp
       identity = { dev: stats.dev, ino: stats.ino };
       contents = await handle.readFile();
     } finally {
-      await handle.close();
+      // Swallowed on purpose, and this is the discipline this repository already wrote down for
+      // itself at fileStore.ts:776 — "a cleanup failure must not replace the error the caller needs
+      // to see". Here it would be worse than losing an error: this close() sits inside the same try
+      // whose catch produces `file-unreadable`, so a close() failure after a PERFECTLY GOOD read
+      // would be reported as an unreadable lock. And `file-unreadable` is the one state with no
+      // digest, hence the one state with no --force route — a failed close would take the escape
+      // hatch away from a lock that was entirely readable. A leaked descriptor in a CLI that is
+      // about to exit is the smaller loss by a wide margin.
+      await handle.close().catch(() => {});
     }
   } catch (error) {
     const errno = error as NodeJS.ErrnoException;
