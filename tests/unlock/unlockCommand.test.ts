@@ -63,6 +63,15 @@ async function run(runDir: string, force?: { expectedDigest: string }): Promise<
 }
 
 describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just the path", () => {
+  // In afterEach, NOT at the end of the test bodies below. A failing assertion aborts the body, so
+  // trailing cleanup never runs and the fs mock leaks into every test that follows — which is
+  // exactly what a mutation run surfaced here: one real failure turned into two, and the second
+  // pointed at innocent code. afterEach runs either way.
+  afterEach(() => {
+    vi.resetModules();
+    vi.doUnmock("node:fs/promises");
+  });
+
   // Human ruling 62 fixed this exact bug class once already, in release(): it "used to unlink
   // `lockPath` unconditionally: whatever file bore that name at that instant was deleted", measured
   // on `dbac288` — a holder deleted the NEW holder's lock on its way out. Both independent reviews
@@ -148,9 +157,6 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
     expect(result.outcome).toBe("unremovable");
     expect((result as { reason: string }).reason).toContain("EACCES");
     expect(await lockExists(runDir), "a lock was deleted despite the guard stat failing").toBe(true);
-
-    vi.resetModules();
-    vi.doUnmock("node:fs/promises");
   });
 
   it("puts the reason in front of the operator, not just in the return value", async () => {
@@ -179,9 +185,6 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
 
     expect(code).toBe(1);
     expect(err.join("\n")).toContain("EACCES");
-
-    vi.resetModules();
-    vi.doUnmock("node:fs/promises");
   });
 });
 
