@@ -140,10 +140,13 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
     // union of the two would accept the other platform's answer and so would sit quiet through a
     // real platform regression — and this is the only assertion in this file that reads an errno a
     // real filesystem produced rather than one a mock was told to throw.
-    expect(result).toMatchObject({
-      outcome: "unremovable",
-      reason: expect.stringMatching(process.platform === "linux" ? /EISDIR/ : /EPERM/),
-    });
+    const measured: Partial<Record<NodeJS.Platform, RegExp>> = { darwin: /EPERM/, linux: /EISDIR/ };
+    const expected = measured[process.platform];
+    // A ternary would have silently asserted one platform's errno on a third one. This says out loud
+    // that the answer here was never measured, instead of blaming the code for a difference nobody
+    // checked. package.json declares darwin and linux; anything else lands on this line.
+    expect(expected, `unlink(2) against a directory has not been measured on ${process.platform}`).toBeDefined();
+    expect(result).toMatchObject({ outcome: "unremovable", reason: expect.stringMatching(expected!) });
   });
 
   it("keeps the errno when the stat that guards the delete fails, instead of collapsing it", async () => {
@@ -239,7 +242,10 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
 
     const result = await freshlyLoaded(lockPath, { dev: 1, ino: 1 });
 
-    expect(result).toMatchObject({ outcome: "unremovable", reason: expect.stringMatching(/\S/) });
+    // The exact answer, not "some non-blank string": `Object.prototype.toString` on a null-prototype
+    // object is "[object Object]" on every platform this runs on, and a matcher loose enough to
+    // accept anything cannot tell that answer apart from a placeholder someone left behind.
+    expect(result).toMatchObject({ outcome: "unremovable", reason: "[object Object]" });
     expect(await lockExists(runDir), "a lock was deleted despite the guard stat failing").toBe(true);
   });
 
@@ -261,7 +267,72 @@ describe("removeLockIfUnchanged — the deletion re-checks WHICH FILE, not just 
 
     const result = await freshlyLoaded(lockPath, { dev: onDisk.dev, ino: onDisk.ino });
 
-    expect(result).toMatchObject({ outcome: "unremovable", reason: expect.stringMatching(/\S/) });
+    expect(result).toMatchObject({ outcome: "unremovable", reason: "[object Object]" });
+    expect(await lockExists(runDir), "the lock was removed even though unlink rejected").toBe(true);
+  });
+
+  it("still answers when the rejection actively fights being described", async () => {
+    // `Object.prototype.toString` is not a way out either: it reads @@toStringTag, so a value that
+    // throws from that getter defeats the fallback too — and a null-prototype object is exactly the
+    // class the fallback's own comment names. Measured, not reasoned: this test failed with
+    // "tag getter" escaping removeLockIfUnchanged before the reason-taking was made total.
+    const runDir = await makeRunDir();
+    await seedLock(runDir, "{not json");
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+
+    const actualFs = await import("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actualFs,
+      stat: async () => {
+        const undescribable = Object.create(null);
+        Object.defineProperty(undescribable, Symbol.toStringTag, {
+          get() {
+            throw new Error("tag getter");
+          },
+        });
+        throw undescribable;
+      },
+    }));
+    const { removeLockIfUnchanged: freshlyLoaded } = await import("../../src/unlock/unlockCommand.js");
+
+    const result = await freshlyLoaded(lockPath, { dev: 1, ino: 1 });
+
+    expect(result).toMatchObject({ outcome: "unremovable", reason: expect.any(String) });
+    expect(await lockExists(runDir), "a lock was deleted despite the guard stat failing").toBe(true);
+  });
+
+  it("does not blow up while PRINTING the refusal it already decided on", async () => {
+    // The worst place for this to fail: `Error#message` is writable, so a message that is a Symbol
+    // survives the return value typed `string` and detonates later, inside the template that reports
+    // the refusal — after nothing was deleted and after the exit code was chosen. A crash there is
+    // read as "the command crashed", which is the one thing this command must never be mistaken for.
+    const runDir = await makeRunDir();
+    const digest = await seedLock(runDir, "{not json");
+
+    const actualFs = await import("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actualFs,
+      unlink: async () => {
+        const weird = new Error("placeholder");
+        weird.message = Symbol("not a string") as unknown as string;
+        throw weird;
+      },
+    }));
+    const { unlockOwnerTransferLock: freshlyLoaded } = await import("../../src/unlock/unlockCommand.js");
+
+    const err: string[] = [];
+    const code = await freshlyLoaded({
+      runDir,
+      force: true,
+      expectedDigest: digest,
+      stdout: () => {},
+      stderr: (line) => err.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(err.join("\n")).toContain("could not be removed");
     expect(await lockExists(runDir), "the lock was removed even though unlink rejected").toBe(true);
   });
 

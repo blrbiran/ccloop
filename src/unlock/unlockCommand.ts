@@ -54,20 +54,37 @@ export type LockRemoval =
 // structural rather than two hand-copies of one expression — copies are how the two catches drifted
 // apart in the first place, and the next edit could split them again just as quietly.
 //
-// String() is NOT total: it throws on an object with a null prototype. A delete path that throws out
-// of its own catch reports "the command crashed" instead of "the lock is still there", which is the
-// substitution this whole function is written to avoid, so the fallback keeps even that case a
-// value. Neither branch is reachable through node:fs, which always rejects with an Error; both are
-// pinned by tests against a mock, because the comments here claim the property.
+// NOTHING here is allowed to throw, and saying that took three tries to make true. String() is not
+// total (it throws on an object with a null prototype), `Object.prototype.toString` is not either
+// (it reads @@toStringTag, which can be a throwing getter — on a null-prototype object, the very
+// class the earlier version's comment named), and neither `instanceof` nor `.message` is safe when
+// the value is a Proxy or carries accessors. A delete path that throws out of its own catch reports
+// "the command crashed" instead of "the lock is still there", which is the substitution this whole
+// function exists to avoid, so every one of those lookups is inside a try and there is a last resort
+// underneath them.
+//
+// `typeof error.message === "string"` is load-bearing rather than defensive noise: `Error#message`
+// is writable, and a message that is a Symbol satisfies `instanceof Error`, survives this function's
+// `: string` signature, and then detonates in reportFailedRemoval's template — after the refusal was
+// decided and while it is being printed.
+//
+// None of it is reachable through node:fs, which rejects only with Errors. It is pinned by tests
+// against mocks anyway, because these comments claim the property.
 function reasonFrom(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
+  try {
+    if (error instanceof Error && typeof error.message === "string") {
+      return error.message;
+    }
+
+    return String(error);
+  } catch {
+    // Fall through to the description below rather than out of the catch that called us.
   }
 
   try {
-    return String(error);
-  } catch {
     return Object.prototype.toString.call(error);
+  } catch {
+    return "a rejection that could not be described";
   }
 }
 
@@ -99,7 +116,13 @@ export async function removeLockIfUnchanged(lockPath: string, identity: LockIden
     // TypeError out of a delete path, which is the "the command crashed" answer the catch below
     // exists to prevent. One function must not disagree with itself about whether the value it
     // caught can be trusted.
-    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
+    //
+    // The cast says only what is true: something that may be absent and may carry a `code` of any
+    // shape. `NodeJS.ErrnoException` would be a claim about a value that arrived from who knows
+    // where. RESIDUE, named because a cast is read as documentation: `?.` guards an absent receiver,
+    // not a `code` that is an accessor which throws — that one still escapes here, one property
+    // lookup later, and is likewise unreachable through node:fs.
+    if ((error as { code?: unknown } | null | undefined)?.code === "ENOENT") {
       return { outcome: "gone" };
     }
 
