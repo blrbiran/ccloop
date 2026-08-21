@@ -44,7 +44,9 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
 | 点 B 裁决包 | `…/pointB-ruling-package.md`（门后重测版，**不要重新推导**） |
 | E1–E4 候选原文 | `…/pointB-design.md` §5.3（⚠️ 该文件行号腐坏过一次） |
 
-## 上一会话做完了什么（**都不要重做**）
+## 前两个会话做完了什么（**都不要重做**）
+
+> 1–6 是 E1 落地那个会话；7–9 是紧接着的收口会话（§25.20–§25.22）。
 
 1. *** **人裁 72**（§25.13）—— C-d 复核完成：**维持 fail-closed**。 ***
    C-d 原本是"随整体同意落定、没单独选过"的，这次单独摆出代价问了，附注就此结清。
@@ -66,16 +68,23 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
    - **scoped 评审 0 Critical**，2 Important 已修：失败的 `close()` 会盖掉一次成功的读；两个 `catch` 丢了 errno。
 6. **人的更正**（§25.19）—— 会话中途那次 push **是人自己手动做的**。
    §25.18 把它定性成"未经授权"并怀疑到第三位评审 agent 头上，**两条都错，已撤回**。
-7. *** **第四～第六位评审（各自换人）＋ 第三～第五个修复环**（§25.20／§25.21／§25.22）—— 人裁 75–82。 ***
-   第六位对 `92018a8` 判 **0 Critical／0 Important／6 Minor**，五条已修（M-6 挂账），
-   **人裁 81 就此停掉评审环**；他还实测出**两条 Linux 红**（见表 2a／2b）。
-   ⚠️ **控制器自查违规一次并已记账**（§25.22）：读全套件输出时先取了尾部 1500 字符，等价于 `tail`。
-   第五位评审对 `3cea111` 判 **0 Critical／0 Important／4 Minor**，四条全修，并把他的临时探针**转成了钉桩测试**；
-   `unlock` 套件**第一次在 Linux 上跑过**（43/43）。**下面这条是上一轮的记录，保留：**
-   评审 scoped 到修复环 2：**0 Critical，1 Important／6 Minor**，控制器**逐条复验了他的前提**
-   （并独立重跑了他最吃重的那次变异），**七条全修**并各自留了红证。
-   ⚠️ **两处据实标注为「未测量」**：`EPERM`／`EISDIR` 的 **Linux 半边**（本机没有可用容器运行时），
-   以及 N-4 那条**结构性反空转守卫**（不存在能让它红的生产变异）。
+7. *** **第四～第六位评审（每轮都换人）＋ 第三～第五个修复环** ***（§25.20／§25.21／§25.22，人裁 75–82）。
+   三轮结论依次是 **0C／1 Important／6 Minor → 0C／0I／4 Minor → 0C／0I／6 Minor**，
+   **按人裁全部修完**（只有 M-6 挂账）。每条修复都留了红证；改动全部落在
+   `src/unlock/unlockCommand.ts` 与 `tests/unlock/*`，**红线函数逐字节未动**。
+   提交按主题行找：`fix(unlock): stop one function disagreeing with itself…`、
+   `fix(unlock): make the two catches agree structurally…`、
+   `fix(unlock): make the reason-taking actually total…`。
+   ⚠️ **控制器每轮都逐条复验了评审员的前提**（推翻过一条 Minor，也独立重跑过最吃重的那次变异）——
+   **这套流程的价值有一半在这一步，别省。**
+8. *** **平台面第一次有了实测**：`unlink(<目录>)` 在 darwin 是 `EPERM`、在 Linux 是 `EISDIR`。 ***
+   `tests/unlock` 已在 `node:22-alpine`（全新 `npm ci`）跑绿 **43/43**；
+   ⚠️ **但整套在 Linux 上不绿（5 failed）**，见表 2a／2b。**别把两者读成一件事。**
+9. **两次自查违规，都已记账，别以为没发生**：
+   ① §25.20 写「本机无容器运行时」是**坏探针**（macOS 没有 `timeout`，127 是 shell 报找不到二进制）——
+   §25.21 已更正，**§25.20 原文按惯例保留不改**；
+   ② 读全套件输出时先取了尾部 1500 字符（**等价于 `tail`**）；返回码来自另一条未接管道的命令，
+   随后整份读回 —— **没造成误判，但违规就是违规**（§25.22）。
 
 ## ⛔ 下一件事
 
@@ -162,7 +171,7 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
 | skill | 何时 | 注意 |
 |---|---|---|
 | `superpowers:verification-before-completion` | 声称「通过/完成」前 | 复跑全套件 ＋ typecheck ＋ build，`rtk proxy`，**未过滤、整份读回**，核 vitest 首行 `RUN` 路径 |
-| `superpowers:requesting-code-review` | 派评审时 | brief 必写：不接受实施者自证／findings 带**可构造场景**／**锚点防同前缀兄弟**／落盘协议（`git add -f`）／允许临时变异但必须证明还原／**造活进程夹具的规矩** |
+| `superpowers:requesting-code-review` | 派评审时 | *** **别从零写 brief —— 抄 `…/E1-review-fix4-brief.md`** ***（最新一版）：不接受实施者自证／可构造场景／锚点防同前缀兄弟／落盘 `git add -f`／**副本还原只认两个 diff 的字节数**／造活进程夹具的规矩／*** **第 6 条「本机与网络」** ***／「坏探针不证明任何事」 |
 | `superpowers:receiving-code-review` | 拿到结论时 | **评审员的结论同样要验**（上一会话推翻了一条 Minor）；读完 finding 一定要读它的处置建议再派工 |
 | `superpowers:test-driven-development` | 改 E1 或做 B 的实现时 | 先写会红的测试；钉桩类要另外证明它**能红且点名原因** |
 | `superpowers:subagent-driven-development` | 再开评审轮时 | 「实施者 → **换人**评审 → 修复环 → **再换人** scoped 评审」；**按改动落点派人，不是凑人头** |
@@ -173,8 +182,10 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
 ## ⚠️ 预算
 
 CLAUDE.md Rule 6：**每任务 330k／每会话 400k**。
-上一会话（三块人裁 ＋ E1 实现 ＋ 三轮评审 ＋ 两个修复环 ＋ 四个红证）用了 **约 320k**，**贴着每任务上限收尾**。
-**B 那一轮务必独占一个会话。**
+- E1 落地那个会话：**约 320k**，贴着每任务上限收尾。
+- 收口会话（三轮评审 ＋ 三个修复环 ＋ 台账 ＋ 本文）：两个任务合计 **约 315k**，**费用约 $100**。
+⇒ *** **「换人评审 ＋ 逐条复验 ＋ 修复环 ＋ 全套验证 ＋ 记账」一轮的实际单价大致 60–120k tokens。** ***
+**B 那一轮务必独占一个会话**，别和评审轮挤在一起。
 
 ---
 
