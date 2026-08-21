@@ -3004,3 +3004,59 @@ Error.message 被设成 Symbol             → 返回 symbol，随后在 stderr 
 | 4 | **红线函数里的假阳性「活」** | `pid:0`／溢出 pid，人裁 74 只改了 E1 |
 | 5 | **N-2／M-1／M-3／`foreign` 文案** | 一律仍挂账 |
 | 6 | **E1 的第五个修复环未评审** | **按人裁 81 有意为之** |
+
+26. 待裁点 B —— 裁决包 v2 的实测（**B 仍未裁；本节只是把板重新打磨好递上去**）
+--------------------------------------------------------------------------------
+
+**触发**：人裁 61 定的顺序（C ⇒ E1 ⇒ B）已走到 B；本会话按交接令独占给 B。
+**人的授权**：本会话开头人明确选了「跑重测」，理由是 v1 的数字测于 533 条且 E1 未落。
+**材料**：`pointB-ruling-package-v2.md`（**新增，`git add -f`**）。v1 `pointB-ruling-package.md` **原样保留不改**。
+
+**基线（本会话开工现跑，未过滤、整份读回、`RUN` 路径已核）**：
+`Test Files 34 passed (34)` ／ `Tests 600 passed (600)`，零 skipped，三码全 0；
+红线 `tryRecoverStaleOwnerTransferLock` 与 `86d3bd6` 逐字节一致（两侧 970 字节、`diff rc=0`、签名命中数两侧 =1）。
+远端 `git ls-remote origin refs/heads/main` = `df5af22`，是本地 HEAD 的祖先（本地领先 12 笔），**开工核过一次**。
+
+### v1 之后变了四件事（**这是重测的全部理由**）
+
+1. *** **爆炸半径从 3 个 `it()` 块降到 2 个。** *** 那个逐字重复块已按**人裁 53 第 3 件**删除
+   （`test(fileStore): delete three byte-identical duplicate test blocks`，在 GATE-PKG2 之后）。
+   现测两条：`:844`（`expected 1 to be 2`）与 `:1419`（`promise resolved "'not-json\n'" instead of rejecting`）。
+2. *** **v1 说的「零逃生口」不成立了** *** —— E1 的 `ccloop unlock` 打的正是这把锁，且**三态**覆盖
+   `pid:0`／溢出 pid／EPERM（归 `liveness-unknown`，`--force --expect` 救得了）。
+3. **形态 1 的静默被 E3 部分解决**：`sweep` 对每个盘上有锁的 **row**（不是 candidate）打 `note … owner_transfer_lock_present`。
+   ⚠️ **`ccloop ls` 仍一个字不提锁**（现验 `renderRuns.ts` 全文无 `lock`）—— **「部分」是字面意思**。
+4. **吞错点仍在，行号腐坏**：`recoverInterruptedOwnerTransfer` 未持锁分支的 `catch { return; }`
+   从 `1216-1224` 漂到 `1321-1329`。**符号锚定有效，行号不可引用。**
+
+### 现测结论（v1 的三条结论在新基线上全部复现）
+
+| 构建 | 结果 |
+|---|---|
+| clone sanity（未变异） | `1 failed | 599 passed` —— 唯一红 = 名单内 flake (B)，按完整测试名比对 |
+| **A**（§23.3 原文，只关 `catch`） | `2 failed | 598 passed` |
+| **B′**（v1 §5 修订措辞） | `2 failed | 598 passed`，**与 A 逐条相同**（同名、同行、同报错） |
+
+⇒ *** **扩大措辞的判据增量仍然 = 0**：不存在「先只关 `catch` 会便宜一点」这个选项。 ***
+出口枚举（探针只经 `claimOwnerRecordWithPrecondition`，未加任何 `export`）：出口 1 在 A 上关掉，
+**出口 2 在 A 上原样 STOLEN**，只有 B′ 关得掉。两半必命中对照臂都在（B′ 上「已死 pid」仍印 STOLEN）。
+
+### *** 本轮新测的一格：开着的第 7 项与 B 正交 ***
+
+`pid:0` 与 `pid:99999999999999999999` **在今天的 HEAD 上就已经永久 REFUSED**（两态 `isProcessActive`
+把「非 ESRCH」一律读成活：`kill(0,·)` 指调用者自己的进程组永不抛；溢出 pid 抛的是 TypeError 不是 errno）。
+**B 的两种措辞都不改变这一格。** ⇒ **B 不是这两格的原因，也不是它们的解药**；解药是 E1 的 `--force`，
+或另裁把三态搬进红线函数。**别把 B 读成顺手修了第 7 项。**
+
+### 还原证明
+
+变异全部在 `git clone --local` 副本里（`scratchpad/mutclone`，符号链接复用 `node_modules`，不进 worktree 注册表）。
+主仓库现验：`git status --porcelain -u` **0 字节**、`git diff` **0 字节**、`git diff --cached` **0 字节**（均走 `rtk proxy`），
+HEAD 未动、`git worktree list` 只有主仓库、红线仍 970 字节 `diff rc=0`。
+副本回退用 `cat pristine > target` ＋ `diff` 现证（**不用 `cp`**，本机有 `-i` alias）。
+每次施加变异前断言逐字锚点**命中次数 = 1**（两个锚点各自打印 `hit count = 1 OK`）。
+
+### ⛔ 下一件事
+
+**把 R1／R2／R3′／R4／R6 递给人。** *** **控制器不裁 B，也不宣布 E1 通过。** ***
+⚠️ **v1 的 R5（`release()` 何时修）已过期** —— 身份校验早在人裁 62 就落地并经独立评审（§24）。
