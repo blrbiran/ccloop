@@ -1,8 +1,8 @@
-# ccloop Handoff — **E1 已走完三轮评审环＋四个修复环；第四个修复环仍未被任何人评审 ⇒ 不得宣布 E1 通过；之后才轮到 B；C-1 仍降级未关闭；包 1 仍不具备开门条件**
+# ccloop Handoff — **E1 的评审环已按人裁 81 收口（六位评审／五个修复环）；但「E1 通过」仍未拍板；下一件事是 B；C-1 仍降级未关闭；包 1 仍不具备开门条件**
 
 ---
 
-# 【最新】2026-08-21（**E1 修复环 4 轮**）—— **本节取代下方一切状态描述**
+# 【最新】2026-08-21（**E1 收口轮**）—— **本节取代下方一切状态描述**
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数。 ***
@@ -22,16 +22,17 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
 ⚠️ **验证性命令一律走 `rtk proxy`**；**判断远端只能 `git ls-remote`** —— `git status` 的 `ahead N` 是缓存 ref。
 ⚠️ *** **rtk 的过滤层会骗你**：`git status --porcelain` 空时它打印 `ok`，`git diff | wc -c` 把 0 字节报成 1 字节。
 **任何还原证明／字节比较一律走 `rtk proxy git …`。** ***
-**上一会话实测基线**（主仓库根，未过滤整份读回，`RUN` 路径已核）：`34 files / 598 tests` 全绿零 skipped，三码 0。
-**598 = 595 ＋ 3（第四个修复环：null 拒绝、null 原型拒绝 ×2）。现跑核实。**
-✅ **`tests/unlock` 已在 Linux 上跑过**（`node:22-alpine` ＋ 全新 `npm ci`，43/43）。
-⚠️ **整套 598 在 Linux 上【没跑过】** —— 别把前者读成后者。
+**上一会话实测基线**（主仓库根，未过滤整份读回，`RUN` 路径已核）：`34 files / 600 tests` 全绿零 skipped，三码 0。
+**600 = 598 ＋ 2（第五个修复环：抗描述的拒绝、打印期崩溃各一条）。现跑核实。**
+⚠️ *** **这是 darwin 的数字。整套在 Linux 上【不绿】：5 failed / 593 passed**（§25.22 新增两行开着的） ***。
+`tests/unlock` 在 Linux 上是绿的（43/43，`node:22-alpine`），**别把它读成整套绿**。
 
 ## 唯一可信进度源（**引路径，不要重新推导**）
 
-`.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **人裁 10–78 全在里面**。
-*** **本轮新增两节：§25.20／§25.21**（第四、第五位评审 ＋ 第三、第四个修复环 ＋ 人裁 75–78 四块流程板）。 ***
+`.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **人裁 10–82 全在里面**。
+*** **本轮新增三节：§25.20／§25.21／§25.22**（第四～第六位评审 ＋ 第三～第五个修复环 ＋ 人裁 75–82）。 ***
 ⚠️ **§25.21 里有一条对 §25.20 的更正**（「本机无容器运行时」是坏探针，见教训 0'）。
+⚠️ **§25.22 末尾那张表是当前唯一权威的「仍然开着」清单**，含两条新的 Linux 红。
 ⚠️ **人裁 75／76 是【流程板】**（再评审一轮／七条全修），**不是设计裁决** —— A／B／C-1 仍未裁。
 ⚠️ *** **`.superpowers/sdd/.gitignore` 内容是 `*`** *** —— 该目录下**新产物必须 `git add -f`**。
 ⚠️ **判断忽略规则要拿「未跟踪」路径去探**：`git check-ignore` 对**已跟踪**文件返回 rc=1，**不能用**。
@@ -39,7 +40,7 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
 | 材料 | 路径 |
 |---|---|
 | 点 C 裁决 ＋ presence-only 实测 | `…/pointC-design.md`（§4.2 五格表／§7 人裁 70／§8 实测） |
-| **E1 的五份评审报告** | `…/E1-review-typescript.md`／`…/E1-review-security.md`／`…/E1-review-scoped-fix.md`／`…/E1-review-fix2.md`／`…/E1-review-fix3.md`（briefs：`…-fix2-brief.md`／`…-fix3-brief.md`） |
+| **E1 的六份评审报告** | `…/E1-review-typescript.md`／`…-security.md`／`…-scoped-fix.md`／`…-fix2.md`／`…-fix3.md`／`…-fix4.md`（briefs：`…-fix2/3/4-brief.md`，**`fix4-brief` 里有该抄的「本机／网络」条款**） |
 | 点 B 裁决包 | `…/pointB-ruling-package.md`（门后重测版，**不要重新推导**） |
 | E1–E4 候选原文 | `…/pointB-design.md` §5.3（⚠️ 该文件行号腐坏过一次） |
 
@@ -65,7 +66,10 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
    - **scoped 评审 0 Critical**，2 Important 已修：失败的 `close()` 会盖掉一次成功的读；两个 `catch` 丢了 errno。
 6. **人的更正**（§25.19）—— 会话中途那次 push **是人自己手动做的**。
    §25.18 把它定性成"未经授权"并怀疑到第三位评审 agent 头上，**两条都错，已撤回**。
-7. *** **第四、第五位评审（各自换人）＋ 第三、第四个修复环**（§25.20／§25.21）—— 人裁 75–78 四块流程板。 ***
+7. *** **第四～第六位评审（各自换人）＋ 第三～第五个修复环**（§25.20／§25.21／§25.22）—— 人裁 75–82。 ***
+   第六位对 `92018a8` 判 **0 Critical／0 Important／6 Minor**，五条已修（M-6 挂账），
+   **人裁 81 就此停掉评审环**；他还实测出**两条 Linux 红**（见表 2a／2b）。
+   ⚠️ **控制器自查违规一次并已记账**（§25.22）：读全套件输出时先取了尾部 1500 字符，等价于 `tail`。
    第五位评审对 `3cea111` 判 **0 Critical／0 Important／4 Minor**，四条全修，并把他的临时探针**转成了钉桩测试**；
    `unlock` 套件**第一次在 Linux 上跑过**（43/43）。**下面这条是上一轮的记录，保留：**
    评审 scoped 到修复环 2：**0 Critical，1 Important／6 Minor**，控制器**逐条复验了他的前提**
@@ -75,26 +79,24 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
 
 ## ⛔ 下一件事
 
-*** **1. E1 的第四个修复环【尚未被任何人评审过】。** ***
-即 `fix(unlock): make the two catches agree structurally, and pin the errno per platform`。
-**控制器仍未宣布 E1 通过。是否再来一轮，是人的板 —— 人上一次的答复是「先看规模再定」，规模已摆在 §25.21 末尾。**
-摆事实不替人裁：`src` 侧 35 行增删（一处可选链、一个 9 行 `reasonFrom` 助手、两处改调用、一段注释移位），
-`tests` 侧 +89（3 条新钉桩 ＋ 1 处断言按平台收紧），**没有别的文件被碰**，每条都有红证（M-D／M-E／M-F）。
+*** **1. E1 的评审环已停**（人裁 81）。第五个修复环没被评审，**这是有意的，不是漏掉的活**。 ***
+⚠️ *** **「停止评审环」≠「E1 通过」** —— 宣布 E1 通过是一块【至今没人拍】的板。控制器不宣布，也别替人宣布。 ***
+⚠️ **要重开评审环的话**，brief 直接抄 `E1-review-fix4-brief.md`：它是唯一含**「本机／网络」条款**的那份。
 
-**2. 派评审前必须补一条 brief 条款** —— *** **能不能启动本机应用／拉取网络镜像** ***。
-上一位评审为做 Linux 测量启动了 OrbStack 并拉了镜像；**brief 没写这一条，他没违规，是协议有缺口**（§25.21）。
-
-**3. E1 之后才轮到 B**（人裁 61）。B 的措辞已在台账 §23.3 固化，*** **不要重新推导** ***；
+**2. 下一件事就是 B**（人裁 61）。B 的措辞已在台账 §23.3 固化，*** **不要重新推导** ***；
 裁 B 时**必须原样复述残余**，含两处精确边界：**resume 路径并不静默**（stderr 有
 `owner-transfer lock busy`，events 有 `resume_denied`）；**真正静默的是形态 1**。
 ⚠️ **形态 1 的静默已被 E3 部分解决**（sweep 现在会报 note），复述时要说准。
+⚠️ **B 那一轮务必独占一个会话**（预算：上一个会话两任务合计已近 400k）。
 
 ## 仍然开着（**接手前先看这张表**）
 
 | # | 项 | 要点 |
 |---|---|---|
 | 1 | **C-1 降级，未关闭** | `tryRecoverStaleOwnerTransferLock` 的**两个**失败开放出口**逐字节未动**。**不许写成「C-1 已修复」**。⚠️ E1 与它的判据分歧是**有意写进两个方向**的（见 `unlockCommand.ts` 头部注释），**不是被 E1 解决了** |
-| 2 | **E1 第四个修复环未评审** | 见上。第三个修复环已由第五位评审看过（0 Critical／0 Important）。**这是唯一挡在 B 前面的事** |
+| 2 | **E1 第五个修复环未评审** | **按人裁 81 有意为之**，不是待办。第四个修复环已由第六位评审看过（0 Critical／0 Important） |
+| 2a | *** **`tests/persistence/fileStore.test.ts:4158` 在 Linux 上红** *** | 硬编码 `unlink(<目录>)` 抛 `EPERM`（Linux 是 `EISDIR`）。**人裁 82：只记账不动**。⚠️ 它是本轮刚修那条的**双胞胎** |
+| 2b | **整套在 Linux 上不绿** | 实测 **5 failed / 593 passed**。名单内 flake 一条、容器 root 导致 `chmod 000` 仍可读一条、疑似容器进程可见性两条 —— **都没人查过** |
 | 3 | **待裁点 B** | 措辞已固化（§23.3），B 本身仍未裁 |
 | 4 | **待裁点 A** | 从未解封（代价：退役一节 spec ＋ ≥8 条具名判据） |
 | 5 | **包 1 的修复环 2** | 人裁 9，**另一条线，别读串**。1 Critical / 6 Important 未修 ⇒ **包 1 不具备开门条件**。⚠️ 它还**正冻着**下一行 |
@@ -106,6 +108,9 @@ export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy n
 
 ## 上一会话换来的、**下一位直接用**的教训
 
+0''. *** **给评审员的 brief 必须写明「能否动本机／拉网络」。** *** 留空不会让人不做，只会让人各自发挥：
+   第五位为测 Linux errno 启动了 OrbStack 并拉了镜像（**他没违规，是协议没覆盖**）；
+   补进条款后第六位**逐条声明**了自己做的每一件（含在主仓库跑 `npm run build` 重生成 `dist/`）。**照抄 `E1-review-fix4-brief.md` 第 6 条。**
 0'. *** **失败的命令有两种意思：被测对象不行，还是【探针自己】不行。** ***
    上一会话实测翻车：控制器跑 `timeout 15 docker info` 拿到 rc=127，据此在 §25.20 写下「本机无容器运行时」——
    而 **macOS 根本没有 `timeout` 这个命令**，127 是 shell 在说找不到二进制。守护进程起来后 docker 完全可用，
