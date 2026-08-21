@@ -1,8 +1,146 @@
-# ccloop Handoff — **E1 的评审环已按人裁 81 收口（六位评审／五个修复环）；但「E1 通过」仍未拍板；下一件事是 B；C-1 仍降级未关闭；包 1 仍不具备开门条件**
+# ccloop Handoff — **点 B 已裁（人裁 83–89）；下一件事是【实施 B】，且人已指定另起会话；「E1 通过」仍未拍板；C-1 仍降级未关闭；包 1 仍不具备开门条件**
 
 ---
 
-# 【最新】2026-08-21（**E1 收口轮**）—— **本节取代下方一切状态描述**
+# 【最新】2026-08-21（**裁 B 轮**）—— **本节取代下方一切状态描述**
+
+> ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
+> *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数。 ***
+> 需要指代某一笔时**引提交主题行**（可 `git log --grep` 找回），需要指代材料时**引路径**。
+
+## 先跑这些，以输出为准
+
+```bash
+cd /Users/biran/code/skills/loop/ccloop
+git log --merges --format='%h %cd %s'   # 末笔应仍是 GATE-PKG2（86d3bd6），其下 GATE-PKG3（e42e062）
+git ls-remote origin refs/heads/main    # ⚠️ 一律现跑，开工核一次、收尾再核一次（人会自己动远端）
+git status --short; git worktree list; git branch -vv
+export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm test -- --run
+export ECC_GATEGUARD=off DISABLE_OMC=1; rtk proxy npm run typecheck; rtk proxy npm run build
+```
+
+⚠️ **验证性命令一律走 `rtk proxy`**；**判断远端只能 `git ls-remote`** —— `git status` 的 `ahead N` 是缓存 ref。
+⚠️ *** **rtk 的过滤层会骗你**：`git status --porcelain` 空时它打印 `ok`，`git diff | wc -c` 把 0 字节报成 1 字节。
+**任何还原证明／字节比较一律走 `rtk proxy git …` 并重定向到文件再 `wc -c`。** ***
+**上一会话实测基线**（主仓库根，未过滤整份读回，`RUN` 路径已核）：`34 files / 600 tests` 全绿零 skipped，三码 0。
+⚠️ *** **这是 darwin 的数字。整套在 Linux 上【不绿】：5 failed / 593 passed** ***（表里两条 Linux 红仍开着）。
+**红线 `tryRecoverStaleOwnerTransferLock` 与 `86d3bd6` 逐字节一致：两侧 970 字节、`diff rc=0`、签名命中数两侧 =1。**
+⚠️ *** **但下一会话【就是要动它】** —— 人裁 83 已授权，见下。动之前先复验这个 970 基线，动之后按新基线重记。 ***
+
+## 唯一可信进度源（**引路径，不要重新推导**）
+
+`.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **人裁 10–89 全在里面**。
+*** **本轮新增三节：§26／§27／§28**（B 的重测 ＋ 人裁 83–89）。 ***
+⚠️ *** **§28 末尾「⛔ 下一件事」是下一会话的第一件事，逐字照做。** ***
+⚠️ *** **`.superpowers/sdd/.gitignore` 内容是 `*`** *** —— 该目录下**新产物必须 `git add -f`**。
+
+| 材料 | 路径 |
+|---|---|
+| **B 的裁决包 v2（本轮新增，实测于 600 条）** | `…/pointB-ruling-package-v2.md` |
+| B 的裁决包 v1（**已部分过期，保留不改**） | `…/pointB-ruling-package.md`（测于 533 条、E1 未落） |
+| 点 C 裁决 ＋ presence-only 实测 | `…/pointC-design.md` |
+| E1 的六份评审报告 ＋ briefs | `…/E1-review-*.md`（**`E1-review-fix4-brief.md` 是该抄的那份**） |
+
+## 上一会话做完了什么（**都不要重做**）
+
+1. **重测 B 的爆炸半径**（人明确授权花这笔钱），在 `git clone --local` 副本里：
+   sanity `1 failed | 599 passed`（唯一红 = 名单内 flake (B)）；
+   **A（§23.3 原文）`2 failed | 598 passed`；B′（修订措辞）`2 failed | 598 passed`，逐条相同**
+   ⇒ *** **扩大措辞的判据增量 = 0，v1 结论在新基线上复现。** ***
+2. *** **代价比 v1 便宜了：3 个 `it()` 块 → 2 个** *** —— 重复块已按人裁 53 第 3 件删除。
+3. **出口枚举复现**：出口 1 在 A 上关掉，**出口 2 在 A 上原样 STOLEN**，只有 B′ 关得掉；两半必命中对照臂都在。
+4. *** **新测一格**：`pid:0` 与溢出 pid **在今天的 HEAD 上就已永久 REFUSED** ⇒ **开着的第 7 项与 B 正交**，
+   B 既不是它的原因也不是它的解药。 ***
+5. *** **人裁 83–89**（§27／§28）：B **裁了**（修订措辞）；liveness **用两态**；`ls` 报锁**另开一轮**；
+   **第八个具名例外批了**（两条整条改写）；**人裁 4 补了正面许可（带三条件）**；**实施另起会话**。 ***
+6. **主仓库全程零触碰已证**：`git status -u`／`git diff`／`git diff --cached` **三个都是 0 字节**，
+   HEAD 未动，`git worktree list` 只有主仓库，红线仍 970 字节 `diff rc=0`。
+
+## ⛔ 下一件事 = **实施点 B**
+
+**授权边界（超出即越权）**：只准动 `tryRecoverStaleOwnerTransferLock` **与那两条具名测试**。
+**取锁路径、`release()`、E1、sweep、`ls` 一律不在授权内。**
+
+**终局措辞（人裁 83 ＋ 86，§27 有逐字版，不要重新推导）**：
+除 liveness 回收外所有出口一律失败关闭；唯一允许删锁的条件 = 解析成功 ＋ `holderProcessInstanceId` 形如 `pid:<n>` ＋ 该进程已不存活；
+**「已不存活」= 今天这个两态 `isProcessActive`，不是 E1 的三态**（人裁 86）。
+
+**那两条测试（人裁 87，第八个具名例外，仅这两条，整条改写不许放宽）**：
+`fileStore > treats malformed lock contents with staged artifacts as stale and recoverable`、
+`fileStore > releases the lock after recovering malformed staged state`。
+⚠️ **按完整测试名锚定，不许用行号**（上一会话记的 `:844`／`:1419` 一改动就腐坏）。
+⚠️ **改写后每条都要写明它现在编码的是人裁 83**（人裁 88 条件 (c)）。
+
+**做法**：`superpowers:test-driven-development` 先写会红的判据；改完按仓库惯例
+**实施者 → 换人评审 → 修复环**（brief 抄 `E1-review-fix4-brief.md`，含「本机／网络」条款）。
+
+## 仍然开着（**接手前先看这张表**）
+
+| # | 项 | 要点 |
+|---|---|---|
+| 1 | **C-1 降级，未关闭** | B 落地会关掉**两个失败开放出口**，但 C-1 的处置口径仍是「降级」——**落完 B 才有资格重新表述，别提前改写** |
+| 2 | **`ls` 不报锁** | **人裁 85：要做，另开一轮。** sweep 已会打 `note … owner_transfer_lock_present`，`ls` 一个字不提 |
+| 3 | **红线函数里的假阳性「活」** | `pid:0`／溢出 pid **实测已永久 REFUSED**。人裁 74 只改了 E1；**人裁 86 明确 B 不碰它** |
+| 4 | **待裁点 A** | 从未解封（代价：退役一节 spec ＋ ≥8 条具名判据） |
+| 5 | **包 1 的修复环 2** | 人裁 9，**另一条线**。1 Critical / 6 Important 未修 ⇒ **包 1 不具备开门条件**；还冻着下一行 |
+| 6 | `SweepOptions.stderr` 契约的测试半边 | 人裁 11 仍然有效，等包 1 修复环 2 |
+| 7 | **E1 是否「通过」** | *** **至今没人拍板。控制器不宣布，也别替人宣布。** *** 评审环按人裁 81 有意停了，不是漏活 |
+| 8 | **N-2／M-1／M-3／`foreign` 文案** | 均挂账（人裁 66） |
+| 9 | *** **`tests/persistence/fileStore.test.ts:4158` 在 Linux 上红** *** | 硬编码 `unlink(<目录>)` 抛 `EPERM`（Linux 是 `EISDIR`）。**人裁 82：只记账不动** |
+| 10 | **整套在 Linux 上不绿** | 实测 **5 failed / 593 passed**，名单内 flake 一条、容器 root 一条、疑似容器进程可见性两条 —— **都没人查过** |
+
+## 上一会话换来的、**下一位直接用**的教训
+
+1. *** **v1 那种「裁决包」会过期，而且是从两头过期的** *** —— 数字过期（533 → 600 条）、**论据也过期**
+   （v1 的 R3「B 与 C 必须同批裁」，其前提"零逃生口"已被 E1 消解；v1 的 R5 早在人裁 62 就做完了）。
+   ⇒ **递给人之前先逐条问「这条今天还成立吗」，别原样端上去。**
+2. *** **人裁 4 的边界是按【动机】写的，动机在评审里不可核** *** —— 这就是七个具名例外的成因。
+   人裁 88 已把它换成三条可核的形式要件。**下次再遇到「这算不算改判据」，先看那三条。**
+3. **变异锚点用逐字块匹配 ＋ 断言命中次数 = 1**，不用行号、不用符号名前缀（同前缀兄弟是本仓库反复命中的陷阱）。
+4. **副本的还原证明只认两个 diff 的字节数**（`git diff` 与 `git diff --cached`，走 `rtk proxy` 重定向到文件再 `wc -c`）。
+5. **`cp` 在本机有 `-i` alias** —— 用 `cat A > B` 并 `diff` 现证。
+6. **造活进程夹具要在同一次调用里，且在【断言时刻】再 `kill(pid,0)` 核一次** —— 上一会话的探针每格都印了这两列。
+7. **名单内 flake (B)** = `evidence.test.ts > run-scenario CLI > records env names only and tracks descendants rooted at
+   the spawned pid`（并行负载下 5000ms 超时）。**按完整测试名比对，不要重新调查。**
+   ⚠️ 上一会话有一跑它是绿的 —— **不构成它消失的证据**。
+
+## ⚠️ 铁律
+
+*** **验证跑绝不过滤（`grep`/`tail`/`sed`/`head` 同罪）。** *** **管道会同时骗走「输出」和「返回码」两样东西。**
+其余不变：***坏探针不能证明「不存在」，也不能证明「违规」***；***读代码的机械论证不等于实测***；
+**不接受实施者自证，评审员的结论同样要验**；***finding 与它的「处置建议」是两回事***；
+**变异只在 `git clone --local` 副本里，且必须证明还原**；**「我无法解释这件事」≠「一定是在场那个 agent 干的」**。
+
+## ⚠️ 仍需人单独授权的四件
+
+**开门／合并／删分支或 worktree／push** —— 各需单独授权，**不外推**。
+**控制器不许 push。非门合并一律 `--ff-only`；开门那一笔必须是 merge、结论写在主题行。**
+（⚠️ 人**自己**推远端是人的自由，别把它读成异常。）
+
+## 建议调用的 skills
+
+| skill | 何时 | 注意 |
+|---|---|---|
+| `superpowers:test-driven-development` | **实施 B 时（下一会话第一件事）** | 先写会红的判据；那两条改写完必须**自证能红且点名原因** |
+| `superpowers:verification-before-completion` | 声称「通过/完成」前 | 复跑全套件 ＋ typecheck ＋ build，`rtk proxy`，**未过滤、整份读回**，核 vitest 首行 `RUN` 路径 |
+| `superpowers:requesting-code-review` | 派评审时 | **别从零写 brief —— 抄 `…/E1-review-fix4-brief.md`**（含「本机／网络」条款） |
+| `superpowers:receiving-code-review` | 拿到结论时 | **评审员的结论同样要验**；读完 finding 一定要读它的处置建议再派工 |
+| `superpowers:subagent-driven-development` | 开评审轮时 | 「实施者 → **换人**评审 → 修复环」；**按改动落点派人，不是凑人头** |
+| `superpowers:brainstorming` | **不需要** | ⚠️ **B 已裁、措辞已定。不要重开 B 的方向讨论** |
+| `superpowers:using-git-worktrees` | 需要隔离工作区时 | ⚠️ `EnterWorktree` 默认基点是 `origin/<default-branch>`，**会丢掉未推送的本地提交** —— 必须 `git worktree add <path> -b <branch> HEAD`；**建完立刻 `npm ci`** |
+
+## ⚠️ 预算
+
+CLAUDE.md Rule 6：**每任务 330k／每会话 400k**。
+- 本会话（重测 ＋ 五块板 ＋ 台账 ＋ 本文）：**约 190k**。
+- 历史单价参考：「换人评审 ＋ 逐条复验 ＋ 修复环 ＋ 全套验证 ＋ 记账」一轮约 **60–120k**。
+⇒ **实施 B ＋ 一轮换人评审，预算上就是一个完整会话** —— 人裁 89 已明确它独占一个会话。
+
+---
+
+---
+
+# 【已过期，保留作历史】2026-08-21（**E1 收口轮**）
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数。 ***
