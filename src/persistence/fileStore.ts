@@ -912,7 +912,7 @@ export function isProcessActive(pid: number): boolean {
 }
 
 async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<boolean> {
-  const { lockPath, ownerPendingPath, transferPendingPath, transactionMarkerPath } = getOwnerTransferPaths(runDir);
+  const { lockPath } = getOwnerTransferPaths(runDir);
   let lockContents = "";
 
   try {
@@ -925,22 +925,24 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<boolean
     throw error;
   }
 
+  // Human ruling 83 (point B): every exit other than liveness reclamation fails CLOSED. The ONLY
+  // condition that may delete an existing lock is: the contents parse, holderProcessInstanceId has
+  // the form `pid:<n>`, and that process is no longer alive. Everything else — unparseable
+  // contents, or a parse that yields no `pid:<n>` holder — returns false and leaves the lock on
+  // disk. Staged artifacts are NO LONGER grounds for reclaiming: a lock nobody can attribute is a
+  // lock nobody may steal, and `ccloop unlock --force --expect` is the escape hatch for the human.
+  // "No longer alive" means TODAY's two-state isProcessActive (human ruling 86), not E1's
+  // three-state classifyHolderLiveness — so `pid:0` and overflowing pids stay REFUSED here exactly
+  // as they already were before this change, and point B is not their fix.
   try {
     const parsed = JSON.parse(lockContents) as Partial<OwnerTransferLockRecord>;
     const pid = parsed.holderProcessInstanceId ? parsePid(parsed.holderProcessInstanceId) : null;
 
-    if (pid !== null && isProcessActive(pid)) {
+    if (pid === null || isProcessActive(pid)) {
       return false;
     }
   } catch {
-    const hasStagedArtifacts =
-      await pathExists(transactionMarkerPath)
-      || await pathExists(ownerPendingPath)
-      || await pathExists(transferPendingPath);
-
-    if (!hasStagedArtifacts) {
-      return false;
-    }
+    return false;
   }
 
   await safeUnlink(lockPath);

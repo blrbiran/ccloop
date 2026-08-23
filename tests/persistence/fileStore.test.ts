@@ -811,7 +811,13 @@ describe("fileStore", () => {
     await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();
   });
 
-  it("treats malformed lock contents with staged artifacts as stale and recoverable", async () => {
+  it("keeps a malformed lock non-recoverable even when staged artifacts are present", async () => {
+    // Encodes human ruling 83 (point B): tryRecoverStaleOwnerTransferLock now fails CLOSED on
+    // every exit but liveness reclamation. Staged artifacts USED to license reclaiming a lock
+    // whose contents do not parse, and this test asserted that licence by name ("stale and
+    // recoverable"), which is why human ruling 87 named it for a whole rewrite rather than a
+    // relaxation. An unparseable lock names no holder, an unattributable holder may not be
+    // declared dead, so the lock is not stolen and the staged transfer is never finalized.
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const initialOwnerRecord = {
       runId: "task-1",
@@ -841,9 +847,12 @@ describe("fileStore", () => {
 
     const owner = await readOwnerRecord(runDir);
 
-    expect(owner.currentOwnerEpoch).toBe(2);
-    expect(owner.currentProcessInstanceId).toBe("pid:67890");
-    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();
+    expect(owner.currentOwnerEpoch).toBe(1);
+    expect(owner.currentProcessInstanceId).toBe("pid:12345");
+    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe("not-json\n");
+    await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toContain(
+      "owner lost after reconciliation",
+    );
   });
 
   it("keeps a malformed lock without staged artifacts non-recoverable", async () => {
@@ -1386,7 +1395,13 @@ describe("fileStore", () => {
     expect(transferRecord.newProcessInstanceId).toBe("pid:88888");
   });
 
-  it("releases the lock after recovering malformed staged state", async () => {
+  it("leaves the lock on disk when malformed staged state names no dead holder", async () => {
+    // Encodes human ruling 83 (point B). The previous version asserted verbatim the behaviour
+    // that ruling forbids -- `rejects.toThrow()` on the lock path, i.e. the lock had been
+    // unlinked -- so human ruling 87 named it for a whole rewrite; relaxing it would have left a
+    // test encoding neither the old spec nor the new one. The only condition that may delete an
+    // existing lock is a parsed `pid:<n>` holder that is no longer alive under today's two-state
+    // isProcessActive (human ruling 86); malformed contents never reach that check.
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const initialOwnerRecord = {
       runId: "task-1",
@@ -1416,7 +1431,7 @@ describe("fileStore", () => {
 
     await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toContain("not-json");
     await readOwnerRecord(runDir);
-    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe("not-json\n");
   });
 
   it("publishes the transaction marker by rename, leaving only .owner-transfer.transaction.tmp when the rename fails", async () => {
