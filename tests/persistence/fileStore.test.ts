@@ -855,6 +855,70 @@ describe("fileStore", () => {
     );
   });
 
+  it("keeps a lock non-recoverable when its live holder is in the strong instance-id form", async () => {
+    // Encodes human ruling 83 (point B) -- specifically the OTHER exit that ruling names, which
+    // human ruling 87's two rewrites both missed. Ruling 83 closes two failure-open exits: parse
+    // failure, and "parse success with a missing or non-`pid:<n>` holder". Both named rewrites
+    // landed on the first, so the second shipped with NO test: an independent review measured that
+    // reverting the guard alone -- `pid === null || isProcessActive(pid)` back to
+    // `pid !== null && isProcessActive(pid)` -- leaves all 600 tests green while restoring the
+    // deletion of a LIVE holder's lock. This test exists so that revert goes red.
+    //
+    // A PURE ADDITION under human ruling 4 ("what is authorised is ADDING tests"). It rewrites no
+    // assertion and needs no named exception.
+    //
+    // The strong `pid:<pid>:<timeOrigin>` form is the realistic holder to use rather than an
+    // invented one: it is exactly what pointC-design.md §4.2's mutation C tidies
+    // acquireOwnerTransferLock into, and parsePid's /^pid:(\d+)$/ does not match it. The holder is
+    // THIS process and therefore alive, so a guard that SKIPS on an unparsed holder instead of
+    // REFUSING deletes the lock of a process that still holds it.
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    // The premise this test rests on, asserted rather than assumed: the strong form is NOT what
+    // parsePid accepts. Without this, a future change making buildProcessInstanceId() return a bare
+    // `pid:<n>` would turn the whole test into a liveness test that passes for the wrong reason.
+    const strongHolder = buildProcessInstanceId();
+    expect(strongHolder).toMatch(/^pid:\d+:\d+$/);
+    expect(strongHolder).not.toMatch(/^pid:\d+$/);
+    expect(strongHolder.startsWith(`pid:${process.pid}:`)).toBe(true);
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(transfer.transferRecord, null, 2));
+    await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(transfer.nextOwnerRecord, null, 2));
+    await writeFile(
+      join(runDir, ".owner-transfer.transaction.json"),
+      JSON.stringify({ version: 1, stagedAt: transfer.transferRecord.transferredAt, finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
+    );
+    const lockContents = JSON.stringify({ holderProcessInstanceId: strongHolder, acquiredAt: "2026-07-22T10:05:00.000Z" });
+    await writeFile(join(runDir, ".owner-transfer.lock"), lockContents);
+
+    const owner = await readOwnerRecord(runDir);
+
+    // The lock is still there, byte for byte, and the staged transfer was never finalized behind
+    // it. Under the reverted guard all three of these fail.
+    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe(lockContents);
+    expect(owner.currentOwnerEpoch).toBe(1);
+    await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toContain(
+      "owner lost after reconciliation",
+    );
+  });
+
   it("keeps a malformed lock without staged artifacts non-recoverable", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const initialOwnerRecord = {
