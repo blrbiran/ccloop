@@ -3779,3 +3779,85 @@ brief 抄 `E1-review-fix4-brief.md`（**含「本机／网络」条款、坏探�
 **现在正相反：该函数就是被审对象，新基线 1558 字节。**
 ⚠️ **评审通过前：不 push、不宣布 C-1 关闭、不宣布 E1 通过。** `ls` 报锁仍按人裁 85 另开一轮。
 ⚠️ **仍只在 darwin 上跑过。**
+
+31. 独立评审回来了（1 Critical／3 Important／3 Minor）＋ 人裁 93 —— A／C／B 三笔已落地
+--------------------------------------------------------------------------------
+
+*** **人裁 93。2026-08-23。「注释授权扩到 `tests/unlock/inspectLock.test.ts` 与 `src/unlock/unlockCommand.ts`，按 A→C→B 开工」。** ***
+
+评审报告与 brief 已归档并入库：`…/pointB-review.md`、`…/pointB-review-brief.md`（提交主题行 `docs(sdd): file the point B review brief and the independent report`）。
+⚠️ **报告是照收归档，控制器【没有】整体采纳它的处置** —— 逐条复核见下。
+
+### 控制器复核了评审的四条承重主张（**不接受自陈，自己跑**）
+
+| 评审主张 | 复核结果 |
+|---|---|
+| **C-1（它的编号）**：只把判据翻回 `pid !== null && isProcessActive(pid)`（M1 变异），**全套件不响** | *** **成立。** *** 独立跑 M1：`1 failed / 599 passed`，**唯一的红是人裁 10 名单内 flake**（`evidence.test.ts > … descendants rooted at the spawned pid`，5000ms 超时）。⚠️ 它报的是 `600/600 ALL PASS` —— **结论不变，措辞我这跑更准** |
+| **I-1**：注释轮漏了 6 处 | **成立**，逐处现验命中（含 `tests/unlock/inspectLock.test.ts:15` 那份 **"unconditional lock stealer" 的第四份逐字拷贝**） |
+| **I-2**：`docs(unlock)` 那笔的提交信息「Every claim … kept verbatim」不实 | *** **成立，是控制器写错了。** *** 现验：该笔删掉 14 行注释，**14 行无一逐字幸存**；其中 5 处是原地改写、无 ERRATUM |
+| **I-4**：两条改写的判据互为重复 | **成立**，读自己的 diff 即可确认：T2 唯一的事后断言 `resolves.toBe("not-json\n")` **逐字是 T1 四条中的一条**，前 27 行夹具逐字节相同 |
+
+**没复核、按 read-only argument 记的**：它的 25 格出口枚举、`process.kill` 12 值全测、Mi-2 的数组 holder 绕过。
+**它填上的一格「没验」**：它是本包**第一个真跑 `ccloop unlock --force --expect` 打真坏锁**的人（refuse → 给出可用命令行 → 错凭据拒绝 → `--force` 成功 → 卡住的转移完成）。⇒ `pointB-ruling-package-v2.md` §8 第 5 项自本条起不再是"没验"。
+
+### A —— 补上人裁 83 第二个出口的判据（**走人裁 4，不需要新的具名例外**）
+
+⚠️ **控制器不采纳评审 Rec 2（把重复的 T2 改造成这条）。理由是裁决面，不是测试条数**：
+改造 T2 = **动既有判据**，得先确认人裁 87 涵盖；而**新增一条**落在人裁 4 逐字许可的「授权的是**补测试**」之内，**不需要任何新裁**。
+
+新判据：`fileStore > keeps a lock non-recoverable when its live holder is in the strong instance-id form`。
+holder 用 `buildProcessInstanceId()` 的强形式 `pid:<pid>:<timeOrigin>`（**mutation C 会把取锁路径改成的那个形状，不是编造的**），指向**本进程、活着**。
+⚠️ **它把自己的前提也断言了**（`toMatch(/^pid:\d+:\d+$/)` ＋ `not.toMatch(/^pid:\d+$/)`）—— 否则将来 `buildProcessInstanceId()` 若退回裸 pid，这条会变成一条"因为错的理由而绿"的存活测试。
+⚠️ **锁文件断言排在最前**，所以失败信息点得出病因（Mi-1 对这条已解决）。
+
+**红证**：clone 里施加 M1，该条变红：`promise rejected "Error: ENOENT…" instead of resolving`（**锁被删了**）。**绿证**：主仓库 601 条全绿。
+
+**T2 的冗余【未处置】** —— 它是冗余不是僵尸（编码的规格是对的，只是被 T1 包含）。为消冗余去动一条具名判据，裁决成本大于收益。**挂账，等人裁。**
+
+### C —— 把 `docs(unlock)` 那笔的方法论陈述改成真的
+
+*** **选择改代码，不选择"在台账记一笔就算了"。** *** 理由：提交信息跟着 `git log` 走，台账不跟着走；把不实陈述留在原地、靠另一个文件解释，形状上就是本仓库那个根因——**一个没有执行机制的完整性断言**。
+
+八处全部改成「原文逐字保留 ＋ 具名 ERRATUM」。**用评审员自己的方法复测**（14 行逐行做子串搜索）：
+**14 行中 12 行已逐字回来，剩 2 行经证是【换行拆分】**（ERRATUM 插在段中，一行变两行，两半都在）。
+
+⚠️ **本轮自己抓到并修掉两个 splice bug**（`str.replace` 的子串匹配在**句子中间**切开了段落）：
+`tests/sweep/sweepRuns.test.ts` 曾出现一行 **153 字符**、`src/unlock/unlockCommand.ts` 曾把 `Human ruling 72 weighed it…` 甩到 ERRATUM 之后。**两处都已还原成整段 ＋ ERRATUM 跟在段后。**
+⇒ **Mi-3 解决**：八个文件的最宽注释行现为 **≤103**，与 `docs(unlock)` 之前的基线一致（该笔曾把它推到 152）。
+
+### B —— 补完 6 处漏网（人裁 93 扩权）
+
+| # | 文件 | 错在哪 |
+|---|---|---|
+| 1 | `tests/unlock/inspectLock.test.ts` 头部 | **"unconditional lock stealer" 的第四份逐字拷贝** —— 前一轮改了三份漏了这份，读者会看到三处 REFUSER／一处 STEALER**且无从判断哪份权威**。半改比不改坏 |
+| 2 | `tests/unlock/inspectLock.test.ts` 那条测试内 | 「`{not json` 无 staged 是**唯一**永久搁浅的形状」＋ 点名已删除的 `hasStagedArtifacts` |
+| 3 | `tests/persistence/fileStore.test.ts` | 「the `catch` branch that unlinks a live holder's lock」 |
+| 4＋5 | 同上，C-1 夹具块的 ERRATUM 1／2 | 「never calls isProcessActive and unlinks a LIVE holder's lock」／「open point B and **was not touched**」⇒ 新增 **ERRATUM 3** 一并更正，**不改动 ERRATUM 1／2 原文** |
+| 6 | `src/unlock/unlockCommand.ts` 头部 | 与 #2 同一个「唯一一格」前提，在生产代码里 |
+
+⚠️ **#2 与 #6 的 ERRATUM 逐字写的是「前提【变宽】了，不是破了」** —— 永久搁浅的集合现在是
+**每一把「不是可解析 `pid:<n>` 且进程已死」的锁**。⇒ **`--force` 比写那两行时承重更多，不是更少。** 这个方向不许说反。
+
+### 落地后的实测（三笔各自都跑过，此处是最终态）
+
+| 项 | 值 |
+|---|---|
+| 全套件 | **`34 files / 601 tests`** 全绿零 skipped，`TEST_RC=0`，`RUN` 路径 = 主仓库根 |
+| typecheck／build | `0`／`0` |
+| 红线函数 | **1558 字节**，签名命中数 =1，**自 `fix(owner-transfer): …` 那笔起逐字节未再动**（`diff rc=0`） |
+| B、C 两轮的 diff | **非 `//` 改动 0 行**；B 轮**删除 0 行**（纯追加） |
+| 工作树 | `git status --porcelain -u` = **0 字节** |
+
+*** **判据基线自本条起是 601，不再是 600。** ***
+
+### ⛔ 下一件事
+
+1. ⚠️ **C-1 仍【不】记作关闭，点 B 仍【不】宣布通过** —— 评审是在补 A 之前做的，**A、C、B 三笔本身没有经过任何独立评审**。
+   要不要为这三笔再派一轮，等人裁。
+2. **I-3（失败关闭之后操作员看不见）**：控制器建议**并入人裁 85 那一轮**，不另开第三轮 —— 它俩是同一个病（操作员看不见锁）。
+   ⚠️ **并且评审员说的"最小修法"并不小**：要区分「持有者还活着」和「锁不可归属」，得让 `tryRecoverStaleOwnerTransferLock`
+   把**为什么返回 false** 告诉调用方，而它现在是 `Promise<boolean>` ⇒ **那是再动一次红线函数并改返回类型**。（read-only argument，未实测。）
+3. **Mi-2（数组／强转 holder 绕过）**：pre-existing、有界（pid 仍须是死的）、与 E1 共用同一个缺口。**挂账，等人裁**。
+4. **T2 的冗余**：挂账，见上。
+5. ⚠️ **远端在本会话中又动了**：开工 `1bd6f06` → 现为 `83ac585`（人自己在推）。**控制器全程未 push。**
+6. ⚠️ **仍只在 darwin 上跑过**；Linux 那两条红一条未碰。
