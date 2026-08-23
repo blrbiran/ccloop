@@ -3717,3 +3717,65 @@ Tests  2 failed | 1 passed | 82 skipped (85)
 5. ⚠️ **B 落地【没有】经过独立评审。** 本条只是实施＋自测记录，不是评审通过。派评审就抄 `E1-review-fix4-brief.md`（含「本机／网络」条款）。
 6. ⚠️ **本包仍只在 darwin 上跑。** Linux 上整套仍不绿（表里两条 Linux 红仍开着），**B 没有在 Linux 上跑过任何一格**。
 7. **开门／合并／删分支或 worktree／push 四件仍需人单独授权。控制器不 push。**
+
+30. 人裁 90–92 —— B-fallout 注释轮已落地，C-1 改措辞（**仍不记作关闭**），评审后由人 push
+--------------------------------------------------------------------------------
+
+*** **人裁 90。2026-08-22。「顺序：注释轮 → 一次独立评审（覆盖 B ＋ 注释轮）→ 人 push」。** *** ⇒ **控制器不 push；两笔／三笔提交留在本地。**
+*** **人裁 91。2026-08-22。「批 B-fallout 注释轮，一次改完，放在评审之前」** ＋ 明许 **「注释不受人裁 87 具名范围限制」**。 ***
+*** **人裁 92。2026-08-22。C-1 改措辞，采纳控制器拟的逐字文本（下附），【不记作关闭】。」** ***
+
+### ⚠️ 先更正 §29 的一处 —— 方向反了的是**三处**，不是两处
+
+§29 把 `tests/persistence/fileStore.test.ts:3218` 归进"人裁 50 froze"那类记账错误。**实施注释轮时逐字读原文，发现它是第三处方向反了的**：
+那段（`describe("the owner-transfer lock's holder stays in the weak pid form…")` 的 WHY）写着 mutation C 会把红线函数变成
+**UNCONDITIONAL LOCK STEALER**，并逐字引了 `pid !== null && isProcessActive(pid)` 这个已经不存在的判据。
+人裁 83 之后同一个变异让它变成 **UNCONDITIONAL LOCK REFUSER** —— **静默数据丢失变成了静默卡死**。
+⇒ **§29 那句"其中两处比过期更严重"应读作三处。** 该测试本身仍必须存在，只是它防的失效换了符号。
+
+### 注释轮实测（人裁 91）
+
+**12 处全部改完，一次提交**：`docs(unlock): correct the twelve comments point B turned false (human ruling 91)`。
+
+| 形式要件（人裁 91 定的可核口径） | 实测 |
+|---|---|
+| 纯注释、零判据、零逻辑 | **`git diff` 里 94 行改动，逐行机器核过：没有一行非 `//` 内容**（脚本判据：去掉 `+`／`-` 前缀后 strip，非空且不以 `//` 开头 ⇒ 报错；输出 `(none)`） |
+| 文件数 | 6：`fileStore.ts`／`sweep/lockPresence.ts`／`unlock/inspectLock.ts`／`fileStore.test.ts`／`sweep/lockPresence.test.ts`／`sweep/sweepRuns.test.ts` |
+| 全套件 | `34 files / 600 tests` 全绿零 skipped，`TEST_RC=0`，`RUN` 路径 = 主仓库根 |
+| typecheck／build | `0`／`0` |
+
+**写法沿用本仓库既有惯例，不静默覆盖**（`fileStore.test.ts` 那句 "this repository does not silently overwrite what it once did"）：
+**人裁 50 下为真的原文一律逐字保留**，后面接一段具名 `*** ERRATUM (point B, HUMAN RULING 83) … ***`。
+
+**三处方向反了的，逐条写明"换了符号但不变的是什么"**：
+1. `fileStore.ts`（`parsePid` 上方）＋ 2. `fileStore.test.ts:3218`（同一条不变式的执行测试）：
+   STEALER ⇒ REFUSER；**该不变式仍要钉，钉的理由从"防偷"变成"防卡死"**。
+3. `unlock/inspectLock.ts`：整段「WHY THE TWO ANSWERS DISAGREE」**前提没了** —— 它点名的两格，B 之后两边都 REFUSE。
+   ⚠️ **该 ERRATUM 逐字写明它【不】主张什么**：**没有**重测全格对照；两边的判据仍然不同
+   （`unlock` 三态／人裁 74，红线两态 `isProcessActive`），**今天这两格同为拒绝是两个不同判据碰巧同向，不是一个共同答案**。
+
+另九处是记账类（`human ruling 50 froze that function byte-for-byte`／`point B is unruled`／`do NOT touch it`）：
+各自补上"当时为真、人裁 83 已解封"，**且凡是把该封印当作第二条理由的设计选择，都写明现在由哪条理由承重**
+（presence-only 承重的是 spec §7.2 禁第二套读实现，不是封印）。
+
+⚠️ **`.superpowers/sdd/**` 与 `docs/handoff/**` 一个字未改**（历史记录）。
+
+### C-1 的新措辞（人裁 92，**自本条起权威，替换台账中一切「降级，未关闭」**）
+
+> **C-1：两半均已修。** 半 1（两步发布留下零字节锁窗口）人裁 50 已修，原子 `link` 发布，probe-c1 实测修前每 5s 数百次 lost update、修后 0；
+> 半 2（`catch` 分支不问存活、有 staged 就删活锁）人裁 83 已修，失败关闭。
+> *** **但 B 尚未独立评审，评审通过前【不记作关闭】。** ***
+> **残余**（人裁 83 已知情接受）：外部损坏的锁现在会**卡住**转移路径而不是被偷，逃生口是 `ccloop unlock --force --expect`。
+> **与 C-1 无关的仍开项**：`pid:0`／溢出 pid 读成"活"那一格 —— 它导致的是**拒绝**不是偷，**不构成 C-1 的失效形状**。
+
+⚠️ **旧措辞「C-1 降级，未关闭（两个失败开放出口逐字节未动）」在台账里出现约二十次。那些是历史记录，一律不改。**
+**自本条起的新记录一律用上面这段。**
+
+### ⛔ 下一件事
+
+**派一次独立评审**，范围 = 三笔本地提交（`fix(owner-transfer): …` ＋ `docs(sdd): §29` ＋ `docs(unlock): …注释轮`），
+brief 抄 `E1-review-fix4-brief.md`（**含「本机／网络」条款、坏探针条款、`cp -i`／`/bin/rm -i` 条款**）。
+⚠️ **红线那条「out of scope」必须改写** —— 它原文要求评审员核 `tryRecoverStaleOwnerTransferLock` 仍与 `86d3bd6` 逐字节一致（970 字节）。
+**现在正相反：该函数就是被审对象，新基线 1558 字节。**
+⚠️ **评审通过前：不 push、不宣布 C-1 关闭、不宣布 E1 通过。** `ls` 报锁仍按人裁 85 另开一轮。
+⚠️ **仍只在 darwin 上跑过。**
