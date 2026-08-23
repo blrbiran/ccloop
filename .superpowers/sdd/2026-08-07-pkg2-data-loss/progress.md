@@ -3167,3 +3167,553 @@ HEAD 未动、`git worktree list` 只有主仓库、红线仍 970 字节 `diff r
 **实施点 B**（人裁 83 措辞、人裁 86 两态、人裁 87 那两条整条改写、人裁 88 条件 (c)）。
 **授权边界**：只准动 `tryRecoverStaleOwnerTransferLock` 与那两条测试；**取锁路径、`release()`、E1 一律不在授权内**。
 ⚠️ **E1 是否「通过」仍未拍板；`ls` 报锁按人裁 85 另开一轮；「仍然开着」表里其余各项一条未动。**
+
+29. *** 点 B 已实施（2026-08-22／23 会话）*** —— 红线函数改了，那两条判据整条改写了，全套件全绿
+--------------------------------------------------------------------------------
+
+**授权来源**：人裁 83（措辞）＋ 86（两态）＋ 87（第八个具名例外，两条整条改写）＋ 88 条件 (c)＋ 89（另起会话）。
+**本会话动过的文件恰好两个**（现验 `git status --porcelain -u` = 71 字节，逐字见下）：
+`src/persistence/fileStore.ts`、`tests/persistence/fileStore.test.ts`。**没有第三个。**
+
+### 开工前的基线（现测，不继承文档）
+
+| 项 | 值 |
+|---|---|
+| `git log --merges` 末两笔 | `86d3bd6` GATE-PKG2／`e42e062` GATE-PKG3（与 §28 一致） |
+| `git ls-remote origin refs/heads/main` | `df5af22`（`docs(sdd): record an unauthorized push…`）—— **是本地 HEAD 的祖先，本地领先 17 笔，未 push** |
+| 全套件（`ECC_GATEGUARD=off DISABLE_OMC=1 rtk proxy`，未过滤整份读回，`RUN` 路径已核） | `34 files / 600 tests` 全绿**零 skipped**，`TEST_RC=0` |
+| typecheck／build | `0`／`0` |
+| 红线函数 vs `86d3bd6` | **两侧 970 字节，`diff rc=0`，签名命中数两侧 =1** |
+
+### 生产代码改动（**只有这一处**）
+
+`tryRecoverStaleOwnerTransferLock` 里两件事，就是 `pointB-ruling-package-v2.md` §3 的 **BUILD_B′**：
+
+1. `if (pid !== null && isProcessActive(pid)) return false;` ⇒ `if (pid === null || isProcessActive(pid)) return false;`
+   —— **解析成功但拿不到 `pid:<n>` 的锁，从"可回收"变成"不可回收"**（关掉出口 2）。
+2. `catch { …hasStagedArtifacts… }` ⇒ `catch { return false; }`
+   —— **解析失败一律失败关闭，staged 残留不再是放行依据**（关掉出口 1）。
+
+附带：staged 分支删掉后，`ownerPendingPath`／`transferPendingPath`／`transactionMarkerPath` 三个解构变量在函数内变成未用，
+解构裁到只剩 `lockPath`。**这仍在函数体内。** `pathExists` 本身在文件里另有两处调用（`:60`／`:1311`），未成孤儿。
+
+⚠️ **ENOENT 那个 `return true` 原样保留** —— 那不是"删除既有锁"，是锁本来就不在盘上。
+⚠️ **函数内新增一段注释**，写明本次改动出自人裁 83，且"已不存活"= 今天的两态 `isProcessActive`（人裁 86），
+并明写 `pid:0`／溢出 pid 两格**在本次改动前后同样 REFUSED，B 不是它们的解药**。
+
+**新的红线基线**（旧基线 970 字节自本条起作废）：`tryRecoverStaleOwnerTransferLock` = **1558 字节**，签名命中数 **=1**。
+
+### 那两条判据（人裁 87 具名，整条改写，**不放宽**）
+
+| 旧完整测试名 | 新完整测试名 | 现在断言什么 |
+|---|---|---|
+| `fileStore > treats malformed lock contents with staged artifacts as stale and recoverable` | `fileStore > keeps a malformed lock non-recoverable even when staged artifacts are present` | `currentOwnerEpoch` **停在 1**、`currentProcessInstanceId` 停在 `pid:12345`、锁文件仍在盘上且**逐字节 `"not-json\n"`**、staged 的 `.owner-transfer.pending.json` **仍未被落盘兑现** |
+| `fileStore > releases the lock after recovering malformed staged state` | `fileStore > leaves the lock on disk when malformed staged state names no dead holder` | 读之前锁在、`readOwnerRecord` 之后锁**仍在**且**逐字节 `"not-json\n"`** |
+
+⚠️ **两条都换了名字** —— 旧名字本身（"stale and recoverable"／"releases the lock"）就是被推翻的规格的化身，留着名字改断言正是人裁 87 拒绝的那种僵尸。
+⚠️ **两条各自的头部注释都写明它现在编码的是人裁 83**（人裁 88 条件 (c)），第二条并写明"两态"出自人裁 86。
+⚠️ **断言是收紧不是放宽**：旧版只断言"锁被删"，新版断言锁**内容逐字节不变**（`toBe("not-json\n")`，不是 `toContain`），
+第一条还多断言了一格 staged 未兑现。
+
+### 红证（**新判据不是空判据**）
+
+面：`git clone --local` 到 `scratchpad/redclone`，**HEAD = `1bd6f06`（生产代码原样）**，只把改过的测试文件 `cat >` 进去；
+符号链接复用 `node_modules`；**不进 `git worktree` 注册表**（现验：跑前跑后 `git worktree list` 只有主仓库）。
+现验该 clone 的红线函数 **970 字节、与 `86d3bd6` `diff rc=0`**（即确系未改的生产代码）。
+
+```
+× fileStore > keeps a malformed lock non-recoverable even when staged artifacts are present
+  → AssertionError: expected 2 to be 1
+✓ fileStore > keeps a malformed lock without staged artifacts non-recoverable      ← 兄弟条，两面都绿
+× fileStore > leaves the lock on disk when malformed staged state names no dead holder
+  → AssertionError: promise rejected "Error: ENOENT: no such file or directory,…" instead of resolving
+Tests  2 failed | 1 passed | 82 skipped (85)
+```
+
+⇒ **两条新判据在旧生产代码上都红，且红在它们各自新增的那句主张上**（epoch 未推进／锁未被删）。
+⇒ 兄弟条 `keeps a malformed lock without staged artifacts non-recoverable` **两面都绿**，说明红不是文件级塌方。
+收尾已 `/bin/rm -rf` 该 clone（本机 `rm`／`cp` 都有 `-i` alias，**必须走 `/bin/rm`**，否则静默挂在交互提示上——本会话踩过一次，超时 2 分钟）。
+
+### 落地后的验证（全部现测，未过滤整份读回）
+
+| 项 | 值 |
+|---|---|
+| 全套件 | `34 files / 600 tests` 全绿**零 skipped**，`TEST_RC=0`，`RUN` 路径 = 主仓库根 |
+| typecheck／build | `0`／`0` |
+| 定向复核（`--reporter=verbose`） | `✓ keeps a malformed lock non-recoverable even when staged artifacts are present`；`✓ keeps a malformed lock without staged artifacts non-recoverable`；`✓ leaves the lock on disk when malformed staged state names no dead holder` |
+| 工作树 | `git status --porcelain -u` = **71 字节**，恰为那两个 ` M`；`git worktree list` 只有主仓库；HEAD 未动（记本条之前） |
+
+*** **判据增量实测 = 0**，与 `pointB-ruling-package-v2.md` §4 的预测一致：600 条基线上只翻了这 2 个 `it()` 块，改完仍是 600 条全绿。 ***
+
+### ⚠️ 落地后变成事实错误的注释（**12 处，全部在授权面之外，本会话一行未动**）
+
+人裁 87／88 的具名范围只到那两条测试，人裁 83 的授权只到那个函数。以下注释现在指着一个已废止的状态。
+**行号测于本条写作时，会腐坏；下面每条都附了可 `grep` 的逐字片段。**
+
+| 文件 | 行 | 逐字锚 | 现在错在哪 |
+|---|---|---|---|
+| `src/persistence/fileStore.ts` | `:508-517` | `asks only whether staged artifacts exist, and if they do it` ／ `(open point B)` | 描述的是**已关掉的出口 1**；且 B 已裁已实施，不再是 open |
+| `src/persistence/fileStore.ts` | `:690` | `which human ruling 50 froze and which DELETES what it reads` | 人裁 50 的封印已被人裁 83 解除；且现在只有 liveness 一条出口会删 |
+| `src/persistence/fileStore.ts` | `:890-894` | `the liveness guard below is skipped, and tryRecoverStaleOwnerTransferLock becomes an unconditional lock stealer` | *** **方向反了** *** —— B 之后正则不匹配 ⇒ `pid === null` ⇒ **无条件拒绝**，不是无条件偷 |
+| `src/persistence/fileStore.ts` | `:998` | `tryRecoverStaleOwnerTransferLock is not touched (point B is unruled; human ruling 50 stands)` | 三句全错 |
+| `src/persistence/fileStore.ts` | `:1062` | `do NOT touch tryRecoverStaleOwnerTransferLock, which is open point B` | 同上 |
+| `src/persistence/fileStore.ts` | `:1067` | `whose \`catch\` branch never asks` | `catch` 已无该分支 |
+| `src/unlock/inspectLock.ts` | `:7-18` | `the redline function STEALS the lock and this command REFUSES it` | *** **整段「WHY THE TWO ANSWERS DISAGREE」的前提没了** *** —— 坏 JSON＋staged／身份不可识别这两格，B 之后**两边都 REFUSE，不再分歧**；同段的 `Human ruling 50 also froze it byte-for-byte` 亦已过期 |
+| `src/sweep/lockPresence.ts` | `:10` | `human ruling 50 froze that function byte-for-byte` | 封印已解 |
+| `tests/persistence/fileStore.test.ts` | `:3218` | `the function human ruling 50 froze byte-for-byte` | 同上 |
+| `tests/persistence/fileStore.test.ts` | `:3859` | `the \`catch\` branch itself, which is open point B and was not touched` | 该 `catch` 正是本次改的 |
+| `tests/sweep/lockPresence.test.ts` | `:5` | `which human ruling 50 froze` | 同上 |
+| `tests/sweep/sweepRuns.test.ts` | `:673` | `function human ruling 50 froze` | 同上 |
+
+⚠️ **逐条现验过原文**，不是从记忆列的。**另外三处查过后【不列】**（它们仍为真）：
+`fileStore.ts:982`（人裁 62／`release()` 身份校验的来历）、`fileStore.test.ts:3109` 附近（那是一段 gap 数据，不是注释）、
+`fileStore.ts` 里其余引 `pointB-design.md` 做历史测量出处的行。
+⚠️ **`.superpowers/sdd/**` 与 `docs/handoff/**` 里的旧测试名一律【不改】** —— 那是历史记录，记的是当时为真的事，改了就毁证。
+
+### ⛔ 下一件事（**别外推**）
+
+*** **第三个修复环（本笔）同样【尚未被任何人评审过】** *** —— 与上一轮同构：
+**是否再来一轮，是人的板**。⚠️ 但**这一轮的改动面比上一轮更小且更偏测试**
+（唯一的 src 行为改动是 N-1，且它有红证），**控制器把这个事实摆出来，不替人裁**。
+**B 仍在 E1 之后**（人裁 61），措辞已在 §23.3 固化，**不要重新推导**。
+
+**仍然开着（一条都没关）**：**C-1 仍是降级、未关闭**；**A／B 未裁**；**包 1 修复环 2 未开**
+⇒ 包 1 不具备开门条件，人裁 11 仍冻着；**红线函数里的假阳性「活」（`pid:0`／溢出 pid）仍未处理**；
+**N-2／M-1／M-3／`foreign` 文案**一律仍挂账。
+
+25.21 第五位评审（换人，scoped 到 `3cea111`）＋ 第四个修复环 —— 0 Critical／0 Important／4 Minor 全修
+--------------------------------------------------------------------------------
+
+**人裁 77（流程板）**：*** **修复环 3 再评一轮，一位换人评审员。** ***
+**人裁 78（流程板）**：*** **本轮 4 条 Minor 全修，并把评审员的临时探针转成钉桩测试。** ***
+**待人裁**：**修复环 4 之后是否再评一轮** —— 人已明确「**先看修完的规模再定**」，规模见本节末。
+⚠️ **仍是流程板，不是设计裁决**：A／B／C-1 未裁，包 1 仍不具备开门条件。
+
+**材料**：brief `E1-review-fix3-brief.md`，报告 `E1-review-fix3.md`（均 `git add -f`）。
+
+### 评审结论：**0 Critical，0 Important，4 Minor**；判 Ready to merge: Yes
+
+他七个落点全过，其中六个是**测量**不是读代码；红线独立复验 970 字节 `diff` rc=0；
+注释搬动用**忽略位置的行多重集比对**证明「零丢失、零重复、零重排」——这是控制器没想到的招，记下来。
+
+**控制器复验（本机实测，不是照抄）**：
+  `null.code`／`undefined.code` ⇒ **抛 TypeError**；`String(Object.create(null))` ⇒ **抛 TypeError**；
+  `String(Symbol/普通对象)` 不抛。**两条 Minor 的前提全部属实。**
+
+### *** 控制器自己的错误：§25.20 那句「本机无可用容器运行时」是【坏探针】***
+
+⚠️ **不改 §25.20 原文**（那是当时的记录），**在此更正**：
+控制器当时跑的是 `timeout 15 docker info`，拿到 **rc=127** 就写下了「没有容器运行时」。
+*** **macOS 根本没有 `timeout` 这个命令 —— 127 是 shell 在说「找不到这个二进制」，跟 docker 一点关系没有。** ***
+`docker` 是 OrbStack 的 CLI，守护进程起来就能用。
+⇒ **这正是本项目自己那条铁律的又一个实例：坏探针不能证明「不存在」。**
+**它和「零红有两种意思」同源**：*失败的命令有两种意思 —— 被测对象不行，还是探针自己不行。*
+
+**重新测量（控制器自己跑，不只信评审员）**：
+```
+darwin（本机）        unlink(目录) -> EPERM  "EPERM: operation not permitted, unlink …"
+linux（node:22-alpine）unlink(目录) -> EISDIR "EISDIR: illegal operation on a directory, unlink …"
+```
+⇒ *** **「Linux 侧未测量」这条记录作废**；`/EPERM|EISDIR/` 可以、也已经收紧成按平台断言。 ***
+**更进一步**：控制器把 `unlock` 整套测试放进 `node:22-alpine`（`npm ci` 全新装）跑了一遍
+—— *** **43 passed (43)，rc=0。这是本项目第一次在【第二个声明平台】上执行代码。** *** 副本走
+`git clone --local` ＋ 三份改动文件 `cat` 覆盖并 `diff -r` 现证，**不动主仓库**。
+⚠️ **限度照实说**：跑绿的是 **`tests/unlock` 这两个文件**，**不是整套 598**；「整套在 Linux 上绿」**没有证据**。
+
+### ⚠️ 一个协议缺口（记下来，下一轮 brief 要补）
+
+评审员为了做这次测量，**启动了本机的 OrbStack 并拉取了容器镜像**。
+**brief 只禁了改工作区，没写「能不能启动本机应用／拉网络镜像」** ⇒ 他没违规，是**协议没覆盖**。
+**已报给人。下一轮 brief 必须明确这一条**（允许与否都行，但不能留空）。
+
+### 一处措辞更正（他挑出来的，成立）
+
+§25.20 把 M-C 写成「把 unlink 提到**身份守卫**之前」，实际跑的是「提到 **stat** 之前」。
+他两种读法都跑了：**插在 stat 与守卫之间 ⇒ 10 红**（`:217` 那条**不触发**，因为该测试的 stat 被 mock 成抛）；
+**提到 stat 之前 ⇒ 11 红**，含 `:217`。**数字与信息无误，措辞偏松，就此校准。**
+
+### 第四个修复环（本笔：`fix(unlock): make the two catches agree structurally…`）
+
+  - **N3-1**：stat catch 的 `.code` 解引用改成可选链 —— 上一轮统一了 **reason** 的取法，
+    **却把这一行落下了**，于是「一个函数不该自相矛盾」那句注释当时**还不成立**。
+  - **N3-2**：两个 catch 都走 `reasonFrom(error)` 助手 —— *** **让「取法一致」变成结构，而不是两份手抄** ***
+    （两份手抄正是它们当初分岔的原因）。助手同时把 `String()` 补成全函数：
+    `String(Object.create(null))` 会抛 ⇒ 上一轮等于**把「坏但被兜住的答案」换成了「从 catch 里逃出去的拒绝」**。
+  - **N3-3**：目录 unlink 的断言改成**按平台**（linux `/EISDIR/`／darwin `/EPERM/`），两半均已实测。
+  - **N3-4**：讲 reason 取法的注释不再压在**不取 reason** 的 ENOENT 分支头上。
+  - *** **探针转钉桩**（人裁 78）：新增 3 条测试 —— null 拒绝、null 原型拒绝（stat 侧）、null 原型拒绝（unlink 侧）。
+    **先写红再改**：改前跑，红 3 条，信息分别直指 `unlockCommand.ts:81` 与 `:84`／`:97`。 ***
+
+**红证（副本 `clone`，未变异 sanity 先验 43 绿，`RUN` 路径已核）**：
+  **M-D** 去掉可选链 ⇒ 红 1（TypeError 停在守卫那行）；
+  **M-E** 去掉 `String()` 兜底 ⇒ **红 2，两个 catch 各一条** ⇒ 助手在两侧都吃劲；
+  **M-F** 把 darwin 的 `EPERM` 改写成**另一平台的 errno** ⇒ 红 1 ——
+  *** **这条正是收紧断言买到的信号：老的并集会【默默放过】它。** ***
+**还原**：副本两个 diff **均 0 字节**（原始字节走 `rtk proxy`）；主仓库同样 0／0；两个门锚点未动；**控制器全程未 push**。
+
+**验证**（主仓库根，**未过滤整份读回**，`RUN` 路径已核）：
+`34 files / **598 tests**` 全绿零 skipped（**598 = 595 ＋ 3**）；`typecheck` rc=0；`build` rc=0；
+名单内 flake 未触发。**红线复验**：`tryRecoverStaleOwnerTransferLock` 仍 **970 字节、`diff` rc=0**。
+
+### ⛔ 规模（人要的那个数）与下一件事
+
+**本笔改动面**：`src/unlock/unlockCommand.ts` **+38／-14 区间内共 35 行增删**（一处可选链、一个 9 行助手、
+两处改调用、一段注释移位），`tests/unlock/unlockCommand.test.ts` **+89**（3 条新测试 ＋ 1 处断言收紧）。
+**没有别的文件被碰。**
+⇒ *** **第四个修复环同样【尚未被任何人评审过】；是否再来一轮，人已说「看规模再定」，规模在此。** ***
+**B 仍在 E1 之后**（人裁 61），措辞已在 §23.3 固化。
+
+**仍然开着（一条都没关）**：**C-1 仍是降级、未关闭**；**A／B 未裁**；**包 1 修复环 2 未开**
+⇒ 包 1 不具备开门条件，人裁 11 仍冻着；**红线函数里的假阳性「活」（`pid:0`／溢出 pid）仍未处理**；
+**N-2／M-1／M-3／`foreign` 文案**一律仍挂账。
+
+25.22 第六位评审（换人，scoped 到 `92018a8`）＋ 第五个修复环 —— 0 Critical／0 Important／6 Minor，五条已修
+--------------------------------------------------------------------------------
+
+**人裁 79（流程板）**：*** **修复环 4 再评一轮（第六位换人）。** ***
+**人裁 80（流程板）**：*** **M-1／M-2b／M-3／M-4／M-5 五条修，M-6 挂账。** ***
+**人裁 81（流程板）**：*** **本轮修完【停止评审环】** *** —— 理由是连续两轮 0 Critical／0 Important，
+剩余 finding 全属「经 `node:fs` 不可达」的注释精确度问题，边际收益已低。
+⚠️ *** **「停止评审环」≠「E1 通过」** —— 宣布 E1 通过仍是一块【尚未拍下】的板。 ***
+**人裁 82（流程板）**：**Linux 那条红只记账、不动**（见下「仍然开着」表新增两行）。
+
+**材料**：brief `E1-review-fix4-brief.md`（首次含「本机／网络」条款），报告 `E1-review-fix4.md`。
+
+### 评审结论：0 Critical／0 Important／6 Minor；判 Ready to merge: Yes
+
+*** **他把 brief 里控制器自己拿不准的三个问题全戳穿了，而且戳对了。** ***
+**控制器本机逐条复验（实测，不是照抄）**：
+```
+null 原型 + 会抛的 @@toStringTag getter → reasonFrom 抛 "tag getter"
+Proxy get 陷阱抛 / getPrototypeOf 陷阱抛 → 均抛（instanceof 在 try 外）
+Error.message 是会抛的取值器            → 抛（.message 也在 try 外）
+Error.message 被设成 Symbol             → 返回 symbol，随后在 stderr 插值处抛 TypeError
+{code: 会抛的取值器}                     → 可选链照样抛
+```
+⇒ *** **M-1 命中要害：`reasonFrom` 的注释声称「连 null 原型对象也留成一个值」，
+而【带会抛 tag getter 的 null 原型对象】恰恰就在它点名的那一类里** —— 与上一轮修的是同一个缺陷形状。 ***
+**M-3 更难看**：失败发生在「已决定拒绝、正在打印拒绝」之时 —— 而那正是「命令崩了」最容易被误读的位置。
+**M-4 也成立**：把兜底换成 `return "?"`，`/\S/` 察觉不到（他实测 30 绿）。
+
+**他比控制器多做的两件事，记下来**：① 把三条新测试**放回父提交**跑，证明各自能红（`:81`／`:84`／`:97`）；
+② 在 Linux 容器里把三元式改成 `/EPERM/`，证明**另一半也会红** —— 控制器只证了 darwin 半边。
+
+### ⚠️ 本机／网络条款（上一节记的协议缺口）—— 已生效
+
+他**逐条声明**了：用了**已在运行**的 OrbStack（**没启动它**）、拉 `node:22-alpine`、容器内 `npm ci` 拉 51 包、
+容器内 `apk add git`、以及**在主仓库跑了 `npm run build`**（重生成被 gitignore 的 `dist/`）。
+主仓库 `status` 空、HEAD 未动。**缺口就此闭合，条款照抄进以后每一份 brief。**
+
+### 第五个修复环（本笔：`fix(unlock): make the reason-taking actually total…`）
+
+  - **M-1**：`reasonFrom` 的每一次查值都进 `try`，底下再垫一个最后手段。
+  - **M-3**：加 `typeof error.message === "string"` 守卫；新测试**走整条命令**，把失败钉在它真正会疼的地方。
+  - **M-2b**：cast 收成 `{ code?: unknown } | null | undefined`，**并在注释里点名残余**
+    （`?.` 挡不住「`code` 是会抛的取值器」）。
+  - **M-4**：两处断言改成**精确的 `"[object Object]"`**。
+  - **M-5**：平台三元式改成查表，**未测量的平台按名字响亮失败**
+    （`unlink(2) against a directory has not been measured on <platform>`）。
+  - **M-6 挂账**：`throw undefined` 时操作员读到的仍是 `…could not be removed: undefined`
+    —— 比崩溃好，但仍是本项目自己点名过的那句难看话。**不可达，未修。**
+
+**红证（副本，未变异 sanity 先验 45 绿）**：
+  **M-G** 回退 `reasonFrom` ⇒ 红 2；**M-H** 只去掉 message 类型守卫 ⇒ **红 1**（该子句独立吃劲）；
+  **M-I** 兜底换 `"?"` ⇒ **红 2** —— *** 正是老的松匹配放过去的那次退化，现在被抓住 ***；
+  **M-J** 把本平台从查表里删掉 ⇒ 红 1，信息**点名平台**。
+**还原**：副本两个 diff 均 0 字节；主仓库同样 0／0；门锚点未动；**控制器全程未 push**。
+
+**验证**（主仓库根，`RUN` 路径已核）：`34 files / **600 tests**` 全绿零 skipped（600 = 598 ＋ 2）；
+`typecheck` rc=0；`build` rc=0；红线仍 **970 字节、`diff` rc=0**。
+⚠️ *** **控制器自查违规一次**：读全套件输出时先用 `python3` 取了尾部 1500 字符（等价于 `tail`）。
+返回码是**另一条未接管道的命令**取的（`TEST_RC=0`），随后**立即整份读回**了同一个文件。
+据实记账：**违规就是违规，即使没造成误判。** ***
+
+### ⛔ 下一件事
+
+**评审环按人裁 81 停在这里。** 本笔（第五个修复环）**同样没有被评审过，而且按裁决也不会再评** ——
+*** **这是【有意】的，不是遗漏；写清楚，免得下一位把它当成没做完的活。** ***
+⚠️ *** **E1 是否「通过」仍未拍板** ***：控制器不宣布。**B 仍在其后**（人裁 61），措辞见 §23.3。
+
+**仍然开着**（新增两行，其余一条未关）：
+
+| # | 项 | 要点 |
+|---|---|---|
+| **新** | *** **`tests/persistence/fileStore.test.ts:4158` 在 Linux 上是红的** *** | 硬编码 `unlink(<目录>)` 抛 `EPERM`，Linux 上是 `EISDIR`。**与本轮修的是双胞胎，在另一个文件里**；其上方注释还写着「两个 errno 都在下面断言」。**人裁 82：只记账，不动**（出 E1 范围，落在包 2 测试面） |
+| **新** | **整套 598 在 Linux 上不绿** | 第六位评审实测：**5 failed / 593 passed**（含上一行那条、名单内 flake、一条因容器以 root 跑导致 `chmod 000` 仍可读、两条疑似容器进程可见性）。⚠️ **「`tests/unlock` 在 Linux 绿」不能读成「整套绿」** |
+| 1 | **C-1 降级，未关闭** | 两个失败开放出口逐字节未动 |
+| 2 | **待裁点 B／A** | B 措辞已固化（§23.3）；A 从未解封 |
+| 3 | **包 1 修复环 2 未开** | ⇒ 包 1 不具备开门条件，人裁 11 仍冻着 |
+| 4 | **红线函数里的假阳性「活」** | `pid:0`／溢出 pid，人裁 74 只改了 E1 |
+| 5 | **N-2／M-1／M-3／`foreign` 文案** | 一律仍挂账 |
+| 6 | **E1 的第五个修复环未评审** | **按人裁 81 有意为之** |
+
+26. 待裁点 B —— 裁决包 v2 的实测（**B 仍未裁；本节只是把板重新打磨好递上去**）
+--------------------------------------------------------------------------------
+
+**触发**：人裁 61 定的顺序（C ⇒ E1 ⇒ B）已走到 B；本会话按交接令独占给 B。
+**人的授权**：本会话开头人明确选了「跑重测」，理由是 v1 的数字测于 533 条且 E1 未落。
+**材料**：`pointB-ruling-package-v2.md`（**新增，`git add -f`**）。v1 `pointB-ruling-package.md` **原样保留不改**。
+
+**基线（本会话开工现跑，未过滤、整份读回、`RUN` 路径已核）**：
+`Test Files 34 passed (34)` ／ `Tests 600 passed (600)`，零 skipped，三码全 0；
+红线 `tryRecoverStaleOwnerTransferLock` 与 `86d3bd6` 逐字节一致（两侧 970 字节、`diff rc=0`、签名命中数两侧 =1）。
+远端 `git ls-remote origin refs/heads/main` = `df5af22`，是本地 HEAD 的祖先（本地领先 12 笔），**开工核过一次**。
+
+### v1 之后变了四件事（**这是重测的全部理由**）
+
+1. *** **爆炸半径从 3 个 `it()` 块降到 2 个。** *** 那个逐字重复块已按**人裁 53 第 3 件**删除
+   （`test(fileStore): delete three byte-identical duplicate test blocks`，在 GATE-PKG2 之后）。
+   现测两条：`:844`（`expected 1 to be 2`）与 `:1419`（`promise resolved "'not-json\n'" instead of rejecting`）。
+2. *** **v1 说的「零逃生口」不成立了** *** —— E1 的 `ccloop unlock` 打的正是这把锁，且**三态**覆盖
+   `pid:0`／溢出 pid／EPERM（归 `liveness-unknown`，`--force --expect` 救得了）。
+3. **形态 1 的静默被 E3 部分解决**：`sweep` 对每个盘上有锁的 **row**（不是 candidate）打 `note … owner_transfer_lock_present`。
+   ⚠️ **`ccloop ls` 仍一个字不提锁**（现验 `renderRuns.ts` 全文无 `lock`）—— **「部分」是字面意思**。
+4. **吞错点仍在，行号腐坏**：`recoverInterruptedOwnerTransfer` 未持锁分支的 `catch { return; }`
+   从 `1216-1224` 漂到 `1321-1329`。**符号锚定有效，行号不可引用。**
+
+### 现测结论（v1 的三条结论在新基线上全部复现）
+
+| 构建 | 结果 |
+|---|---|
+| clone sanity（未变异） | `1 failed | 599 passed` —— 唯一红 = 名单内 flake (B)，按完整测试名比对 |
+| **A**（§23.3 原文，只关 `catch`） | `2 failed | 598 passed` |
+| **B′**（v1 §5 修订措辞） | `2 failed | 598 passed`，**与 A 逐条相同**（同名、同行、同报错） |
+
+⇒ *** **扩大措辞的判据增量仍然 = 0**：不存在「先只关 `catch` 会便宜一点」这个选项。 ***
+出口枚举（探针只经 `claimOwnerRecordWithPrecondition`，未加任何 `export`）：出口 1 在 A 上关掉，
+**出口 2 在 A 上原样 STOLEN**，只有 B′ 关得掉。两半必命中对照臂都在（B′ 上「已死 pid」仍印 STOLEN）。
+
+### *** 本轮新测的一格：开着的第 7 项与 B 正交 ***
+
+`pid:0` 与 `pid:99999999999999999999` **在今天的 HEAD 上就已经永久 REFUSED**（两态 `isProcessActive`
+把「非 ESRCH」一律读成活：`kill(0,·)` 指调用者自己的进程组永不抛；溢出 pid 抛的是 TypeError 不是 errno）。
+**B 的两种措辞都不改变这一格。** ⇒ **B 不是这两格的原因，也不是它们的解药**；解药是 E1 的 `--force`，
+或另裁把三态搬进红线函数。**别把 B 读成顺手修了第 7 项。**
+
+### 还原证明
+
+变异全部在 `git clone --local` 副本里（`scratchpad/mutclone`，符号链接复用 `node_modules`，不进 worktree 注册表）。
+主仓库现验：`git status --porcelain -u` **0 字节**、`git diff` **0 字节**、`git diff --cached` **0 字节**（均走 `rtk proxy`），
+HEAD 未动、`git worktree list` 只有主仓库、红线仍 970 字节 `diff rc=0`。
+副本回退用 `cat pristine > target` ＋ `diff` 现证（**不用 `cp`**，本机有 `-i` alias）。
+每次施加变异前断言逐字锚点**命中次数 = 1**（两个锚点各自打印 `hit count = 1 OK`）。
+
+### ⛔ 下一件事
+
+**把 R1／R2／R3′／R4／R6 递给人。** *** **控制器不裁 B，也不宣布 E1 通过。** ***
+⚠️ **v1 的 R5（`release()` 何时修）已过期** —— 身份校验早在人裁 62 就落地并经独立评审（§24）。
+
+27. *** 人裁 83–86 —— 待裁点 B 裁了 *** ＋ 第八个具名例外的前置问题
+--------------------------------------------------------------------------------
+
+*** **人裁 83。2026-08-21。「裁，用修订措辞」。** *** ⇒ **待裁点 B 自本条起不再是待裁点。**
+*** **人裁 84。2026-08-21。R4「先答『为何需要第八个例外』再定」。** *** ⇒ 那 2 个 `it()` 块**仍未处置**。
+*** **人裁 85。2026-08-21。R3′「`ls` 也报锁：要，但另开一轮」。** *** ⇒ **立项挂账，不进本轮。**
+*** **人裁 86。2026-08-21。R6「liveness 用两态，并在措辞里写明」。** ***
+
+### 待裁点 B 的**终局措辞**（人裁 83 ＋ 86，自本条起权威，替换 §23.3）
+
+> **点 B（已裁）**：`tryRecoverStaleOwnerTransferLock` **除 liveness 回收之外的所有出口一律失败关闭** ——
+> **唯一允许删除既有锁的条件，是锁内容解析成功、`holderProcessInstanceId` 形如 `pid:<n>`、且该进程已不存活**。
+> 其余一切情形（解析失败；解析成功但 `holderProcessInstanceId` 缺失或非 `pid:<n>`）**一律返回 `false`、不删锁**，
+> **不再以 staged 残留作为放行依据**。
+> *** **「已不存活」= 今天这个两态 `isProcessActive`（人裁 86），不是 E1 的三态 `classifyHolderLiveness`。** ***
+> ⇒ **`pid:0`／溢出 pid 那两格 B 不碰**（它们在 B 之前就已永久 REFUSED，实测见 §26）；
+> **别把 B 读成顺手修了「仍然开着」表里的第 7 项。**
+
+⚠️ **人裁 50 的红线（`tryRecoverStaleOwnerTransferLock` 一行不许动）是「B 未裁」时的封印，人裁 83 之后对该函数的
+改动由人裁 83 授权，且【仅限】上面这段措辞所描述的改动。** 取锁路径、`release()`、其余一切仍不在授权内。
+
+### 人裁 84 的答案 —— **为什么这个仓库需要第八个具名例外**
+
+**先摆事实：前七个例外分别是什么**（逐条查过原文，不是回忆）：
+
+| # | 人裁 | 动的是什么 | 理由形状 |
+|---|---|---|---|
+| 1 | 13 | 改 `runLoop.integration` 一条既有判据 | 判据钉住的轨迹**不是今天认定的正确行为** |
+| 2 | 14 | 两条测试的**穷举事件清单**补入 `terminal_write_abandoned` | 修复合法地多发了一个事件，清单是穷举的 |
+| 3 | 17 | 改**夹具**（`seedEligibleRun` 改播 `buildProcessInstanceId()`） | 明写**「改夹具 ≠ 改判据」**；理由是不把生产中不会发生的轨迹钉成正确行为 |
+| 4 | 37 | 改一条测试的**一半**（读 `reconciliation-record.json` 那半） | 另一半（`owner_transfer_contended` 恰好一次）**必须原样保留** |
+| 5 | 48 | 三终态判据 ＋ 常数绝对值断言 | 判据**缺失或太弱**，是补强不是放宽 |
+| 6 | 51 | 改 18 行判据 | 人知情两半后仍决定两半都改（§22.3） |
+| 7 | 56 | 夹具 hook `open → link` 的移位 | **沿用 17**（同样不是改判据） |
+
+*** **答案分三段，且第三段对这个仓库不利，照说不改。** ***
+
+**（一）第八个不是新长出来的，它三周前就挂在那儿了。**
+台账 §11 末尾（2026-08-07，B 首次被列为待裁点时）逐字写着：
+> **B** 阶段 2a 把 `tryRecoverStaleOwnerTransferLock` 从失败开放改成失败关闭 ——
+> **必然推翻两条同名既有判据**（`treats malformed lock contents with staged artifacts as stale and recoverable`）。
+> *** **人裁 13/14/17 都不 cover 它。** ***
+
+⇒ **「第八个例外」是 B 这块板从第一天起就自带的价签，不是斜率的新增量。**
+⚠️ **同时更正那句预告**：它说的是**两条同名**判据（那对逐字重复块）。重复块已按人裁 53 第 3 件删除，
+**今天实测推翻的是两条【不同名】的**：`treats malformed lock contents…`（`:844`）与
+`releases the lock after recovering malformed staged state`（`:1419`）。**条数没变，构成变了。**
+
+**（二）它与前七个不同型。** 前七个都在回答「判据钉住的行为，今天还算不算正确」；
+**第八个在回答一个更硬的问题：人裁明文把规格反过来了，编码旧规格的判据怎么办。**
+`:1419` 逐字断言**「坏锁被删」**——那正是人裁 83 刚刚禁止的行为。**它不是挡路的测试，它是被废止的规格的化身。**
+
+**（三）真正的病灶：人裁 4 的边界是按【动机】写的，不是按【类别】写的。**
+人裁 4 逐字：「授权的是补测试，**不含为了让测试变绿而改判据**」。
+「为了让测试变绿」是**动机**，而**动机在评审里不可核**——评审员能核的是改了哪一行，核不了改的人心里想什么。
+⇒ 于是**每一次合法的改判据都只能逐条上升到人**，七次都是这么来的。**斜率的成因不是松懈，是规则缺一个正面类别。**
+
+*** **控制器的建议（是建议，不是裁决）**：批第八个例外的同时，给人裁 4 补一条正面许可，
+让第九次不必再走同一趟：**当判据编码的行为已被人裁明文推翻时，改它属于履行裁决，不属于人裁 4 的禁区** ——
+条件三条：**(a) 由人裁指名到具体测试；(b) 整条改写，不许放宽（放宽会留下一条既不测旧规格也不测新规格的僵尸）；
+(c) 改后的测试里写明它现在编码的是哪一条人裁。** ***
+
+### ⛔ 下一件事
+
+**R4 仍未裁**（人裁 84 只要了答案，没定处置）。答案已在上面，**处置等人拍**。
+**B 的实施尚未授权、也未开工。** ⚠️ **E1 是否「通过」仍未拍板，控制器不宣布。**
+
+28. 人裁 87–89 —— 第八个具名例外批了，人裁 4 补了正面许可，B 的实施另起会话
+--------------------------------------------------------------------------------
+
+*** **人裁 87。2026-08-21。R4「批第八个例外，两条都整条改写」。** ***
+*** **人裁 88。2026-08-21。「给人裁 4 补正面许可，带三条件」。** ***
+*** **人裁 89。2026-08-21。「B 的实施另起一个会话」。** *** ⇒ **本会话【不】写实现，也【不】写任务书。**
+
+### 第八个具名例外（人裁 87，**逐条具名，不得外推**）
+
+**准改** `tests/persistence/fileStore.test.ts` 里的**这两条，仅这两条**：
+
+| 完整测试名 | 现行号 | 今天断言什么 | 为什么与人裁 83 正面冲突 |
+|---|---|---|---|
+| `fileStore > treats malformed lock contents with staged artifacts as stale and recoverable` | `:844` | `owner.currentOwnerEpoch` 推进到 `2` | 推进的前提是坏锁被回收 —— 人裁 83 之后不再回收 |
+| `fileStore > releases the lock after recovering malformed staged state` | `:1419` | `await expect(readFile(lock)).rejects.toThrow()`（**锁被删了**） | **逐字断言人裁 83 刚禁止的那个行为** |
+
+**处置 = 整条改写，不许放宽**（人裁 87 明选）。理由已在 §27（三）：放宽会留下一条
+**既不测旧规格也不测新规格的僵尸判据**，与本仓库「一个没有执行机制的完整性断言」那个根因形状同型。
+⚠️ **改写后的两条必须各自写明它现在编码的是人裁 83**（人裁 88 条件 (c)）。
+⚠️ **行号 `:844`／`:1419` 测于本会话，会腐坏 —— 实施时按【完整测试名】锚定，不许用行号。**
+
+### 人裁 4 的正面许可（人裁 88 新增，**全仓有效**）
+
+> **当一条既有判据编码的行为已被人裁明文推翻时，改它属于【履行裁决】，不落入人裁 4
+> 「授权的是补测试，不含为了让测试变绿而改判据」的禁区。** 条件三条，**缺一不可**：
+> **(a)** 由**人裁指名到具体测试** —— 不许按文件、按目录、按「相关的那几条」授权；
+> **(b)** **整条改写，不许放宽**；
+> **(c)** 改后的测试里**写明它现在编码的是哪一条人裁**。
+
+⚠️ *** **这一条不豁免「不许实施者自改判据」那条铁律** *** —— 指名权在人，不在实施者，也不在控制器。
+⚠️ **它也不追溯**：前七个例外的具名范围**一字不变**，不因本条而扩大。
+**理由见 §27（三）**：人裁 4 的边界是按**动机**写的，而动机在评审里不可核；补这一条是把不可核的动机
+换成三条可核的形式要件。
+
+### ⛔ 下一件事（**下一个会话的第一件事**）
+
+**实施点 B**（人裁 83 措辞、人裁 86 两态、人裁 87 那两条整条改写、人裁 88 条件 (c)）。
+**授权边界**：只准动 `tryRecoverStaleOwnerTransferLock` 与那两条测试；**取锁路径、`release()`、E1 一律不在授权内**。
+⚠️ **E1 是否「通过」仍未拍板；`ls` 报锁按人裁 85 另开一轮；「仍然开着」表里其余各项一条未动。**
+
+29. *** 点 B 已实施（2026-08-22／23 会话）*** —— 红线函数改了，那两条判据整条改写了，全套件全绿
+--------------------------------------------------------------------------------
+
+**授权来源**：人裁 83（措辞）＋ 86（两态）＋ 87（第八个具名例外，两条整条改写）＋ 88 条件 (c)＋ 89（另起会话）。
+**本会话动过的文件恰好两个**（现验 `git status --porcelain -u` = 71 字节，逐字见下）：
+`src/persistence/fileStore.ts`、`tests/persistence/fileStore.test.ts`。**没有第三个。**
+
+### 开工前的基线（现测，不继承文档）
+
+| 项 | 值 |
+|---|---|
+| `git log --merges` 末两笔 | `86d3bd6` GATE-PKG2／`e42e062` GATE-PKG3（与 §28 一致） |
+| `git ls-remote origin refs/heads/main` | `df5af22`（`docs(sdd): record an unauthorized push…`）—— **是本地 HEAD 的祖先，本地领先 17 笔，未 push** |
+| 全套件（`ECC_GATEGUARD=off DISABLE_OMC=1 rtk proxy`，未过滤整份读回，`RUN` 路径已核） | `34 files / 600 tests` 全绿**零 skipped**，`TEST_RC=0` |
+| typecheck／build | `0`／`0` |
+| 红线函数 vs `86d3bd6` | **两侧 970 字节，`diff rc=0`，签名命中数两侧 =1** |
+
+### 生产代码改动（**只有这一处**）
+
+`tryRecoverStaleOwnerTransferLock` 里两件事，就是 `pointB-ruling-package-v2.md` §3 的 **BUILD_B′**：
+
+1. `if (pid !== null && isProcessActive(pid)) return false;` ⇒ `if (pid === null || isProcessActive(pid)) return false;`
+   —— **解析成功但拿不到 `pid:<n>` 的锁，从"可回收"变成"不可回收"**（关掉出口 2）。
+2. `catch { …hasStagedArtifacts… }` ⇒ `catch { return false; }`
+   —— **解析失败一律失败关闭，staged 残留不再是放行依据**（关掉出口 1）。
+
+附带：staged 分支删掉后，`ownerPendingPath`／`transferPendingPath`／`transactionMarkerPath` 三个解构变量在函数内变成未用，
+解构裁到只剩 `lockPath`。**这仍在函数体内。** `pathExists` 本身在文件里另有两处调用（`:60`／`:1311`），未成孤儿。
+
+⚠️ **ENOENT 那个 `return true` 原样保留** —— 那不是"删除既有锁"，是锁本来就不在盘上。
+⚠️ **函数内新增一段注释**，写明本次改动出自人裁 83，且"已不存活"= 今天的两态 `isProcessActive`（人裁 86），
+并明写 `pid:0`／溢出 pid 两格**在本次改动前后同样 REFUSED，B 不是它们的解药**。
+
+**新的红线基线**（旧基线 970 字节自本条起作废）：`tryRecoverStaleOwnerTransferLock` = **1558 字节**，签名命中数 **=1**。
+
+### 那两条判据（人裁 87 具名，整条改写，**不放宽**）
+
+| 旧完整测试名 | 新完整测试名 | 现在断言什么 |
+|---|---|---|
+| `fileStore > treats malformed lock contents with staged artifacts as stale and recoverable` | `fileStore > keeps a malformed lock non-recoverable even when staged artifacts are present` | `currentOwnerEpoch` **停在 1**、`currentProcessInstanceId` 停在 `pid:12345`、锁文件仍在盘上且**逐字节 `"not-json\n"`**、staged 的 `.owner-transfer.pending.json` **仍未被落盘兑现** |
+| `fileStore > releases the lock after recovering malformed staged state` | `fileStore > leaves the lock on disk when malformed staged state names no dead holder` | 读之前锁在、`readOwnerRecord` 之后锁**仍在**且**逐字节 `"not-json\n"`** |
+
+⚠️ **两条都换了名字** —— 旧名字本身（"stale and recoverable"／"releases the lock"）就是被推翻的规格的化身，留着名字改断言正是人裁 87 拒绝的那种僵尸。
+⚠️ **两条各自的头部注释都写明它现在编码的是人裁 83**（人裁 88 条件 (c)），第二条并写明"两态"出自人裁 86。
+⚠️ **断言是收紧不是放宽**：旧版只断言"锁被删"，新版断言锁**内容逐字节不变**（`toBe("not-json\n")`，不是 `toContain`），
+第一条还多断言了一格 staged 未兑现。
+
+### 红证（**新判据不是空判据**）
+
+面：`git clone --local` 到 `scratchpad/redclone`，**HEAD = `1bd6f06`（生产代码原样）**，只把改过的测试文件 `cat >` 进去；
+符号链接复用 `node_modules`；**不进 `git worktree` 注册表**（现验：跑前跑后 `git worktree list` 只有主仓库）。
+现验该 clone 的红线函数 **970 字节、与 `86d3bd6` `diff rc=0`**（即确系未改的生产代码）。
+
+```
+× fileStore > keeps a malformed lock non-recoverable even when staged artifacts are present
+  → AssertionError: expected 2 to be 1
+✓ fileStore > keeps a malformed lock without staged artifacts non-recoverable      ← 兄弟条，两面都绿
+× fileStore > leaves the lock on disk when malformed staged state names no dead holder
+  → AssertionError: promise rejected "Error: ENOENT: no such file or directory,…" instead of resolving
+Tests  2 failed | 1 passed | 82 skipped (85)
+```
+
+⇒ **两条新判据在旧生产代码上都红，且红在它们各自新增的那句主张上**（epoch 未推进／锁未被删）。
+⇒ 兄弟条 `keeps a malformed lock without staged artifacts non-recoverable` **两面都绿**，说明红不是文件级塌方。
+收尾已 `/bin/rm -rf` 该 clone（本机 `rm`／`cp` 都有 `-i` alias，**必须走 `/bin/rm`**，否则静默挂在交互提示上——本会话踩过一次，超时 2 分钟）。
+
+### 落地后的验证（全部现测，未过滤整份读回）
+
+| 项 | 值 |
+|---|---|
+| 全套件 | `34 files / 600 tests` 全绿**零 skipped**，`TEST_RC=0`，`RUN` 路径 = 主仓库根 |
+| typecheck／build | `0`／`0` |
+| 定向复核（`--reporter=verbose`） | `✓ keeps a malformed lock non-recoverable even when staged artifacts are present`；`✓ keeps a malformed lock without staged artifacts non-recoverable`；`✓ leaves the lock on disk when malformed staged state names no dead holder` |
+| 工作树 | `git status --porcelain -u` = **71 字节**，恰为那两个 ` M`；`git worktree list` 只有主仓库；HEAD 未动（记本条之前） |
+
+*** **判据增量实测 = 0**，与 `pointB-ruling-package-v2.md` §4 的预测一致：600 条基线上只翻了这 2 个 `it()` 块，改完仍是 600 条全绿。 ***
+
+### ⚠️ 落地后变成事实错误的注释（**13 处，全部在授权面之外，本会话一行未动**）
+
+人裁 87／88 的具名范围只到那两条测试，人裁 83 的授权只到那个函数。以下注释现在指着一个已废止的状态，
+**需要另裁一轮才能改**：
+
+| 文件 | 行（会腐坏，按内容锚定） | 现在错在哪 |
+|---|---|---|
+| `src/persistence/fileStore.ts` | `:516` | 「the repair is a separate human decision (**open point B**)」—— B 已裁已实施 |
+| `src/persistence/fileStore.ts` | `:996` | 「tryRecoverStaleOwnerTransferLock **is not touched** (point B is unruled; human ruling 50 stands)」—— 三句全错 |
+| `src/persistence/fileStore.ts` | `:1060` | 「**do NOT touch** tryRecoverStaleOwnerTransferLock, which is **open point B**」 |
+| `src/persistence/fileStore.ts` | `:508-517` | 描述出口 1 的行为（「asks only whether staged artifacts exist, and if they do it …」）—— 该出口已关 |
+| `src/persistence/fileStore.ts` | `:1065` | 「whose `catch` branch never asks …」—— `catch` 已无该分支 |
+| `src/persistence/fileStore.ts` | `:690`、`:892`、`:982` | 均引「human ruling 50 froze」／描述旧 `catch` 语义 |
+| `src/sweep/lockPresence.ts` | `:10` | 「human ruling 50 froze that function **byte-for-byte**」 |
+| `src/unlock/inspectLock.ts` | 顶部 `:7` 起 | 「WHY IT DOES NOT CALL tryRecoverStaleOwnerTransferLock…」段落的前提 |
+| `tests/persistence/fileStore.test.ts` | `:3109`／`:3203`／`:3844` | 「the function human ruling 50 froze byte-for-byte」／「the `catch` branch itself, which is **open point B and was not touched**」 |
+| `tests/sweep/lockPresence.test.ts` | `:5` | 同上 |
+| `tests/sweep/sweepRuns.test.ts` | `:673` | 同上 |
+
+⚠️ **`.superpowers/sdd/**` 与 `docs/handoff/**` 里的旧测试名一律【不改】** —— 那是历史记录，记的是当时为真的事，改了就毁证。
+
+### ⛔ 下一件事（**别外推**）
+
+1. **上面那 13 处注释要不要改，等人裁。** 控制器不自行更正授权面外的注释。
+2. **C-1 的措辞落地后写什么，等人裁。** 本条之前它写「降级，未关闭」；**控制器不宣布 C-1 关闭。**
+3. ⚠️ **「E1 通过」仍未拍板**，控制器不宣布。
+4. ⚠️ **`ls` 报锁按人裁 85 另开一轮**；「仍然开着」表里其余各项**一条未动**（`pid:0`／溢出 pid 那两格现测在 B 前后同样 REFUSED）。
+5. ⚠️ **B 落地【没有】经过独立评审。** 本条只是实施＋自测记录，不是评审通过。派评审就抄 `E1-review-fix4-brief.md`（含「本机／网络」条款）。
+6. ⚠️ **本包仍只在 darwin 上跑。** Linux 上整套仍不绿（表里两条 Linux 红仍开着），**B 没有在 Linux 上跑过任何一格**。
+7. **开门／合并／删分支或 worktree／push 四件仍需人单独授权。控制器不 push。**
