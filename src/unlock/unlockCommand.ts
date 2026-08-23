@@ -14,6 +14,13 @@
 // bytes were truncated mid-write still belongs to a process that may be running, and losing that
 // process's work is the failure mode this whole package is about.
 //
+// *** ERRATUM (point B, human ruling 83): the paragraph above is kept verbatim and its premise
+// WIDENED rather than broke. Staged artifacts no longer change what the normal transfer path does,
+// so the qualifier "with no staged artifacts" is dead, and the stranded set is no longer one shape
+// — it is every lock that is not a parsed `pid:<n>` whose process is dead. The intersection with
+// what this command refuses grew with it, which makes --force load-bearing for more of the table
+// than when this was written, not less. Nothing about the fail-closed choice changes. ***
+//
 // --force is gated on a digest of the lock's bytes rather than on the holder id C-d first named,
 // because the one cell that genuinely needs it is the cell with no readable holder id (human
 // ruling 73). It proves the operator looked at this lock — and, since a changed lock produces a

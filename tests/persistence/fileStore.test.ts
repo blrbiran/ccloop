@@ -3197,6 +3197,10 @@ function ownerRecord(overrides: Partial<OwnerRecord> = {}): OwnerRecord {
 // FIRST EXISTS, its content already parses. That is the whole of C-1's first half — an intruder
 // that hits EEXIST reads whatever is there at that moment, and a zero-byte read is what sends
 // tryRecoverStaleOwnerTransferLock into the `catch` branch that unlinks a live holder's lock.
+// *** ERRATUM (point B, human ruling 83): the sentence above is kept verbatim; that `catch` branch
+// now returns false and unlinks nothing. The property asserted below does not depend on it — it
+// pins that the lock parses the instant it first exists, which is worth pinning whatever the
+// intruder would have done next. ***
 //
 // HOW it is observed without touching production code or the shared mock factory at the top of this
 // file: a LOCAL vi.doMock of node:fs/promises wraps the two calls that can bring the lock path into
@@ -3934,6 +3938,16 @@ describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racin
           // length and machine, the difference between arms does not). What is STILL open is the other
           // half of C-1 — the `catch` branch itself, which is open point B and was not touched, and
           // which an externally corrupted lock still reaches. ***
+          //
+          // *** ERRATUM 3 (point B, HUMAN RULING 83). ERRATUM 1 and ERRATUM 2 are kept verbatim as
+          // history; both are now out of date in the same place. That `catch` branch HAS been
+          // touched: it returns false without asking about staged artifacts, so it no longer "never
+          // calls isProcessActive and unlinks a LIVE holder's lock", and it is no longer "the other
+          // half of C-1 … still open". Both halves of C-1 are repaired — ruling 50's atomic publish
+          // and ruling 83's fail-closed exits. C-1 is still NOT recorded as closed: an independent
+          // review of point B found ruling 83's second exit had shipped with no test, and that gap
+          // was filled separately. An externally corrupted lock still reaches the branch; what has
+          // changed is that the branch now refuses it instead of stealing it. ***
           //
           // The hook had to move because it instrumented the very call ruling 50 replaced: with the
           // atomic publish, nothing ever calls `open` on the lock path, so the old hook would never

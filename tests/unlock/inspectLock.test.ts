@@ -15,6 +15,13 @@
 // tryRecoverStaleOwnerTransferLock degenerates into an unconditional lock stealer. This module
 // reuses fileStore's own parsePid/isProcessActive for that reason — a second liveness
 // implementation here would be free to drift into exactly that failure.
+//
+// *** ERRATUM (point B, HUMAN RULING 83) — THE DIRECTION REVERSED. The paragraph above is kept
+// verbatim because it records what mutation C measured under ruling 50. Ruling 83 turned the guard
+// into `pid === null || isProcessActive(pid)`, so an unparsed holder now REFUSES instead of falling
+// through: the same "upgrade" makes the redline function an unconditional lock REFUSER, not a
+// stealer — silent data loss became a silent stall. The reason to reuse fileStore's predicates
+// rather than grow a second one is unchanged. ***
 
 import { createHash } from "node:crypto";
 import { chmod, mkdtemp, stat, writeFile } from "node:fs/promises";
@@ -120,6 +127,13 @@ describe("inspectOwnerTransferLock", () => {
     // shape the normal transfer path gives up on for good (JSON.parse throws, hasStagedArtifacts
     // is false, the redline function returns false and the lock stays on disk forever). It is also
     // the cell fail-closed refuses. That intersection is why --force exists at all.
+    //
+    // *** ERRATUM (point B, human ruling 83): the paragraph above is kept verbatim and its premise
+    // has widened, not broken. There is no `hasStagedArtifacts` any more, staged artifacts no
+    // longer change the answer, and the permanently-stranded set is no longer ONE shape: it is now
+    // every lock that is not a parsed `pid:<n>` whose process is dead. The intersection this test
+    // names therefore grew, which makes the case for --force stronger rather than weaker. This
+    // cell is still in it. ***
     const runDir = await makeRunDir();
     const digest = await writeLock(runDir, "{not json");
 
