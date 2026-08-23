@@ -7,9 +7,10 @@
 // WHY IT DOES NOT CALL tryRecoverStaleOwnerTransferLock, even though that function asks a very
 // similar question: that function's answer IS a deletion — it unlinks the lock on the way to
 // returning true. A command whose entire purpose is to refuse cannot be built on a reader that
-// takes the action first. That reason is the load-bearing one and is unaffected by anything below.
-// Human ruling 50 also froze it byte-for-byte, so it could not be split — *** that freeze has since
-// been lifted for point B alone (human ruling 83); the first reason still stands on its own. ***
+// takes the action first. Human ruling 50 also froze it byte-for-byte, so it could not be split.
+// *** ERRATUM (point B, human ruling 83): the two sentences above are kept verbatim. That freeze
+// has since been lifted, for point B alone. The first reason — a reader whose answer IS a deletion
+// cannot serve a command whose whole job is to refuse — is load-bearing and unaffected by it. ***
 //
 // WHY THE TWO ANSWERS DISAGREE, and why that is deliberate rather than a bug (pointC-design.md
 // §4.2, judgement 6): on a lock whose holder identity is unrecognizable, or one whose JSON is

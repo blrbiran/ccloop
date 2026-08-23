@@ -2,10 +2,12 @@
 // allowed to do — ask whether the file EXISTS. It must not read the file, must not parse it, must
 // not extract a holder identity and must not judge liveness, because every one of those would
 // either need a second JSON reading implementation for this file (spec §7.2 forbids it: the only
-// existing one lives inside tryRecoverStaleOwnerTransferLock, which human ruling 50 froze when
-// this was decided and human ruling 83 has since changed, for point B alone — the ban on a second
-// reading implementation is what carries this choice now, not the freeze) or
+// existing one lives inside tryRecoverStaleOwnerTransferLock, which human ruling 50 froze) or
 // would put a liveness judgment into a read-only reporting path.
+//
+// *** ERRATUM (point B, human ruling 83): that freeze has since been lifted, for point B alone. The
+// clause above is kept verbatim because it records the ground the choice was made on; what carries
+// the choice now is §7.2's ban on a second reading implementation, which is untouched. ***
 //
 // The unparseable and empty cases below are what pin that: both are files no reader could make
 // sense of, and both must still answer "present", because presence is the only question asked.

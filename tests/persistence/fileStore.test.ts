@@ -3279,10 +3279,13 @@ describe("the owner-transfer lock is published atomically, never as an empty fil
 // WHY this deserves a test of its own, measured rather than argued (pointC-design.md §4.2,
 // mutation C): replacing acquireOwnerTransferLock's weak `pid:<pid>` holder with the strong
 // buildProcessInstanceId() form is a ONE-LINE change that typechecks with ZERO errors — and it
-// breaks tryRecoverStaleOwnerTransferLock, because parsePid's /^pid:(\d+)$/ returns null for the
-// strong form and the function never gets a pid to judge.
+// turns tryRecoverStaleOwnerTransferLock, the function human ruling 50 froze byte-for-byte, into an
+// UNCONDITIONAL LOCK STEALER. parsePid's /^pid:(\d+)$/ returns null for the strong form, so the
+// `pid !== null && isProcessActive(pid)` guard is skipped entirely and the path falls through to
+// safeUnlink.
 //
-// *** ERRATUM (point B, HUMAN RULING 83) — THE DIRECTION REVERSED, THE INVARIANT DID NOT. When
+// *** ERRATUM (point B, HUMAN RULING 83) — THE DIRECTION REVERSED, THE INVARIANT DID NOT. The
+// paragraph above is kept verbatim because it records what was measured under ruling 50. When
 // mutation C was measured, an unparsed holder SKIPPED the guard (`pid !== null && isProcessActive`)
 // and fell through to safeUnlink, making the function an UNCONDITIONAL LOCK STEALER. Ruling 83
 // turned that guard into `pid === null || isProcessActive(pid)`, so the same one-line tidy-up now

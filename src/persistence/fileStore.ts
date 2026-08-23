@@ -697,9 +697,13 @@ type OwnerTransferPaths = {
 
 // Exported for `ccloop unlock` (human ruling 70 board C-d, held fail-closed by ruling 72). The
 // unlock command reads this file with its own reader rather than through the redline function,
-// which human ruling 50 froze (a freeze human ruling 83 has since lifted, for point B alone) and
-// which still DELETES what it reads — now only when the holder parses as a dead `pid:<n>`, but a
-// command whose whole job is to refuse must not call a reader that deletes at all. Sharing the shape is what keeps the two readers describing one file.
+// which human ruling 50 froze and which DELETES what it reads — a command whose whole job is to
+// refuse must not call it. Sharing the shape is what keeps the two readers describing one file.
+//
+// *** ERRATUM (point B, human ruling 83): that freeze has since been lifted, for point B alone, and
+// the function changed. It still DELETES what it reads — now only when the holder parses as a dead
+// `pid:<n>` — so the reason above stands unchanged: a command whose whole job is to refuse must not
+// call a reader that deletes at all. ***
 export type OwnerTransferLockRecord = {
   holderProcessInstanceId: string;
   acquiredAt: string;
@@ -899,10 +903,12 @@ function sameOwnerRecord(left: OwnerRecord, right: OwnerRecord): boolean {
 
 // parsePid and isProcessActive are exported for `ccloop unlock` (human ruling 70, board C-e), and
 // exporting rather than reimplementing is the whole point. pointC-design.md §4.2 mutation C
-// measured what a second, "upgraded" identity notion does here: /^pid:(\d+)$/ stops matching and
-// the liveness guard below never gets a pid to judge.
+// measured what a second, "upgraded" identity notion does here: /^pid:(\d+)$/ stops matching, the
+// liveness guard below is skipped, and tryRecoverStaleOwnerTransferLock becomes an unconditional
+// lock stealer.
 //
-// *** ERRATUM (point B, HUMAN RULING 83) — THE DIRECTION REVERSED. That measurement was taken when
+// *** ERRATUM (point B, HUMAN RULING 83) — THE DIRECTION REVERSED. The sentence above is kept
+// verbatim because it records what was measured under ruling 50. That measurement was taken when
 // an unparsed holder meant the guard was SKIPPED, which made tryRecoverStaleOwnerTransferLock an
 // unconditional lock STEALER. Under ruling 83 an unparsed holder returns false, so the same
 // mutation now makes it an unconditional lock REFUSER: nothing is ever reclaimed, and every owner
@@ -1014,8 +1020,9 @@ async function discardLockStaging(stagingPath: string): Promise<void> {
 //      whose content is corrupt, truncated or forged is simply "not ours" without a parse step.
 //   3. It needs nothing from the on-disk record, so the deliberately weak `pid:<pid>` form and its
 //      only consumer (parsePid's liveness probe) stay exactly as they are — no format change, and
-//      tryRecoverStaleOwnerTransferLock was not touched by ruling 62 (point B was unruled then).
-//      *** ERRATUM (human ruling 83): point B has since been ruled and that function HAS changed.
+//      tryRecoverStaleOwnerTransferLock is not touched (point B is unruled; human ruling 50 stands).
+//      *** ERRATUM (human ruling 83): the clause above is kept verbatim. Point B has since been
+//      ruled and that function HAS changed.
 //      What this clause depends on is unaffected — the `pid:<pid>` format and parsePid's liveness
 //      probe are exactly as they were, and release()'s (dev, ino) comparison still needs nothing
 //      from the on-disk record. ***
@@ -1082,10 +1089,10 @@ async function recordSkippedLockRelease(
 }
 
 // Package 2 whole-branch review, Critical C-1, fixed under human ruling 50 (option O1(a): make the
-// publish atomic; do NOT touch tryRecoverStaleOwnerTransferLock, which was open point B when this
-// was written). *** Point B has since been ruled and implemented (human ruling 83); see the
-// ERRATUM at the end of this comment, which is where the "deliberately unchanged" list stopped
-// being true. ***
+// publish atomic; do NOT touch tryRecoverStaleOwnerTransferLock, which is open point B).
+// *** ERRATUM: the line above is kept verbatim. Point B has since been ruled and implemented
+// (human ruling 83); see the ERRATUM at the end of this comment, which is where the "deliberately
+// unchanged" list stopped being true. ***
 //
 // WHAT WAS WRONG. The lock used to be published in TWO steps: `open(lockPath, "wx")` created the
 // file, and `handle.writeFile(...)` filled it. Between those two awaits the lock EXISTS AND IS ZERO
