@@ -515,6 +515,16 @@ async function acquireOwnerTransferLockForReconciliation(
 // must-miss control), so it is not a reading of the code. It is a KNOWN, UNFIXED Critical (C-1);
 // the repair is a separate human decision (open point B) and was DELIBERATELY NOT MADE in this
 // round — no line of acquireOwnerTransferLock or tryRecoverStaleOwnerTransferLock was touched. ***
+//
+// *** ERRATUM 2 (point B, HUMAN RULING 83). The steal described in ERRATUM 1 is now CLOSED, and
+// ERRATUM 1 is kept verbatim rather than edited for the same reason it kept the sentence above it.
+// tryRecoverStaleOwnerTransferLock now fails closed on every exit but liveness reclamation: its
+// `catch` branch returns false without asking about staged artifacts, and a parse that yields no
+// `pid:<n>` holder returns false too. So no intruder reaching that function takes a live holder's
+// lock away, and the interleaving ERRATUM 1 measured is no longer reachable through it. TWO THINGS
+// THIS DOES NOT SAY. (a) C-1 is not recorded as closed: this change has not had an independent
+// review. (b) A lock can still be removed by `ccloop unlock --force --expect` — by a human's hand,
+// never unattended — so "cannot interleave" remains a premise about the automated paths only. ***
 async function publishReconciliationUnderTransferLock(
   runDir: string,
   nextReconciliationRecord: ReconciliationRecord,
@@ -687,8 +697,9 @@ type OwnerTransferPaths = {
 
 // Exported for `ccloop unlock` (human ruling 70 board C-d, held fail-closed by ruling 72). The
 // unlock command reads this file with its own reader rather than through the redline function,
-// which human ruling 50 froze and which DELETES what it reads — a command whose whole job is to
-// refuse must not call it. Sharing the shape is what keeps the two readers describing one file.
+// which human ruling 50 froze (a freeze human ruling 83 has since lifted, for point B alone) and
+// which still DELETES what it reads — now only when the holder parses as a dead `pid:<n>`, but a
+// command whose whole job is to refuse must not call a reader that deletes at all. Sharing the shape is what keeps the two readers describing one file.
 export type OwnerTransferLockRecord = {
   holderProcessInstanceId: string;
   acquiredAt: string;
@@ -888,9 +899,17 @@ function sameOwnerRecord(left: OwnerRecord, right: OwnerRecord): boolean {
 
 // parsePid and isProcessActive are exported for `ccloop unlock` (human ruling 70, board C-e), and
 // exporting rather than reimplementing is the whole point. pointC-design.md §4.2 mutation C
-// measured what a second, "upgraded" identity notion does here: /^pid:(\d+)$/ stops matching, the
-// liveness guard below is skipped, and tryRecoverStaleOwnerTransferLock becomes an unconditional
-// lock stealer. A separate liveness implementation inside the unlock command would be free to
+// measured what a second, "upgraded" identity notion does here: /^pid:(\d+)$/ stops matching and
+// the liveness guard below never gets a pid to judge.
+//
+// *** ERRATUM (point B, HUMAN RULING 83) — THE DIRECTION REVERSED. That measurement was taken when
+// an unparsed holder meant the guard was SKIPPED, which made tryRecoverStaleOwnerTransferLock an
+// unconditional lock STEALER. Under ruling 83 an unparsed holder returns false, so the same
+// mutation now makes it an unconditional lock REFUSER: nothing is ever reclaimed, and every owner
+// transfer behind a stale lock blocks until a human runs `ccloop unlock`. The failure changed sign;
+// the reason not to grow a second identity notion did not. ***
+//
+// A separate liveness implementation inside the unlock command would be free to
 // drift into that same failure, on the one command whose purpose is to not delete live locks.
 export function parsePid(processInstanceId: string): number | null {
   const match = /^pid:(\d+)$/.exec(processInstanceId);
@@ -995,7 +1014,11 @@ async function discardLockStaging(stagingPath: string): Promise<void> {
 //      whose content is corrupt, truncated or forged is simply "not ours" without a parse step.
 //   3. It needs nothing from the on-disk record, so the deliberately weak `pid:<pid>` form and its
 //      only consumer (parsePid's liveness probe) stay exactly as they are — no format change, and
-//      tryRecoverStaleOwnerTransferLock is not touched (point B is unruled; human ruling 50 stands).
+//      tryRecoverStaleOwnerTransferLock was not touched by ruling 62 (point B was unruled then).
+//      *** ERRATUM (human ruling 83): point B has since been ruled and that function HAS changed.
+//      What this clause depends on is unaffected — the `pid:<pid>` format and parsePid's liveness
+//      probe are exactly as they were, and release()'s (dev, ino) comparison still needs nothing
+//      from the on-disk record. ***
 // What it does NOT cover is named in the report: the stat and the unlink are still two syscalls, so
 // a theft landing between them is undetectable here.
 //
@@ -1059,7 +1082,10 @@ async function recordSkippedLockRelease(
 }
 
 // Package 2 whole-branch review, Critical C-1, fixed under human ruling 50 (option O1(a): make the
-// publish atomic; do NOT touch tryRecoverStaleOwnerTransferLock, which is open point B).
+// publish atomic; do NOT touch tryRecoverStaleOwnerTransferLock, which was open point B when this
+// was written). *** Point B has since been ruled and implemented (human ruling 83); see the
+// ERRATUM at the end of this comment, which is where the "deliberately unchanged" list stopped
+// being true. ***
 //
 // WHAT WAS WRONG. The lock used to be published in TWO steps: `open(lockPath, "wx")` created the
 // file, and `handle.writeFile(...)` filled it. Between those two awaits the lock EXISTS AND IS ZERO
@@ -1093,6 +1119,16 @@ async function recordSkippedLockRelease(
 // 62 gave it the identity check described above lockPathStillHoldsPublishedInode. The acquire path
 // here is still byte-identical — the check costs no I/O before the publish and adds no statement
 // between the publish and the return, which is the shape the scoped re-review's Imp-1 named.
+//
+// *** ERRATUM (point B, HUMAN RULING 83). "WHAT IS DELIBERATELY UNCHANGED" above is no longer
+// true of tryRecoverStaleOwnerTransferLock, and the paragraphs above are kept verbatim because
+// they record what was true under ruling 50. The steal branch described in "WHAT WAS WRONG" — the
+// `catch` that never asked whether the holder is alive and unlinked a live holder's lock as soon
+// as a staged artifact existed — no longer exists: that `catch` now returns false, as does a parse
+// yielding no `pid:<n>` holder. The only exit that may still delete a lock is a parsed `pid:<n>`
+// holder that is not alive under isProcessActive (two-state, human ruling 86). The acquire path
+// here, the two-iteration loop and OwnerTransferLockBusyError ARE still unchanged. C-1 is not
+// recorded as closed: both halves are repaired, but this half has not had an independent review. ***
 async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () => Promise<void> }> {
   const { lockPath } = getOwnerTransferPaths(runDir);
 

@@ -9,6 +9,9 @@
 //     second implementation drifts against the first"). The only existing one lives inside
 //     tryRecoverStaleOwnerTransferLock, and human ruling 50 froze that function byte-for-byte —
 //     so the choice was a forbidden second implementation, a frozen first one, or neither.
+//     *** ERRATUM (point B, human ruling 83): that freeze has since been lifted for point B alone,
+//     and the function changed. The choice recorded here does not reopen — the freeze was only the
+//     second of the two reasons, and §7.2's ban on a second reading implementation is untouched. ***
 //   - judging liveness in a reporting path would put a decision where an observation belongs. The
 //     line this feeds says a lock is on disk; deciding whether it is dead is a different command's
 //     job, and one a human is meant to approve (board C-d).

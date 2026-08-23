@@ -7,7 +7,9 @@
 // WHY IT DOES NOT CALL tryRecoverStaleOwnerTransferLock, even though that function asks a very
 // similar question: that function's answer IS a deletion — it unlinks the lock on the way to
 // returning true. A command whose entire purpose is to refuse cannot be built on a reader that
-// takes the action first. Human ruling 50 also froze it byte-for-byte, so it could not be split.
+// takes the action first. That reason is the load-bearing one and is unaffected by anything below.
+// Human ruling 50 also froze it byte-for-byte, so it could not be split — *** that freeze has since
+// been lifted for point B alone (human ruling 83); the first reason still stands on its own. ***
 //
 // WHY THE TWO ANSWERS DISAGREE, and why that is deliberate rather than a bug (pointC-design.md
 // §4.2, judgement 6): on a lock whose holder identity is unrecognizable, or one whose JSON is
@@ -16,6 +18,19 @@
 // this one runs because a human typed it. Fail-closed is the answer for the second (human ruling
 // 72). The disagreement is recorded in both directions rather than resolved by making the
 // dangerous one quieter.
+//
+// *** ERRATUM (point B, HUMAN RULING 83) — THE PARAGRAPH ABOVE HAS LOST ITS PREMISE, and is kept
+// verbatim because it records the design as it was argued. On BOTH cases it names — an
+// unrecognizable holder identity, and broken JSON with staged artifacts present — the redline
+// function no longer steals: it fails closed and refuses, exactly as this command does. So on those
+// two cases the two answers now AGREE, and the reason this module keeps its own reader is the first
+// one above (a reader that deletes cannot serve a command that refuses), not a disagreement.
+// ⚠️ WHAT THIS ERRATUM DOES NOT CLAIM: that the two answers agree everywhere. The full cell-by-cell
+// comparison has NOT been re-measured since ruling 83, and the two still ask different questions —
+// this command classifies liveness in three states (human ruling 74: pid:0, an overflowing pid and
+// EPERM are `liveness-unknown`), while the redline function's isProcessActive has two and reads all
+// three as alive. Both directions happen to refuse on those inputs today, but that is a coincidence
+// of two different predicates, not one shared answer. ***
 //
 // The liveness predicate is the bare-pid one and can be nothing else. pointC-design.md §4.2
 // mutation C measured the alternative: "upgrading" the holder identity makes parsePid return null,

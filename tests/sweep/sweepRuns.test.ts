@@ -670,7 +670,8 @@ describe("sweepRuns", () => {
   // C-a picked presence-only over the two paths measured in §4.1 for a specific reason: probing
   // only for existence needs no reader for this file, so it creates no second JSON reading
   // implementation (spec §7.2), and it never touches tryRecoverStaleOwnerTransferLock, the
-  // function human ruling 50 froze. The probe is an INJECTED dependency, the same shape `scan`
+  // function human ruling 50 froze at the time (changed since, for point B alone, under human
+  // ruling 83 — presence-only rests on §7.2, not on that freeze). The probe is an INJECTED dependency, the same shape `scan`
   // already has, so sweepRuns itself still reads no file under any run directory (§3 #1).
   //
   // C-b decided this walks `rows`, not `candidates`, and the reason is measured rather than
