@@ -4040,3 +4040,22 @@ brief 与报告已归档并入库（提交主题行 `docs(sdd): file the cleanup
 3. **I-3（失败关闭后操作员看不见卡死的锁）仍挂账**，并入人裁 85 那一轮 —— **要改红线函数返回类型，有实质设计成分，建议新会话用 brainstorming 起手。**
 4. ⚠️ **仍只在 darwin 上跑过**；点 B 的任何一格都没在 Linux 上跑过，而整套在 Linux 上本来就红 5 条。
 5. **控制器全程未 push**，远端一律以 `git ls-remote` 现跑为准。
+
+35. 人裁 10 的 flake 名单不全 —— 名单外两条在负载下也会 5000ms 超时
+--------------------------------------------------------------------------------
+
+**不是裁决，是实测记录。** 收尾复核基线时全套件突然红，追到底是 flake 不是回归，过程记在这里，
+因为**下一个 agent 或评审员看到这两条红会当成真回归去追**。
+
+| 步骤 | 实测 |
+|---|---|
+| 1 | 全套件 **`2 failed / 600 passed`**，`TEST_RC=1`，工作树干净 |
+| 2 | 两条红：`runLoop > accounts an execute timeout that rejects after the abort as exhaustion`、`run-scenario CLI > fails on an existing run directory without creating evidence or harvesting stale run data`。**都是 `Test timed out in 5000ms`** |
+| 3 | **证明代码没变**：`git diff --numstat <绿那次的提交> HEAD` 里**非 `.md` 文件 0 行** |
+| 4 | 两条**单独重跑**：`2 files / 103 tests` 全绿，`RC=0` |
+| 5 | 全套件**再跑一次**：`34 files / 602 tests` 全绿，`RC=0` |
+| 6 | 耗时对照：红那轮 **28.93s**，绿的两轮 **17.51s／18.91s** ⇒ 负载相关 |
+
+*** **这两条不在人裁 10 的名单里**（名单只有 `records env names only …` 与 `persists phase usage evidence…`）。 ***
+⇒ **下次派评审，brief 的「已知 flake」清单必须补上这两条**，否则评审员会照名单判定它们是真红。
+⚠️ **本条不主张放宽任何判据**，也不主张把它们加进人裁 10 的豁免名单 —— **要不要正式豁免，是人的事，未裁。**

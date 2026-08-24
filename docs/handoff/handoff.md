@@ -28,6 +28,12 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 - *** **判据基线是 602** *** —— 601 是上一会话开工时的数，600 是点 B 之前的数
 - *** **红线函数 `tryRecoverStaleOwnerTransferLock` = 3185 字节**，签名命中数 =1 ***
   **970 与 1558 两个旧基线都已作废**（人裁 83 授权改函数、人裁 94／97 授权改它体内的注释）
+- ⚠️ *** **这份基线在负载下会 flake。** *** 同一份代码（非 `.md` 改动 0 行）连跑三次：**绿 → `2 failed / 600 passed` → 绿**。
+  两条红都是 `Test timed out in 5000ms`，那一轮总耗时 28.93s 而绿的两轮是 17–19s。**两条单独重跑 103/103 全绿。**
+  ⚠️ *** **这两条不在人裁 10 的 flake 名单里** ***，名单只有 `records env names only …` 与 `persists phase usage evidence…`：
+  `runLoop > accounts an execute timeout that rejects after the abort as exhaustion`
+  与 `run-scenario CLI > fails on an existing run directory without creating evidence or harvesting stale run data`。
+  ⇒ **看到红先看是不是这四条之一 ＋ 是不是超时 ＋ 总耗时是否异常，再单独重跑那个文件，别急着报回归。**
 - ⚠️ **整套在 Linux 上【不绿】**（`5 failed / 593 passed`，第六位评审在别的轮次实测）；**点 B 相关的任何一格都没在 Linux 上跑过**
 
 ---
@@ -51,7 +57,7 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ## 上一会话做完了什么（**都不要重做**，细节全在台账 §32–§34）
 
-按提交主题行找，**全部本地，一笔未 push**：
+按提交主题行找（*** **别数笔数** *** —— 提交本文这个动作本身就会加笔），**全部本地，一笔未 push**：
 
 1. `docs(comments): record that parsePid's coercion widens the redline's "ONLY condition" (Mi-2, human ruling 94)`
 2. `docs(comments): mark the near-duplicate malformed-lock test as kept on purpose (T2, human ruling 95)`
@@ -63,6 +69,8 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 8. `docs(sdd): record section 33 …`
 9. `docs(unlock): close I-3b and both M-3 sites … (human ruling 100)`
 10. `docs(sdd): record section 34 …`
+11. `docs(handoff): rewrite for a fresh agent …` ＋ `docs(handoff): make this document obey its own rule …`
+12. `docs(sdd): record section 35 …` —— 上面那条 flake 事实
 
 **人裁 96 那轮评审的 3 条 Important 已全部闭合**，且**每一条都是控制器自己复核过才动的**（其中两条是控制器自己写错的事实）。
 
@@ -126,7 +134,9 @@ M-8（pid namespace，与本轮无关）、M-9（无需动）。逐条描述见 
 3. **注释轮必须做全树扫描再动手。** 第一轮改 12 漏 6；第二轮补 6 又漏 2（其中一处让同一文件**顶部说 REFUSER、80 行后说 STEALER**）。**半改比不改坏。**
 4. **评审员的自陈也要核，数字也不能照抄。** 上一会话两次实测出它的数与控制器的数不一致（M-1 的 153／137／125 三个数**没有一个能互相复现**）。
 5. **别信"判据增量 = 0"这种条数指标。** 它在条数上准，却掩盖了一整个出口零覆盖 —— 那是第一轮 Critical 的成因。
-6. *** **「为修复派评审」会无限递归** *** —— 每轮修复都在制造新的未评审面。人裁 100 的收口理由：连续两轮 0 Critical
+6. *** **人裁 10 的 flake 名单不全。** *** 上一会话实测到名单外的两条也会在负载下 5000ms 超时（见基线段）。
+   ⇒ **派评审时，brief 里的「已知 flake」清单必须把这两条也写上**，否则评审员会把它们当成真回归去追。
+7. *** **「为修复派评审」会无限递归** *** —— 每轮修复都在制造新的未评审面。人裁 100 的收口理由：连续两轮 0 Critical
    且 Important 全是文字准确性时，继续递归买不到安全，只买字面完美。**下次要收口，援引人裁 100。**
 
 ---
