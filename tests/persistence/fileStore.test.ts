@@ -8,6 +8,7 @@ import {
   buildAtomicTempPath,
   claimOwnerRecordWithPrecondition,
   initializeRunFiles,
+  isProcessActive,
   OwnerTransferLockBusyError,
   OwnerTransferMarkerFinalizeOrderInvalidError,
   OwnerTransferMarkerUnreadableError,
@@ -917,6 +918,65 @@ describe("fileStore", () => {
     await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toContain(
       "owner lost after reconciliation",
     );
+  });
+
+  it("reclaims a lock whose holder is an ARRAY that String()s into pid:<n> -- pinned as measured", async () => {
+    // Encodes human ruling 99 (Mi-2). ADDED, never rewritten -- human ruling 4 covers adding a
+    // criterion, so no naming under ruling 88 was needed. It pins TODAY'S BEHAVIOUR ON PURPOSE,
+    // not the behaviour anyone would design: parsePid matches with /^pid:(\d+)$/.exec(holder),
+    // and exec coerces its argument through String(), so a holder that is not a string at all
+    // still reaches the liveness gate and can license the unlink. Human ruling 94 chose to
+    // record that widening in a comment rather than close it, and a claim with nothing
+    // enforcing it is this package's signature defect -- so this test is what goes red if
+    // someone "tidies" parsePid into a typeof guard, or widens the coercion further. If a later
+    // ruling closes the gap, THIS TEST IS THE ONE TO REWRITE (human ruling 88): its failure is
+    // then the intended signal, not a regression.
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    // Both premises asserted rather than assumed, so this cannot quietly become a test of
+    // something else: the pid must be DEAD (otherwise the guard refuses for the ordinary reason
+    // and the coercion is never exercised), and the holder must be a NON-STRING (otherwise
+    // there is no coercion to pin).
+    const deadPid = 999999;
+    expect(isProcessActive(deadPid)).toBe(false);
+    const arrayHolder = [`pid:${deadPid}`];
+    expect(typeof arrayHolder).not.toBe("string");
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(transfer.transferRecord, null, 2));
+    await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(transfer.nextOwnerRecord, null, 2));
+    await writeFile(
+      join(runDir, ".owner-transfer.transaction.json"),
+      JSON.stringify({ version: 1, stagedAt: transfer.transferRecord.transferredAt, finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
+    );
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: arrayHolder, acquiredAt: "2026-07-22T10:05:00.000Z" }),
+    );
+
+    const owner = await readOwnerRecord(runDir);
+
+    // Measured consequence, both halves. The second is why this matters: the coercion does not
+    // merely widen an unlink, it lets an owner epoch advance behind a holder nobody could
+    // attribute.
+    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();
+    expect(owner.currentOwnerEpoch).toBe(2);
   });
 
   it("keeps a malformed lock without staged artifacts non-recoverable", async () => {
