@@ -3933,3 +3933,61 @@ holder 用 `buildProcessInstanceId()` 的强形式 `pid:<pid>:<timeOrigin>`（**
 2. ⚠️ **评审回来前**：不 push、不宣布点 B 通过、不把 C-1 记成关闭、不宣布 E1 通过。
 3. **I-3 仍挂账**（并入人裁 85 那一轮；要改红线函数返回类型，read-only argument，未实测）。
 4. ⚠️ **仍只在 darwin 上跑过**；Linux 那几条红一条未碰。
+
+33. 人裁 96 那轮评审回来了（0 Critical／3 Important／9 Minor）＋ 人裁 97／98／99
+--------------------------------------------------------------------------------
+
+*** **人裁 97。2026-08-25。「修 I-1、I-2、I-3a。」** ***（**I-3b 人没勾，未裁，仍挂着 —— 控制器没动它**）
+*** **人裁 98。2026-08-25。「I-1 就地改，不追 ERRATUM。」** ***
+*** **人裁 99。2026-08-25。「补一条判据钉住『数组 holder 能走到 safeUnlink』这一现状行为。」** ***
+
+brief 与报告已归档并入库（提交主题行 `docs(sdd): file the cleanup-round review brief and the independent report`）：
+`…/pointB-cleanup-review-brief.md`、`…/pointB-cleanup-review.md`。
+⚠️ **报告是照收归档，控制器【没有】整体采纳它的处置。**
+
+### 控制器复核了评审的承重主张（**不接受自陈，自己跑**）
+
+| 评审主张 | 复核结果 |
+|---|---|
+| **I-1**：`parsePid has two other callers (unlock, sweep)` 是假的 | *** **成立，是控制器写错的。** *** 全树 `grep parsePid src tests`：其它调用方**只有** `src/unlock/inspectLock.ts:168`，**sweep 零个**（board C-a presence-only，设计上不读该文件） |
+| **I-2**：「shared with E1」说轻了 | **成立**。顺代码走通：数组 holder → `parsePid` 强转出 pid → `classifyHolderLiveness` → `state: "dead"` → `unlockCommand:185` 的 dead 分支 `removeLockIfUnchanged` **无 `--force`／无 `--expect` 直接删**。而对象型非法 holder 走的是 `unrecognized-holder` → 拒绝。**同一强转在 E1 那边把一格从「拒绝」挪进了「无人值守删除」** |
+| **I-3(a)**：`tests/unlock/inspectLock.test.ts` 里 `… falls through to the unlink` 仍为假 | **成立，且是最坏那种**。同文件**头部 ERRATUM 明写 REFUSER**，80 行后仍说 stealer —— 读者无从判断哪份权威 |
+| **I-3(b)**：`src/unlock/inspectLock.ts` 的 `which skips the liveness guard entirely` | **成立**（该段无 ERRATUM，同文件另有 3 处有）。⚠️ **人未裁，本会话一行未动** |
+| **M-1**：C 的提交信息把 153 字符那行记错了文件 | **成立，但数字两边不同**：控制器实测 `29aa60e` 时 `sweepRuns.test.ts` **全文件最宽行 137**；评审员说那一行是 125。**「153」两边都复现不出来**，别照抄任何一个数 |
+| **M-4**：`open(lockPath, "wx")` 已不存在于生产码 | **成立**。`src` 里该串只出现在注释；实际是 `open(stagingPath, "w")` |
+
+**没复核、按 read-only argument 记的**：评审员的变异跑（守卫翻回去 → `2 failed / 599 passed`，唯一有效红是 A）、
+它的 14 行逐字恢复枚举、M-2／M-3／M-5～M-9。
+
+### 落地（三笔）
+
+1. `docs(comments): correct the caller count and state what the coercion costs on the E1 path (I-1, I-2, human ruling 97)`
+   —— **+11／−3**。被删的 3 行是**本会话自己一小时前写的**，非历史记录 ⇒ 人裁 98 的就地改成立。
+   ⚠️ **I-2 也按同一理由就地改了**（同一段、同一笔、同一小时），**提交信息里已写明以便人否决**。
+2. `docs(unlock): correct the seventh stale comment, the one that made this file contradict itself (I-3, human ruling 97)` —— **+13／−0**，**测试名未动**（改名要走人裁 88）
+3. `test(fileStore): pin the array-holder coercion human ruling 94 chose to record rather than close (human ruling 99)` —— **+60／−0**（含一行 `isProcessActive` import），走人裁 4 只加不改
+
+### 落地后实测（未过滤整份读回）
+
+| 项 | 值 |
+|---|---|
+| 全套件 | **`34 files / 602 tests`** 全绿零 skipped，`TEST_RC=0`，`RUN` 路径 = 主仓库根 |
+| typecheck／build | `0`／`0` |
+| 最宽注释行 | `fileStore.ts` 101／`fileStore.test.ts` 103／`inspectLock.test.ts` 101／`inspectLock.ts` 100，**均未超改前基线** |
+| **红线函数** | **2515 → 3185 字节**，签名命中数 =1 |
+| **新判据非空证明** | `git clone --local` 副本注入 `typeof processInstanceId === "string" ? … : null` ⇒ **`2 failed / 600 passed`**，两条红 = 本条新判据 ＋ 人裁 10 名单内 flake。失败信息指向病因：`promise resolved '{"holderProcessInstanceId":["pid:9999…' instead of rejecting`。副本已 `/bin/rm -rf` 删除，主仓库工作树全程只读 |
+
+*** **判据基线自本条起是 602；红线函数字节基线自本条起是 3185。** ***
+
+### ⛔ 下一件事
+
+1. ⚠️ **仍未拍板的三件，控制器一件都没替人宣布**：点 B 是否通过、C-1 是否记关闭、E1 是否通过。
+   ⚠️ **注意**：这三笔（I-1／I-2／I-3a／新判据）**本身又没经过独立评审** —— 与上一轮同形的问题，要不要再派一轮，等人裁。
+2. **I-3(b) 挂着**（`src/unlock/inspectLock.ts` 的 `which skips the liveness guard entirely`）—— **人未裁**。
+3. **评审的 9 条 Minor 全部挂账**：M-1（C 提交信息记错文件与字符数）、M-2（`e22d1ea` 甩出去的那句仍在 ERRATUM 之后）、
+   M-3（两处 ERRATUM 把「活 holder 的锁」也扫进了「永久滞留」集合，且暗示 `--force` 可解 —— 而同文件明写活 holder 连 `--force` 都不删）、
+   M-4（`open(lockPath,"wx")` 那句）、M-5（A 缺正向观测）、M-6（T2 的注释只挂在较弱那条上）、M-7（一处 freeze 主张只补了方向 erratum）、
+   M-8（`isProcessActive` 的 pid namespace 残留，与本轮无关）、M-9（无生产注释再引旧字节基线，无需动）。
+4. **I-3（操作员看不见卡死的锁）仍挂账**，并入人裁 85 那一轮。
+5. ⚠️ **仍只在 darwin 上跑过。**
+6. **控制器全程未 push**；远端仍是 `git ls-remote` 说了算，开工与收尾各核一次。
