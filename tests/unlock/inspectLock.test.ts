@@ -95,6 +95,19 @@ describe("inspectOwnerTransferLock", () => {
     // redline function that null SKIPS the liveness check and falls through to the unlink. Here it
     // must instead land in a state that refuses, because "I cannot tell whose it is" is the one
     // answer that must never authorize a deletion.
+    //
+    // *** ERRATUM (I-3, HUMAN RULING 97) — THE DIRECTION REVERSED, AND THIS COPY WAS MISSED.
+    // The paragraph above is kept verbatim because it records what mutation C measured under
+    // ruling 50. Under human ruling 83 a null pid RETURNS FALSE — `pid === null ||
+    // isProcessActive(pid)` refuses first — so nothing "falls through to the unlink", and the
+    // same upgrade makes the redline function an unconditional lock REFUSER, not a stealer.
+    // This file's header already carries that correction; the comment round that added it
+    // (human ruling 93) missed this second copy, so until now the file said REFUSER at the top
+    // and stealer-by-implication here — the half-corrected state that round exists to prevent.
+    // The test NAME still contrasts with "skipping the liveness guard": read literally that is
+    // true (a null pid short-circuits before isProcessActive is called) but it invites the old
+    // conclusion. Renaming it would change a criterion and needs a naming under human ruling
+    // 88; this erratum does not, and what the test asserts is unchanged and still correct. ***
     const runDir = await makeRunDir();
     const holder = `pid:${process.pid}:1787154059514`;
     const digest = await writeLock(
