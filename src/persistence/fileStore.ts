@@ -967,9 +967,17 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<boolean
   // JSON.parse, which is free to hand back an array — `["pid:999999"]` coerces to "pid:999999"
   // and reaches the liveness check below. Bounded, not a hole a thief can walk through: that
   // pid must still be DEAD before the lock is deleted, so no LIVE lock becomes reclaimable this
-  // way. Pre-existing (parsePid predates point B) and shared with E1. Left as measured rather
-  // than fixed, because a `typeof === "string"` guard is NEW LOGIC in this function — outside
-  // ruling 83's authorisation — and parsePid has two other callers (unlock, sweep). ***
+  // way. Pre-existing: parsePid predates point B. MEASURED on the E1 path, where the same
+  // coercion does not merely recur but costs more: `inspectOwnerTransferLock` answers "dead"
+  // rather than "unrecognized-holder" for an array holder over a dead pid, so unlockCommand's
+  // `dead` branch deletes the lock with NO `--force` and no `--expect` digest — for that input
+  // the fail-closed answer an unattributable holder is supposed to get is lost. E1 is outside
+  // this round's authorisation: recorded, not fixed. Left as measured here too, because a
+  // `typeof === "string"` guard is NEW LOGIC in this function — outside ruling 83's
+  // authorisation — and parsePid's ONE other caller is `src/unlock/inspectLock.ts` (the sweep
+  // has none: board C-a made it presence-only, so it never reads or parses this file). The
+  // array case is pinned by a criterion under human ruling 99, so it cannot be "tidied" away
+  // silently. ***
   try {
     const parsed = JSON.parse(lockContents) as Partial<OwnerTransferLockRecord>;
     const pid = parsed.holderProcessInstanceId ? parsePid(parsed.holderProcessInstanceId) : null;
