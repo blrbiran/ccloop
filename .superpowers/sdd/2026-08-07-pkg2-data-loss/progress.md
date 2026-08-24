@@ -3861,3 +3861,75 @@ holder 用 `buildProcessInstanceId()` 的强形式 `pid:<pid>:<timeOrigin>`（**
 4. **T2 的冗余**：挂账，见上。
 5. ⚠️ **远端在本会话中又动了**：开工 `1bd6f06` → 现为 `83ac585`（人自己在推）。**控制器全程未 push。**
 6. ⚠️ **仍只在 darwin 上跑过**；Linux 那两条红一条未碰。
+
+32. 人裁 94／95／96 —— Mi-2 与 T2 收账（纯注释），评审派发范围扩到五笔
+--------------------------------------------------------------------------------
+
+*** **人裁 94。2026-08-25。「Mi-2：改红线函数【体内】那段注释，接受 1558 字节基线被打掉，重设新基线。」** ***
+*** **人裁 95。2026-08-25。「T2：不删任何一条，只加注释说明两条的分工。」** ***
+*** **人裁 96。2026-08-25。「为未评审的几笔派一轮独立评审，一名评审员。」** ***
+
+⚠️ 人在同一次作答里同时勾了「全部继续挂着」与「Mi-2 现在就修／T2 现在就处理」，**三者互斥**。
+控制器**没有平均**（CLAUDE.md Rule 7）：摆出证据后回问，人二次确认为 **I-3 挂着、Mi-2 与 T2 现在做**。
+**I-3 仍挂账**，处置意见不变（并入人裁 85 那一轮；「最小修法」要改红线函数返回类型）。
+
+### 开工基线（本会话现跑，未过滤整份读回）
+
+| 项 | 值 |
+|---|---|
+| 全套件 | `34 files / 601 tests` 全绿零 skipped，`TEST_RC=0`，`RUN` 路径 = 主仓库根 |
+| typecheck／build | `0`／`0` |
+| 红线函数 | **1558 字节**（与 §31 记录一致），签名命中数 =1 |
+| 工作树 | `git status --short` 空 |
+| 门锚点 | 末两笔合并仍是 `86d3bd6`(GATE-PKG2)／`e42e062`(GATE-PKG3) |
+
+⚠️ **远端复核出一条 §31 没记的推论**：`git ls-remote` = `83ac585`，本地 ahead 3
+⇒ **未评审三笔里，A（`test(fileStore): pin the exit …`）与 C（`docs(comments): make e22d1ea's own method claim true …`）已在远端**，
+只有 B（`docs(unlock): correct the six …`）与其后两笔文档还在本地。**评审对 A／C 是推后审，不是把关。控制器全程未 push。**
+
+### Mi-2 的现场（控制器自己跑，不是抄评审员）
+
+`parsePid`（`src/persistence/fileStore.ts`）是 `/^pid:(\d+)$/.exec(processInstanceId)`。
+`exec` 先经 `String()` 强转；`holderProcessInstanceId` 类型写的是 `string`，但值来自 `JSON.parse`，
+可以是数组 —— `["pid:999999"]` 强转后命中，进到 liveness 检查。
+⇒ 红线函数体内那句「**The ONLY** condition … **has the form** `pid:<n>`」**比代码强**。
+**有界**：该 pid 仍须是死的，**活锁偷不走**；pre-existing（`parsePid` 早于点 B），与 E1 共用同一缺口。
+人裁 94 选注释而非 `typeof === "string"`：后者是在红线函数里**加新逻辑**，超出人裁 83 授权面，且 `parsePid` 另有两个调用方（unlock、sweep）。
+
+### T2 的现场（独立复核，非照收）
+
+| | |
+|---|---|
+| 罐 A | `tests/persistence/fileStore.test.ts` 的 `keeps a malformed lock non-recoverable even when staged artifacts are present` —— **4 条断言** |
+| 罐 B（T2） | 同文件 `leaves the lock on disk when malformed staged state names no dead holder` —— 唯一事后断言 `resolves.toBe("not-json\n")`，**逐字是 A 四条中的一条** |
+| 夹具 | `cmp` 逐字节相同，**实测 26 行**（§31 记的是 27 行；**§31 一字不改**，此处记本次实测值，结论不变） |
+| B 独有 | 只有调用前那条「锁确实在盘上」的**前置断言** |
+| ⚠️ | **两条的注释都自称被人裁 87 指名重写过** ⇒ 人裁 87 是「指名重写」，**不是删除授权** |
+
+### 落地（两笔，均为纯注释，本地提交）
+
+1. `docs(comments): record that parsePid's coercion widens the redline's "ONLY condition" (Mi-2, human ruling 94)`
+2. `docs(comments): mark the near-duplicate malformed-lock test as kept on purpose (T2, human ruling 95)`
+
+原文逐字保留，更正一律走具名 `*** ERRATUM (…, HUMAN RULING N) … ***` 追加。
+
+### 落地后实测（未过滤整份读回）
+
+| 项 | 值 |
+|---|---|
+| 全套件 | `34 files / 601 tests` 全绿零 skipped，`TEST_RC=0`，`RUN` 路径 = 主仓库根 |
+| typecheck／build | `0`／`0` |
+| diff | **+21／−0**，**非注释改动 0 行**，**删除 0 行** |
+| 最宽注释行 | `src` 104／`tests` 129，**与改前相同**（新增行最宽 97） |
+| **红线函数** | *** **1558 → 2515 字节**（人裁 94 授权），签名命中数仍 =1 *** |
+
+*** **红线函数字节基线自本条起是 2515，不再是 1558；判据基线仍是 601。** ***
+
+### ⛔ 下一件事
+
+1. **派人裁 96 那轮评审**，被审面 = **五笔**：A（`test(fileStore): pin the exit …`）、C（`docs(comments): make e22d1ea's …`）、
+   B（`docs(unlock): correct the six …`）、Mi-2 那笔、T2 那笔。brief 抄 `…/pointB-review-brief.md`，
+   ⚠️ **其中「红线基线 1558 字节」一句必须改成 2515**，否则评审员会拿作废的数去比。
+2. ⚠️ **评审回来前**：不 push、不宣布点 B 通过、不把 C-1 记成关闭、不宣布 E1 通过。
+3. **I-3 仍挂账**（并入人裁 85 那一轮；要改红线函数返回类型，read-only argument，未实测）。
+4. ⚠️ **仍只在 darwin 上跑过**；Linux 那几条红一条未碰。
