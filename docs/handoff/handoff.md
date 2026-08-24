@@ -93,7 +93,7 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 数组 holder ＋ 死 pid ⇒ E1 无 `--force` 删锁。**已在红线函数的注释里记录为实测，代码一行未改**（E1 在授权面外）。
 
 ### 4. 仍开着的 8 条 Minor（**人裁 100 明确不再为它们派评审**）
-M-1（C 提交信息记错文件与字符数）、M-2（`e22d1ea` 甩出去的那句仍在 ERRATUM 之后）、M-4（`open(lockPath,"wx")`）、
+M-1（C 提交信息记错文件与字符数）、M-2（第一轮注释轮 `docs(unlock): correct the twelve comments point B turned false` 甩出去的那句仍在 ERRATUM 之后）、M-4（`open(lockPath,"wx")`）、
 M-5（A 缺正向观测）、M-6（T2 注释只挂在较弱那条上）、M-7（一处 freeze 主张只补了方向 erratum）、
 M-8（pid namespace，与本轮无关）、M-9（无需动）。逐条描述见 `…/pointB-cleanup-review.md`。
 
