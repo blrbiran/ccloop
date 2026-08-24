@@ -21,6 +21,16 @@
 // what this command refuses grew with it, which makes --force load-bearing for more of the table
 // than when this was written, not less. Nothing about the fail-closed choice changes. ***
 //
+// *** ERRATUM (M-3, human ruling 100): the set description above over-includes, and its --force
+// claim does not hold for the cell it sweeps in. Kept verbatim. Read literally, "every lock that
+// is not a parsed `pid:<n>` whose process is dead" includes a lock held by a LIVE `pid:<n>`. That
+// lock is not stranded — it is released when the holder exits — and --force is not load-bearing
+// for it but explicitly unavailable: the alive branch refuses and deliberately prints no --force
+// line to copy, exactly as the rule stated a few lines below requires. The stranded set is every
+// lock that is NEITHER reclaimable by the automated path NOR held by a live pid. An operator who
+// read the sentence as written would type --force at a live-holder refusal and be refused a
+// second time. ***
+//
 // --force is gated on a digest of the lock's bytes rather than on the holder id C-d first named,
 // because the one cell that genuinely needs it is the cell with no readable holder id (human
 // ruling 73). It proves the operator looked at this lock — and, since a changed lock produces a

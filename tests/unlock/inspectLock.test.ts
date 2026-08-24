@@ -147,6 +147,14 @@ describe("inspectOwnerTransferLock", () => {
     // every lock that is not a parsed `pid:<n>` whose process is dead. The intersection this test
     // names therefore grew, which makes the case for --force stronger rather than weaker. This
     // cell is still in it. ***
+    //
+    // *** ERRATUM (M-3, human ruling 100): the same over-inclusion as unlockCommand.ts's copy of
+    // this sentence. Kept verbatim. "Every lock that is not a parsed `pid:<n>` whose process is
+    // dead" reads as including a lock held by a LIVE `pid:<n>`, which is not stranded — it is
+    // released when the holder exits — and for which --force is not stronger but unavailable: the
+    // alive refusal deliberately prints no --force line. The stranded set is every lock that is
+    // NEITHER reclaimable by the automated path NOR held by a live pid. The cell THIS test names
+    // is unaffected: `{not json` names no holder at all, so it is still in the set. ***
     const runDir = await makeRunDir();
     const digest = await writeLock(runDir, "{not json");
 

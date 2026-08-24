@@ -37,6 +37,16 @@
 // mutation C measured the alternative: "upgrading" the holder identity makes parsePid return null,
 // which skips the liveness guard entirely. Hence fileStore's own parsePid/isProcessActive here,
 // not a copy.
+//
+// *** ERRATUM (I-3, human ruling 100): the direction reversed here too. The paragraph above is
+// kept verbatim because it records what mutation C measured under ruling 50. "Skips the liveness
+// guard entirely" is still literally true — a null pid short-circuits `pid === null ||
+// isProcessActive(pid)` before isProcessActive is ever called — but under human ruling 83 skipping
+// it no longer means falling through to the unlink: the guard REFUSES first. The failure that
+// alternative would cause is now an unconditional lock REFUSER, not a stealer. The reason to reuse
+// fileStore's own predicates rather than grow a second one is unchanged. The other errata in this
+// file carry that correction already; this paragraph was missed until the human ruling 96 review
+// found it. ***
 
 import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";
