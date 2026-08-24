@@ -1,9 +1,8 @@
-# ccloop Handoff — **点 B 已实施并评审过一轮；A/C/B 三笔收尾已落地但【未评审】；C-1 仍不记关闭；「E1 通过」仍未拍板**
+# ccloop Handoff — **点 B 的所有评审发现已闭合；但「点 B 通过 / C-1 关闭 / E1 通过」三件仍【未拍板】**
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数。 ***
 > 需要指代某一笔时**引提交主题行**（`git log --grep` 找得回），需要指代材料时**引路径**。
-> **本文是重写的**（上一版 2322 行，内容留在 git 历史里，找 `docs(handoff): correct this session's token figure` 那笔的父提交状态）。
 
 ---
 
@@ -15,7 +14,7 @@ git log --merges --format='%h %cd %s'   # 末两笔应仍是 GATE-PKG2（86d3bd6
 git ls-remote origin refs/heads/main    # ⚠️ 一律现跑，开工核一次、收尾再核一次（人会自己动远端）
 git status --short; git worktree list; git branch -vv
 export ECC_GATEGUARD=off DISABLE_OMC=1
-rtk proxy npm test -- --run             # 期望 34 files / 601 tests，零 skipped
+rtk proxy npm test -- --run             # 期望 34 files / 602 tests，零 skipped
 rtk proxy npm run typecheck; rtk proxy npm run build
 ```
 
@@ -23,75 +22,82 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 ⚠️ *** **rtk 的过滤层会骗你**：`git status --porcelain` 空时它打印 `ok`，`git diff | wc -c` 把 0 字节报成 1 字节。
 **任何还原证明／字节比较一律走 `rtk proxy git … > 文件` 再 `wc -c`。** ***
 
-### 上一会话（2026-08-22／23）实测基线，未过滤整份读回、`RUN` 路径已核
+### 上一会话（2026-08-25）实测基线，未过滤整份读回、`RUN` 路径已核
 
-- **`34 files / 601 tests`** 全绿**零 skipped**，`TEST_RC=0`／`TYPECHECK_RC=0`／`BUILD_RC=0`
-- *** **判据基线是 601，不是 600** *** —— 600 是点 B 之前的数
-- **红线函数 `tryRecoverStaleOwnerTransferLock` = 1558 字节**，签名命中数 =1
-  *** **970 字节那个旧基线已作废** —— 人裁 83 授权动了它，别再拿 970 去比 ***
+- **`34 files / 602 tests`** 全绿**零 skipped**，`TEST_RC=0`／`TYPECHECK_RC=0`／`BUILD_RC=0`
+- *** **判据基线是 602** *** —— 601 是上一会话开工时的数，600 是点 B 之前的数
+- *** **红线函数 `tryRecoverStaleOwnerTransferLock` = 3185 字节**，签名命中数 =1 ***
+  **970 与 1558 两个旧基线都已作废**（人裁 83 授权改函数、人裁 94／97 授权改它体内的注释）
 - ⚠️ **整套在 Linux 上【不绿】**（`5 failed / 593 passed`，第六位评审在别的轮次实测）；**点 B 相关的任何一格都没在 Linux 上跑过**
 
 ---
 
 ## 唯一可信进度源（**引路径，不要重新推导**）
 
-`.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **人裁 10–93 全在里面**。
-*** **上一会话新增 §29／§30／§31。§31 末尾「⛔ 下一件事」是下一会话的第一件事，逐字照做。** ***
+`.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **人裁 10–100 全在里面**。
+*** **上一会话新增 §32／§33／§34。§34 末尾「⛔ 下一件事」是下一会话的第一件事，逐字照做。** ***
 ⚠️ *** **`.superpowers/sdd/.gitignore` 内容是 `*`** *** —— 该目录下**新产物必须 `git add -f`**。
 
 | 材料 | 路径 |
 |---|---|
-| **点 B 的独立评审报告（1 Critical／3 Important／3 Minor）** | `…/pointB-review.md` |
-| **该轮的 brief（下次派评审抄这份，它已按「红线是被审对象」改写过）** | `…/pointB-review-brief.md` |
-| B 的裁决包 v2（实测于 600 条基线） | `…/pointB-ruling-package-v2.md` |
-| B 的裁决包 v1（**已过期，保留不改**） | `…/pointB-ruling-package.md` |
+| **第二轮（收尾轮）独立评审报告：0 Critical／3 Important／9 Minor** | `…/pointB-cleanup-review.md` |
+| 该轮 brief（**下次派评审抄这份**，红线基线等数字需按现测更新） | `…/pointB-cleanup-review-brief.md` |
+| 第一轮（点 B 本体）评审报告 ＋ brief | `…/pointB-review.md`、`…/pointB-review-brief.md` |
+| B 的裁决包 v2／v1（**v1 已过期，保留不改**） | `…/pointB-ruling-package-v2.md`、`…/pointB-ruling-package.md` |
 | 点 C 裁决 ＋ presence-only 实测 | `…/pointC-design.md` |
-| E1 的六份评审 ＋ briefs | `…/E1-review-*.md`（`E1-review-fix4-brief.md` 含「本机／网络」条款） |
+| E1 的六份评审 ＋ briefs | `…/E1-review-*.md` |
 
 ---
 
-## 上一会话做完了什么（**都不要重做**，细节全在台账 §29–§31）
+## 上一会话做完了什么（**都不要重做**，细节全在台账 §32–§34）
 
-按提交主题行找，**九笔，全部本地，一笔未 push**：
+按提交主题行找，**全部本地，一笔未 push**：
 
-1. `fix(owner-transfer): make stale-lock recovery fail closed (point B, human ruling 83)`
-   —— **点 B 实施**。红线函数两处改动（判据反向 ＋ `catch` 失败关闭），两条具名判据整条改写并改名。
-2. `docs(sdd): record section 29 …`
-3. `docs(unlock): correct the twelve comments point B turned false (human ruling 91)` —— 第一轮注释轮
-4. `docs(sdd): record rulings 90-92 …`
-5. `docs(sdd): file the point B review brief and the independent report`
-6. `test(fileStore): pin the exit human ruling 83 closed and nobody covered` —— **A**
-7. `docs(comments): make e22d1ea's own method claim true …` —— **C**
-8. `docs(unlock): correct the six stale comments the first round missed (human ruling 93)` —— **B**
-9. `docs(sdd): record section 31 …`
+1. `docs(comments): record that parsePid's coercion widens the redline's "ONLY condition" (Mi-2, human ruling 94)`
+2. `docs(comments): mark the near-duplicate malformed-lock test as kept on purpose (T2, human ruling 95)`
+3. `docs(sdd): record section 32 …`
+4. `docs(comments): correct the caller count and state what the coercion costs on the E1 path (I-1, I-2, human ruling 97)`
+5. `docs(unlock): correct the seventh stale comment, the one that made this file contradict itself (I-3, human ruling 97)`
+6. `test(fileStore): pin the array-holder coercion human ruling 94 chose to record rather than close (human ruling 99)` —— **判据 601 → 602**
+7. `docs(sdd): file the cleanup-round review brief and the independent report`
+8. `docs(sdd): record section 33 …`
+9. `docs(unlock): close I-3b and both M-3 sites … (human ruling 100)`
+10. `docs(sdd): record section 34 …`
 
-**评审那轮的 Critical 已修**（第 6 笔）：人裁 83 关的两个出口里，**只有"解析失败"那个有判据**，
-"解析成功但 holder 不是 `pid:<n>`"那个**零覆盖** —— 一个 token 翻回判据，600 条一条不响。现已补上并有红证。
+**人裁 96 那轮评审的 3 条 Important 已全部闭合**，且**每一条都是控制器自己复核过才动的**（其中两条是控制器自己写错的事实）。
 
 ---
 
-## ⛔ 下一件事 —— **四件全部等人裁，控制器一件都没替他决定**
+## ⛔ 下一件事 —— **只剩一件在人手上**
 
-### 1. 要不要为 A／C／B 这三笔再派一轮独立评审（**最该先问的一件**）
-⚠️ *** **那轮评审是在补 A 之前做的。第 6／7／8 三笔本身没有经过任何独立评审。** ***
-⇒ **在这三笔被审过之前：不许宣布点 B 通过，不许把 C-1 记成关闭。**
-派评审就抄 `…/pointB-review-brief.md`（**它已经把「红线是被审对象、新基线 1558 字节」写进去了**，别再抄那份要求核 970 字节的旧文）。
+### 1. 点 B 是否通过 / C-1 是否记关闭 / E1 是否通过（**等人裁，控制器一件都没宣布**）
 
-### 2. I-3 —— 失败关闭之后，操作员看不见被永久卡住的锁
+**控制器给过建议，人尚未拍板。建议原文与理由：**
+
+- **建议点 B 通过**：人裁 83 关的两个出口**各有判据、各有变异红证**（评审员把守卫翻回 `pid !== null && isProcessActive`，
+  602 条里只有 A 那条变红）；**两轮独立评审、不同评审员、0 Critical**；第二轮 3 条 Important 全是注释文字，已全闭合。
+- **建议 C-1 记关闭**：**人裁 92 自己写下了关闭条件** ——「两半均已修 … 但 B 尚未独立评审，评审通过前不记作关闭」。
+  该条件现已达成。不是放宽标准，是既定标准被满足。权威措辞见台账 §30。
+- **建议 E1 仍不拍**：上一会话新发现 **I-2** —— 数组 holder 让 `inspectLock` 答 `dead` 而非 `unrecognized-holder`，
+  于是 `unlockCommand` **无 `--force` 直接删锁**。这一格**未裁未修**（E1 在授权面外）。缺口未处置前宣布通过不自洽。
+- **不建议把 Linux 当成点 B 的门**：整套在 Linux 上本来就红 5 条，那是**先于点 B 存在的包级缺口**，
+  绑上去点 B 会永远悬着。**Linux 应单列成一件独立的账。**
+
+### 2. I-3 —— 失败关闭之后，操作员看不见被永久卡住的锁（**挂账**）
 控制器建议**并入人裁 85 那一轮**（`ls` 也报锁），不另开第三轮：**两者是同一个病**。
 ⚠️ **评审员说的"最小修法"并不小**：要区分「持有者还活着」和「锁不可归属」，
 得让 `tryRecoverStaleOwnerTransferLock` 把**为什么返回 false** 告诉调用方，而它现在是 `Promise<boolean>`
-⇒ **那是再动一次红线函数并改它的返回类型。**（read-only argument，**未实测**。）
-现状实测：`readOwnerRecord` **静默返回过期记录不抛错**；唯一出声的 `owner transfer already in progress` **是假话**且不提 `ccloop unlock`。
+⇒ **那是再动一次红线函数并改它的返回类型。** **有实质设计成分，建议新会话用 `superpowers:brainstorming` 起手。**
 
-### 3. Mi-2 —— 数组／强转 holder 绕过
-`parsePid` 的正则 `exec` 会 `String()` 强转，`["pid:999999"]` 能命中。**pre-existing、有界**（pid 仍须是死的，不偷活锁）、
-**与 E1 共用同一个缺口**。但红线函数里新写的注释宣称的"唯一条件"比代码实际强 —— 要么软化注释，要么加 `typeof === "string"`。**挂账。**
+### 3. E1 的 I-2 那一格（**新账，未裁**）
+数组 holder ＋ 死 pid ⇒ E1 无 `--force` 删锁。**已在红线函数的注释里记录为实测，代码一行未改**（E1 在授权面外）。
 
-### 4. T2 的冗余
-`fileStore > leaves the lock on disk when malformed staged state names no dead holder` 的唯一事后断言，
-**逐字是另一条的四条之一**，前 27 行夹具逐字节相同。**是冗余不是僵尸**（编码的规格是对的）。
-消它要动一条具名判据 ⇒ 需要人裁确认人裁 87 涵盖。**挂账。**
+### 4. 仍开着的 8 条 Minor（**人裁 100 明确不再为它们派评审**）
+M-1（C 提交信息记错文件与字符数）、M-2（`e22d1ea` 甩出去的那句仍在 ERRATUM 之后）、M-4（`open(lockPath,"wx")`）、
+M-5（A 缺正向观测）、M-6（T2 注释只挂在较弱那条上）、M-7（一处 freeze 主张只补了方向 erratum）、
+M-8（pid namespace，与本轮无关）、M-9（无需动）。逐条描述见 `…/pointB-cleanup-review.md`。
+
+### 5. Linux 从没跑过点 B（**唯一的真覆盖缺口**）
 
 ---
 
@@ -99,30 +105,29 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 1. **四件需人单独授权**：开门／合并／删分支或 worktree／**push**。*** **控制器不许 push。** *** 非门合并一律 `--ff-only`。
 2. **不许实施者自改判据。** 人裁 4 许可的是**补测试**；**改既有判据**必须由人**指名到具体测试**（人裁 88 三条件：(a) 指名 (b) 整条改写不许放宽 (c) 改后写明编码的是哪条人裁）。
-   ⇒ **需要新覆盖时，先想"能不能只加不改"** —— 上一会话的 A 就是这么绕开一次裁决的。
-3. **不许替人宣布**：「E1 通过」至今没人拍板；C-1 不许记关闭；点 B 不许宣布通过。
+   ⇒ **需要新覆盖时，先想"能不能只加不改"** —— 上一会话的 A 与人裁 99 那条都是这么绕开裁决的。
+3. **不许替人宣布**：点 B 通过、C-1 关闭、E1 通过 —— 三件都没人拍板。
 4. **`.superpowers/sdd/**` 与 `docs/handoff/**` 里的历史记录一个字不改** —— 它们记的是当时为真的事，改了就毁证。
-   （旧措辞「C-1 降级，未关闭」在台账里约二十处，**全部保留**；新记录用 §30 那段权威文本。）
-5. **变异只在 `git clone --local` 副本里**，主仓库工作树全程零触碰；还原证明看 `git diff` 与 `git diff --cached` 的**字节数**，
+5. **注释铁律的分界（人裁 98／100 立的先例）**：
+   - **就地改**只适用于**本会话自己刚写、且从未为真**的笔误；
+   - **已在远端历史里、或上一会话写的** ⇒ **原文逐字保留 ＋ 追加具名 `*** ERRATUM (…, human ruling N) … ***`**。
+6. **变异只在 `git clone --local` 副本里**，主仓库工作树全程零触碰；还原证明看 `git diff` 与 `git diff --cached` 的**字节数**，
    `diff -r` **不是**还原证明（它看不见 index）。
-6. **绝不过滤验证性跑**（`grep`/`tail`/`head`/`sed` 都算，管道还会吞退出码）：重定向到文件、整份读回、核 vitest 第一行 `RUN` 指向的路径。
+7. **绝不过滤验证性跑**（`grep`/`tail`/`head`/`sed` 都算，管道还会吞退出码）：重定向到文件、整份读回、核 vitest 第一行 `RUN` 指向的路径。
 
 ---
 
-## 本会话踩过的坑（**别再踩**）
+## 踩过的坑（**别再踩**）
 
-1. *** **本机 `rm` 和 `cp` 都有 `-i` alias。** *** 普通 `rm -rf` 会**静默挂在确认提示上直到超时**（实测浪费 2 分钟）；
-   `cp` 会**静默拒绝覆盖**。⇒ **一律用 `/bin/rm -rf` 和 `cat pristine > target`。**
-2. *** **`str.replace` 的子串匹配会在句子中间切开段落。** *** 上一会话因此制造了两个 splice bug
-   （一行 153 字符、一整句被甩到 ERRATUM 之后），都是自己抓回来的。
-   ⇒ **改注释时锚点要落在行边界上，改完必须核最宽注释行宽度**（这八个文件的基线是 **≤103**）。
-3. **注释轮必须做全树扫描再动手。** 第一轮改了 12 处、漏了 6 处，其中一处是同一论断的**第四份逐字拷贝** ——
-   结果读者会看到三处说 REFUSER、一处说 STEALER，**且无从判断哪份权威**。**半改比不改坏。**
-4. **注释的写法**：本仓库**不静默覆盖** —— 原文逐字保留，后面接具名 `*** ERRATUM (…, human ruling N) … ***`。
-   ⇒ **改完要用"每一行被删的注释是否还能逐字搜到"来自查**，这是评审员抓住上一轮的方法。
-5. **评审员的自陈也要核。** 上一轮它报 M1 变异「600/600 ALL PASS」，实测是 `599 passed + 1 名单内 flake`。
-   结论不变，但**数字不能照抄**。
-6. **别信"判据增量 = 0"这种条数指标。** 它在条数上准，却掩盖了一整个出口零覆盖 —— 这是那轮 Critical 的成因。
+1. *** **本机 `rm` 和 `cp` 都有 `-i` alias。** *** 普通 `rm -rf` 会**静默挂在确认提示上直到超时**；`cp` 会**静默拒绝覆盖**。
+   ⇒ **一律用 `/bin/rm -rf` 和 `cat pristine > target`。**
+2. *** **`str.replace` 的子串匹配会在句子中间切开段落。** *** ⇒ **改注释时锚点要落在行边界上，改完必须核每个文件的最宽注释行**
+   （现基线：`fileStore.ts` 101／`fileStore.test.ts` 103／`inspectLock.ts` 100／`unlockCommand.ts` 101／`inspectLock.test.ts` 101）。
+3. **注释轮必须做全树扫描再动手。** 第一轮改 12 漏 6；第二轮补 6 又漏 2（其中一处让同一文件**顶部说 REFUSER、80 行后说 STEALER**）。**半改比不改坏。**
+4. **评审员的自陈也要核，数字也不能照抄。** 上一会话两次实测出它的数与控制器的数不一致（M-1 的 153／137／125 三个数**没有一个能互相复现**）。
+5. **别信"判据增量 = 0"这种条数指标。** 它在条数上准，却掩盖了一整个出口零覆盖 —— 那是第一轮 Critical 的成因。
+6. *** **「为修复派评审」会无限递归** *** —— 每轮修复都在制造新的未评审面。人裁 100 的收口理由：连续两轮 0 Critical
+   且 Important 全是文字准确性时，继续递归买不到安全，只买字面完美。**下次要收口，援引人裁 100。**
 
 ---
 
@@ -130,12 +135,12 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 | skill | 什么时候用 |
 |---|---|
-| `superpowers:verification-before-completion` | *** **每次要说"做完了／通过了／绿了"之前。** *** 本项目的 Rule 12 与它同形：跑过、整份读回、贴出证据再下结论 |
-| `superpowers:systematic-debugging` | 出现测试红／行为不符时**先用它**，别直接改代码。本包的历史反复证明：先射后画靶会写出"因为错的理由而绿"的判据 |
-| `superpowers:test-driven-development` | 补任何新判据时（比如下一轮若要补 Mi-2 或 I-3 的覆盖）：**先红后绿**，本会话的 A 就是这么做的 |
-| `superpowers:requesting-code-review` | 派上面第 1 件那轮评审时；派之前先读 `…/pointB-review-brief.md` 当模板 |
-| `superpowers:receiving-code-review` | *** 拿到评审报告之后。 *** ⚠️ **本项目额外要求：评审员的承重主张必须自己复核**，不许照单全收，也不许照抄它的数字 |
-| `superpowers:brainstorming` | 只在第 2 件（I-3／人裁 85）真要动设计时；那件有实质设计成分，值得一个满上下文的开局 |
+| `superpowers:verification-before-completion` | *** **每次要说"做完了／通过了／绿了"之前。** *** 本项目 Rule 12 与它同形 |
+| `superpowers:systematic-debugging` | 出现测试红／行为不符时**先用它**，别直接改代码 |
+| `superpowers:test-driven-development` | 补任何新判据时。⚠️ **本仓库的"先红"是变异证明**（钉现状行为的判据天然先绿），人裁 99 那条就是这么做的 |
+| `superpowers:requesting-code-review` | 派评审时；模板用 `…/pointB-cleanup-review-brief.md`，**里面每个数字都要按现测更新** |
+| `superpowers:receiving-code-review` | *** 拿到报告之后。 *** ⚠️ **本项目额外要求：评审员的承重主张必须自己复核**，不许照单全收，也不许照抄它的数字 |
+| `superpowers:brainstorming` | 只在 I-3（人裁 85 那轮）真要动设计时 —— 那件值得一个满上下文的开局 |
 
 ⚠️ **skill 与本仓库 CLAUDE.md 冲突时，CLAUDE.md 优先**（Rule 11：conformance > taste）。
 
@@ -143,5 +148,5 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ## 预算
 
-上一会话烧了约 **$45**（其中独立评审员一人 **190k tokens**），**远超 CLAUDE.md Rule 6 写的每会话 400k**。
-⇒ **下一会话开局先看 Rule 6**，大动作（再派评审、动 I-3）之前先跟人报一次预估。
+上一会话烧了约 **$48**（其中独立评审员一人 **185k tokens**），**超 CLAUDE.md Rule 6 写的每会话 400k**。
+⇒ **下一会话开局先看 Rule 6**，大动作（再派评审、动 I-3、跑 Linux）之前先跟人报一次预估。
