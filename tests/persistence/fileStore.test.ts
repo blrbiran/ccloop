@@ -1466,6 +1466,16 @@ describe("fileStore", () => {
     // test encoding neither the old spec nor the new one. The only condition that may delete an
     // existing lock is a parsed `pid:<n>` holder that is no longer alive under today's two-state
     // isProcessActive (human ruling 86); malformed contents never reach that check.
+    //
+    // *** ERRATUM (T2, HUMAN RULING 95) — THIS TEST IS A NEAR-DUPLICATE, KEPT DELIBERATELY.
+    // "keeps a malformed lock non-recoverable even when staged artifacts are present" (earlier
+    // in this file) builds a BYTE-IDENTICAL fixture and already asserts, verbatim, this test's
+    // sole post-hoc assertion -- as one of its four. What is only here is the PRE-assertion that
+    // the lock is on disk before readOwnerRecord runs, so a reader can see the delete did not
+    // merely fail to happen for want of a lock. Ruling 95 declined to delete either one: both
+    // encode a correct spec, and dropping a passing criterion to save a few milliseconds trades
+    // real coverage for tidiness. Do not "deduplicate" these two without a fresh naming under
+    // human ruling 88 -- ruling 87 named both for REWRITE, which is not authority to remove. ***
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const initialOwnerRecord = {
       runId: "task-1",
