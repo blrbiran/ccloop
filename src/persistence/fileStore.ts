@@ -959,6 +959,17 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<boolean
   // "No longer alive" means TODAY's two-state isProcessActive (human ruling 86), not E1's
   // three-state classifyHolderLiveness — so `pid:0` and overflowing pids stay REFUSED here exactly
   // as they already were before this change, and point B is not their fix.
+  //
+  // *** ERRATUM (Mi-2, HUMAN RULING 94) — "has the form `pid:<n>`" IS STRONGER THAN THE CODE.
+  // The sentence above is kept verbatim: it states the rule ruling 83 intends. What the code
+  // actually tests is `/^pid:(\d+)$/.exec(holder)`, and `exec` coerces its argument through
+  // String() before matching. `holderProcessInstanceId` is TYPED `string`, but it arrives from
+  // JSON.parse, which is free to hand back an array — `["pid:999999"]` coerces to "pid:999999"
+  // and reaches the liveness check below. Bounded, not a hole a thief can walk through: that
+  // pid must still be DEAD before the lock is deleted, so no LIVE lock becomes reclaimable this
+  // way. Pre-existing (parsePid predates point B) and shared with E1. Left as measured rather
+  // than fixed, because a `typeof === "string"` guard is NEW LOGIC in this function — outside
+  // ruling 83's authorisation — and parsePid has two other callers (unlock, sweep). ***
   try {
     const parsed = JSON.parse(lockContents) as Partial<OwnerTransferLockRecord>;
     const pid = parsed.holderProcessInstanceId ? parsePid(parsed.holderProcessInstanceId) : null;
