@@ -4059,3 +4059,115 @@ brief 与报告已归档并入库（提交主题行 `docs(sdd): file the cleanup
 *** **这两条不在人裁 10 的名单里**（名单只有 `records env names only …` 与 `persists phase usage evidence…`）。 ***
 ⇒ **下次派评审，brief 的「已知 flake」清单必须补上这两条**，否则评审员会照名单判定它们是真红。
 ⚠️ **本条不主张放宽任何判据**，也不主张把它们加进人裁 10 的豁免名单 —— **要不要正式豁免，是人的事，未裁。**
+
+36. 人裁 101–104 —— 点 B 通过、C-1 记关闭、E1 仍不拍，8 条 Minor 收尾
+--------------------------------------------------------------------------------
+
+*** **人裁 101。2026-08-25。「点 B 通过。」** ***
+*** **人裁 102。2026-08-25。「C-1 记关闭。」** ***
+*** **人裁 103。2026-08-25。「E1 仍不拍。」** ***
+*** **人裁 104。2026-08-25。「修 8 条 Minor，然后记台账收工。」** ***
+
+控制器上一会话给的三条建议，人**逐条采纳**，没有替人宣布过任何一件 —— 三件都是人在本会话亲自拍的。
+
+### 开工基线（未过滤整份读回，`RUN` 路径已核）
+
+| 项 | 实测 |
+|---|---|
+| 远端 `refs/heads/main` | `83ac585`，是本地 HEAD 的**祖先**（`merge-base --is-ancestor` 为真）⇒ 16 笔纯本地未 push，无分叉 |
+| 工作树 | `git status --porcelain` **0 字节**（重定向到文件再 `wc -c`，绕开 rtk 把空报 `ok`） |
+| 全套件 | `34 files / 602 tests` 全绿零 skipped，`TEST_RC=0`，耗时 **20.28s**（健康带内，未触发 §35 的 flake） |
+| typecheck／build | `0`／`0` |
+| 红线函数 | `tryRecoverStaleOwnerTransferLock` **3185 字节**，签名命中数 **1**，返回类型 `Promise<boolean>` |
+
+### M-1 —— 三个数字**全部成立**，只是量的不是同一样东西（**这条推翻了 §33 的一句话**）
+
+| 数 | 谁说的 | 实测 | 判定 |
+|---|---|---|---|
+| **125** | 评审员 | `tests/sweep/sweepRuns.test.ts@29aa60e` L674 = **125 字符／128 字节**，且**不含 `***`** | ✅ 成立 |
+| **137** | 控制器（§33） | 同文件**全文件最宽行**是 L463，一行**代码**，137 | ✅ 成立，量的是另一样东西 |
+| **153** | C 的提交信息（`83ac585`） | = `src/persistence/fileStore.ts@29aa60e` **L702 的 152 字符 ＋ 换行** | ✅ 数对，**挂在了错误的文件上** |
+
+⚠️ *** **§33 写的「『153』两边都复现不出来」是错的 —— 它复现得出来，在 `fileStore.ts`。** ***
+按铁律 4，**§33 原文一字不改**，更正记在此处。
+
+C 的提交信息把**三样东西拼成了一句**：fileStore.ts 的长度、sweepRuns.test.ts 的文本、以及一个**两处都不存在的 `***`**。
+*** **M-1 无法在代码里修：`83ac585` 就是远端 main 的头，重写它的提交信息要 rebase 16 笔，还会作废台账里全部哈希引用。** ***
+
+### 顺带查出的第二个记账缺陷：「最宽注释行」的口径从来没被写死
+
+§33／§34 记的 `fileStore.ts` 101／`fileStore.test.ts` 103／`inspectLock.ts` 100／`unlockCommand.ts` 101／`inspectLock.test.ts` 101，
+**用三种全文件口径都复现不出来**（实测全文件最宽注释行是 104／129／104／103／101，顶格 `//` 与「从 `//` 起算」两种口径同样对不上）。
+最接近的口径是「**本次 diff 新增行里最宽的注释行**」—— 但实测 `060fbbf` 是 **101／100／100**，而 §34 记的是 **100／101／101**：
+*** **数值差一，且三个文件之间张冠李戴。** *** 按铁律 4，§33／§34 原文不改。
+
+⇒ *** **本轮起，口径写死并逐次复述：全文件、首个非空白字符为 `//` 的行、按【字符】计。** ***
+本轮改前基线：`fileStore.ts` **104**、`fileStore.test.ts` **129**。
+
+### 8 条 Minor 的逐条处置（**每条都是控制器自己复核过才动的，评审员的数字一个没照抄**）
+
+| | 复核结果 | 处置 |
+|---|---|---|
+| **M-1** | 成立（见上表） | **只记台账** —— 提交信息在远端头上，改不了 |
+| **M-2** | 成立。`fileStore.ts:918-919` 那两行仍在 ERRATUM 之后，「that same failure」的最近先行词是 erratum 的 REFUSER，而句子写的是段落的 STEALER | 追加具名 ERRATUM 点明先行词；**原文逐字保留，不搬回去** |
+| **M-4** | 成立。`fileStore.test.ts` 里 `open(lockPath, "wx")` 用现在时，而**同文件 20 行之上**明写「atomic publish 之后没有任何东西对 lock path 调 `open`」 | 两处都追加 ERRATUM（见下） |
+| **M-5** | 成立，且**实测可证**（见变异段） | **新增一条判据**，只加不改，人裁 4 |
+| **M-6** | 成立。人裁 95 的「刻意保留」注释只挂在较**弱**那条上；较富那条（多三条断言）一个字都没有 | 在较富那条上加回指 ＋ 指向人裁 88 |
+| **M-7** | 成立。全树五个 freeze 站点写了「that freeze has since been lifted, for point B alone」，`fileStore.test.ts:3356` 那条只改了方向 | 补齐，措辞与另五处一致 |
+| **M-8** | 评审员自陈「words 'this way' are doing correct work」，无需动 | 只记台账 |
+| **M-9** | 实测无生产注释再引旧字节基线 | 只记台账 |
+
+### ⚠️ M-4 的第二处：**评审员没点名，是强制全树扫描查出来的**
+
+`src/persistence/fileStore.ts:506`（在 C-1 那条 ERRATUM 1 体内）同样用**现在时**写着
+`acquireOwnerTransferLock creates the lock with open(lockPath, "wx")`。
+实测生产码：`fileStore.ts` 里 `await open` **只有一处** —— `open(stagingPath, "w")`，发布靠 `link(staging, lockPath)`。
+⇒ *** **只修测试那处、放着这处，正是坑 3 说的「半改比不改坏」。两处一起修。** ***
+
+### R-1 —— **人裁 102 的直接后果，不是评审发现**
+
+`fileStore.ts` 的 ERRATUM 2 写着「**(a) C-1 is not recorded as closed: this change has not had an independent review**」。
+人裁 102 刚把 C-1 记关闭。**台账记关闭而生产注释否认它，正是本包存在的理由那种缺陷形状。** ⇒ 追加 ERRATUM 3 一并说明。
+
+### M-5 的变异证明（`git clone --local` 副本，主仓库工作树全程只读）
+
+| 变异 | 测试 A（`keeps a lock non-recoverable when its live holder is in the strong instance-id form`） | **新判据** |
+|---|---|---|
+| **B：红线函数永不进入**（`if (!(await Promise.resolve(false)))`） | *** **全绿 —— 它分辨不出** *** | *** **红：`expected 0 to be greater than 0`** *** |
+| **A：守卫翻回 `pid !== null && isProcessActive(pid)`** | 红：`promise rejected "ENOENT ..." instead of resolving` | 红：`expected 2 to be 1`（被偷锁放行的 epoch） |
+
+*** **变异 B 就是 M-5 的全部内容：旧判据的绿与「函数根本没被调用」不可区分。这是实测，不是论证。** ***
+观测点：`fileStore.ts` 对 lock path 的 `readFile` **全文件只有一处**，就在红线函数的第一条语句
+⇒ `readOwnerRecord` 期间对该路径的一次读 **＝** 一次进入红线函数。断言写成「至少一次」是**故意的**，
+免得它悄悄变成一条关于重试次数的判据。副本已 `/bin/rm -rf`，主仓库 index 全程 0 字节。
+
+### 落地（两笔，按文件切开，均为本地提交）
+
+1. `docs(comments): correct the two fileStore.ts claims measurement and ruling 102 overtook (M-2, M-4, human ruling 104)` —— **+22／−0**
+2. `test(fileStore): give test A the positive observation it lacked, and close three comment Minors (M-4, M-5, M-6, M-7, human ruling 104)` —— **+106／−0**
+
+全部 ERRATUM 均为**追加**，历史原文逐字保留（人裁 98／100 立的先例）。
+
+### 落地后实测（未过滤整份读回）
+
+| 项 | 值 |
+|---|---|
+| 全套件 | *** **`34 files / 603 tests`** *** 全绿零 skipped，`TEST_RC=0`，`RUN` 路径 = 主仓库根，耗时 17.22s |
+| typecheck／build | `0`／`0` |
+| 新判据单跑 | `1 passed | 87 skipped`，**6ms**，`RC=0`（不给负载添压，不新增 flake 面） |
+| diff | **+128／−0**，**删除 0 行** |
+| 最宽注释行 | `fileStore.ts` **104**、`fileStore.test.ts` **129** —— **改前改后逐一相同**（本轮口径） |
+| 新增行最宽 | 注释 **102**（src）／**100**（tests）；代码最宽 156，是**逐字抄自同文件既有夹具**的那行，全文件已出现 10 次 |
+| 红线函数 | **本轮逐字节未动**，基线仍 **3185**，签名命中数 =1 |
+
+*** **判据基线自本条起是 603。红线函数字节基线仍是 3185。** ***
+
+### ⛔ 下一件事
+
+1. *** **本轮无人裁待决。** *** 点 B 已通过（101）、C-1 已记关闭（102）、E1 仍不拍（103）、8 条 Minor 已收尾（104）。
+2. **仍挂账、需要人先开口的**：
+   - **I-3**（失败关闭后操作员看不见卡死的锁）—— 并入人裁 85 那一轮，**要改红线函数的返回类型，有实质设计成分**，建议**新会话用 `superpowers:brainstorming` 起手**。
+   - **E1 的 I-2 那一格**（数组 holder ⇒ 无 `--force` 删锁）—— **E1 在授权面外**，动它要新授权。人裁 103 不拍 E1 的理由就是这一格。
+   - **Linux 从没跑过点 B** —— 本机 OrbStack 的 docker CLI 在 `/usr/local/bin/docker`，但 **daemon 没起**（`unix:///Users/biran/.orbstack/run/docker.sock` 连不上），要人自己开。整套在 Linux 上本来就红 5 条，是**先于点 B 的包级缺口**，人裁 101 没把它绑成点 B 的门。
+3. ⚠️ **本轮的两笔【自身没有经过独立评审】** —— 与 §33 同形。人裁 100 的收口理由（「为修复派评审」会无限递归）在此**同样适用**，但**要不要为这两笔破例，是人的事，未裁**。
+4. **控制器全程未 push**；远端一律以 `git ls-remote` 现跑为准，开工与收尾各核一次。
