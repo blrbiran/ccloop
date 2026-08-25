@@ -525,6 +525,19 @@ async function acquireOwnerTransferLockForReconciliation(
 // THIS DOES NOT SAY. (a) C-1 is not recorded as closed: this change has not had an independent
 // review. (b) A lock can still be removed by `ccloop unlock --force --expect` — by a human's hand,
 // never unattended — so "cannot interleave" remains a premise about the automated paths only. ***
+//
+// *** ERRATUM 3 (M-4 and the ruling that closed C-1, HUMAN RULING 104). Both errata above are kept
+// verbatim. Two things they state have since been overtaken, one by measurement and one by ruling:
+//   - ERRATUM 1's `open(lockPath, "wx")` is not how this lock is published any more. Human ruling
+//     50's atomic publish stages with `open(stagingPath, "w")` and publishes with
+//     `link(staging, lockPath)`; the only `await open` left in this file is that staging one, and
+//     the ZERO-BYTE WINDOW ERRATUM 1 measured closed with it. An intruder now meets the link's
+//     EEXIST on a lock that is already complete. The measurement is kept because it records what
+//     was true when it was taken, not because it still describes this code.
+//   - ERRATUM 2's "(a) C-1 is not recorded as closed: this change has not had an independent
+//     review" has been overtaken by ruling. Point B had two independent reviews, 0 Critical in
+//     both. HUMAN RULING 101 passed point B; HUMAN RULING 102 then recorded C-1 closed, on the
+//     condition human ruling 92 had itself written down. ERRATUM 2's (b) is untouched. ***
 async function publishReconciliationUnderTransferLock(
   runDir: string,
   nextReconciliationRecord: ReconciliationRecord,
@@ -917,6 +930,15 @@ function sameOwnerRecord(left: OwnerRecord, right: OwnerRecord): boolean {
 //
 // A separate liveness implementation inside the unlock command would be free to
 // drift into that same failure, on the one command whose purpose is to not delete live locks.
+//
+// *** ERRATUM (M-2, HUMAN RULING 104) — WHAT "THAT SAME FAILURE" POINTS AT. The two lines above are
+// kept verbatim and are NOT being moved back. They are the tail of the paragraph ABOVE the first
+// erratum; commit e22d1ea's reflow left them stranded on the far side of it. The nearest antecedent
+// a reader now meets is that erratum's unconditional lock REFUSER, while the sentence was written
+// about the paragraph's unconditional lock STEALER. Under ruling 83 a second liveness
+// implementation could drift into either, so the sentence is true where it sits; only its
+// antecedent moved. This repository records where its text went rather than quietly putting it
+// back. ***
 export function parsePid(processInstanceId: string): number | null {
   const match = /^pid:(\d+)$/.exec(processInstanceId);
   return match === null ? null : Number.parseInt(match[1], 10);
