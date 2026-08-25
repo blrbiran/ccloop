@@ -3468,6 +3468,17 @@ describe("the owner-transfer lock is published atomically, never as an empty fil
 // all carry that sentence; this was the one site that did not. The omission was cosmetic — the
 // invariant this test guards is unaffected either way. ***
 //
+// *** ERRATUM (Mi-1 and Mi-2 of the Minors-round review, HUMAN RULING 105). The erratum above is
+// kept verbatim and takes two corrections, one of them caused by inserting it where it sits:
+//   - "that mutation" in the paragraph BELOW means MUTATION C — replacing the weak `pid:<pid>`
+//     holder with the strong buildProcessInstanceId() form. Its antecedent used to be the
+//     direction erratum, which names mutation C; inserting the freeze erratum between them pushed
+//     that antecedent one block further away. The referent is named here rather than moving any
+//     published text, which is the same reason the direction erratum exists at all.
+//   - "in so many words ... and the function changed" overstates the other sites. Every one of
+//     them does carry the freeze-lifted sentence — that is the operative claim and it holds — but
+//     the trailing clause about the function having changed is at two of them, not at all. ***
+//
 // Three tests DO go red under that mutation today, but they report it as
 // "renameCount 4 instead of 2", as a loser that was never blocked, and as a loser that published
 // against a live lock — not one of them names the cause. This one names it, so the next person who
@@ -4025,6 +4036,14 @@ describe("claimOwnerRecordWithPrecondition", () => {
 // and to hold A there until reader B's own failed-acquire attempt has actually happened. No
 // production code is touched; the seam only observes/delays real fs calls the production code
 // already makes.
+//
+// *** ERRATUM (I-5 of the Minors-round review, HUMAN RULING 105). The paragraph above is kept
+// verbatim. `open(lockPath, "wx")` names the two-step publish human ruling 50 replaced: production
+// stages with `open(stagingPath, "w")` and publishes with `link(staging, lockPath)`, and the only
+// `await open` in fileStore.ts is that staging one. Reader B's EEXIST therefore comes from the
+// link, not from an open of the lock path — which is what makes the "genuine EEXIST, never a
+// zero-length read" point above still true, by a different mechanism than it names. This header
+// was MISSED when the same claim was corrected inside this block; a reader meets it FIRST. ***
 describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racing the same marker", () => {
   it(
     "lets exactly one of two concurrent readOwnerRecord calls finalize the transaction; the other returns without writing",
@@ -4118,6 +4137,14 @@ describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racin
           // review of point B found ruling 83's second exit had shipped with no test, and that gap
           // was filled separately. An externally corrupted lock still reaches the branch; what has
           // changed is that the branch now refuses it instead of stealing it. ***
+          //
+          // *** ERRATUM 4 (I-1 of the Minors-round review, HUMAN RULING 105). ERRATUM 3 is kept
+          // verbatim. "C-1 is still NOT recorded as closed" has been overtaken: human ruling 102
+          // recorded it closed, on the condition human ruling 92 had itself written down. The
+          // sentence's own account of why it was open — the second exit shipped untested, the gap
+          // was filled separately — is what satisfied that condition. This site was MISSED when
+          // the same claim was corrected in src/persistence/fileStore.ts, twenty-six lines above
+          // the erratum the same round added to this very block. ***
           //
           // The hook had to move because it instrumented the very call ruling 50 replaced: with the
           // atomic publish, nothing ever calls `open` on the lock path, so the old hook would never

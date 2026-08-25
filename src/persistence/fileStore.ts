@@ -538,6 +538,15 @@ async function acquireOwnerTransferLockForReconciliation(
 //     review" has been overtaken by ruling. Point B had two independent reviews, 0 Critical in
 //     both. HUMAN RULING 101 passed point B; HUMAN RULING 102 then recorded C-1 closed, on the
 //     condition human ruling 92 had itself written down. ERRATUM 2's (b) is untouched. ***
+//
+// *** ERRATUM 4 (I-2 of the Minors-round review, HUMAN RULING 105). ERRATUM 3 is kept verbatim,
+// and one sentence in it is false. "Point B had two independent reviews, 0 Critical in both" —
+// the FIRST of the two opened its Critical section with the ruling 83 exit that had shipped with
+// no test at all. That finding was fixed before the second review, which found none. The ruling
+// ERRATUM 3 cites is unaffected: ruling 92's stated condition was review PASSAGE, not a review
+// with nothing in it, and ruling 102 recorded the closure on that condition. What is wrong is a
+// count, written into src/ where nothing could check it — the defect class this package exists
+// to remove. Review status belongs in the ledger; no further count is added here. ***
 async function publishReconciliationUnderTransferLock(
   runDir: string,
   nextReconciliationRecord: ReconciliationRecord,
@@ -1177,6 +1186,14 @@ async function recordSkippedLockRelease(
 // holder that is not alive under isProcessActive (two-state, human ruling 86). The acquire path
 // here, the two-iteration loop and OwnerTransferLockBusyError ARE still unchanged. C-1 is not
 // recorded as closed: both halves are repaired, but this half has not had an independent review. ***
+//
+// *** ERRATUM (I-1 of the Minors-round review, HUMAN RULING 105). The sentence above is kept
+// verbatim and has been overtaken: human ruling 102 recorded C-1 CLOSED, on the condition human
+// ruling 92 had itself written down. The independent review it says this half never had has since
+// happened. Nothing about the acquire path described above changed — only the bookkeeping claim
+// in the last sentence did, and that status is tracked in the ledger, not here. This site was
+// MISSED when the same sentence was corrected earlier in this file: one claim in three places,
+// two of them left standing. That is the half-fix the correcting commit itself condemned. ***
 async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () => Promise<void> }> {
   const { lockPath } = getOwnerTransferPaths(runDir);
 

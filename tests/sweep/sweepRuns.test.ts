@@ -686,6 +686,13 @@ describe("sweepRuns", () => {
   // would void every hash the ledger cites. So the correction lives here, where a reader who
   // follows that message lands. Ledger §36 carries the full three-way measurement. ***
   //
+  // *** ERRATUM (I-4 of the Minors-round review, HUMAN RULING 105). The paragraph above is kept
+  // verbatim and one clause in it has already rotted: "the commit is the remote tip" was true
+  // when written and is not now — the branch has moved past it. The reason it supports does not
+  // depend on that clause: rewriting a published commit rebases everything after it and voids
+  // every hash the ledger cites, which holds however far back the commit sits. A comment that
+  // pins a moving git reference rots exactly like one that pins a byte baseline. ***
+  //
   // C-b decided this walks `rows`, not `candidates`, and the reason is measured rather than
   // argued (pointC-design.md §4.1 judgment 2, §8.5 end to end): a run whose owner-transfer.json
   // never landed and whose lock is unrecoverable — "shape 1" — is reported by NOTHING today.
