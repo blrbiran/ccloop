@@ -819,6 +819,14 @@ describe("fileStore", () => {
     // recoverable"), which is why human ruling 87 named it for a whole rewrite rather than a
     // relaxation. An unparseable lock names no holder, an unattributable holder may not be
     // declared dead, so the lock is not stolen and the staged transfer is never finalized.
+    //
+    // *** ERRATUM (M-6, HUMAN RULING 104) — THIS IS THE RICHER HALF OF A NEAR-DUPLICATE PAIR.
+    // "leaves the lock on disk when malformed staged state names no dead holder", later in this
+    // file, builds a BYTE-IDENTICAL fixture, and its single post-hoc assertion is one of the four
+    // below. Human ruling 95 declined to delete either one, but left its note only on that test,
+    // which is the poorer of the two: deleting THIS one costs three assertions the other lacks.
+    // Do not "deduplicate" the pair without a fresh naming under human ruling 88 — ruling 87
+    // named both for REWRITE, which is not authority to remove. ***
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const initialOwnerRecord = {
       runId: "task-1",
@@ -918,6 +926,90 @@ describe("fileStore", () => {
     await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toContain(
       "owner lost after reconciliation",
     );
+  });
+
+  it("observes that the redline function actually ran on the strong-holder fixture", async () => {
+    // M-5, HUMAN RULING 104. A PURE ADDITION under human ruling 4: it adds a criterion and rewrites
+    // none, so it needs no naming under human ruling 88, and the test above is untouched.
+    //
+    // WHY THIS EXISTS. Every assertion in the test above is also true of a world where
+    // tryRecoverStaleOwnerTransferLock was never entered at all: the lock is byte-identical, the
+    // epoch is still 1, the staged transfer is still pending. That green is therefore consistent
+    // with the guard REFUSING and with the call NEVER HAPPENING, and an independent review named
+    // it (cleanup round, M-5). This supplies the missing positive observation — the same
+    // anti-vacuity move withLockAttemptCounter already makes for the acquire path.
+    //
+    // WHAT IS COUNTED, and why the count means what it says: fileStore.ts holds exactly ONE
+    // readFile of the lock path, the first statement of tryRecoverStaleOwnerTransferLock. So one
+    // read of that path during readOwnerRecord IS one entry into the redline function. It is
+    // asserted as "at least one" on purpose, so that the retry bound around it stays free to
+    // change without this quietly becoming a criterion about retries.
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    // The same premise the test above asserts, kept here so this one cannot quietly turn into a
+    // liveness test that passes for the wrong reason.
+    const strongHolder = buildProcessInstanceId();
+    expect(strongHolder).not.toMatch(/^pid:\d+$/);
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(transfer.transferRecord, null, 2));
+    await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(transfer.nextOwnerRecord, null, 2));
+    await writeFile(
+      join(runDir, ".owner-transfer.transaction.json"),
+      JSON.stringify({ version: 1, stagedAt: transfer.transferRecord.transferredAt, finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
+    );
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    const lockContents = JSON.stringify({ holderProcessInstanceId: strongHolder, acquiredAt: "2026-07-22T10:05:00.000Z" });
+    await writeFile(lockPath, lockContents);
+
+    let lockReads = 0;
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+      return {
+        ...actual,
+        readFile: async (...args: Parameters<typeof actual.readFile>) => {
+          // Counted, never faked: everything is forwarded to the real implementation.
+          if (String(args[0]) === lockPath) {
+            lockReads += 1;
+          }
+
+          return actual.readFile(...args);
+        },
+      };
+    });
+
+    try {
+      const fileStore = await import("../../src/persistence/fileStore.js");
+      const owner = await fileStore.readOwnerRecord(runDir);
+
+      // The positive observation this test exists for: the code under test was entered.
+      expect(lockReads).toBeGreaterThan(0);
+      // And, having been entered, it refused. Both halves are needed: either alone is vacuous.
+      expect(owner.currentOwnerEpoch).toBe(1);
+      await expect(readFile(lockPath, "utf8")).resolves.toBe(lockContents);
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
   });
 
   it("reclaims a lock whose holder is an ARRAY that String()s into pid:<n> -- pinned as measured", async () => {
@@ -3368,6 +3460,14 @@ describe("the owner-transfer lock is published atomically, never as an empty fil
 // stall. That is why this test still has to exist, and why its name says the guard must be able to
 // PARSE the holder rather than saying anything about stealing. ***
 //
+// *** ERRATUM (M-7, HUMAN RULING 104) — THE FREEZE, NAMED HERE AS IT IS EVERYWHERE ELSE. The
+// erratum above corrects the direction and stops there. Every other freeze site in this tree says
+// the rest of it in so many words: that freeze has since been lifted, for point B alone, and the
+// function changed. src/persistence/fileStore.ts, src/sweep/lockPresence.ts,
+// src/unlock/inspectLock.ts, tests/sweep/lockPresence.test.ts and tests/sweep/sweepRuns.test.ts
+// all carry that sentence; this was the one site that did not. The omission was cosmetic — the
+// invariant this test guards is unaffected either way. ***
+//
 // Three tests DO go red under that mutation today, but they report it as
 // "renameCount 4 instead of 2", as a loser that was never blocked, and as a loser that published
 // against a live lock — not one of them names the cause. This one names it, so the next person who
@@ -4042,6 +4142,12 @@ describe("recoverInterruptedOwnerTransfer: two concurrent unlocked readers racin
               // Reader B only ever reads the lock file from inside tryRecoverStaleOwnerTransferLock,
               // which runs exactly when its own open(lockPath, "wx") lost the EEXIST race -- i.e.
               // this fires once B's failed-acquire attempt has actually happened.
+              // *** ERRATUM (M-4, HUMAN RULING 104): kept verbatim. `open(lockPath, "wx")` names
+              // the publish shape human ruling 50 replaced. Production stages with
+              // `open(stagingPath, "w")` and publishes with `link(staging, lockPath)`, and the
+              // only `await open` in fileStore.ts is that staging one — which is what the note
+              // twenty lines above already says. Read "lost the EEXIST race" as the link's
+              // EEXIST. The instant being forced and every assertion below are unchanged. ***
               bAttemptedAcquire.resolve();
             }
 
