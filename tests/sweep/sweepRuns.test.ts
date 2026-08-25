@@ -675,6 +675,17 @@ describe("sweepRuns", () => {
   // *** ERRATUM (point B, human ruling 83): that freeze has since been lifted, for point B alone.
   // The paragraph above is kept verbatim; presence-only rests on §7.2, not on that freeze. ***
   //
+  // *** ERRATUM (M-1, HUMAN RULING 104) — A COMMIT MESSAGE ABOUT THIS SITE IS WRONG, MEASURED.
+  // `docs(comments): make e22d1ea's own method claim true -- restore what it overwrote` says the
+  // erratum above had been spliced into the middle of a sentence here, "leaving ... on one
+  // 153-character line". Measured on that commit's own parent: the line here was 125 characters
+  // and contained no `***` at all. The 152-character line — 153 with its newline — was in
+  // src/persistence/fileStore.ts, a different file the same reflow had damaged and the same
+  // commit also repaired. The repair recorded there is real; only its measurement named the
+  // wrong file. That message cannot be corrected: the commit is the remote tip, and rewriting it
+  // would void every hash the ledger cites. So the correction lives here, where a reader who
+  // follows that message lands. Ledger §36 carries the full three-way measurement. ***
+  //
   // C-b decided this walks `rows`, not `candidates`, and the reason is measured rather than
   // argued (pointC-design.md §4.1 judgment 2, §8.5 end to end): a run whose owner-transfer.json
   // never landed and whose lock is unrecoverable — "shape 1" — is reported by NOTHING today.
