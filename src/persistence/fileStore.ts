@@ -993,9 +993,25 @@ export function isProcessActive(pid: number): boolean {
 // every caller could only say one thing about them, and that thing was false for the second.
 // Human ruling 83's fail-closed semantics are unchanged cell for cell: the only exit that deletes a
 // lock is still "contents parse + `pid:<n>` holder + that process is not alive".
+//
+// *** ERRATUM (I-1 and Mi-1 of the ruling 106(b) review, HUMAN RULING 108) -- the paragraph above
+// is kept verbatim and one sentence in it is too strong. "a lock a LIVE holder is using (transient:
+// it clears when that process exits)" is NOT what this exit means. isProcessActive is human ruling
+// 86's TWO-state predicate: it answers "alive" whenever `process.kill(pid, 0)` fails with anything
+// other than ESRCH. Measured on darwin: isProcessActive(0) === true, because `kill(0, 0)` signals
+// the caller's own process GROUP and succeeds; isProcessActive(1e20) === true, because an
+// out-of-range pid raises ERR_INVALID_ARG_TYPE, which is not ESRCH. Neither lock is held by
+// anything and neither will ever clear on its own -- so this exit means "NOT DETERMINED DEAD", not
+// "alive". The variant is named for what it computes, and the `pid` field it used to carry is gone:
+// nothing read it, and carrying it made the exit read as a determination that was never made.
+//
+// The BEHAVIOUR is deliberately unchanged. Those cells stay REFUSED exactly as rulings 83 and 86
+// leave them, with the lock on disk; widening `unattributable` to cover them would be new logic
+// outside ruling 106(a)'s authorisation, which reaches the return type and its consumers and no
+// further. Recorded, not fixed. ***
 type StaleOwnerTransferLockOutcome =
   | { kind: "cleared" }
-  | { kind: "holder-alive"; pid: number }
+  | { kind: "not-determined-dead" }
   | { kind: "unattributable"; why: "unparseable" | "no-pid-holder" };
 
 async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<StaleOwnerTransferLockOutcome> {
@@ -1066,8 +1082,12 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<StaleOw
   // because it is total: `process.kill(pid, 0)` inside its own try, ESRCH => false, every other
   // errno => true. It has no throw for the removed catch to have been catching. This is pinned by
   // the EPERM criterion in fileStore.test.ts, not by this sentence.
+  //
+  // "every other errno => true" is also why this exit is called not-determined-dead rather than
+  // holder-alive (human ruling 108): a live holder, `pid:0`, an out-of-range pid and an EPERM
+  // refusal all land here, and only the first of them clears on its own.
   if (isProcessActive(pid)) {
-    return { kind: "holder-alive", pid };
+    return { kind: "not-determined-dead" };
   }
 
   await safeUnlink(lockPath);
@@ -1317,7 +1337,17 @@ async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () =
         );
       }
 
-      if (outcome.kind === "holder-alive") {
+      // *** ERRATUM (I-1 of the ruling 106(b) review, HUMAN RULING 108) -- the paragraph above is
+      // kept verbatim, and "It was only ever false HERE" is too strong. Measured against this
+      // function: a lock holding `pid:0`, one holding an out-of-range pid, and one whose holder's
+      // liveness the probe cannot determine (EPERM) ALL reach the throw below and all get
+      // "owner transfer already in progress" -- and none of them will ever clear on its own either.
+      // The busy message is true only for a genuinely live holder, not for every cell that reaches
+      // it. Those three cells stay REFUSED with the lock on disk, exactly as rulings 83 and 86
+      // leave them; naming them would be new logic outside ruling 106(a). Recorded, not fixed --
+      // the same disposition the redline function's own ruling-94 erratum gives its array-holder
+      // cell. ***
+      if (outcome.kind === "not-determined-dead") {
         throw new OwnerTransferLockBusyError("owner transfer already in progress");
       }
     }

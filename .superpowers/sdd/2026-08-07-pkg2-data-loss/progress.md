@@ -4462,3 +4462,88 @@ I-3 要改的是**返回类型**，不在人裁 83 的措辞内 ⇒ **授权来�
    - **E1 的 I-2 那一格**（授权面外）、**Linux**（OrbStack daemon 要人自己起）、**人裁 85**（`ls` 也报锁）。
 3. ⚠️ **本轮三笔尚未经过独立评审** —— 那正是第 1 条要做的事。
 4. **控制器不许 push。**
+
+41. 人裁 106(b) 的评审回来了（0C／1I／3Mi）＋ 人裁 108 —— 全修，并给 §40 一条更正
+--------------------------------------------------------------------------------
+
+*** **人裁 108。2026-08-27。「1–3 修、4 一并改名。」** *** 即：I-1 追加 ERRATUM、Mi-2 更正普查、
+Mi-3 补断言，**并采纳评审员建议 2**：把 `holder-alive` 改名为 `not-determined-dead`，连带删掉 Mi-1 那个死字段。
+评审报告在 `…/i3b-review.md`，brief 在 `…/i3b-review-brief.md`。
+
+### 评审结论与控制器逐条复核（**一条自陈都没照收**）
+
+| | 评审员说 | 控制器复核 |
+|---|---|---|
+| **I-1** | `It was only ever false HERE` 太强；`pid:0`／超范围 pid／EPERM 三格也拿到那句 busy 假话且永不自清 | ✅ **成立**。实测 `isProcessActive(0)=true`（`kill(0,0)` signal 自己的进程组，不抛）、`isProcessActive(1e20)=true` |
+| **Mi-1** | `holder-alive` 的 `pid` 字段没人读 | ✅ **成立**。`src` 内 `outcome.pid` 命中 **0** |
+| **Mi-2** | 消费点普查串了 | ✅ **成立，且它报小了** —— 见下 |
+| **Mi-3** | 人裁 107 那条判据没断言锁还在 | ✅ **成立** |
+
+⚠️ *** **评审员两处不准，均已实测更正**（本仓库规矩：不许照抄评审员的数字）：*** ***
+1. 它说超范围 pid 抛 `ERR_OUT_OF_RANGE`；**实测是 `ERR_INVALID_ARG_TYPE`**。结论不变，数字错。
+2. 它说 Mi-2 只有 brief 串了、「台账 §40 与提交信息说得对」。**假的。** 见下条。
+
+### ⚠️ 更正 §40（**铁律 4：§40 原文一字不改，更正落在本节**）
+
+§40 写道「「五个消费点」漏了**三个吞错误的调用点**」；spec §4.1 亦写「`acquireOwnerTransferLock`
+共有 5 个调用点…另外三处直接吞」。*** **这两句都把两类东西混成了一类。** ***
+
+**准确的普查**（控制器自己数的）：`acquireOwnerTransferLock` 有 **5 个直接调用点** ——
+`acquireOwnerTransferLockForReconciliation`／`recoverInterruptedOwnerTransfer`／
+`writeOwnerTransferArtifacts`／`claimOwnerRecordWithPrecondition`／`updateOwnerRecordWithPrecondition` ——
+其中 *** **只有 1 个直接吞** ***（`recoverInterruptedOwnerTransfer` 的裸 `catch`，即 I-3(a)）。
+另外两处吞在**上一层**：`leaseHeartbeat` 调的是 `affirmOwnerLease`／`releaseOwnerLease`，
+它们才经 `updateOwnerRecordWithPrecondition` 到达锁。*** **三处吞，但不是「三个调用点」。** ***
+
+spec §4.1 在 `docs/` 下、本会话所写且未发布 ⇒ **就地更正**（并在该节写明经人裁 108 更正过）。
+§40 在 `.superpowers/sdd/**` 下 ⇒ **一字不改**，更正即本节。
+
+### 落地
+
+- `src/persistence/fileStore.ts`：`holder-alive` ⇒ *** **`not-determined-dead`** ***，删掉无人读的 `pid` 字段；
+  类型注释块与 acquire 站点注释块**原文逐字保留**，各追加一条具名 `ERRATUM (…, HUMAN RULING 108)`，
+  写明那三格也拿到 busy 那句话、且 *** **行为故意不动** ***（人裁 86 的两态判据 ＋ 人裁 83 的失败关闭；
+  把 `unattributable` 扩到那三格是**人裁 106(a) 授权面外的新逻辑**）。
+- `tests/persistence/fileStore.test.ts`：人裁 107 那条判据补上 `锁仍在盘上` 的断言（Mi-3）。
+
+⇒ 改名顺带解掉评审员点出的一处自相矛盾：EPERM 那条判据名为
+`… when the holder's liveness cannot be determined`，而旧判别名说的是 `holder-alive`。现在名实相符。
+
+### 变异证明（**新加的断言必须先被看到能红**）
+
+| | 变异 | 结果 |
+|---|---|---|
+| M8 | `unparseable` 出口获得 `safeUnlink` | *** **3 条红，含人裁 107 那条** *** ⇒ Mi-3 新断言承重 |
+| M9 | `not-determined-dead` 出口改成 `cleared` ＋ unlink | **8 条红**，含活持有者三条 ⇒ 改名后出口仍承重 |
+
+⚠️ *** **控制器自己掉进了 brief 警告评审员的那个坑：`git clone --local` 只克隆已提交状态。** ***
+第一次跑 M8 时改名与新断言**尚未提交**，副本里是旧代码，于是「人裁 107 那条判据没红」，
+而 M9 的锚点直接 0 命中。**是锚点断言当场拦下的** —— 这就是「插入前先断言锚点逐字相符」的价值。
+按协议 `cat` 工作树文件过去（`diff` 两个文件均 **0 字节**）后重做，两条才成立。
+
+⚠️ *** **还原证明的诚实限度**：*** 副本 `git diff` ＝ **5252 字节**（正是 `cat` 过去的未提交改动本身），
+`git diff --cached` ＝ **0 字节**；但**删副本前没做「副本文件 vs 工作树文件」的最终字节比对**，
+副本侧的还原证明**比协议要求弱一档**。主仓库侧是硬的：`git status --porcelain` 只有三个有意改动的文件。
+
+### 落地后实测（未过滤整份读回）
+
+`35 files / 609 tests` 全绿零 skipped，`TEST_RC=0`／`TYPECHECK_RC=0`／`BUILD_RC=0`，耗时 17.83s。
+*** **判据基线仍是 609**（Mi-3 只加断言、不加判据）。 *** 红线函数字节基线因本节改名而变，
+**引用前必须现测，并连口径一起引**（口径见 §39）。
+
+### 评审员那边值得留下的
+
+它独立复现了控制器的每个数字（609／35、4496 连口径、`tests/` 目录删除行数 5 且全在人裁 107 那条判据内、
+两笔人裁 105 提交删除行数各 0），另跑两条自己的变异（M6／M7）去找覆盖漏洞**没找到**，
+并**主动交代了自己一个坏探针**（import 错模块）把那次结果作废。
+它最重的那条——「人裁 83 的删锁条件逐格未变」——用 **75 行差分探针（25 输入 × 3 种 kill 状态）零不匹配**
+＋ 一条给失败关闭出口加删除的全量变异，**攻不破**。
+
+### ⛔ 下一件事
+
+1. *** **本轮无人裁待决。** *** 人裁 106 三件全部做完；106(b) 的评审 1 Important ＋ 3 Minor 全部处置完毕。
+2. ⚠️ **人裁 108 这一笔自身没有再经评审。** 人裁 100 的递归收口理由适用（连续 0 Critical，
+   且本轮 Important 是文字准确性）—— **但要不要再破一次例是人的事，未裁。**
+3. **仍挂账，都要人先开口**：**I-3(a)**、***`leaseHeartbeat` 的两处吞***、**E1 的 I-2 那一格**、
+   **Linux**（OrbStack daemon 实测仍未起，socket 不存在）、**人裁 85**（`ls` 也报锁）。
+4. **控制器不许 push。**

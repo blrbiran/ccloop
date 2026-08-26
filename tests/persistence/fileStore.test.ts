@@ -1120,6 +1120,12 @@ describe("fileStore", () => {
     expect(error).toBeInstanceOf(OwnerTransferLockUnattributableError);
     expect(error).not.toBeInstanceOf(OwnerTransferLockBusyError);
     expect(String(error)).toContain("ccloop unlock");
+
+    // Mi-3 of the ruling 106(b) review, human ruling 108: its sibling criterion below asserts the
+    // same invariant, and two adjacent criteria asserting one invariant two different ways reads to
+    // a later editor as a deliberate distinction. It is not one -- human ruling 83's fail-closed
+    // exit did not gain a delete on EITHER unattributable branch.
+    expect(await readFile(join(runDir, ".owner-transfer.lock"), "utf8")).toContain("not-json");
   });
 
   it("refuses a lock whose holder identity is not a pid as unattributable, never as busy", async () => {

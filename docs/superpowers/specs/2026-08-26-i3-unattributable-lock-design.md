@@ -107,10 +107,16 @@ it will not clear on its own — inspect it with: ccloop unlock <runDir>
 | 4 | `runLoop.ts:847` | ⚠️ **必须加分支**，否则新类会 `throw` 出去，把本来被收住的失败变成抛出。照 busy 的样子记 `owner_transfer_contended`，detail 带新消息。**不新增事件类型** | 是 |
 | 5 | `resumeLoop.ts:233` | ⚠️ **必须加第三分支**，否则不可归属落进 `claim CAS failed`——**比现在这句假话更假**。这是 I-3 点名的操作员可见路径 | 是 |
 
-### 4.1 ⚠️ 另外三个调用点【吞掉】这个错误，本轮【不修】
+### 4.1 ⚠️ 另外三处【吞掉】这个错误，本轮【不修】
 
-`acquireOwnerTransferLock` 共有 **5 个调用点**。上表顺着 `instanceof` 找到的只是其中两条链；
-另外三处**不做判别、直接吞**，新错误类到那里同样是沉默的：
+⚠️ *** **本节的普查经人裁 108 更正过（Mi-2）。原文把两类东西混成了一类。** *** 准确的说法是：
+`acquireOwnerTransferLock` 有 **5 个直接调用点**（`acquireOwnerTransferLockForReconciliation`、
+`recoverInterruptedOwnerTransfer`、`writeOwnerTransferArtifacts`、`claimOwnerRecordWithPrecondition`、
+`updateOwnerRecordWithPrecondition`），其中**只有 1 个直接吞**。
+另外两处吞在**上一层**：`leaseHeartbeat` 调的是 `affirmOwnerLease` ／ `releaseOwnerLease`，
+它们才经 `updateOwnerRecordWithPrecondition` 到达锁。**三处吞，但不是「三个调用点」。**
+
+下表列的是**三处吞**，新错误类到那里同样是沉默的：
 
 | 站点 | 后果 | 本轮处置 |
 |---|---|---|
@@ -118,7 +124,7 @@ it will not clear on its own — inspect it with: ccloop unlock <runDir>
 | `leaseHeartbeat.ts:150` | 新类被吞，**每 tick 重试到永远**；该处注释的前提 *"lock contention, transient I/O"* **对新类为假** | 记账，不修 |
 | `leaseHeartbeat.ts:254` | 释放期 best-effort 吞掉（较轻）| 记账，不修 |
 
-⇒ *** **本设计修好的是 `resume` 与 transfer 两条链上的操作员可见消息，不是全部五条链。** *** 见 §8。
+⇒ *** **本设计修好的是 `resume` 与 transfer 两条链上的操作员可见消息；上面三处吞不受影响。** *** 见 §8。
 
 ⚠️ **#2 与 #3 靠「不加代码」得到新行为。** 方向与房规担心的相反——房规怕的是子类**保留**匹配，
 这里是兄弟类**丢失**匹配。两处都必须在注释里写明**是重决过的**，不是没想过。
