@@ -5,6 +5,7 @@ import {
   appendEvent,
   claimOwnerRecordWithPrecondition,
   OwnerTransferLockBusyError,
+  OwnerTransferLockUnattributableError,
   readOwnerRecord,
   readOwnerTransferRecord,
   readReconciliationRecord,
@@ -65,6 +66,12 @@ async function claimOwnerRecordWithBoundedLockRetry(
       return;
     } catch (error) {
       const isLastAttempt = attempt === OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS - 1;
+      // Human ruling 106 (I-3(b)) re-decided this site and deliberately left it unchanged: an
+      // OwnerTransferLockUnattributableError is not an OwnerTransferLockBusyError, so it exits on
+      // the first attempt instead of being retried. That is the wanted answer -- retrying a lock
+      // that nothing will ever release only delays the operator's message by the full bound. The
+      // sibling doctrine's warning runs the other way (a SUBCLASS silently KEEPING a match); this
+      // is a match deliberately LOST, recorded so it is not later read as an oversight.
       if (!(error instanceof OwnerTransferLockBusyError) || isLastAttempt) {
         throw error;
       }
@@ -230,9 +237,18 @@ export async function resumeLoop(
   } catch (error) {
     // §3: stays fail-closed either way, but a busy lock never evaluated a CAS, so the detail
     // must not claim one did.
-    const detail = error instanceof OwnerTransferLockBusyError
-      ? `owner-transfer lock busy: ${String(error)}`
-      : `claim CAS failed: ${String(error)}`;
+    //
+    // Human ruling 106 (I-3(b)): a THIRD branch, written first and explicitly, because the two lock
+    // errors are siblings and neither `instanceof` implies the other. Without it an unattributable
+    // lock fell through to "claim CAS failed" -- a worse lie than the one I-3 reported, since no CAS
+    // was evaluated either. Measured before this branch existed, from the criterion below in
+    // tests/controller/resumeLoop.integration.test.ts: the detail read
+    // `claim CAS failed: OwnerTransferLockUnattributableError: ...`.
+    const detail = error instanceof OwnerTransferLockUnattributableError
+      ? `owner-transfer lock unattributable: ${String(error)}`
+      : error instanceof OwnerTransferLockBusyError
+        ? `owner-transfer lock busy: ${String(error)}`
+        : `claim CAS failed: ${String(error)}`;
     await appendEvent(runDir, { type: "resume_denied", at: new Date().toISOString(), detail });
     throw new ResumeNotEligibleError(detail);
   }

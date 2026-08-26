@@ -311,6 +311,41 @@ describe("resumeLoop", () => {
     expect(denied[0].detail).toContain("lock busy");
   });
 
+  // Human ruling 106 (I-3(b)). The test above fabricates a lock a LIVE holder is using: it clears
+  // when that process exits, and "lock busy" is a true thing to tell the operator. This one
+  // fabricates a lock NOBODY can be attributed to. Nothing will ever release it, so the old answer
+  // was false in both halves -- there is no transfer, and there is no progress -- and it named
+  // neither a reason nor a way out.
+  it("tells the operator a resume-blocking lock is unattributable and how to clear it, not that a transfer is in progress", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
+
+    const ownerBefore = await readFile(join(runDir, "owner-record.json"), "utf8");
+
+    await expect(resumeLoop(runDir, new ScriptedAdapter([successFrame()]))).rejects.toBeInstanceOf(
+      ResumeNotEligibleError,
+    );
+
+    expect(await readFile(join(runDir, "owner-record.json"), "utf8")).toBe(ownerBefore); // untouched
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; detail: string });
+    const denied = events.filter((event) => event.type === "resume_denied");
+
+    expect(denied).toHaveLength(1);
+    expect(denied[0].detail).toContain("unattributable");
+    expect(denied[0].detail).toContain("ccloop unlock");
+    // The two lies this criterion exists to keep out: the CAS that was never evaluated, and the
+    // transfer that does not exist.
+    expect(denied[0].detail).not.toContain("claim CAS failed");
+    expect(denied[0].detail).not.toContain("already in progress");
+  });
+
   // Package 2 / §13 4th entry, review round 2 (I-1). D2 put the loser's reconciliation
   // read → decide → write inside .owner-transfer.lock, which is the same lock this claim takes, so
   // a resume can now collide with an ordinary boundary write rather than only with a transfer. The
