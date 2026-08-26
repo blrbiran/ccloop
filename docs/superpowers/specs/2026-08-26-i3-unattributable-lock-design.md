@@ -60,7 +60,11 @@ type StaleOwnerTransferLockOutcome =
 
 今天 `pid === null || isProcessActive(pid)` 短路在**同一个 `try` 内**。要区分这两格必须拆开，
 `isProcessActive` 因此移到 `try` 外。它（`fileStore.ts:956`）自有 `catch`：`ESRCH ⇒ false`，其余 ⇒ `true`，
-**是全函数、不抛**。但「读过」不是证明 ⇒ 见 §6 变异 M4。
+**是全函数、不抛**（`process.kill(pid, 0)`，catch 里 `ESRCH ⇒ false`、其余 ⇒ `true`）。
+
+但「读过」不是证明。⚠️ **这个差别只有在 `isProcessActive` 会抛时才看得出来** —— 所以它**不能**用「把 `holder-alive`
+出口改成 `cleared`」来证（那条变异走到 `:1261` 照样抛 busy，判据全绿，什么都没证明）。
+真正的证明是 §5.2 的 EPERM 注入判据 ＋ §6 的 M5。
 
 ---
 
@@ -103,6 +107,19 @@ it will not clear on its own — inspect it with: ccloop unlock <runDir>
 | 4 | `runLoop.ts:847` | ⚠️ **必须加分支**，否则新类会 `throw` 出去，把本来被收住的失败变成抛出。照 busy 的样子记 `owner_transfer_contended`，detail 带新消息。**不新增事件类型** | 是 |
 | 5 | `resumeLoop.ts:233` | ⚠️ **必须加第三分支**，否则不可归属落进 `claim CAS failed`——**比现在这句假话更假**。这是 I-3 点名的操作员可见路径 | 是 |
 
+### 4.1 ⚠️ 另外三个调用点【吞掉】这个错误，本轮【不修】
+
+`acquireOwnerTransferLock` 共有 **5 个调用点**。上表顺着 `instanceof` 找到的只是其中两条链；
+另外三处**不做判别、直接吞**，新错误类到那里同样是沉默的：
+
+| 站点 | 后果 | 本轮处置 |
+|---|---|---|
+| `recoverInterruptedOwnerTransfer:1425` 裸 `catch { return; }` | **就是 I-3(a) 本身** ⇒ 新类在 `readOwnerRecord` 路径上**完全不可见**，本修复对该路径**无效** | 记账，不修（不在人裁 106 措辞内）|
+| `leaseHeartbeat.ts:150` | 新类被吞，**每 tick 重试到永远**；该处注释的前提 *"lock contention, transient I/O"* **对新类为假** | 记账，不修 |
+| `leaseHeartbeat.ts:254` | 释放期 best-effort 吞掉（较轻）| 记账，不修 |
+
+⇒ *** **本设计修好的是 `resume` 与 transfer 两条链上的操作员可见消息，不是全部五条链。** *** 见 §8。
+
 ⚠️ **#2 与 #3 靠「不加代码」得到新行为。** 方向与房规担心的相反——房规怕的是子类**保留**匹配，
 这里是兄弟类**丢失**匹配。两处都必须在注释里写明**是重决过的**，不是没想过。
 
@@ -143,6 +160,7 @@ expect(String(error)).toContain("ccloop unlock");               // I-3 的病灶
 | 活持有者 ⇒ 仍是 busy **且不是**新类 | 反方向判别 |
 | ⭐ `resume_denied` 的 detail 含 `unattributable` 与 `ccloop unlock` | **I-3 的正主** |
 | 不可归属**不抛出**，只记 `owner_transfer_contended` | `runLoop:847` 的收敛性 |
+| ⭐ `process.kill` 注入 **EPERM**（非 ESRCH）⇒ 仍是 busy 拒绝，**不是 EPERM 裸抛出** | §2.1 的 `try` 边界：`isProcessActive` 是全函数 |
 
 ---
 
@@ -156,13 +174,19 @@ expect(String(error)).toContain("ccloop unlock");               // I-3 的病灶
 | M1 | `unattributable` 出口改回抛 busy | 改写后的 1074 ＋ resume detail |
 | M2 | 删掉 `resumeLoop` 第三分支 | resume detail |
 | M3 | 删掉 `runLoop:847` 第三分支 | 收敛性判据 |
-| M4 | `holder-alive` 出口改成 `cleared` | 既有 `:679`（**证明 `isProcessActive` 挪出 `try` 未改行为**）|
+| M4′ | `holder-alive` 出口改成 `cleared` **并 unlink**（把活持有者当可回收）| 既有 `:679`（acquire 会成功，`rejects` 失败）|
+| M5 | `isProcessActive` 的 catch 改成**重抛非 ESRCH** | EPERM 注入判据（错误会裸穿出来）|
+
+⚠️ *** **M4′ 是替换品，不是原来那条。** *** 最初写的 M4 是「`holder-alive` 出口改成 `cleared`」（不 unlink），
+**它证明不了任何东西**：变异后循环第二次迭代仍 EEXIST，走到 `:1261` 照样抛 `OwnerTransferLockBusyError`，
+`:679` 全绿。这是本包第三次撞上「绿可能是空的」——**变异证明本身也要先被证明会红。**
 
 ---
 
 ## 7. 成功判据
 
-1. `35 files / 604+ tests` 全绿**零 skipped**，`typecheck` / `build` 均 `0`
+1. 全绿**零 skipped**，`typecheck` / `build` 均 `0`。
+   基线是 `35 files / 604 tests`；新增判据条数定下后，**把预期数字写死**，不留「604+」这种软判据
 2. 四条变异**各自**把指定判据打红，还原后回绿
 3. 红线函数的删锁条件**逐格未变**（人裁 83 语义不动）
 4. 除 `fileStore.test.ts:1074` 外，**没有第二条既有判据被改动**
@@ -174,4 +198,7 @@ expect(String(error)).toContain("ccloop unlock");               // I-3 的病灶
 - **I-3(a)** —— `recoverInterruptedOwnerTransfer` 的裸 `catch { return; }` 使 `readOwnerRecord`
   无限期返回转移前的旧记录。评审员称之为 *"the project's signature defect"*。
   **不在人裁 106 的措辞内，仍挂账，需人另开授权。**
+- **`leaseHeartbeat.ts:150`** —— 新错误类被吞，心跳**每 tick 重试一把永远不会清的锁**，而那段注释的前提
+  写着 "transient"。⚠️ **比 I-3(a) 更刺眼一点：走进去的是本轮新造的类。** 同样不在人裁 106 措辞内，
+  **记账，需人另开授权**。`leaseHeartbeat.ts:254` 同病较轻。
 - **人裁 85**（`ls` 也报锁）—— 仍是独立一轮。
