@@ -473,6 +473,13 @@ async function acquireOwnerTransferLockForReconciliation(
     try {
       return { kind: "lock", lock: await acquireOwnerTransferLock(runDir) };
     } catch (error) {
+      // Human ruling 106 (I-3(b)) re-decided this site and deliberately left it unchanged: an
+      // OwnerTransferLockUnattributableError is not an OwnerTransferLockBusyError, so it takes the
+      // abandon arm on the FIRST attempt instead of consuming the whole retry bound. That is the
+      // wanted answer -- this lock will never be released, so every retry is dead time before the
+      // same abandonment. The sibling doctrine's warning runs the other way (a SUBCLASS silently
+      // KEEPING a match); this is a match deliberately LOST, recorded here so it is not later
+      // mistaken for an oversight.
       if (!(error instanceof OwnerTransferLockBusyError)) {
         return { kind: "abandon", error };
       }
@@ -870,6 +877,19 @@ export class OwnerTransferLockBusyError extends Error {
   }
 }
 
+// Sibling of OwnerTransferLockBusyError and OwnerTransferPreconditionError, and deliberately NOT a
+// subclass of either -- the doctrine stated directly above, applied to a third meaning. A subclass
+// would let every existing `instanceof OwnerTransferLockBusyError` branch keep matching, silently
+// retaining retry behaviour that is only ever correct for a lock that clears on its own. This one
+// never clears: no process can be attributed to it, so nothing will ever release it, and the only
+// route past it is the human typing `ccloop unlock`. Human ruling 106 (I-3(b)).
+export class OwnerTransferLockUnattributableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OwnerTransferLockUnattributableError";
+  }
+}
+
 // Sibling of OwnerTransferPreconditionError, deliberately NOT a subclass: a corrupt marker is a
 // third, unrelated failure from a CAS mismatch or lock contention. It surfaces through the same
 // call chain as those two errors — acquireOwnerTransferLock's locked callers, and readOwnerRecord's
@@ -967,7 +987,18 @@ export function isProcessActive(pid: number): boolean {
   }
 }
 
-async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<boolean> {
+// Human ruling 106 (I-3(b)): the boolean this used to return conflated two answers a caller must
+// tell apart -- a lock a LIVE holder is using (transient: it clears when that process exits) and a
+// lock NOBODY can be attributed to (permanent: nothing will ever release it). Both were `false`, so
+// every caller could only say one thing about them, and that thing was false for the second.
+// Human ruling 83's fail-closed semantics are unchanged cell for cell: the only exit that deletes a
+// lock is still "contents parse + `pid:<n>` holder + that process is not alive".
+type StaleOwnerTransferLockOutcome =
+  | { kind: "cleared" }
+  | { kind: "holder-alive"; pid: number }
+  | { kind: "unattributable"; why: "unparseable" | "no-pid-holder" };
+
+async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<StaleOwnerTransferLockOutcome> {
   const { lockPath } = getOwnerTransferPaths(runDir);
   let lockContents = "";
 
@@ -975,7 +1006,7 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<boolean
     lockContents = await readFile(lockPath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return true;
+      return { kind: "cleared" };
     }
 
     throw error;
@@ -1009,19 +1040,38 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<boolean
   // has none: board C-a made it presence-only, so it never reads or parses this file). The
   // array case is pinned by a criterion under human ruling 99, so it cannot be "tidied" away
   // silently. ***
+  //
+  // *** ERRATUM (I-3(b), HUMAN RULING 106) -- "returns false and leaves the lock on disk" above is
+  // kept verbatim and still describes exactly what happens; only the VALUE changed. This function
+  // no longer returns a boolean. Those exits now return { kind: "unattributable", why: ... }, the
+  // live-holder exit returns { kind: "holder-alive", pid }, and the two former `true` exits return
+  // { kind: "cleared" } -- so a caller can finally tell a lock that will clear on its own from one
+  // that never will. NO exit gained or lost the right to delete: the single deleting exit is
+  // unchanged, and ruling 83's wording above governs it verbatim. Which criterion pins which exit
+  // is recorded in the ledger, not here. ***
+  let pid: number | null;
+
   try {
     const parsed = JSON.parse(lockContents) as Partial<OwnerTransferLockRecord>;
-    const pid = parsed.holderProcessInstanceId ? parsePid(parsed.holderProcessInstanceId) : null;
-
-    if (pid === null || isProcessActive(pid)) {
-      return false;
-    }
+    pid = parsed.holderProcessInstanceId ? parsePid(parsed.holderProcessInstanceId) : null;
   } catch {
-    return false;
+    return { kind: "unattributable", why: "unparseable" };
+  }
+
+  if (pid === null) {
+    return { kind: "unattributable", why: "no-pid-holder" };
+  }
+
+  // isProcessActive now sits OUTSIDE the try above, where it used to sit inside. That is safe only
+  // because it is total: `process.kill(pid, 0)` inside its own try, ESRCH => false, every other
+  // errno => true. It has no throw for the removed catch to have been catching. This is pinned by
+  // the EPERM criterion in fileStore.test.ts, not by this sentence.
+  if (isProcessActive(pid)) {
+    return { kind: "holder-alive", pid };
   }
 
   await safeUnlink(lockPath);
-  return true;
+  return { kind: "cleared" };
 }
 
 // Removing the lock's staging name, on BOTH paths that reach it, and deliberately NOT through
@@ -1252,7 +1302,22 @@ async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () =
         throw error;
       }
 
-      if (!(await tryRecoverStaleOwnerTransferLock(runDir))) {
+      const outcome = await tryRecoverStaleOwnerTransferLock(runDir);
+
+      if (outcome.kind === "unattributable") {
+        // Human ruling 106 (I-3(b)). The busy message below is TRUE for a live holder -- a transfer
+        // really is in progress -- so it is kept byte for byte. It was only ever false HERE, where
+        // nobody holds the lock and no transfer is running. This exit names the reason and the one
+        // command that can clear it. `ccloop unlock <runDir>` without --force refuses and prints
+        // the `--force --expect <digest>` line itself, so the operator's next step comes from that
+        // command rather than being duplicated (and left to rot) in this message.
+        throw new OwnerTransferLockUnattributableError(
+          `owner-transfer lock cannot be attributed to any process (${outcome.why}); ` +
+            `it will not clear on its own -- inspect it with: ccloop unlock ${runDir}`,
+        );
+      }
+
+      if (outcome.kind === "holder-alive") {
         throw new OwnerTransferLockBusyError("owner transfer already in progress");
       }
     }

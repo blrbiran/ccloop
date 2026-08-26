@@ -10,6 +10,7 @@ import {
   initializeRunFiles,
   isProcessActive,
   OwnerTransferLockBusyError,
+  OwnerTransferLockUnattributableError,
   OwnerTransferMarkerFinalizeOrderInvalidError,
   OwnerTransferMarkerUnreadableError,
   OwnerTransferPendingMissingError,
@@ -1093,11 +1094,184 @@ describe("fileStore", () => {
     await writeOwnerRecord(runDir, initialOwnerRecord);
     await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
 
-    // §3: malformed-and-non-recoverable is a lock-busy outcome (fileStore.ts's
-    // acquireOwnerTransferLock, not the CAS check), so it is the sibling class now.
-    await expect(
-      writeOwnerTransferArtifacts(runDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord),
-    ).rejects.toBeInstanceOf(OwnerTransferLockBusyError);
+    // §3 + human rulings 106/107: malformed-and-non-recoverable is no longer a lock-BUSY outcome.
+    // A lock whose holder cannot be attributed to any process never clears on its own, so it gets
+    // its own sibling class -- and fileStore.ts's sibling doctrine requires that it not be
+    // confusable with the busy one in EITHER direction. The message must also carry the one
+    // command that can clear it: an operator who cannot see the escape hatch is the defect I-3
+    // named.
+    //
+    // .then(onFulfilled, onRejected) rather than .catch((e) => e) on purpose: the latter yields
+    // `undefined` when the promise RESOLVES, and all three assertions below would then be checking
+    // undefined -- a green that asserts nothing. This package has been caught by an empty green
+    // twice already.
+    const error = await writeOwnerTransferArtifacts(
+      runDir,
+      initialOwnerRecord,
+      transfer.nextOwnerRecord,
+      transfer.transferRecord,
+    ).then(
+      () => {
+        throw new Error("expected writeOwnerTransferArtifacts to reject, but it resolved");
+      },
+      (rejection: unknown) => rejection,
+    );
+
+    expect(error).toBeInstanceOf(OwnerTransferLockUnattributableError);
+    expect(error).not.toBeInstanceOf(OwnerTransferLockBusyError);
+    expect(String(error)).toContain("ccloop unlock");
+  });
+
+  it("refuses a lock whose holder identity is not a pid as unattributable, never as busy", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    // Parses perfectly; simply names no pid. `upgrading` is the exact holder shape pointC-design's
+    // mutation C used, so this is the SECOND permanent exit -- distinct from the unparseable one,
+    // and reached by a different branch.
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: "upgrading", acquiredAt: "2026-07-22T10:04:59.000Z" }, null, 2),
+    );
+
+    const error = await writeOwnerTransferArtifacts(
+      runDir,
+      initialOwnerRecord,
+      transfer.nextOwnerRecord,
+      transfer.transferRecord,
+    ).then(
+      () => {
+        throw new Error("expected writeOwnerTransferArtifacts to reject, but it resolved");
+      },
+      (rejection: unknown) => rejection,
+    );
+
+    expect(error).toBeInstanceOf(OwnerTransferLockUnattributableError);
+    expect(error).not.toBeInstanceOf(OwnerTransferLockBusyError);
+    expect(String(error)).toContain("no-pid-holder");
+    expect(String(error)).toContain("ccloop unlock");
+
+    // The lock is still on disk: human ruling 83's fail-closed exit did not gain a delete.
+    expect(await readFile(join(runDir, ".owner-transfer.lock"), "utf8")).toContain("upgrading");
+  });
+
+  it("keeps a live holder's lock a BUSY outcome, never the unattributable one", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-07-22T10:04:59.000Z" }, null, 2),
+    );
+
+    // The other direction of the sibling doctrine. A live holder's lock DOES clear on its own, so
+    // it must never be reported as the permanent kind -- an operator told to run `ccloop unlock`
+    // on a live holder would be sent to a command that refuses and deliberately offers no --force.
+    const error = await writeOwnerTransferArtifacts(
+      runDir,
+      initialOwnerRecord,
+      transfer.nextOwnerRecord,
+      transfer.transferRecord,
+    ).then(
+      () => {
+        throw new Error("expected writeOwnerTransferArtifacts to reject, but it resolved");
+      },
+      (rejection: unknown) => rejection,
+    );
+
+    expect(error).toBeInstanceOf(OwnerTransferLockBusyError);
+    expect(error).not.toBeInstanceOf(OwnerTransferLockUnattributableError);
+  });
+
+  it("refuses a lock as busy when the holder's liveness cannot be determined, never letting the errno escape", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-07-22T10:04:59.000Z" }, null, 2),
+    );
+
+    // isProcessActive reads every non-ESRCH errno as "alive" (human ruling 86's two-state
+    // predicate), and it does so INSIDE its own try. This criterion pins that totality, because
+    // I-3(b) moved the CALL to it outside the try that wraps the parse: an errno escaping
+    // isProcessActive would leave the redline function as a raw EPERM instead of a refusal, and
+    // the operator would get an unexplained errno where a lock refusal belongs.
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      const errno = new Error("operation not permitted") as NodeJS.ErrnoException;
+      errno.code = "EPERM";
+      throw errno;
+    });
+
+    let error: unknown;
+    try {
+      error = await writeOwnerTransferArtifacts(
+        runDir,
+        initialOwnerRecord,
+        transfer.nextOwnerRecord,
+        transfer.transferRecord,
+      ).then(
+        () => {
+          throw new Error("expected writeOwnerTransferArtifacts to reject, but it resolved");
+        },
+        (rejection: unknown) => rejection,
+      );
+    } finally {
+      // process.kill is global: leaking this spy would poison every later criterion in this file.
+      killSpy.mockRestore();
+    }
+
+    expect(error).toBeInstanceOf(OwnerTransferLockBusyError);
+    expect(error).not.toBeInstanceOf(OwnerTransferLockUnattributableError);
+    expect(String(error)).not.toContain("EPERM");
   });
 
   it("cleans up staged owner transfer files when the lock-holder sees leftover pending files without a marker", async () => {
