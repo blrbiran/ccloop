@@ -4,6 +4,7 @@ import {
   appendEvent,
   initializeRunFiles,
   OwnerTransferLockBusyError,
+  OwnerTransferLockUnattributableError,
   OwnerTransferPreconditionError,
   readOwnerRecord,
   writeAttemptArtifacts,
@@ -688,6 +689,11 @@ async function persistOwnerTransfer(
       break;
     } catch (error) {
       const isLastAttempt = attempt === OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS - 1;
+      // Human ruling 106 (I-3(b)) re-decided this site and deliberately left it unchanged: an
+      // OwnerTransferLockUnattributableError is not an OwnerTransferLockBusyError, so it is thrown
+      // on the first attempt rather than retried to the bound. Retrying a lock nothing will ever
+      // release buys nothing but delay. It is caught and contained at the persistOwnerTransfer call
+      // site, not left to escape.
       if (!(error instanceof OwnerTransferLockBusyError) || isLastAttempt) {
         throw error;
       }
@@ -853,6 +859,22 @@ async function persistBoundaryAnalysis(
               type: "owner_transfer_contended",
               at: new Date().toISOString(),
               detail: "owner transfer abandoned: owner-transfer lock busy",
+            });
+          } else if (error instanceof OwnerTransferLockUnattributableError) {
+            // Human ruling 106 (I-3(b)). Same containment as the busy branch above, for the same
+            // reason: a refusal to overwrite must not be upgraded into a failed attempt. Measured
+            // before this branch existed, from the criterion in leaseLifecycle.integration.test.ts:
+            // the run ended `failed` instead of `exhausted`, because the sibling class is not an
+            // OwnerTransferLockBusyError and fell through to the rethrow below.
+            //
+            // What differs from the busy branch is the detail: this lock will not clear on its own,
+            // so the event carries the reason and the command that can clear it. Deliberately NOT a
+            // new event type -- the shape of what happened (a transfer abandoned to a lock) is the
+            // one this stream already names, and a second type would split every consumer of it.
+            await appendEvent(runDir, {
+              type: "owner_transfer_contended",
+              at: new Date().toISOString(),
+              detail: `owner transfer abandoned: ${String(error)}`,
             });
           } else if (!(error instanceof OwnerTransferPreconditionError)) {
             throw error;

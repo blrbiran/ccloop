@@ -551,6 +551,65 @@ describe("lease heartbeat lifecycle", () => {
     expect(await readEventTypes(runDir)).not.toContain("owner_epoch_transferred");
   });
 
+  // Human ruling 106 (I-3(b)). Same fixture as the test above, with ONE difference: the lock it
+  // plants names no attributable holder. That raises the sibling class, which is NOT
+  // OwnerTransferLockBusyError -- and the catch around persistOwnerTransfer contained only the busy
+  // one. Without a branch for the sibling the error escapes the attempt entirely, turning a
+  // contained, recorded abandonment into a thrown failure. This criterion exists to make that
+  // regression impossible, and to require that the recorded reason names the way out.
+  it("contains an unattributable transfer lock as a recorded contention instead of throwing out of the attempt", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 200,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+          runId: "task-1",
+          logicalSessionId: "task-1:lost",
+          currentOwnerEpoch: 1,
+          currentProcessInstanceId: buildProcessInstanceId(),
+          lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+          ownerStatus: "lost",
+          supersededByEpoch: null,
+        }, null, 2));
+        await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+
+    expect(finalState.status).toBe("exhausted");
+    const contended = (await readEvents(runDir)).filter(
+      (event) => event.type === "owner_transfer_contended",
+    );
+    expect(contended).toHaveLength(1);
+    // The recorded reason must say WHY this lock is stuck and how to get out. "cannot be attributed"
+    // is the message's own phrase; the busy branch's detail is the fixed string
+    // "owner transfer abandoned: owner-transfer lock busy", so the negative assertion is the other
+    // direction of the sibling doctrine -- this abandonment must not be filed as ordinary
+    // contention that will clear itself.
+    expect(contended[0].detail).toContain("cannot be attributed");
+    expect(contended[0].detail).toContain("ccloop unlock");
+    expect(contended[0].detail).not.toContain("owner-transfer lock busy");
+    expect(await readEventTypes(runDir)).not.toContain("owner_epoch_transferred");
+  });
+
   // Task 2 / spec §5.2 requirement 1: a transfer whose first attempt finds the owner-transfer
   // lock busy, and whose next attempt finds it free, must still complete. `writeOwnerTransferArtifacts`
   // is mocked (rather than using a real lock file, as the test above does) so the lock's
