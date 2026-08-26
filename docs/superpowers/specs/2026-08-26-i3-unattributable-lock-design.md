@@ -185,8 +185,7 @@ expect(String(error)).toContain("ccloop unlock");               // I-3 的病灶
 
 ## 7. 成功判据
 
-1. 全绿**零 skipped**，`typecheck` / `build` 均 `0`。
-   基线是 `35 files / 604 tests`；新增判据条数定下后，**把预期数字写死**，不留「604+」这种软判据
+1. *** **`35 files / 609 tests`** *** 全绿**零 skipped**，`typecheck` / `build` 均 `0`（604 ＋ 新增 5 条）
 2. 四条变异**各自**把指定判据打红，还原后回绿
 3. 红线函数的删锁条件**逐格未变**（人裁 83 语义不动）
 4. 除 `fileStore.test.ts:1074` 外，**没有第二条既有判据被改动**

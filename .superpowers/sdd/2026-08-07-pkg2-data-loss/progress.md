@@ -4361,3 +4361,104 @@ I-3 要改的是**返回类型**，不在人裁 83 的措辞内 ⇒ **授权来�
    ⚠️ 模板用 `…/pointB-minors-review-brief.md`（**读它末尾那条 ERRATUM**），每个数字按现测更新，
    **已知 flake 必须写满 4 条**（含 §35 记的名单外两条）。
 3. **仍挂账、仍要人先开口**：E1 的 I-2 那一格（授权面外）、Linux 覆盖（要人自己起 OrbStack daemon）。
+
+40. 人裁 106／107 落地 —— I-3(b)：不可归属的锁开口说话了
+--------------------------------------------------------------------------------
+
+*** **人裁 106(a)＋107 已实施完毕。** *** 范围是 I-3 的 **(b) 面**（操作员看得见的那条消息），
+**(a) 面一行未动**。设计与计划落盘在 `docs/superpowers/specs/2026-08-26-i3-unattributable-lock-design.md`
+与 `docs/superpowers/plans/2026-08-26-i3-unattributable-lock.md`。
+
+### 做了什么（按提交主题行找，**别数笔数**）
+
+1. `feat(fileStore): tell the caller WHY a stale transfer lock could not be reclaimed (I-3(b), human rulings 106/107)`
+2. `fix(resumeLoop): report an unattributable transfer lock as itself, not as a CAS failure (I-3(b), human ruling 106)`
+3. `fix(runLoop): keep an unattributable transfer lock contained as a recorded contention (I-3(b), human ruling 106)`
+
+红线函数的 `Promise<boolean>` 换成三态判别式 `StaleOwnerTransferLockOutcome`
+（`cleared` ／ `holder-alive` ／ `unattributable`），不可归属那两条出口抛新的**兄弟**类
+`OwnerTransferLockUnattributableError`。
+*** **人裁 83 的删锁条件逐格未变** ***：唯一删锁的出口仍是「解析成功 ＋ `pid:<n>` ＋ 该进程已不存活」。
+
+⚠️ **`OwnerTransferLockBusyError` 的文本一个字没改。** 逐格核过：对**活持有者**那一格
+`owner transfer already in progress` 是**真话**；假话只发生在不可归属那一格，新类带走了它。
+
+### 两条决定性实测（**不是推理，是量出来的**）
+
+| 站点 | 缺分支时操作员实际看到的 |
+|---|---|
+| `resumeLoop` 的 `resume_denied` detail | *** **`claim CAS failed: OwnerTransferLockUnattributableError: …`** *** —— 一个**从未被求值过的 CAS**，比 I-3 报的那句更假 |
+| `runLoop` 的 transfer catch | *** **run 终态 `failed` 而不是 `exhausted`** *** —— 一次「被收住并记录的放弃」被升级成整个 run 失败 |
+
+⇒ 兄弟类房规（`fileStore.ts` busy 类上方那段）要求「每个消费点各自重决」**是对的**：
+两处不加分支就会坏，而且坏的方向正好相反（一处说假话、一处炸出去）。
+
+### 五个消费点的重决（**两处是「不加代码」，已在注释里写明**）
+
+| 站点 | 决定 |
+|---|---|
+| `acquireOwnerTransferLock` 的 EEXIST 分支 | 按 outcome 分抛 |
+| `acquireOwnerTransferLockForReconciliation` | **不加代码**：新类非 busy ⇒ 第一次就 abandon，不空转 |
+| `persistOwnerTransfer` 的重试 | **不加代码**：第一次就抛，不重试永久锁 |
+| `persistOwnerTransfer` 调用处的 catch | **加分支**，照 busy 的样子收住，**不新增事件类型** |
+| `resumeLoop` 的 detail | **加第三分支**，排在 busy 之前 |
+
+⚠️ 房规担心的是**子类悄悄【保留】匹配**；这里是兄弟类**【丢失】匹配**。方向相反，
+所以两处「不加代码」都写了注释说明**是重决过的**，不是没想过。
+
+### 变异证明（`git clone --local` 副本，主仓库工作树全程零触碰）
+
+| | 变异 | 指名判据 | 结果 |
+|---|---|---|---|
+| M1 | `unattributable` 出口改回抛 busy | malformed 判据 ＋ resume detail 判据 | **两条都红** |
+| M2 | 摘掉 `resumeLoop` 第三分支 | resume detail 判据 | **红** |
+| M3 | 摘掉 `runLoop` 收敛分支 | 收敛性判据 | **红** |
+| M4′ | 活持有者当可回收**并 unlink** | 既有 `rejects owner transfer while a live transfer lock is held` | **红** |
+| M5 | `isProcessActive` 的 catch 改成重抛非 ESRCH | EPERM 注入判据 | **红** |
+
+还原证明：副本 `git diff` ＝ **0 字节**、`git diff --cached` ＝ **0 字节**；
+主仓库 `status`／`diff`／`diff --cached` ＝ **0／0／0 字节**；副本已删除。
+
+⚠️ *** **M4′ 是替换品。原 M4 证明不了任何东西。** *** 原 M4 写的是「`holder-alive` 出口改成 `cleared`」（不 unlink）——
+变异后循环第二次迭代仍 EEXIST，走到底照样抛 busy，判据**全绿**。
+**这是本包第三次撞上「绿可能是空的」，而这次撞上的是【变异证明本身】。**
+⇒ *** **规矩：一条变异在被看到打红之前，它不是证明。** *** 与「探针没验证过就不是证据」同形。
+
+### 自查抓出来的六条（**都在落地前就地修掉了，没有一条是评审员发现的**）
+
+**spec 自查三条**：M4 无效（上条）；「五个消费点」漏了**三个吞错误的调用点**；§7 判据写「604+」太软。
+**plan 自查三条**：Task 3 指错了测试文件（`owner_transfer_contended` 的判据在
+`leaseLifecycle.integration.test.ts`，不在 `runLoop.integration.test.ts`）；两个任务用了编造的 helper 名配一句
+「实施时自己去找」（正是 writing-plans 明令禁止的占位）；**消费点 #2 根本没有任务步骤**——它是唯一
+「不用改代码」的那个，所以最容易掉。
+
+### 落地后实测（未过滤整份读回）
+
+| 项 | 值 |
+|---|---|
+| 全套件 | *** **`35 files / 609 tests`** *** 全绿零 skipped，`TEST_RC=0`，`RUN` ＝ 主仓库根，耗时 20.64s |
+| typecheck／build | `0`／`0` |
+| 红线函数 | *** **4496 字节**，口径 ＝ `src/persistence/fileStore.ts` **第 1001–1075 行整行范围、含末尾换行**（`sed -n '1001,1075p' \| wc -c`）*** |
+| 签名命中数 | **1**；返回类型现为 `Promise<StaleOwnerTransferLockOutcome>` |
+
+*** **判据基线自本条起是 609。旧的 604 作废。** ***
+*** **红线函数旧基线 3185 自本条起作废** ***（函数被人裁 106 授权改了）。**引用新基线必须连口径一起引。**
+
+⚠️ **计划偏离一处，已记**：计划里 Task 4（EPERM 判据）是独立一笔，实施时**并进了第一笔**——同文件、同主题，
+省一次整文件跑与一次提交周期。预算压力下的效率取舍，判据内容一条未减。
+
+### ⛔ 下一件事
+
+1. *** **独立评审（人裁 106(b)，人已点名要审）。** *** brief 必须**同时覆盖**：
+   上一轮那两笔（`docs(comments): close every site…`／`test(fileStore): enforce the "one reader" premise…`）
+   ＋ **本轮这三笔**。模板抄 `…/pointB-minors-review-brief.md`（**读它末尾那条 ERRATUM**），
+   每个数字按现测更新（**609／35**，红线函数 **4496 连口径**），**已知 flake 写满 4 条**。
+   ⚠️ **人裁 100 的收口理由本轮不适用** —— 人主动指名要审（与人裁 105 同形）。
+2. **仍挂账，都要人先开口**：
+   - **I-3(a)** —— `recoverInterruptedOwnerTransfer` 的裸 `catch { return; }`，评审员称之为
+     *"the project's signature defect"*。**新错误类在 `readOwnerRecord` 路径上同样被它吞掉**，本修复对该路径无效。
+   - *** **`leaseHeartbeat.ts:150`／`:254`（本轮新查出）** *** —— 新类被吞，心跳**每 tick 重试一把永远不会清的锁**，
+     而那段注释的前提写着 "transient"。**比 I-3(a) 更刺眼：走进去的是本轮新造的类。**
+   - **E1 的 I-2 那一格**（授权面外）、**Linux**（OrbStack daemon 要人自己起）、**人裁 85**（`ls` 也报锁）。
+3. ⚠️ **本轮三笔尚未经过独立评审** —— 那正是第 1 条要做的事。
+4. **控制器不许 push。**
