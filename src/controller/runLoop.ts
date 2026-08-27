@@ -1554,6 +1554,39 @@ export async function runLoopFromState(
         return state;
       }
 
+      // Human ruling 114 (I-3(a)). An owner-transfer lock nothing can be attributed to reaches here
+      // from the ownership read, through the catch human ruling 111 narrowed. It is routed ONCE,
+      // here, rather than at each readOwnerRecord call site: one of those sites sits inside the
+      // catch that just contained this same class, and catching it there would take that
+      // containment apart.
+      //
+      // Contained exactly as the transfer path contains it -- an abandonment, not an attempt
+      // failure. Nothing was attempted and nothing was rejected; a lock is stuck, and only
+      // `ccloop unlock` moves it. MEASURED before this branch existed, from the criterion in
+      // leaseLifecycle.integration.test.ts: the run ended `failed` with an `attempt_failed` event,
+      // fingerprinting an attempt that never ran. Deliberately NOT a new event type, for the
+      // reason the transfer path already recorded: this stream already names "a transfer blocked
+      // by a lock", and a second type would split every consumer of it.
+      //
+      // The writeOwnedRunState mirrors the RunHeartbeatStoppedError branch above, whose comment
+      // gives the reason: this branch fires mid-attempt, where `state` may have been advanced by
+      // applyPhaseUsage since the loop's own write.
+      //
+      // Human ruling 118: that reason is INHERITED, NOT DEMONSTRATED HERE. Mutation M8 deleted
+      // this line and the criterion below stayed green -- on the path that criterion walks, the
+      // returned state and the persisted one already agree, so nothing in this package pins this
+      // write. Kept for parity with the sibling branch rather than removed, and said out loud so
+      // the next reader does not mistake an unpinned line for a proven one.
+      if (error instanceof OwnerTransferLockUnattributableError) {
+        await appendEvent(runDir, {
+          type: "owner_transfer_contended",
+          at: new Date().toISOString(),
+          detail: `owner transfer recovery blocked: ${String(error)}`,
+        });
+        await writeOwnedRunState(runDir, state);
+        return state;
+      }
+
       // §8.1: the side effect was skipped and the attempt is abandoned IN PLACE. No further
       // side effect of this attempt is attempted, including its worktree cleanup — cleanup
       // is itself a side effect on a worktree the new owner may already be reading, and

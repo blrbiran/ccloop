@@ -610,6 +610,75 @@ describe("lease heartbeat lifecycle", () => {
     expect(await readEventTypes(runDir)).not.toContain("owner_epoch_transferred");
   });
 
+  // Human ruling 114 (I-3(a)). The sibling above walks the TRANSFER path, which already contains
+  // this class. This one walks the READ path: with the transaction marker present, the ownership
+  // evaluation's readOwnerRecord goes into recovery, recovery reaches for the lock, and human
+  // ruling 111 lets that failure out. Nothing here is an attempt failure -- no phase ran, no
+  // verification was rejected -- so the run must not be transitioned to "failed" on the way out.
+  it("abandons the attempt in place when the ownership read hits an unattributable transfer lock, without failing the run", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 200,
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+          runId: "task-1",
+          logicalSessionId: "task-1:lost",
+          currentOwnerEpoch: 1,
+          currentProcessInstanceId: buildProcessInstanceId(),
+          lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+          ownerStatus: "lost",
+          supersededByEpoch: null,
+        }, null, 2));
+        // Both are load-bearing. The marker is what sends the ownership read into recovery; the
+        // unparseable lock is what makes that recovery unattributable. Either alone leaves this
+        // criterion testing nothing -- without the marker recovery returns before taking the lock.
+        await writeFile(
+          join(runDir, ".owner-transfer.transaction.json"),
+          JSON.stringify({ version: 1, stagedAt: "2026-07-23T00:00:00.000Z", finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
+        );
+        await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+
+    // The positive observation this criterion exists for: the branch was entered at all.
+    const contended = (await readEvents(runDir)).filter(
+      (event) => event.type === "owner_transfer_contended",
+    );
+    expect(contended).toHaveLength(1);
+    expect(contended[0].detail).toContain("cannot be attributed");
+    expect(contended[0].detail).toContain("ccloop unlock");
+    // And, having been entered, it did not upgrade a blocked recovery into an attempt failure.
+    expect(finalState.status).not.toBe("failed");
+    expect(finalState.status).not.toBe("cancelled");
+    // Nothing was reclaimed on the way out.
+    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe("not-json\n");
+    // Spec §2.3 premise 2, measured rather than assumed: the branch persists what it returns, so
+    // the returned state and the one on disk do not disagree. Mutation M8 is what proves this
+    // pair is load-bearing.
+    const persisted = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8")) as RunState;
+    expect(persisted.status).toBe(finalState.status);
+    expect(persisted.attemptsUsed).toBe(finalState.attemptsUsed);
+  });
+
   // Task 2 / spec §5.2 requirement 1: a transfer whose first attempt finds the owner-transfer
   // lock busy, and whose next attempt finds it free, must still complete. `writeOwnerTransferArtifacts`
   // is mocked (rather than using a real lock file, as the test above does) so the lock's
