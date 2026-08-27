@@ -63,6 +63,10 @@ ERRATUM 内不写会被后续裁决推翻的计数，不引用会移动的 git �
 普查结果（本会话自己数的，不引任何文档）：`readOwnerRecord` 在 `src/` 下**只有 3 个调用点** ——
 `src/controller/runLoop.ts` 两处、`src/controller/resumeLoop.ts` 一处。
 
+**爆炸半径还能钉得更死**：`readOwnerRecord` 是 `recoverInterruptedOwnerTransfer` **唯一的未持锁调用点**，
+其余四个调用点全部传 `{ lockHeld: true }`，走的是**根本不碰 `acquireOwnerTransferLock`** 的那条分支。
+⇒ §2.1 的收窄在 `src/` 内**只可能沿这一条路径**冒出来。
+
 **resumeLoop 的那处**已经被 try 包住、已经 fail closed，只是 detail 说不出病名（`cannot read run artifacts: …`）。
 处置：在该 catch 里加不可归属分支，detail 改说 `owner-transfer lock unattributable: …`，
 形状抄同文件 claim 站点已有的那组三分支（Busy／不可归属／CAS 各说各的）。**refusal 的性质不变，仍是 `ResumeNotEligibleError`。**
@@ -136,6 +140,14 @@ N4 是 N3 的去重面，单独立一条，因为「记了」和「只记了一�
 + await expect(readOwnerRecord(runDir)).rejects.toBeInstanceOf(OwnerTransferLockUnattributableError);
 ```
 
+第四条 `leaves the lock on disk when malformed staged state names no dead holder` **形状不同**：它没有 `const owner`，
+返回值本来就没人用，只是裸 `await readOwnerRecord(runDir);`。它改成：
+
+```
+- await readOwnerRecord(runDir);
++ await expect(readOwnerRecord(runDir)).rejects.toBeInstanceOf(OwnerTransferLockUnattributableError);
+```
+
 **逐字保留**：锁仍在盘上的断言、staged pending 未被 finalize 的断言、以及第三条里 `lockReads > 0` 那个正向观测
 （它是「代码真的被进入过」的唯一证据，去掉它整条判据就变空）。
 
@@ -149,12 +161,12 @@ N4 是 N3 的去重面，单独立一条，因为「记了」和「只记了一�
 | | 变异 | 期望 |
 |---|---|---|
 | M1 | 删掉 `runLoop` 新增的那一支 | N1 红，且红的方式是运行被判 `failed` —— **这同时是 §2.3 第 1 条前提的度量** |
-| M2 | 把该支移到通用失败处理**之后** | N1 红 —— 钉住「顺序本身承重」 |
-| M7 | 把该支的条件放宽成匹配任意 `Error` | 现存那些「运行应判 `failed`」的判据**变红** —— 钉住新分支**没有放宽**，没有把别的错误一并当成不可归属。本仓库正是被「吞掉一切非某某类」这个形状咬过三次的 |
+| M2 | 把该支移到通用失败处理**之后** | N1 红 —— 钉住「顺序本身承重」。**前提已核实**：通用失败处理以 `return state` 结尾，故排在其后的分支不可达 |
 | M3 | 删掉 `resumeLoop` 的不可归属分支 | N2 红，detail 退回 `cannot read run artifacts` |
 | M4 | 删掉心跳 `runAffirm` 的分支 | N3 红（事件不出现） |
 | M5 | 去掉「只记一次」的标志 | N4 红（事件多于一条） |
-| M6 | 把 §2.1 的收窄改回裸 `catch` | 四条改写判据回绿 —— 钉住它们承的是收窄这件事 |
+| M6 | 把 §2.1 的收窄改回裸 `catch` | 四条改写判据**变红** —— 撤掉收窄，`readOwnerRecord` 恢复 resolve，而改写后的它们断言的是 `rejects`。钉住它们承的正是收窄这件事 |
+| M7 | 把该支的条件放宽成匹配任意 `Error` | 现存那些「运行应判 `failed`」的判据**变红**（**靶子已核实存在**：`tests/controller/runLoop.integration.test.ts` 里有 14 条 `status).toBe("failed")` 断言） —— 钉住新分支**没有放宽**，没有把别的错误一并当成不可归属。本仓库正是被「吞掉一切非某某类」这个形状咬过三次的 |
 
 ⚠️ 变异一律在 `git clone --local` 副本里做，主仓库工作树全程零触碰。
 ⚠️ **副本只克隆已提交状态** —— 未提交的改动必须先 `cat 工作树文件 > 副本对应文件`，并用 `diff` 证明两边逐字节相同；
