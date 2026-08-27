@@ -346,6 +346,49 @@ describe("resumeLoop", () => {
     expect(denied[0].detail).not.toContain("already in progress");
   });
 
+  // Human ruling 111 (I-3(a)). The test above has no transaction marker, so recovery returns
+  // before it ever reaches for the lock and it is the CLAIM that refuses. This one adds the
+  // marker: now the ENTRY READ walks into recovery, recovery reaches for the lock, and ruling
+  // 111 lets that failure out of readOwnerRecord. It landed in the catch that says "cannot read
+  // run artifacts" -- true of nothing here. Every artifact is readable; what cannot run is the
+  // recovery, and only a human clears it.
+  it("names an unattributable transfer lock on the entry read, instead of calling the artifacts unreadable", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    // Both files are load-bearing: the marker is what makes recoverInterruptedOwnerTransfer go for
+    // the lock at all, and the unparseable lock is what makes that acquisition unattributable.
+    // Drop either and this criterion silently stops testing the entry read.
+    await writeFile(
+      join(runDir, ".owner-transfer.transaction.json"),
+      JSON.stringify({ version: 1, stagedAt: "2026-07-23T00:00:00.000Z", finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
+    );
+    await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
+
+    const ownerBefore = await readFile(join(runDir, "owner-record.json"), "utf8");
+
+    await expect(resumeLoop(runDir, new ScriptedAdapter([successFrame()]))).rejects.toBeInstanceOf(
+      ResumeNotEligibleError,
+    );
+
+    expect(await readFile(join(runDir, "owner-record.json"), "utf8")).toBe(ownerBefore); // untouched
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; detail: string });
+    const denied = events.filter((event) => event.type === "resume_denied");
+
+    expect(denied).toHaveLength(1);
+    expect(denied[0].detail).toContain("owner-transfer lock unattributable");
+    expect(denied[0].detail).toContain("ccloop unlock");
+    // The lie this criterion exists to keep out: the artifacts were never the problem.
+    expect(denied[0].detail).not.toContain("cannot read run artifacts");
+    // And nothing was reclaimed on the way out.
+    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe("not-json\n");
+  });
+
   // Package 2 / §13 4th entry, review round 2 (I-1). D2 put the loser's reconciliation
   // read → decide → write inside .owner-transfer.lock, which is the same lock this claim takes, so
   // a resume can now collide with an ordinary boundary write rather than only with a transfer. The

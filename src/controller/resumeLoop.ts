@@ -216,8 +216,17 @@ export async function resumeLoop(
       loadContract(join(runDir, "loop-contract.json")),
     ]);
   } catch (error) {
-    await appendEvent(runDir, { type: "resume_denied", at: new Date().toISOString(), detail: `cannot read run artifacts: ${String(error)}` });
-    throw new ResumeNotEligibleError(`cannot read run artifacts: ${String(error)}`);
+    // Human ruling 111 (I-3(a)). "cannot read run artifacts" is true of an ENOENT or a bad parse.
+    // It is false of an unattributable owner-transfer lock: every artifact here is readable, and
+    // what failed is the recovery this read performs on the way -- blocked by a lock nothing will
+    // ever release. The old detail sent the operator to look at files that were never the problem.
+    // Same fail-closed exit, both halves of the detail kept in one variable so the event and the
+    // thrown error cannot drift apart.
+    const detail = error instanceof OwnerTransferLockUnattributableError
+      ? `owner-transfer lock unattributable: ${String(error)}`
+      : `cannot read run artifacts: ${String(error)}`;
+    await appendEvent(runDir, { type: "resume_denied", at: new Date().toISOString(), detail });
+    throw new ResumeNotEligibleError(detail);
   }
 
   const eligibility = evaluateResumeEligibility({ ownerRecord, ownerTransfer, reconciliation, runState });
