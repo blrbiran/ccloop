@@ -1518,11 +1518,27 @@ async function recoverInterruptedOwnerTransfer(runDir: string, options?: { lockH
 
     try {
       lock = await acquireOwnerTransferLock(runDir);
-    } catch {
+    } catch (error) {
+      // Human ruling 111 (I-3(a)). Narrowed to what the paragraph below actually names. An
+      // OwnerTransferLockUnattributableError is neither of those two: nothing will ever release
+      // that lock, so returning here published a pre-transfer record for the rest of the run's
+      // life with nobody told. It is the ONLY class that escapes; busy and errno are unchanged.
+      if (error instanceof OwnerTransferLockUnattributableError) {
+        throw error;
+      }
+
       // Could not acquire: another process holds a live lock (OwnerTransferLockBusyError), or the
       // acquire attempt hit a non-EEXIST errno (e.g. EACCES/ENOSPC). Either way, this read must not
       // surface a new failure mode: readOwnerRecord's caller expects the read to succeed even when
       // recovery can't run right now, same as today's "busy -> skip recovery" behaviour.
+      //
+      // *** ERRATUM (I-3(a), HUMAN RULING 111) -- "this read must not surface a new failure mode"
+      // above is kept verbatim and still governs the two cases it names. It no longer governs a
+      // third: a lock that cannot be attributed to any process now escapes this catch, above.
+      // That case is not "recovery can't run right now" but "recovery can never run", and the
+      // caller that was told the read succeeded went on deciding ownership from a record the
+      // transfer had already superseded, for the rest of the run's life. Which criteria pin this,
+      // and where the escaped error is routed, is recorded in the ledger rather than here. ***
       return;
     }
 

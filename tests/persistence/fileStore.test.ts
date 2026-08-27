@@ -828,6 +828,15 @@ describe("fileStore", () => {
     // which is the poorer of the two: deleting THIS one costs three assertions the other lacks.
     // Do not "deduplicate" the pair without a fresh naming under human ruling 88 — ruling 87
     // named both for REWRITE, which is not authority to remove. ***
+    //
+    // *** ERRATUM (I-3(a), HUMAN RULING 115) — THE TWO COUNTS IN THE PARAGRAPH ABOVE NO LONGER
+    // HOLD. It is kept verbatim: everything it says about the PAIR — byte-identical fixtures,
+    // richer half, do not deduplicate without a fresh naming — still governs. What moved is what
+    // it counted: ruling 111 made readOwnerRecord REFUSE on this fixture rather than return the
+    // pre-transfer record, so ruling 115 named both halves for rewrite and the assertion each
+    // half carries is no longer the assertion that was counted here. Deliberately not restated as
+    // a new count, which the next ruling would only invalidate again; the current shape of both
+    // halves is in the ledger. ***
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const initialOwnerRecord = {
       runId: "task-1",
@@ -855,10 +864,10 @@ describe("fileStore", () => {
     );
     await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
 
-    const owner = await readOwnerRecord(runDir);
-
-    expect(owner.currentOwnerEpoch).toBe(1);
-    expect(owner.currentProcessInstanceId).toBe("pid:12345");
+    // Human ruling 111 (I-3(a)): the read no longer hands back the pre-transfer record when the
+    // lock cannot be attributed to any process — it refuses, naming the lock. This assertion
+    // encodes that reversal. The two below it are untouched and still encode human ruling 83.
+    await expect(readOwnerRecord(runDir)).rejects.toBeInstanceOf(OwnerTransferLockUnattributableError);
     await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe("not-json\n");
     await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toContain(
       "owner lost after reconciliation",
@@ -918,12 +927,13 @@ describe("fileStore", () => {
     const lockContents = JSON.stringify({ holderProcessInstanceId: strongHolder, acquiredAt: "2026-07-22T10:05:00.000Z" });
     await writeFile(join(runDir, ".owner-transfer.lock"), lockContents);
 
-    const owner = await readOwnerRecord(runDir);
-
     // The lock is still there, byte for byte, and the staged transfer was never finalized behind
     // it. Under the reverted guard all three of these fail.
     await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe(lockContents);
-    expect(owner.currentOwnerEpoch).toBe(1);
+    // Human ruling 111 (I-3(a)): this was `expect(owner.currentOwnerEpoch).toBe(1)` — the read
+    // handing back the pre-transfer record. It refuses now. Still one of the three, still red
+    // under the reverted guard.
+    await expect(readOwnerRecord(runDir)).rejects.toBeInstanceOf(OwnerTransferLockUnattributableError);
     await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toContain(
       "owner lost after reconciliation",
     );
@@ -1000,12 +1010,25 @@ describe("fileStore", () => {
 
     try {
       const fileStore = await import("../../src/persistence/fileStore.js");
-      const owner = await fileStore.readOwnerRecord(runDir);
+      // Human ruling 111 (I-3(a)): the read refuses on this fixture now, so the call has to be
+      // made here — before the lockReads assertion below, which counts what this call does — and
+      // its rejection carried forward. Taken with .then(onFulfilled, onRejected) rather than
+      // .catch(e => e): a .catch on a SUCCEEDING promise yields undefined, and every assertion
+      // downstream would then be asserting about undefined instead of failing.
+      const outcome = await fileStore.readOwnerRecord(runDir).then(
+        (record) => {
+          throw new Error(`readOwnerRecord resolved with epoch ${record.currentOwnerEpoch} instead of refusing`);
+        },
+        (error: unknown) => error,
+      );
 
       // The positive observation this test exists for: the code under test was entered.
       expect(lockReads).toBeGreaterThan(0);
       // And, having been entered, it refused. Both halves are needed: either alone is vacuous.
-      expect(owner.currentOwnerEpoch).toBe(1);
+      // The class comes off the dynamically imported module, not the file-level import: this test
+      // runs after vi.resetModules(), so the two are different objects and instanceof against the
+      // file-level one would fail for a reason that has nothing to do with the behaviour.
+      expect(outcome).toBeInstanceOf(fileStore.OwnerTransferLockUnattributableError);
       await expect(readFile(lockPath, "utf8")).resolves.toBe(lockContents);
     } finally {
       vi.doUnmock("node:fs/promises");
@@ -1836,7 +1859,10 @@ describe("fileStore", () => {
     await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
 
     await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toContain("not-json");
-    await readOwnerRecord(runDir);
+    // Human ruling 111 (I-3(a)): the return value was never used here, but the call now refuses
+    // rather than resolving, and an unawaited rejection would fail this test for the wrong reason.
+    // Asserting the class keeps the refusal itself pinned, not merely tolerated.
+    await expect(readOwnerRecord(runDir)).rejects.toBeInstanceOf(OwnerTransferLockUnattributableError);
     await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe("not-json\n");
   });
 
