@@ -318,6 +318,74 @@ describe("startLeaseHeartbeat", () => {
     await heartbeat.stop();
   });
 
+  // Human ruling 112. The busy-lock test above is the transient case: it clears when its holder
+  // exits, so retrying every tick is exactly right and saying nothing is exactly right. This one
+  // never clears -- no process can be attributed to it -- so the heartbeat retried it for the life
+  // of the run while the comment it retried under said "transient". The retry is deliberately
+  // unchanged (ruling 112 declined to stop affirming: a lease left to age out invites a second
+  // process onto a run the same lock will block). What changes is that it stops being silent.
+  it("records an unattributable owner-transfer lock once, and keeps ticking", async () => {
+    const runDir = await seed(record());
+    const lost: unknown[] = [];
+    const heartbeat = startLeaseHeartbeat({
+      runDir,
+      ownerRecord: record(),
+      onLeaseLost: (error) => lost.push(error),
+    });
+
+    // Unparseable, so tryRecoverStaleOwnerTransferLock can attribute it to nobody. No transaction
+    // marker is needed here, unlike the readOwnerRecord path: the affirm reaches for the lock
+    // directly, through updateOwnerRecordWithPrecondition.
+    await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
+
+    await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS);
+    await heartbeat.affirmNow();
+
+    const types = await readEventTypes(runDir);
+    expect(types.filter((type) => type === "owner_transfer_lock_unattributable")).toHaveLength(1);
+    expect(types).not.toContain("lease_lost");
+    expect(lost).toHaveLength(0);
+
+    // Still ticking. Without this the criterion would pass against a heartbeat that recorded the
+    // event and then quietly stopped affirming -- the behaviour ruling 112 refused.
+    await rm(join(runDir, ".owner-transfer.lock"));
+    await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS);
+    await heartbeat.affirmNow();
+
+    expect((await readOwner(runDir)).leaseAffirmedAt).not.toBeNull();
+    await heartbeat.stop();
+  });
+
+  // Human ruling 119: this type is the heartbeat's own, not the transfer path's
+  // `owner_transfer_contended`. Reusing that one was tried and measured: two criteria that count
+  // it went red at 2 instead of 1, because a live heartbeat records alongside the transfer path.
+  //
+  // Human ruling 112/113. "Recorded" and "recorded once" are two different claims, and the second
+  // needs its own criterion: a per-tick append would drown the stream for a condition that is one
+  // standing fact. The flag is shared with stop(), whose release hits the same lock, so a run
+  // leaves at most one of these however many times it walks into it.
+  it("records the unattributable lock at most once per run, across repeated ticks and stop()", async () => {
+    const runDir = await seed(record());
+    const heartbeat = startLeaseHeartbeat({
+      runDir,
+      ownerRecord: record(),
+      onLeaseLost: () => {},
+    });
+
+    await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
+
+    for (let tick = 0; tick < 3; tick += 1) {
+      await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS);
+      await heartbeat.affirmNow();
+    }
+
+    // stop() reaches the same lock through releaseOwnerLease, and shares the same flag.
+    await heartbeat.stop();
+
+    const types = await readEventTypes(runDir);
+    expect(types.filter((type) => type === "owner_transfer_lock_unattributable")).toHaveLength(1);
+  });
+
   // Task 3 / spec requirement 10 — the poisoned-chain killer. Requirement 10 asks for two
   // things: the rejection reaches the runExclusive caller, and the queue is still usable for a
   // subsequent affirm afterward (not deadlocked, not silently swallowed). A second runExclusive

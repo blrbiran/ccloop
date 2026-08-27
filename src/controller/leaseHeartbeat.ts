@@ -11,6 +11,7 @@ import {
 import {
   affirmOwnerLease,
   appendEvent,
+  OwnerTransferLockUnattributableError,
   OwnerTransferPreconditionError,
   readOwnerRecordWithoutRecovery,
   releaseOwnerLease,
@@ -38,6 +39,10 @@ export function startLeaseHeartbeat(options: {
   let lastAffirmAtMs = Number.NEGATIVE_INFINITY;
   let stopped = false;
   let superseded = false;
+  // Human ruling 112/113: at most one of these per run. Every tick walks into the same lock, and
+  // stop() walks into it again through releaseOwnerLease; without this the event stream would
+  // carry one line per tick for what is a single standing fact.
+  let unattributableLockRecorded = false;
   // Both writers of §6 funnel through here, so serialize them: the throttle alone does not
   // stop two calls in the same tick from racing the owner-transfer lock.
   let queue: Promise<void> = Promise.resolve();
@@ -148,6 +153,27 @@ export function startLeaseHeartbeat(options: {
       expected = await affirmOwnerLease(options.runDir, expected, new Date(now()).toISOString());
       lastAffirmAtMs = now();
     } catch (error) {
+      // Human ruling 112 (I-3(a)). Ordered ahead of the paragraph below because it is the
+      // exception to it: an unattributable owner-transfer lock is the OPPOSITE of transient --
+      // no process holds it, so no tick will ever find it cleared. The swallow-and-retry stays
+      // (stopping the affirm would let the lease age out and invite a second process onto a run
+      // this same lock will block); only the silence goes, and only once per run.
+      //
+      // Human ruling 119: its own event type, NOT the `owner_transfer_contended` the transfer
+      // path uses. The design said to reuse that one, on the transfer path's own reasoning that a
+      // second type splits its consumers. MEASURED to be wrong here: reusing it turned two
+      // criteria that COUNT that type red at 2 instead of 1 -- consumers really do count these,
+      // which is the proof the two facts are not interchangeable. Nothing is being abandoned
+      // here; a lease affirm is blocked, and the run continues.
+      if (error instanceof OwnerTransferLockUnattributableError) {
+        if (!unattributableLockRecorded) {
+          unattributableLockRecorded = true;
+          await appendLeaseEvent("owner_transfer_lock_unattributable", `lease affirm blocked: ${String(error)}`);
+        }
+
+        return;
+      }
+
       // §6: a failure that is not a precondition failure — lock contention, transient I/O —
       // is swallowed and retried on the next tick. It must never throw into the control loop.
       if (!(error instanceof OwnerTransferPreconditionError)) {
@@ -252,8 +278,16 @@ export function startLeaseHeartbeat(options: {
     // the new owner's record.
     try {
       await releaseOwnerLease(options.runDir, expected);
-    } catch {
+    } catch (error) {
       // Swallowed by contract: the lease simply ages out.
+      //
+      // Human ruling 113 (I-3(a)): the swallow stands, byte for byte -- the release still fails
+      // and the lease still ages out. Only the silence goes, and only for a lock nobody will ever
+      // clear, and only if no tick already said so. The flag is shared with runAffirm.
+      if (error instanceof OwnerTransferLockUnattributableError && !unattributableLockRecorded) {
+        unattributableLockRecorded = true;
+        await appendLeaseEvent("owner_transfer_lock_unattributable", `lease release blocked: ${String(error)}`);
+      }
     }
   };
 
