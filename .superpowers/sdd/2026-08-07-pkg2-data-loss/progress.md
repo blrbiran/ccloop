@@ -4547,3 +4547,105 @@ spec §4.1 在 `docs/` 下、本会话所写且未发布 ⇒ **就地更正**（
 3. **仍挂账，都要人先开口**：**I-3(a)**、***`leaseHeartbeat` 的两处吞***、**E1 的 I-2 那一格**、
    **Linux**（OrbStack daemon 实测仍未起，socket 不存在）、**人裁 85**（`ls` 也报锁）。
 4. **控制器不许 push。**
+
+42. I-3(a) ＋ 心跳两处吞：一轮做完（人裁 109／111–119）—— 并把上一轮那条"引用但没量过"的前提量掉了
+--------------------------------------------------------------------------------
+
+*** **人裁 109。2026-08-27。「I-3(a) ＋ leaseHeartbeat 一起（同一轮开）。」** ***
+*** **人裁 110。同日。「援引人裁 100 收口，人裁 108 那一笔不再派评审。」** ***
+
+随后在设计与执行中，人逐条拍了：
+
+| 人裁 | 原话／内容 |
+|---|---|
+| **111** | 「收窄 catch，让它抛」—— `readOwnerRecord` 碰上不可归属的转移锁时 fail closed |
+| **112** | 「只记一次事件，继续重试」—— 心跳 `runAffirm` 的 tick 行为一字不改 |
+| **113** | 「同样记一次，行为不改」—— `stop()` 那处有意的 `catch {}` |
+| **114** | 「方案 B：外层 catch 一处路由」—— `runLoop` 两个调用点一行不改 |
+| **115** | 「四条全指名改写」—— 见下表 |
+| **116** | 「本会话逐任务执行」 |
+| **117** | 「连着做到 Task 4」 |
+| **118** | M8 那行 `writeOwnedRunState`「留着，但注释里写明没被钉住」 |
+| **119** | 「心跳用自己的事件类型」 |
+
+材料：spec `docs/superpowers/specs/2026-08-27-i3a-swallowed-unattributable-design.md`（**§7 是落地更正，读上文以它为准**）、
+plan `docs/superpowers/plans/2026-08-27-i3a-swallowed-unattributable.md`（**末尾有「执行后更正」**）。
+
+### 做了什么（按提交主题行找，**别数笔数**）
+
+1. `fix(fileStore): stop a lock that can never clear from being swallowed as if it would …`
+2. `fix(resumeLoop): stop calling a blocked recovery an unreadable artifact …`
+3. `fix(runLoop): route a blocked transfer recovery to abandonment, not to a failed attempt …`
+4. `fix(leaseHeartbeat): stop retrying a lock that can never clear in silence …`
+
+三处吞全部处置：`recoverInterruptedOwnerTransfer` 的裸 `catch` 收窄（只放 `OwnerTransferLockUnattributableError` 出来，
+Busy 与 errno 逐格不变）；`runLoop` 在 `runLoopFromState` 外层 catch **一处**接住（两个调用点一行未改）；
+`resumeLoop` 的入口读改说真名；心跳两处各记一次、行为不改。
+
+### *** 上一轮那条"引用但没量过"的前提 —— 量到了，成立 ***
+
+无 `runLoop` 新分支时：**`status = "failed"`**，事件流 `[loop_planning, attempt_started, execute_started, attempt_failed]`。
+被锁挡住的恢复确实会被升级成一次失败的尝试。仓库里四处注释这么说、上一轮有实测记录，**本轮有了自己的证据**。
+
+⚠️ *** **度量方式本身也留下一条教训**：*** 计划原以为「N1 先红在 `not.toBe("failed")`」就能证明它。**不能** ——
+N1 的事件断言排在状态断言之前，会先短路，红的位置区分不了。真正靠的是副本里一条**定向探针**（把状态打印出来）。
+⇒ **「红在哪条断言」不是可靠的判别方式；要量什么就直接量什么。**
+
+### 人裁 115 指名改写的四条（全在 `tests/persistence/fileStore.test.ts`）
+
+- `keeps a malformed lock non-recoverable even when staged artifacts are present`
+- `keeps a lock non-recoverable when its live holder is in the strong instance-id form`
+- `observes that the redline function actually ran on the strong-holder fixture`
+- `leaves the lock on disk when malformed staged state names no dead holder`
+
+四条的 `readOwnerRecord` 载具改为 `rejects.toBeInstanceOf(OwnerTransferLockUnattributableError)`；
+**锁在盘上、staged pending 未 finalize、`lockReads > 0` 三类断言逐字保留**；每条写明编码的是人裁 111。
+
+两件计划没预见、执行中现做的：
+1. `:816` 那条里**人裁 104 的 ERRATUM 有两处计数**（「the four below」「costs three assertions」）会被改写变成假话
+   ⇒ 原文逐字保留 ＋ 追加具名 ERRATUM（人裁 115），**不写新计数**、指向本台账。
+2. 第三条判据走 `vi.resetModules()` ＋ 动态 `import` ⇒ **类身份不同**，`toBeInstanceOf` 必须用**动态模块实例上的类**
+   （`fileStore.OwnerTransferLockUnattributableError`），否则会因模块身份而非行为失败。取 rejection 用
+   `.then(onFulfilled, onRejected)` ＋ onFulfilled 里 throw。
+
+### *** 人裁 119 —— 一条先例被外推错了，是实测把它抓回来的 ***
+
+spec 为 `runLoop` 那一支写了「故意不新造事件类型，否则劈开消费者」。实施时**把这条先例外推到了心跳**，
+复用 `owner_transfer_contended` ⇒ **实测打红两条在数该类型条数的判据**，其中一条是**人裁 106 立的既有判据**（1 → 2）。
+
+⇒ 人裁 119：心跳改用 **`owner_transfer_lock_unattributable`**。既有判据一字未动（纯只加不改）。
+*** **这次碰撞本身就是证据**：消费者确实在数这些事件，所以「转移被放弃」与「续租被挡」不可互换。 ***
+那条先例对 `runLoop` 仍成立（那里确实是一次转移被放弃），**它只是不能外推到心跳**。
+
+### 变异证明（八条，全部在 `git clone --local` 副本里，主仓库工作树全程零触碰）
+
+| | 变异 | 实测 |
+|---|---|---|
+| M6 | 撤回收窄 | 四条改写判据**变红**（不是回绿 —— spec 自审时纠正过这个方向） |
+| M3 | 撤回 `resumeLoop` 分支 | N2 红，detail 精确退回 `cannot read run artifacts: …` |
+| M1 | 删 `runLoop` 新分支 | N1 红 |
+| M2 | 该支移到通用失败处理**之后** | N1 红，**但事件照记、`failed` 先落定** ⇒ spec 里「等于不存在」的说法不准（已在 spec §7.1 更正） |
+| M7 | 条件放宽成 `instanceof Error` | `runLoop.integration.test.ts` **7 条**变红 ⇒ 没有放宽 |
+| **M8** | 只删 `writeOwnedRunState` 那一行 | *** **没红** *** ⇒ 该行无判据承重（人裁 118：留着＋注释写明理由是继承来的） |
+| M4 | 删心跳 affirm 分支 | N3 红；***N4 仍绿***（`stop()` 那支照记 1 条）⇒ 两条判据缺一不可 |
+| M5 | 去掉去重标志 | 计数变 **2** 与 **7** |
+
+⚠️ M4／M5 在人裁 119 改类型后**重跑过一遍**，结论不变 —— 变异证明必须对应当前代码，不能拿改动前的结果充数。
+⚠️ 本轮补上了上一轮承认"弱一档"的那一档：每个副本删除前都做了**「副本判据文件 vs 工作树判据文件」字节比对**，
+八条变异**一次都没碰过判据文件**（diff 皆 0 字节）。
+
+### 落地后实测（未过滤整份读回）
+
+*** **`35 files / 613 tests`** *** 全绿**零 skipped**（609 ＋ N1／N2／N3／N4），`TEST_RC=0`／`TYPECHECK_RC=0`／`BUILD_RC=0`，
+耗时 19.13s，vitest 第一行 `RUN` 指向本仓库。
+*** **判据基线自本节起是 613。609 作废。** ***
+红线函数 `tryRecoverStaleOwnerTransferLock` **本轮一个字未动**：第 1017–1095 行、**4769 字节**
+（口径＝`src/persistence/fileStore.ts` 整行范围、含末尾换行），与开工时现测一致。
+
+### ⛔ 下一件事
+
+1. *** **本轮四笔尚未经过独立评审。** *** 人裁 110 只对**人裁 108 那一笔**收了口，**不覆盖本轮**。
+   本轮体量比上一轮大（四笔代码 ＋ 四条新判据 ＋ 四条改写判据 ＋ 两条执行中的新人裁），**控制器不替人宣布，未裁。**
+2. **仍挂账，都要人先开口**：**E1 的 I-2 那一格**（授权面外）、**Linux**（OrbStack daemon 要人自己起）、
+   **人裁 85**（`ls` 也报锁）。⇒ *** **I-3(a) 与 `leaseHeartbeat` 两处已在本轮清掉，不再是挂账。** ***
+3. **控制器不许 push。** 本轮全部只在本地。
