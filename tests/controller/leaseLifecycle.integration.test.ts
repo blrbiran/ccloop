@@ -666,14 +666,35 @@ describe("lease heartbeat lifecycle", () => {
     expect(contended).toHaveLength(1);
     expect(contended[0].detail).toContain("cannot be attributed");
     expect(contended[0].detail).toContain("ccloop unlock");
+    // Human ruling 124 (I-3 of the fix round). Both this branch and the ruling-106 transfer branch
+    // append `owner_transfer_contended` carrying the same error, so the three assertions above are
+    // satisfied by EITHER of them. Measured: with the ruling-111 narrowing reverted this branch is
+    // never entered at all -- the read succeeds and the transfer path meets the lock instead -- and
+    // this criterion stayed green. `recovery blocked` is this branch's own wording; `owner transfer
+    // abandoned` is the transfer path's. Without this line the criterion cannot say which one ran.
+    expect(contended[0].detail).toContain("recovery blocked");
     // And, having been entered, it did not upgrade a blocked recovery into an attempt failure.
     expect(finalState.status).not.toBe("failed");
     expect(finalState.status).not.toBe("cancelled");
+    // Human ruling 124 (I-2 of the fix round). The two negatives above do not pin an outcome, and
+    // "abandons the attempt IN PLACE" is an outcome: measured, a mutation writing the TERMINAL
+    // status `exhausted` here left the whole suite green, and nothing in this codebase leads back
+    // out of a terminal status. `executing` is what the branch actually returns -- the attempt is
+    // left exactly where it stood, for a lock only `ccloop unlock` can move.
+    expect(finalState.status).toBe("executing");
     // Nothing was reclaimed on the way out.
     await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe("not-json\n");
     // Spec §2.3 premise 2, measured rather than assumed: the branch persists what it returns, so
     // the returned state and the one on disk do not disagree. Mutation M8 is what proves this
     // pair is load-bearing.
+    //
+    // *** ERRATUM (I-3(a) FIX ROUND, HUMAN RULING 124) -- the last sentence above is FALSE, and was
+    // false when it was written. Mutation M8 deleted the writeOwnedRunState line and NOTHING went
+    // red; that non-red is exactly what human ruling 118 was passed on, and the comment above the
+    // branch in runLoop.ts says so in the same commit that added this sentence. On the path this
+    // criterion walks, the returned state and the persisted one already agree, so this pair pins
+    // the write not at all. The assertions stay -- they are true, and cheap -- but they prove
+    // nothing about that line. The ledger records which mutation established this. ***
     const persisted = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8")) as RunState;
     expect(persisted.status).toBe(finalState.status);
     expect(persisted.attemptsUsed).toBe(finalState.attemptsUsed);
