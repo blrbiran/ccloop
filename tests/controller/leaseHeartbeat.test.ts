@@ -386,6 +386,41 @@ describe("startLeaseHeartbeat", () => {
     expect(types.filter((type) => type === "owner_transfer_lock_unattributable")).toHaveLength(1);
   });
 
+  // Human ruling 124 (C-1 of the fix round). The criterion above exercises stop() only AFTER three
+  // ticks have already recorded, so it enters with the shared flag already true and never runs the
+  // release branch's body at all: an independent review deleted that branch outright and the whole
+  // suite stayed green. Ruling 113's half of this round had nothing pinning it. This criterion
+  // drives stop() into the lock FIRST, with the flag still false, so that branch is the thing under
+  // test.
+  //
+  // The DETAIL is asserted, not just the type: the affirm branch says "lease affirm blocked" and
+  // the release branch says "lease release blocked". Without that, an affirm recording first would
+  // satisfy this criterion for the wrong reason -- the failure mode the round's own methodology
+  // note warns about, where a green comes from a path nobody meant to test.
+  //
+  // A PURE ADDITION under human ruling 4. No existing criterion is touched.
+  it("records the unattributable lock when stop() is the first to meet it, with no tick before", async () => {
+    const runDir = await seed(record());
+    const heartbeat = startLeaseHeartbeat({
+      runDir,
+      ownerRecord: record(),
+      onLeaseLost: () => {},
+    });
+
+    // No timer is advanced and no affirm is forced: the lock appears before the first tick is due,
+    // so stop() -> releaseOwnerLease is the first thing in this run to reach for it.
+    await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
+    await heartbeat.stop();
+
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; detail?: string });
+    const recorded = events.filter((event) => event.type === "owner_transfer_lock_unattributable");
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].detail).toContain("lease release blocked");
+  });
+
   // Task 3 / spec requirement 10 — the poisoned-chain killer. Requirement 10 asks for two
   // things: the rejection reaches the runExclusive caller, and the queue is still usable for a
   // subsequent affirm afterward (not deadlocked, not silently swallowed). A second runExclusive
