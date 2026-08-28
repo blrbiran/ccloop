@@ -1,4 +1,4 @@
-# ccloop Handoff — **I-3(a) ＋ 心跳两处吞已全部落地（人裁 109／111–119），四笔未经独立评审；挂账剩三件**
+# ccloop Handoff — **I-3(a) 那一轮已评审并修完（人裁 120／122–124）；下一件事是派复审**
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -14,7 +14,7 @@ git log --merges --format='%h %cd %s'   # 末两笔应仍是 GATE-PKG2（86d3bd6
 git ls-remote origin refs/heads/main    # ⚠️ 开工核一次、收尾【必须】再核一次 —— 人会自己推远端
 git status --short; git worktree list; git branch -vv
 export ECC_GATEGUARD=off DISABLE_OMC=1
-rtk proxy npm test -- --run             # 期望 35 files / 613 tests，零 skipped
+rtk proxy npm test -- --run             # 期望 35 files / 614 tests，零 skipped
 rtk proxy npm run typecheck; rtk proxy npm run build
 ```
 
@@ -24,13 +24,14 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 长 grep 截断成「[+N more]」，含括号的正则直接报错。
 **任何还原证明／字节比较／整份读回一律 `rtk proxy … > 文件` 再 `cat`／`wc -c`；读大文件用 `sed -n 'a,bp'` 或 python，不要用 grep。** ***
 
-### 最近一次会话（2026-08-27／28）实测基线 —— 未过滤整份读回，`RUN` 路径已核
+### 最近一次会话（2026-08-28）实测基线 —— 未过滤整份读回，`RUN` 路径已核
 
-- *** **`35 files / 613 tests`** *** 全绿**零 skipped**，`TEST_RC=0`／`TYPECHECK_RC=0`／`BUILD_RC=0`，耗时 19.13s
-- *** **判据基线是 613。609／604／603／602／601／600 全部作废。** ***（本轮 +4：N1／N2／N3／N4）
-- *** **红线函数 `tryRecoverStaleOwnerTransferLock` 本轮一个字未动**：第 1017–1095 行、**4769 字节**，
+- *** **`35 files / 614 tests`** *** 全绿**零 skipped**，`TEST_RC=0`／`TYPECHECK_RC=0`／`BUILD_RC=0`，耗时 16.84s
+- *** **判据基线是 614。613／609／604／603／602／601／600 全部作废。** ***（修复轮 +1：`stop()` 那条）
+- *** **红线函数 `tryRecoverStaleOwnerTransferLock` 近两轮一个字未动**：第 1017–1095 行、**4769 字节**，
   口径 ＝ `src/persistence/fileStore.ts` 的【整行范围、含末尾换行】（`sed -n 'a,bp' … | wc -c`）***
   ⚠️ **行号会移动 ⇒ 引用前必须现测**（先找签名行，再大括号配对找收尾行）。**3185／4496 两个旧基线均已作废。**
+  （独立评审员用同一口径复测过，并比对了 `30dde52` 与当时 HEAD 的 sha256 —— 逐字节相同。）
   ⚠️ *** **报任何字节数必须连口径一起报。** ***
 - ⚠️ *** **这份基线在负载下会 flake。** *** 已知 **4 条**，其中**两条不在人裁 10 的名单里**：
   - 名单内：`records env names only …`、`persists phase usage evidence…`
@@ -47,13 +48,15 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 ## 唯一可信进度源（**引路径，不要重新推导**）
 
 `.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **人裁 10–119 全在里面**。
-*** **最近一次会话新增 §42。§42 末尾「⛔ 下一件事」是下一会话的第一件事，逐字照做。** ***
+*** **最近一次会话新增 §43。§43 末尾「⛔ 下一件事」是下一会话的第一件事，逐字照做。** ***
+（§42 是 I-3(a) 那一轮本身；**§43 是它的评审 ＋ 修复**，两节都要读，冲突以 §43 为准。）
 ⚠️ *** **`.superpowers/sdd/.gitignore` 内容是 `*`** *** —— 该目录下**新产物必须 `git add -f`**。
 
 | 材料 | 路径 |
 |---|---|
 | **I-3(a) 设计（spec）** | `docs/superpowers/specs/2026-08-27-i3a-swallowed-unattributable-design.md` ⚠️ **§7 是落地更正，读上文以它为准** |
-| **I-3(a) 实施计划** | `docs/superpowers/plans/2026-08-27-i3a-swallowed-unattributable.md` ⚠️ **末尾有「执行后更正」** |
+| **I-3(a) 实施计划** | `docs/superpowers/plans/2026-08-27-i3a-swallowed-unattributable.md` ⚠️ **末尾有【两节】更正：「执行后更正」＋「第二次更正」，后者是评审之后的** |
+| **I-3(a) 独立评审报告 ＋ brief（下次派复审抄这份 brief）** | `.superpowers/sdd/2026-08-07-pkg2-data-loss/i3a-review.md`、`…/i3a-review-brief.md` |
 | I-3(b) 设计／计划（上一轮） | `…/specs/2026-08-26-i3-unattributable-lock-design.md`、`…/plans/2026-08-26-i3-unattributable-lock.md` |
 | I-3(b) 独立评审报告 ＋ brief（**下次派评审抄这份 brief**；⚠️ 它自己的消费点普查有错，见台账 §41） | `…/i3b-review.md`、`…/i3b-review-brief.md` |
 | 更早几轮的评审 ＋ brief ＋ 裁决包 | `…/pointB-*.md`、`…/pointC-design.md`、`…/E1-review-*.md` |
@@ -72,10 +75,15 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 | **116／117** | 本会话逐任务执行；连着做到 Task 4。 |
 | **118** | M8 那行 `writeOwnedRunState`「**留着，但注释里写明没被钉住**」。 |
 | **119** | **心跳用自己的事件类型** `owner_transfer_lock_unattributable`（复用共享类型被实测打红两条既有/新判据）。 |
+| **120** | 本轮四笔**派独立评审**（人裁 110 只覆盖人裁 108 那一笔）。 |
+| **121** | 挂账里**先动 E1 的 I-2 ＋ 人裁 85**；Linux 继续挂。 |
+| **122** | **修完派复审**（本轮有 1 Critical，人裁 100 前提不成立）。 |
+| **123** | C-1 **只补一条判据**，不做人裁 118 式披露注释。 |
+| **124** | I-1 整条改写；I-2／I-3 向 N1 各加一条断言；K-1 追加具名 ERRATUM —— **四条全授权**。 |
 
 ---
 
-## 最近一次会话做完了什么（**都不要重做**，细节在台账 §42）
+## 最近两轮做完了什么（**都不要重做**，细节在台账 §42／§43）
 
 按提交主题行找（*** **别数笔数** ***）：
 
@@ -86,6 +94,12 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 5. `fix(runLoop): route a blocked transfer recovery to abandonment, not to a failed attempt …`
 6. `fix(leaseHeartbeat): stop retrying a lock that can never clear in silence …`
 7. `docs(sdd): record section 42 …`（含台账 §42 ＋ 本文）
+
+**评审 ＋ 修复轮（§43）再加三笔，生产代码一行未改**：
+
+8. `test(fileStore): restore the weight the ruling-111 rewrite took out of one assertion …`
+9. `test(runLoop): pin the outcome and the path this criterion only implied …`（含 K-1 的 ERRATUM）
+10. `test(leaseHeartbeat): pin the release-path record that nothing was pinning …`
 
 **做出来的东西**：三处吞掉 `OwnerTransferLockUnattributableError` 的地方全部处置 ——
 `recoverInterruptedOwnerTransfer` 的裸 `catch` 收窄（Busy 与 errno 逐格不变）；`runLoop` 在
@@ -101,28 +115,29 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ## ⛔ 下一件事
 
-### 1. **本轮四笔尚未经过独立评审 —— 未裁，等人开口**
-人裁 110 只对**人裁 108 那一笔**收了口，**不覆盖本轮**。本轮体量明显更大：**四笔代码 ＋ 四条新判据 ＋
-四条改写判据 ＋ 执行中新增的两条人裁（118／119）**，且其中人裁 119 是**实测推翻了 spec 的一条外推**才定下来的。
-*** **控制器不替人宣布收口。** *** 要派的话，brief 抄 `…/i3b-review-brief.md`，**每个数按现测更新（613／35、红线函数连口径）**，
-**已知 flake 写满 4 条**，并把 spec §7 与 plan 末尾的更正节一并给评审员。
+### 1. **派复审（人裁 122，已裁 —— 不用再问，但 brief 要现测过的数）**
+评审面**只盯修复轮那三笔**：新判据能不能被变异打红、I-1 重排之后是否真的承重、有没有第五条被动过的判据。
+brief 抄 `.superpowers/sdd/2026-08-07-pkg2-data-loss/i3a-review-brief.md` 改：
+**范围换成那三笔**、**基线 614**、**红线函数连口径**、**已知 flake 写满 4 条**，
+并把 plan 的**第二次更正节**与台账 §43 一并给评审员。
 
-### 2. 挂账剩三件（**都要人先开口**）
-- **E1 的 I-2 那一格**（**未裁**）：数组 holder ＋ 死 pid ⇒ `inspectLock` 答 `dead` 而非 `unrecognized-holder`，
-  于是 `unlockCommand` **无 `--force` 直接删锁**。已在红线函数注释里记录为实测，代码一行未改（**E1 在授权面外**）。
-- **Linux 从没跑过**（唯一的真覆盖缺口）：本机 OrbStack 的 docker CLI 在 `/usr/local/bin/docker`，
-  **daemon 实测未起**（socket 不存在）⇒ **要人自己开**（`! open -a OrbStack`）。整套在 Linux 上本来就红 5 条，
-  是**先于点 B 存在的包级缺口**。预估 $5–15。
-- **人裁 85 —— `ls` 也报锁**：已立项挂账（「要，但另开一轮」）。
+### 2. 挂账（**人裁 121 已经开口两件**）
+- **E1 的 I-2**（人裁 121 已开工设计）：数组 holder ＋ 死 pid ⇒ `inspectLock` 答 `dead` 而非 `unrecognized-holder`，
+  于是 `unlockCommand` **无 `--force` 直接删锁**。⚠️ *** **E1 在授权面外：动生产代码前必须另拿一次具名授权。** ***
+- **人裁 85 —— `ls` 也报锁**（人裁 121 已开工设计）。
+- **Linux 从没跑过**（唯一的真覆盖缺口，**仍挂着**）：OrbStack daemon 实测未起（socket 不存在）⇒ **要人自己开**
+  （`! open -a OrbStack`）。整套在 Linux 上本来就红 5 条。预估 $5–15。
 
-⇒ *** **I-3(a) 与 `leaseHeartbeat` 两处已在本轮清掉，不再是挂账。** ***
+⇒ 这两件都有实质设计成分 ⇒ **先 `superpowers:brainstorming`，再 `writing-plans`**。
 
-### 3. 本轮留下的一条方法论（**下一轮直接用**）
-*** **「红在哪条断言」不是可靠的判别方式。** *** 本轮计划原以为「新判据先红在状态断言」就能证明「不接住会被判 failed」，
-实际前面的事件断言会**先短路**。真正的度量靠副本里一条**定向探针**（把状态打印出来）。
-⇒ **要量什么就直接量什么，别靠红的位置推断。**
-
----
+### 3. 近两轮留下的方法论（**下一轮直接用**）
+1. *** **「红在哪条断言」不是可靠的判别方式。** *** 前面的断言会先短路。**要量什么就直接量什么**（定向探针打印值）。
+2. *** **「没跑过的那条变异」也不是证据。** *** 八条变异看着完备，`stop()` 那一支却只被别的分支的变异间接掠过，
+   结果它**删掉全套照绿**。⇒ **机械检查：每新增一个分支，点名那条删掉【它自己】的变异，并确认它存在。**
+3. *** **改写判据时，断言的【位置】和它的【文字】一样承重。** *** I-1 那处三条断言一字未改、只是顺序变了，
+   其中一条就此不再观测任何生产行为。**「逐字保留」≠「承重保留」；验收改写要看「它还能不能红」。**
+4. **一笔提交里的两处注释可以互相打脸**（K-1：`runLoop.ts` 说 M8 没红，同一笔的判据注释说 M8 证明了承重）。
+   ⇒ **写完注释做一次「同一事实在别处怎么说」的对照。**
 
 ## 铁律与边界（**违反即事故**）
 
@@ -182,7 +197,7 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 | `superpowers:writing-plans` | brainstorming 出 spec 之后。⚠️ **写完必须跑它的自查三项**（spec 覆盖／占位扫描／类型一致），本轮靠这个补出了 M8 |
 | `superpowers:executing-plans` | 执行计划时。⚠️ 它要求隔离 worktree，**但本仓库铁律 1 把「删 worktree」列为需人授权**，且历轮都直接在 `main` 上落本地提交 —— **CLAUDE.md 优先** |
 | `superpowers:test-driven-development` | 补新判据时。⚠️ **本仓库的「先红」多数要靠变异证明**；但**改既有判据成 `rejects` 时是真 TDD**（本轮 Task 1 就先红了 4 条） |
-| `superpowers:requesting-code-review` | 派评审时；模板用 `…/i3b-review-brief.md`，**每个数按现测更新，已知 flake 写满 4 条** |
+| `superpowers:requesting-code-review` | 派评审时；模板用 `…/i3a-review-brief.md`（比 i3b 那份新），**每个数按现测更新，已知 flake 写满 4 条** |
 | `superpowers:receiving-code-review` | *** 拿到报告之后。 *** ⚠️ **本项目额外要求：评审员的承重主张必须自己复核**，不许照单全收，也不许照抄它的数字 |
 | `superpowers:systematic-debugging` | 出现测试红／行为不符时**先用它**，别直接改代码 |
 
