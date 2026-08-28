@@ -1,4 +1,4 @@
-# ccloop Handoff — **I-3(a) 那一轮已评审并修完（人裁 120／122–124）；下一件事是派复审**
+# ccloop Handoff — **I-3(a) 两轮评审都过了（0 Critical）；下一件事是 E1 的 I-2 与人裁 85 的设计**
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -48,15 +48,17 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 ## 唯一可信进度源（**引路径，不要重新推导**）
 
 `.superpowers/sdd/2026-08-07-pkg2-data-loss/progress.md` —— **人裁 10–119 全在里面**。
-*** **最近一次会话新增 §43。§43 末尾「⛔ 下一件事」是下一会话的第一件事，逐字照做。** ***
-（§42 是 I-3(a) 那一轮本身；**§43 是它的评审 ＋ 修复**，两节都要读，冲突以 §43 为准。）
+*** **最近一次会话新增 §43 与 §44。§44 末尾「⛔ 下一件事」是下一会话的第一件事，逐字照做。** ***
+（§42 是 I-3(a) 那一轮本身；§43 是它的评审 ＋ 修复；**§44 是复审**。三节都要读，冲突以 §44 为准。）
+⚠️ **§43 末尾那句「全部只在本地」现在是假的** —— 人随后把整包推上了远端，更正记在 §44。
 ⚠️ *** **`.superpowers/sdd/.gitignore` 内容是 `*`** *** —— 该目录下**新产物必须 `git add -f`**。
 
 | 材料 | 路径 |
 |---|---|
 | **I-3(a) 设计（spec）** | `docs/superpowers/specs/2026-08-27-i3a-swallowed-unattributable-design.md` ⚠️ **§7 是落地更正，读上文以它为准** |
 | **I-3(a) 实施计划** | `docs/superpowers/plans/2026-08-27-i3a-swallowed-unattributable.md` ⚠️ **末尾有【两节】更正：「执行后更正」＋「第二次更正」，后者是评审之后的** |
-| **I-3(a) 独立评审报告 ＋ brief（下次派复审抄这份 brief）** | `.superpowers/sdd/2026-08-07-pkg2-data-loss/i3a-review.md`、`…/i3a-review-brief.md` |
+| **I-3(a) 独立评审报告 ＋ brief** | `.superpowers/sdd/2026-08-07-pkg2-data-loss/i3a-review.md`、`…/i3a-review-brief.md` |
+| **修复轮的复审报告 ＋ brief（下次派评审抄这份 brief，它最新）** | `…/i3a-rereview.md`、`…/i3a-rereview-brief.md` |
 | I-3(b) 设计／计划（上一轮） | `…/specs/2026-08-26-i3-unattributable-lock-design.md`、`…/plans/2026-08-26-i3-unattributable-lock.md` |
 | I-3(b) 独立评审报告 ＋ brief（**下次派评审抄这份 brief**；⚠️ 它自己的消费点普查有错，见台账 §41） | `…/i3b-review.md`、`…/i3b-review-brief.md` |
 | 更早几轮的评审 ＋ brief ＋ 裁决包 | `…/pointB-*.md`、`…/pointC-design.md`、`…/E1-review-*.md` |
@@ -107,20 +109,20 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 `resumeLoop` 的入口读改说真名；心跳两处各记一次、tick 与释放契约一字不改。
 *** **人裁 83 的删锁条件逐格未变，红线函数一个字没动。** ***
 
-⚠️ *** **人在评审那一轮进行中把 §42 那批推上了远端。** *** 修复轮那三笔（8–10）写本文时**只在本地**。
-但**提交本文这个动作本身就会让本地再多一笔**，而且人随时会再推。
+⚠️ *** **写本文时，上面十笔【全部已经推到远端】** *** —— 人在本会话里推了两次（`4493338 → d4a9bb1 → 26da28e`，
+reflog 可查）。**但提交本文这个动作本身就会让本地再多一笔。**
 ⇒ *** **开工第一件事是自己现跑 `git ls-remote`，别信这一句。** ***
-⇒ ⚠️ **这直接改变注释铁律的适用面**：已推到远端的注释一律「原文逐字保留 ＋ 追加具名 ERRATUM」，不许就地改。
+⇒ ⚠️ *** **注释铁律的适用面已经切换**：这十笔里的每一处注释、每一条 ERRATUM 都是【已发布文本】 ——
+被推翻时唯一合法的修法是【再追加一条具名 ERRATUM】，不许就地改。 ***
 
 ---
 
 ## ⛔ 下一件事
 
-### 1. **派复审（人裁 122，已裁 —— 不用再问，但 brief 要现测过的数）**
-评审面**只盯修复轮那三笔**：新判据能不能被变异打红、I-1 重排之后是否真的承重、有没有第五条被动过的判据。
-brief 抄 `.superpowers/sdd/2026-08-07-pkg2-data-loss/i3a-review-brief.md` 改：
-**范围换成那三笔**、**基线 614**、**红线函数连口径**、**已知 flake 写满 4 条**，
-并把 plan 的**第二次更正节**与台账 §43 一并给评审员。
+### 1. **收口与否，未裁 —— 要问人**
+复审判 **0 Critical／1 Important（文档性：整包已推远端）／4 Minor**，四条修复各有红证，
+两轮评审都没在台账／spec／plan／ERRATUM 里查出假数。
+⚠️ **但人裁 100 的原文前提是「连续两轮 0 Critical」，上一轮有 1 Critical，严格说不满足** ⇒ **控制器不替人宣布。**
 
 ### 2. 挂账（**人裁 121 已经开口两件**）
 - **E1 的 I-2**（人裁 121 已开工设计）：数组 holder ＋ 死 pid ⇒ `inspectLock` 答 `dead` 而非 `unrecognized-holder`，
