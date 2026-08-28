@@ -929,11 +929,21 @@ describe("fileStore", () => {
 
     // The lock is still there, byte for byte, and the staged transfer was never finalized behind
     // it. Under the reverted guard all three of these fail.
-    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe(lockContents);
+    //
+    // *** ERRATUM (I-3(a) FIX ROUND, HUMAN RULING 124) -- the three assertions are unchanged; their
+    // ORDER was not. The ruling-111 rewrite left the readOwnerRecord call BELOW the two file
+    // assertions, which put them ahead of the only production code this criterion runs: the
+    // lock-contents assertion was then reading back the bytes the test itself had just written, and
+    // could not fail whatever the read did. An independent review measured it: under a mutation
+    // that deletes the lock at both unattributable exits, the other criteria named in the same
+    // rewrite went red and this one stayed green. The read is moved back above them, where it stood
+    // before the rewrite, so "all three of these" is true again. Nothing was added, removed or
+    // weakened. Which mutation pins this is recorded in the ledger. ***
     // Human ruling 111 (I-3(a)): this was `expect(owner.currentOwnerEpoch).toBe(1)` — the read
     // handing back the pre-transfer record. It refuses now. Still one of the three, still red
     // under the reverted guard.
     await expect(readOwnerRecord(runDir)).rejects.toBeInstanceOf(OwnerTransferLockUnattributableError);
+    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe(lockContents);
     await expect(readFile(join(runDir, ".owner-transfer.pending.json"), "utf8")).resolves.toContain(
       "owner lost after reconciliation",
     );
