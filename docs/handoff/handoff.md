@@ -306,3 +306,31 @@ Orca 的进度与待办见 `/Users/biran/code/skills/loop/Orca/docs/handoff/hand
 按"上下文窗口"读，330k/task 与实测舒适区间 300K–450K 几乎重合。
 每会话额度同时由 400,000 统一为 **450,000**（与 ccmem 对齐；两仓库此前只差这一个数字，属复制后的漂移）。
 ⚠️ **本节不修改「预算」一节的原文**（那是已发布文本），此处即为具名更正。
+
+---
+
+# 📌 本仓库本轮还多了一份 `README.md`（**同一会话追加，上面一字未动**）
+
+仓库此前**没有 README**。现有一份，**是从源码写的、且 quickstart 先跑通再写下来**：
+`cli.ts`、契约 schema、两个 adapter、`scripts/claude-phase-runner.mjs`。
+
+**它记录了几件此前只散落在 spec 里的事**（都实测过）：
+- run 目录的**真实**结构 —— 除 `loop-state.json`／`events.jsonl` 外还有
+  `loop-contract.json`（**所以 `resume` 不需要 `--contract`**）、`owner-record.json`、
+  `attempts/<n>/{plan,execution,verify}.json` ＋ `diff.patch` ＋ `stdout-stderr.log`；
+- **`worktrees/` 跑完是空的** —— `cleanupAttemptWorkspace` 会 `git worktree remove --force`，
+  源仓库 `git worktree list` 不多出任何条目；
+- scripted 路径在一次性 git 仓库里 **exit 0**（没在主仓库跑，避免注册 worktree 触碰铁律的授权面）。
+
+⚠️ **README 是活文档**，但它写的每个结构性断言都来自实测 —— **改它之前请先现测，别照抄。**
+
+## 本会话对本仓库的改动一览（**都只在本地提交，一次没 push**）
+
+按提交主题行找（**别数笔数，也别记 SHA**）：
+
+1. `docs(readme): write the missing README, verified against a real scripted run`
+2. `docs(spec): design A' …` ＋ `docs: point at Orca for the ledger design instead of keeping a second copy here`
+   （spec 曾短暂存在于本仓库，**已删；真相源在 Orca**）
+3. `docs: move the ironclad rules into CLAUDE.md and fix Rule 6's unit ambiguity`
+
+*** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
