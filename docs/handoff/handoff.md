@@ -1,4 +1,4 @@
-# ccloop Handoff — **下一件事是 P0：让 attempt 交出一笔可达的 commit（人 2026-09-03 裁决）；I-3(a) 已收口（人裁 125）；E1 的 I-2 ＋ 人裁 85 顺延，人裁 121 仍有效**
+# ccloop Handoff — **P0 已做完（2026-09-04，Orca 那条线执行）；下一件事回到 E1 的 I-2 ＋ 人裁 85，人裁 121 仍有效；I-3(a) 已收口（人裁 125）**
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -14,7 +14,7 @@ git log --merges --format='%h %cd %s'   # 末两笔应仍是 GATE-PKG2（86d3bd6
 git ls-remote origin refs/heads/main    # ⚠️ 开工核一次、收尾【必须】再核一次 —— 人会自己推远端
 git status --short; git worktree list; git branch -vv
 export ECC_GATEGUARD=off DISABLE_OMC=1
-rtk proxy npm test -- --run             # 期望 35 files / 614 tests，零 skipped
+rtk proxy npm test -- --run             # 期望 35 files / 624 tests，零 skipped（P0 之后的新基线）
 rtk proxy npm run typecheck; rtk proxy npm run build
 ```
 
@@ -24,11 +24,16 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 长 grep 截断成「[+N more]」，含括号的正则直接报错。
 **任何还原证明／字节比较／整份读回一律 `rtk proxy … > 文件` 再 `cat`／`wc -c`；读大文件用 `sed -n 'a,bp'` 或 python，不要用 grep。** ***
 
-### 最近一次会话（2026-08-28）实测基线 —— 未过滤整份读回，`RUN` 路径已核
+### 2026-08-28 那一次会话的实测基线 —— 未过滤整份读回，`RUN` 路径已核
+
+⚠️ *** **它已经不是「最近一次」了** *** —— P0 那一轮（2026-09-04）之后的现行基线见下一条与文末「📌 Orca 那条线」。
+本段其余内容（四条已知 flake、红线函数字节数口径、Linux 上不绿）**原样有效**。
 
 - *** **`35 files / 614 tests`** *** 全绿**零 skipped**，`TEST_RC=0`／`TYPECHECK_RC=0`／`BUILD_RC=0`，耗时 17.58s
   （**收尾时在最终树上重跑过一次**，不是引用会话中段的数）
-- *** **判据基线是 614。613／609／604／603／602／601／600 全部作废。** ***（修复轮 +1：`stop()` 那条）
+- *** **判据基线现在是 624（P0 那一轮 +10，2026-09-04 现测）。614 及此前的 613／609／604／603／602／601／600 全部作废。** ***
+  ⚠️ **本行原文是「判据基线是 614」，由 P0 那一轮就地更正** —— 活文档不得把已知为假的说法带下去（铁律 4）。
+  614 仍然是**那一次会话（2026-08-28）的实测值**，下面这一段整段保留不动。
 - *** **红线函数 `tryRecoverStaleOwnerTransferLock` 在 I-3(a) 轮与修复轮都一个字未动**：第 1017–1095 行、**4769 字节**，
   口径 ＝ `src/persistence/fileStore.ts` 的【整行范围、含末尾换行】（`sed -n 'a,bp' … | wc -c`）***
   ⚠️ **行号会移动 ⇒ 引用前必须现测**（先找签名行，再大括号配对找收尾行）。**3185／4496 两个旧基线均已作废。**
@@ -134,18 +139,18 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ## ⛔ 下一件事
 
-### 0. 🔴 **人 2026-09-03 改了本仓库的下一件事：先做 P0**
+### 0. ✅ **P0 已经做完（2026-09-04）—— 不要重做**
 
-> 原话：「现在就动 ccloop，先做 Orca 这部分工作，**E1 的 I-2 ＋ 人裁 85 顺延**，**人裁 121 仍有效**。」
+> **原文（2026-09-03 写下时为真）**：人裁「现在就动 ccloop，先做 Orca 这部分工作，
+> **E1 的 I-2 ＋ 人裁 85 顺延**，**人裁 121 仍有效**。」
 
-**P0 ＝ 在 `git worktree remove --force` 之前把 agent 的改动 commit 掉，并写一个
-`refs/ccloop/<run-id>/attempts/<n>` 让它可达。** 纯追加，`diff.patch` 原样保留。
-实施计划已写好（在 Orca 那边）⇒ *** **详见本文档末尾「📌 Orca 那条线」一节，那里有全部细节与三条现测。** ***
+*** **P0 已由 Orca 那条线的 run `orca-dev-213d1395` 在本仓库执行完毕，四笔本地提交，未 push。** ***
+细节、实测数与全部更正见本文档末尾「📌 Orca 那条线」一节。
 
-⚠️ **顺延不是取消。** 下面第 2 条那两件事**原样有效**，只是排在 P0 之后；
+⇒ *** **本仓库的下一件事因此回到下面第 2 条：E1 的 I-2 ＋ 人裁 85。** ***
 **人裁 121 仍然有效，回来做它们时不需要重新拿授权。**
-⚠️ *** **E1 仍在授权面外** *** —— 下面第 2 条里「动生产代码之前必须另拿一次具名授权」那句**没有被这次裁决碰过**。
-⚠️ *** **push 仍需每次单独授权。控制器不许 push。** ***
+⚠️ *** **E1 仍在授权面外** *** —— 第 2 条里「动生产代码之前必须另拿一次具名授权」那句**至今没有被任何裁决碰过**。
+⚠️ *** **push 仍需每次单独授权。控制器不许 push。本仓库现在有四笔未 push 的提交。** ***
 
 ### 1. **I-3(a) 已收口（人裁 125）—— 不要重开，也不要重做**
 复审判 **0 Critical／1 Important（文档性：整包已推远端）／4 Minor**，四条修复各有红证。
@@ -307,92 +312,90 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ---
 
-# 📌 Orca 那条线（**单节滚动更新，最后更新 2026-09-03（第二次）**）
+# 📌 Orca 那条线（**单节滚动更新，最后更新 2026-09-04**）
 
-> ⚠️ *** **本节合并并取代了此前【三节】各自独立的 Orca 章节** ***
-> （原「另一条并行的线：Orca」2026-08-29、「Orca 那条线的进度更新」2026-08-29、
-> 「A′ 的校验器已全部落地」2026-09-01／02）。
-> **合并的授权来自人**（2026-09-02，理由：Orca 的章节不能在本仓库无限增加下去）；
-> **合并本身合法**，因为 `CLAUDE.md` 与本文档铁律 4 都写明 `docs/handoff/**` 是
-> **允许整篇重写**的活文档，只是「不得把已知为假的说法带下去」。
-> ⇒ *** **今后 Orca 的更新一律【就地更新本节】，不再新增编号章节。** ***
-> 三节原文均可由 `git log -- docs/handoff/handoff.md` 取回，**没有丢失**。
-> ⚠️ 本节**不写任何哈希，也不写「远端到第几笔」** —— 提交本文这个动作本身就会改 HEAD，而人还会自己推远端。
+> ⚠️ *** **本节就地更新，不新增编号章节** *** —— 规矩是人 2026-09-02 定的（Orca 的章节不能在本仓库无限增加）。
+> 合法性依据：`CLAUDE.md:74` 与本文档铁律 4 都明写 `docs/handoff/**` 是**允许整篇重写**的活文档，
+> 只是「**不得把已知为假的说法带下去**」。**历次原文可由 `git log -- docs/handoff/handoff.md` 取回，没有丢失。**
+> ⚠️ 本节**不写任何当前哈希，也不写「远端到第几笔」** —— 提交本文这个动作本身就会改 HEAD，人还会自己推远端。
 > 要指代某一笔就**引提交主题行**，要指代材料就**引路径**。
+> ⚠️ 例外：**实测值的观测锚点 commit 必须写** —— 那是有效期，不是当前状态。
 
-## 🔴 一、本次更新最重要的一件事：**本仓库的「下一件事」被人改了**
+## 🔴 一、本次更新最重要的一件事：**P0 已经做完了**
 
-> **人 2026-09-03 原话**：「现在就动 ccloop，先做 Orca 这部分工作，
-> **E1 的 I-2 ＋ 人裁 85 顺延**，**人裁 121 仍有效**。」
+*** **执行者**：Orca 那条线的 run `orca-dev-213d1395`，2026-09-03／04。 ***
+*** **在本仓库落了四笔本地提交，一次都没 push。** *** 按提交主题行找（**别数笔数，别记 SHA**）：
 
-⇒ *** **本仓库的下一件事从「E1 的 I-2 ＋ 人裁 85」改成「P0：让 attempt 交出一笔可达的 commit」。** ***
+1. `feat(worktree): publish each attempt as a commit reachable through a ref`
+2. `feat(runLoop): publish the attempt commit before the worktree is removed`
+3. `feat(runLoop): publish on the retry path too, the twelfth cleanup call site`
+4. `docs(readme): document the attempt commit refs and what they cost`
 
-**读它的三层意思，一层都不要多读**：
+**做出来的东西**：`git worktree remove --force` 之前，attempt worktree 里的东西被
+`git add -A` ＋ commit，并写一个 `refs/ccloop/<run-id>/attempts/<n>` 让它在 worktree 消失后仍然可达。
+**发布放在 `cleanupAttemptWorkspaceWithStatus`（11 个调用点的收敛点）＋ 重试路径那个裸调用点**，
+两处覆盖全部十二个清理点。`diff.patch` 与它的采集路径**一个字节未动**。
 
-1. **P0 排在 E1 的 I-2 ＋ 人裁 85 【前面】** —— 那一轮 *** **顺延，不是取消** ***。
-2. *** **人裁 121 仍然有效** *** —— 它当初授权的是「开工设计 E1 的 I-2 与人裁 85」，
-   顺延**不撤销它**；那一轮回来时**不需要重新拿授权**。
-3. ⚠️ *** **E1 仍在授权面外。** *** 本文档上方明写「E1 出完设计、动生产代码之前必须**另拿一次具名授权**」——
-   *** **本次裁决没有碰这一条。** ***
+### 🔴 本轮的实测数（**只抄工具打印出来的数**，观测时点 2026-09-04，基点 `7b44220`）
 
-⚠️ *** **push 仍需每次单独授权，本次裁决不含 push。控制器不许 push。** ***
-⚠️ **本节这次更新由 Orca 那条线写入，但它写的是【人对本仓库的裁决】，不是 Orca 的意见。**
+| 量 | 值 |
+|---|---|
+| 开工基线 | `35 files / 614 tests`，零 skipped，TEST／TYPECHECK／BUILD 三个 RC 全 0，17.00s |
+| *** **收尾基线** *** | *** **`35 files / 624 tests`（+10），零 skipped，三个 RC 全 0，23.92s** *** |
+| 改动范围 | **5 个文件**：`src/workspace/worktreeManager.ts`、`src/controller/runLoop.ts`、两个对应判据文件、`README.md` |
+| `git diff --stat 7b44220 HEAD -- scripts/` | *** **空输出** *** ⇒ `claude-phase-runner.mjs` 零触碰 |
+| `git diff --stat 7b44220 HEAD -- src/persistence/` | *** **空输出** *** ⇒ `fileStore.ts` 零触碰，**红线函数 `tryRecoverStaleOwnerTransferLock` 一个字未动** |
+| 变异 | **M0-1 ～ M0-7 七条全部被看见红** |
 
-## 二、P0 是什么、要改哪里（**计划已写好，在 Orca 那边**）
+⚠️ **本节把上面「最近一次会话（2026-08-28）实测基线」那一段里的 614 就地更正成了 624**（在那一段里逐字注明了）。
+**那一段其余内容（四条已知 flake、红线函数字节数口径、Linux 上不绿）原样有效，没有被本轮碰过。**
 
-*** **`…/Orca/docs/superpowers/plans/2026-09-03-p0-ccloop-publish-attempt-commit.md`** ***
-（背景一页仍在 `…/Orca/docs/superpowers/proposals/2026-09-03-ccloop-p0-publish-attempt-commit.md`）
+## 二、🔴 本轮有一条**必须由人拍板**的事，人拍了
 
-**一句话**：在 `git worktree remove --force` 之前把 agent 的改动 commit 掉，
-写一个 `refs/ccloop/<run-id>/attempts/<n>` 让它可达。`diff.patch` 原样保留，**纯追加**。
+**P0 计划原本要求发布成功时也记一条 `attempt_commit_published` 事件。**
+实测：`events.jsonl` 里多一条事件，*** **打红了 17 条既有判据** *** —— 它们用 `toEqual`
+钉死了完整的事件类型序列（`succeeds when verification approves`、
+`stops immediately when a stopOn signal matches`、
+`records retained cleanupStatus in execution recovery when cleanup fails` 等）。
 
-**为什么非做不可**：`scripted` adapter 不产 `diffPatch`（Orca 2026-09-03 现测），
-所以 Orca 的 v1 **没有任何产物可收**；且 patch 作为机器交接物有三条静默转空的通道。
-⚠️ **那三条不是对本仓库的缺陷指控** —— 在「patch 是给人看的证据」这个定位下它们够用。
+⇒ **这正是本仓库铁律 2 的形状**（不许实施者自改既有判据；改既有判据必须由人指名到具体测试）
+⇒ *** **升人。人 2026-09-04 裁决：撤掉成功事件，只保留 `attempt_commit_publish_failed`。** ***
 
-### 🔴 那份计划里有三条**关于本仓库自己**的现测，值得先看（**引用前请现测**）
+**两条路都实测过**：保留两个事件 ⇒ 17 条既有判据红；只记失败事件 ⇒ 整支全绿。
+**依据是「ref 本身就是产物」** —— 成功事件与 ref 重复（`git for-each-ref` 就能回答），失败时没有 ref 可看。
 
-1. *** **`cleanupAttemptWorkspace` 有 12 个调用点，但只有 2 个收敛点。** ***
-   本体只有一行（`src/workspace/worktreeManager.ts`）。**11 个**走
-   `cleanupAttemptWorkspaceWithStatus`（`src/controller/runLoop.ts`），
-   *** **第 12 个是 `runLoop.ts` 里 verification-rejected 之后那条重试路径上的裸调用** ***，
-   而它要求「移除失败仍然致命」。
-   ⇒ **逐点改 ＝ 12 次漏掉一次的机会**，而本仓库自己的教训正是「**半改比不改坏**」。
-2. **计划因此把改动收敛到两个文件**：`src/workspace/worktreeManager.ts` ＋ `src/controller/runLoop.ts`。
-   *** **`src/persistence/fileStore.ts` 零触碰** *** —— 红线函数
-   `tryRecoverStaleOwnerTransferLock` 就在那个文件里。
-3. **原提案第 3 节第 4 步（把 sha 写进 `attempts/<n>/` 的产物文件）已被人否掉**，
-   改成 *** **ref 本身就是产物** *** ＋ `events.jsonl` 里两条新事件
-   （`attempt_commit_published` / `attempt_commit_publish_failed`）。
-   理由就是第 2 条：`attempts/<n>/` 是 `fileStore.ts` 的地盘。
+⇒ *** **既有判据一条都没有被改过。** *** 本轮只加不改。
 
-### 那份计划明确**不**改什么（这一节是给评审看的）
+## 三、🔴 本轮在本仓库现测到的两条，**下一轮直接用**
 
-状态机、退出码、租约／心跳／owner-transfer／`unlock`、`evaluatePathPolicy`、契约 schema、
-`scripts/claude-phase-runner.mjs`（`diff.patch` 的采集路径）**全部原样**；
-*** **E1 的 I-2 ＋ 人裁 85 那一轮的东西一个字节不碰。** ***
+1. *** **变异 M0-4 第一次跑是绿的 —— 那条判据是空的。** *** 「仓库里没配 git 身份」
+   **不足以让 `git commit` 失败**：git 会从 OS 用户名与主机名自己猜一个身份，带警告提交成功。
+   四场景探针实测：清空全局／系统配置且仓库无身份 ⇒ **成功**；再加 `user.useConfigOnly=true` ⇒
+   **exit 128，`fatal: no email was given and auto-detection is disabled`**；再加 `-c` 显式身份 ⇒ **成功**。
+   ⇒ 判据补上 `user.useConfigOnly=true` 之后才看见红。
+   ⇒ **本仓库任何「没配身份时 git 会失败」的假设都要照这个口径重测。**
+2. **`cleanupAttemptWorkspace` 的调用点计数**：机械普查是 **9 个 `BestEffort` ＋ 1 个直接
+   `WithStatus` ＋ 1 个裸调（重试路径）= 11 个叶子调用点**；全仓**只有两处裸调**
+   `cleanupAttemptWorkspace(`，一处在收敛点内部、一处在重试路径。
+   （Orca 的 P0 计划写的是「12 个」，把包装层内部那一行也算了进去 —— **口径差异，不是漂移**。）
 
-⚠️ **执行 P0 时守本仓库自己的 `CLAUDE.md` 与铁律，不守 Orca 的**
-（Orca spec §7：Orca 的规则不放松本仓库的任何铁律）。计划里已按本仓库的纪律写好了
-变异表、`clone --local` 副本流程、以及「先跑基线再动手」。
-
-## 三、Orca 是什么、跟本仓库什么关系（**不变**）
+## 四、Orca 是什么、跟本仓库什么关系（**不变**）
 
 | | 角色 |
 |---|---|
-| **ccloop（本仓库）** | **一个工具**——把单个任务跑成循环。**Orca 的依赖**（锁版本，**不是 submodule**） |
-| **Orca**（`/Users/biran/code/skills/loop/Orca`） | **系统**——调度、决策台账、索引器、Web 面板 |
+| **ccloop（本仓库）** | **一个工具** —— 把单个任务跑成循环。**Orca 的依赖**（**不是 submodule**） |
+| **Orca**（`/Users/biran/code/skills/loop/Orca`） | **系统** —— 调度、决策台账、索引器、Web 面板 |
 | **ccmem** | 记忆层，走 CLI/DB 接口，**不 vendor** |
 
 **ccloop 不知道 Orca 存在，也不需要知道。** 设计与进度的真相源只有 Orca 那边：
 `…/Orca/docs/superpowers/specs/`、`…/plans/`、`…/proposals/`、`…/research/`、`…/docs/handoff/handoff.md`。
 
-⚠️ *** **一处具名更正**：Orca 的 spec §1.4 已把「走 npm 依赖」改成 **spawn 子进程**，
-理由是本仓库 `package.json` 是 `private: true` ＋ `bin` 指向要先 `npm run build` 的 `dist/cli.js`
-（Orca 2026-09-02 现测）。上表「锁版本」那句因此**只是意图，不是已成立的机制**。 ***
+⚠️ **一处具名更正（沿用）**：Orca 的 spec §1.4 已把「走 npm 依赖」改成 **spawn 子进程**，
+理由是本仓库 `package.json` 是 `private: true` ＋ `bin` 指向要先 `npm run build` 的 `dist/cli.js`。
+上表「依赖」那句因此**只是意图，不是已成立的机制**。
 Orca 改为**每次 spawn 前记本仓库的 `git rev-parse HEAD` ＋ `--version` 进它自己的台账**。
 
-## 四、🔴 本仓库【真正需要知道】的一件事：两个契约字段是承重的
+## 五、🔴 本仓库【真正需要知道】的一件事：两个契约字段是承重的
 
 Orca 的并行判据：**写集 ＝ `context.targetPaths` ∪ `safetyPolicy.allowlistPaths`；两个任务写集相交 ⇒ 必须串行。**
 
@@ -400,17 +403,17 @@ Orca 的并行判据：**写集 ＝ `context.targetPaths` ∪ `safetyPolicy.allo
 ⚠️ **改它们的名字或语义会静默弄坏 Orca 的调度判据**，且坏法是**延迟的**。
 **不是不许改，是改之前要知道有人在读它。**
 
-⚠️ **但要读准强度**：*** **Orca 的调度器（子系统 C）至今没有一行代码** *** ——
+⚠️ **强度**：*** **Orca 的调度器（子系统 C）至今仍然没有一行代码** *** ——
 这条目前是「**已登记的未来消费点**」，不是「已经有代码在读」。
-（此处即为对更早那句「现在多了一个下游读者」的具名更正。）
 
 同类的还有两处，**都只是引用，不构成任何约束**：Orca 的台账写入方**照抄**
-`src/persistence/fileStore.ts` 里 `appendEvent` 的形状（Rule 11 conformance，不是接口契约）；
-Orca 的 run-id **复用本仓库 run 目录的 basename** ⇒ run 目录名从此是一个**身份**，不只是一个路径。
+`src/persistence/fileStore.ts` 里 `appendEvent` 的形状；Orca 的 run-id **复用本仓库 run 目录的 basename**
+⇒ run 目录名从此是一个**身份**，不只是一个路径。
 
-## 五、Orca 2026-09-02 现测的两条**关于本仓库自己**的事实（**只是诊断，不是任务**）
+*** **本轮之后多了第三处**：`refs/ccloop/<run-id>/attempts/<n>` 这个 ref 命名空间现在是 Orca 收产物的入口
+（`git for-each-ref refs/ccloop/<run-id>/attempts/`，`base` 就是 `<sha>^`）。**改这个命名规则同样会静默弄坏它。** ***
 
-按 `CLAUDE.md` Rule 3，别的线不动本仓库的代码，**只报诊断**。两条都带命令，观测时点 2026-09-02：
+## 六、Orca 2026-09-02 现测的两条**关于本仓库自己**的事实（**只是诊断，不是任务；本轮未变**）
 
 1. *** **`evaluatePathPolicy` 是一个纯事后检测器，不是闸门。** *** `src/policy/pathPolicy.ts`
    吃的是 `changedFiles`（**已经改完了的**），调用点在 `src/controller/runLoop.ts` 的 execute **之后**，
@@ -422,46 +425,43 @@ Orca 的 run-id **复用本仓库 run 目录的 basename** ⇒ run 目录名从�
 顺带一条实现细节（引用前请现测）：`pathPolicy` 的 `matches` **只认三种形式** ——
 `前缀/**`、`**`、以及**完全相等**，**没有通用 glob**。
 
-## 六、Orca 那边现在到哪了（**知情，不复述细节**）
+## 七、Orca 那边现在到哪了（**知情，不复述细节**）
 
-- **A′（决策台账校验器）已全部落地并已发布**：spec §3.8 六项检查的实现、一个 CLI、
-  一个 fail-closed 写入方、一道 pre-commit 闸门。
-- **子系统 C（调度层）的 spec 已写完并过一轮自评 ＋ 一轮自审修复**：
-  `…/Orca/docs/superpowers/specs/2026-09-03-scheduler-design.md`（十一节）。
-  同类系统调研在 `…/Orca/docs/superpowers/research/2026-09-02-scheduler-prior-art.md`。
-- *** **2026-09-03 更新：C 的实施计划已拆成三份并全部写完** ***（都在 `…/Orca/docs/superpowers/plans/`）：
-  **P0**（本仓库这一件）→ **P1**（Orca 台账三处扩展）→ **P2**（C 本体，22 场景 / 14 变异）。
-  **P0 ∥ P1 之间没有依赖**，依赖只有「两者都在 P2 之前」。
-- ⚠️ *** **Orca 的调度器仍然没有一行代码** *** —— 已写完的是设计与计划，不是实现。
+- **A′（决策台账校验器）已落地并已发布。**
+- **子系统 C 的 spec 已写完并过两轮自评修复**，并已追加 **ERRATUM 1／ERRATUM 2**。
+- **三份实施计划全部写完**：**P0**（本仓库这一件，*** **已执行完毕** ***）、
+  **P1**（Orca 台账三处扩展，*** **已执行完毕** ***）、**P2**（C 本体，15 任务 / 22 场景 / 14 变异，**尚未开工**）。
+- ⚠️ *** **Orca 的调度器仍然没有一行代码** *** —— P2 是它，还没做。
 - ⚠️ **判断 Orca 某一笔发没发布，现跑它那边的 `git ls-remote`，别读本节。**
 
-## 七、归属与边界
+## 八、归属与边界
 
-**归属**：本节本次更新由 Orca 那条线的 run `orca-dev-10762e47` 于 2026-09-03 写入，
-写入时本仓库工作树干净、只有主工作树、本地与远端同点（口径：`git status --short`、
-`git worktree list`、`git ls-remote origin refs/heads/main`，写入当时现测）。
+**归属**：本节本次更新由 Orca 那条线的 run `orca-dev-213d1395` 于 2026-09-04 写入，
+写入时本仓库工作树干净、只有主工作树（口径：`git status --short`、`git worktree list`，写入当时现测）。
 
-*** **本次只改了本文档：本节 ＋ 顶部标题行 ＋「⛔ 下一件事」里新增的第 0 条。** ***
-*** **`src/**`、`tests/**`、`scripts/**`、`.superpowers/**` 一个字节未动。未 push。** ***
+*** **本轮对本仓库的改动**：`src/workspace/worktreeManager.ts`、`src/controller/runLoop.ts`、
+`tests/workspace/worktreeManager.test.ts`、`tests/controller/runLoop.integration.test.ts`、`README.md`，
+外加本文档。`src/persistence/**`、`scripts/**`、`.superpowers/**` 一个字节未动。未 push。 ***
 
-⚠️ **给读那份 P0 计划的人一条口径**：计划与提案里所有 ccloop 实测都标着观测时的 commit
-`0f7fc28e8bdc573ba22840d3c7e00e25d8927b17`。Orca 已现测
-`git diff --stat 0f7fc28 <本仓库当前 main> -- src scripts tests` **为空输出** ⇒
-**那之后本仓库只多了文档提交，那些实测仍然有效。**
-但按本仓库纪律，**行号与字节数引用前仍请现测**。
+⚠️ **执行 P0 全程守的是本仓库自己的 `CLAUDE.md` 与铁律，不是 Orca 的**（Orca spec §7 ／ Orca CLAUDE.md Rule 16）。
+**遇到铁律 2 就升人了，没有自作主张改任何既有判据。**
 
-## 八、Orca 那边几条可能对本仓库有用的实测（**建议，不是任务**）
+## 九、Orca 那边几条可能对本仓库有用的实测（**建议，不是任务**）
 
 1. *** **`git diff` 对【未跟踪文件】的内容改动完全看不见。** *** 覆写一个未跟踪文件，前后
    `git diff | wc -c` 都是 0，`git status --porcelain` 打印同一行 `??`。
    ⚠️ **这直接打到本仓库铁律 6**（「还原证明看 `git diff` 与 `git diff --cached` 的字节数」）：
    **被变异的文件若在那一刻还没被 `git add` 过，那个证明什么也没证。**
-   ⇒ 建议把还原证明的口径改成对参与文件取 `shasum -a 256` 前后比对。
+   ⇒ 建议把还原证明的口径改成对参与文件取 `shasum -a 256` 前后比对。**本轮 P0 全程用的就是这个口径。**
 2. **`git checkout -- <尚未提交的新文件>`** 报 `pathspec ... did not match`，exit=1，**什么都不还原**。
-3. **`git checkout -- <path>` 是从【索引】恢复，不是从 HEAD** —— 文件已 `git add` 过时，
-   它会把**暂存的那份**写回工作树。
-4. *** **`rtk proxy git log --oneline -N` 会漏笔** *** —— 输出以第二新的那笔开头，**HEAD 那一笔整个不见了**，
-   裸 `git log` 能看到。**验证性 git 命令建议一律走裸 `/usr/bin/git`。**
-5. *** **散文式的 `undo.how` 是默认产物，不是偶发。** *** Orca 2026-09-03 实测：一轮 16 条决策里，
-   闸门当场拦下 1 条，随后审计剩余 14 条**又发现 10 条不合格**。
-   ⇒ **凡是要求「写出可执行的撤销方式」的地方，不带机械闸门就等于没要求。**
+3. **`git checkout -- <path>` 是从【索引】恢复，不是从 HEAD。**
+4. *** **`rtk proxy git log --oneline -N` 会漏笔** *** —— 输出以第二新的那笔开头，**HEAD 那一笔整个不见了**。
+   **验证性 git 命令建议一律走裸 `/usr/bin/git`。本轮 P0 全程如此。**
+5. *** **散文式的 `undo.how` 是默认产物，不是偶发。** *** ⇒ **凡是要求「写出可执行的撤销方式」的地方，
+   不带机械闸门就等于没要求。**
+6. 🆕 *** **zsh 对无引号变量不做词分割。** *** `FILES="a b c"; for f in $FILES` 会把三个路径当成**一个词**，
+   于是「把工作树文件覆盖进 `clone --local` 副本」那一步**静默没执行**，而后面的测试照样绿 ——
+   **量的是错的树**。⇒ **副本覆盖一律用字面列表，并逐个 `diff` 打印 `IDENTICAL`。**
+7. 🆕 **`git clone --local` 的副本里，软链主树的 `node_modules` 就够跑本仓库的测试**，不必 `npm ci`
+   （本轮多次使用）。⚠️ 删副本前先 `/bin/rm -f <副本>/node_modules` 删软链本身。
+8. 🆕 *** **`throw` 挪进 `try` 会被它自己的 `catch` 吞掉，而判据可能照绿。** *** Orca 侧实测复现过一次。
