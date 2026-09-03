@@ -284,6 +284,44 @@ Adapter 契约（`src/runtime/types.ts`）有三个 phase：`plan` / `execute` /
 `git worktree remove --force` 掉它。所以正常跑完之后这个目录是空的——里面留着东西说明有 attempt 没走完清理。
 主工作树全程不被触碰（实测：跑完之后 `git worktree list` 在源仓库里没有多出任何条目）。
 
+### Attempt commit：worktree 被移除之前，改动会先被提交并钉上一个 ref
+
+`git worktree remove --force` 之前，ccloop 会把 attempt worktree 里的东西 `git add -A` ＋ commit，
+并写一个 ref 让它在 worktree 消失之后仍然可达：
+
+```
+refs/ccloop/<run-id>/attempts/<n>
+```
+
+`<run-id>` 是 run 目录的 basename，`<n>` 与 `attempts/<n>/` 那个产物目录一一对应。
+attempt 的**基点就是这笔提交的第一个父提交**，所以想知道某次 attempt 改了什么：
+
+```bash
+git for-each-ref --format='%(refname) %(objectname)' 'refs/ccloop/<run-id>/attempts/'
+git diff --name-only <sha>^ <sha>
+```
+
+**什么都没改的 attempt 也会有一笔提交**（`--allow-empty`）。所以「**有 ref 但 diff 为空**」＝
+agent 什么都没干，「**没有 ref**」＝发布失败 —— 这两件事不是一回事，而后者在 `events.jsonl` 里有
+`attempt_commit_publish_failed`。**发布成功不记事件**：ref 本身就是产物，
+`git for-each-ref` 已经能回答「发布了没有」，再记一条只是重复。
+
+提交身份用 `-c user.name=ccloop -c user.email=ccloop@invalid` 显式传，不依赖环境里的 git config ——
+一次性 clone 与 CI 容器常常没有可用身份，那正是这个功能最该工作的场景。
+
+`attempts/<n>/diff.patch` **一个字节没变**，它仍然是给人看的证据。但它**不是**给机器用的那一份：
+它那两处 `git diff` 都没有 `--binary`，且 `readGitDiff` 的 catch 只对 `code === 1` 返回 stdout、
+其余一律返回空串。
+
+**已知代价**（都不是 bug，是这个设计换来的）：
+
+- **ref 会堆积。** 一个 attempt 一个 ref，ccloop **不会**清理它们 —— 删 ref 不可逆，按铁律要人单独授权。
+  run 多了之后 `git for-each-ref refs/ccloop/` 会很长。
+- **对象库会变大。** attempt 的改动此前随 worktree 一起消失，现在有 ref 拽着，gc 不会收。
+- **被 gitignore 的文件不会进去。** `git add -A` 尊重 `.gitignore`。
+- **临时文件会进去。** agent 在 worktree 里留下的任何东西都会进这笔提交。`diff.patch` 本来也收，
+  所以这不是新问题，但值得知道。
+
 `loop-state.json` 里的 `RunState`：
 
 ```ts
