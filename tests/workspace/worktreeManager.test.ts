@@ -193,3 +193,17 @@ describe("attemptRefName", () => {
     expect(() => attemptRefName("/tmp/some-run/worktrees/scratch")).toThrow(/not an attempt worktree path/);
   });
 });
+
+describe("publishAttemptCommit failure surface", () => {
+  it("throws instead of returning a sentinel when the worktree is gone", async () => {
+    const { repoDir, worktreePath } = await seedRepoAndWorktree(true);
+    await cleanupAttemptWorkspace(repoDir, worktreePath);
+
+    // Removing the worktree first is the cheapest real failure: the cwd no
+    // longer exists, so `git rev-parse HEAD` cannot run. The point of the
+    // assertion is the shape of the failure, not this particular cause —
+    // a publish that fails must be loud, because a silently unpublished
+    // attempt reads downstream exactly like an attempt that did nothing.
+    await expect(publishAttemptCommit(worktreePath)).rejects.toThrow();
+  });
+});

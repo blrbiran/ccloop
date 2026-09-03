@@ -5,7 +5,8 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLeaseLossSignal, createStopRequestSignal, parseChangedPathsFromGitStatus, runLoop, runLoopFromState } from "../../src/controller/runLoop.js";
+import { cleanupAttemptWorkspaceBestEffort, createLeaseLossSignal, createStopRequestSignal, parseChangedPathsFromGitStatus, runLoop, runLoopFromState } from "../../src/controller/runLoop.js";
+import { createAttemptWorkspace } from "../../src/workspace/worktreeManager.js";
 import { initializeRunFiles, writeOwnerRecord } from "../../src/persistence/fileStore.js";
 import { RunHeartbeatStoppedError, RunLeaseLostError } from "../../src/ownership/lease.js";
 import type { LeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
@@ -177,6 +178,15 @@ function successFrame() {
     execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "ok" },
     verification: { approved: true, rejectCategory: "", primaryTargetPaths: ["src/index.ts"], failingCommand: null, safeToRetry: false, evidence: ["npm test passed"], pauseSignals: [], stopSignals: [] },
   };
+}
+
+async function seedRunWithLiveAttemptWorktree(): Promise<{ runDir: string; repoPath: string; worktreePath: string }> {
+  const repoPath = await createRepo();
+  const contract = createContract(repoPath);
+  const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+  await initializeRunFiles(runDir, contract, makeRunState("executing"));
+  const { worktreePath } = await createAttemptWorkspace(repoPath, runDir, 1);
+  return { runDir, repoPath, worktreePath };
 }
 
 describe("evaluateRunBoundary", () => {
@@ -4726,5 +4736,27 @@ describe("runLoop", () => {
     const types = await readEventTypes(runDir);
     expect(types[0]).toBe("loop_planning");
     expect(types).not.toContain("lease_expired_observed");
+  });
+
+  it("removes the attempt worktree even when publishing the attempt commit fails", async () => {
+    // Wiring publish ahead of removal must not turn a publish failure into a
+    // leaked worktree: eleven of the twelve cleanup call sites are error paths
+    // that already ran best-effort, and a throw there would strand a worktree
+    // that nothing else will ever clean up.
+    const { runDir, repoPath, worktreePath } = await seedRunWithLiveAttemptWorktree();
+
+    // Make publishing fail without making removal fail: an unwritable refs
+    // directory blocks update-ref while `git worktree remove` still works.
+    await chmod(join(repoPath, ".git", "refs"), 0o500);
+    try {
+      await cleanupAttemptWorkspaceBestEffort(repoPath, worktreePath, runDir, "test");
+    } finally {
+      await chmod(join(repoPath, ".git", "refs"), 0o700);
+    }
+
+    const { stdout } = await execFileAsync("git", ["worktree", "list"], { cwd: repoPath });
+    expect(stdout).not.toContain(worktreePath);
+
+    expect(await readEventTypes(runDir)).toContain("attempt_commit_publish_failed");
   });
 });

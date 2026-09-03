@@ -43,7 +43,7 @@ import type {
 import { isPartialExecutionResult } from "../runtime/types.js";
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { FailureFingerprint, LastTrustedBoundary, RunState, StopDecision } from "../state/types.js";
-import { cleanupAttemptWorkspace, createAttemptWorkspace } from "../workspace/worktreeManager.js";
+import { cleanupAttemptWorkspace, createAttemptWorkspace, publishAttemptCommit } from "../workspace/worktreeManager.js";
 
 export type { AttemptContext } from "../runtime/types.js";
 
@@ -334,6 +334,29 @@ async function cleanupAttemptWorkspaceWithStatus(
   runDir: string,
   detail: string,
 ): Promise<ExecutionRecovery["cleanupStatus"]> {
+  // Publishing has to happen before removal — after `git worktree remove` the
+  // commit has no ref and no worktree, and there is nothing left to publish.
+  // It is deliberately not fatal: eleven of the twelve call sites reach here
+  // on an error path where the worktree must come off regardless, so a failed
+  // publish is recorded as an event and the removal proceeds. The event is
+  // what keeps this from being a swallow: a missing ref with no event would be
+  // indistinguishable from an attempt that was never run.
+  //
+  // A success records nothing. The ref is the artifact, so an event saying the
+  // ref exists would only repeat what `git for-each-ref refs/ccloop/<run-id>/`
+  // already answers — and every event on this path lands in events.jsonl,
+  // whose exact sequence seventeen existing criteria pin. Only the failure is
+  // unobservable without an event, and only the failure gets one.
+  try {
+    await publishAttemptCommit(worktreePath);
+  } catch (error) {
+    await appendEvent(runDir, {
+      type: "attempt_commit_publish_failed",
+      at: new Date().toISOString(),
+      detail: `${detail}: ${String(error)}`,
+    });
+  }
+
   try {
     await cleanupAttemptWorkspace(repoPath, worktreePath);
     return "removed";
