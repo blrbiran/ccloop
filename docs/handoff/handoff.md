@@ -294,7 +294,7 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ---
 
-# 📌 Orca 那条线（**单节滚动更新，最后更新 2026-09-02**）
+# 📌 Orca 那条线（**单节滚动更新，最后更新 2026-09-03**）
 
 > ⚠️ *** **本节合并并取代了此前【三节】各自独立的 Orca 章节** ***
 > （原「另一条并行的线：Orca」2026-08-29、「Orca 那条线的进度更新」2026-08-29、
@@ -367,10 +367,35 @@ Orca 的 run-id **复用本仓库 run 目录的 basename** ⇒ run 目录名从�
 - **A′（决策台账校验器）已全部落地并已发布**：spec §3.8 六项检查的实现、一个 CLI、一个 fail-closed 写入方、
   一道 pre-commit 闸门。*** **「Orca 至今零产品代码」这句话不再为真。** ***
 - **下一件事是子系统 C（调度层）**，人已选定，v1 打在**一次性沙盒仓**上（不是本仓库）。
-  设计尚未开写；同类系统调研已落 `…/Orca/docs/superpowers/research/2026-09-02-scheduler-prior-art.md`。
-- ⚠️ *** **具名更正：此前两节都写着「Orca 那边一次都没 push」，现在为假。** *** 现测远端与本地同点。
+  ~~设计尚未开写~~ ⇒ *** **2026-09-03 更新：C 的 spec 已写完**，落在
+  `…/Orca/docs/superpowers/specs/2026-09-03-scheduler-design.md`（十一节，已过一轮自查 ＋ 一轮评审修复）。*** ***
+  同类系统调研仍在 `…/Orca/docs/superpowers/research/2026-09-02-scheduler-prior-art.md`。
+  ⚠️ **Orca 的调度器仍然没有一行代码** —— 已写完的是设计，不是实现。
+- ⚠️ *** **具名更正：此前两节都写着「Orca 那边一次都没 push」，现在为假。** ***
   **推的人是人类，手动推的；Orca 的控制器仍然一次都没 push。**
   ⇒ Orca 的 spec／plan／`CLAUDE.md`／校验器代码**都是已发布文本**。
+  ⚠️ **2026-09-03 更新**：原文这里写的「现测远端与本地同点」**是那一刻的观测，现在不成立** ——
+  Orca 本地**领先它自己的远端若干笔**（C 的 spec 等）。
+  ⇒ **判断 Orca 某笔发没发布，现跑它那边的 `git ls-remote`，别读本节。**
+
+## 🔴 一件需要本仓库自己决定的事：Orca 提了一个改动请求（**提案，不是任务**）
+
+*** **`…/Orca/docs/superpowers/proposals/2026-09-03-ccloop-p0-publish-attempt-commit.md`** ***
+
+一句话：**在 `git worktree remove --force` 之前把 agent 的改动 commit 掉，写一个
+`refs/ccloop/<run-id>/attempts/<n>` 让它可达，并把 sha 报进产物** —— `diff.patch` 原样保留，**纯追加**。
+
+- **为什么**：`scripted` adapter 不产 `diffPatch`（2026-09-03 实测，`0f7fc28`），
+  所以 Orca 的 v1 **没有任何产物可收**；且 patch 作为机器交接物有三条静默转空的通道。
+  ⚠️ **那三条不是对本仓库的缺陷指控** —— 在「patch 是给人看的证据」这个定位下它们够用。
+- **那一页里整有一节写「不改什么」**：状态机、退出码、租约、`evaluatePathPolicy`、契约 schema
+  **全部原样**，**E1 的 I-2 ＋ 人裁 85 那一轮一个字节不碰**。
+- *** **本仓库的下一件事没有变，仍然是 E1 的 I-2 ＋ 人裁 85。** *** 这条请求**不抢它的位置**，
+  **也不构成任何授权** —— 要不要做、什么时候做、怎么做，**由本仓库自己决定**。
+
+**归属**：本节本次更新由 Orca 那条线的 run `orca-dev-8d4c6ba3` 于 2026-09-03 写入，
+写入时本仓库 HEAD 为 `0f7fc28e8bdc573ba22840d3c7e00e25d8927b17`、工作树干净、只有主工作树。
+*** **本次只改了本节；`src/**`、`tests/**`、`scripts/**`、`.superpowers/**` 与本文档其余部分一个字节未动。未 push。** ***
 
 ## Orca 那边几条可能对本仓库有用的实测（**建议，不是任务；要不要跟进由本仓库自己决定**）
 
