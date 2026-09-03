@@ -4759,4 +4759,37 @@ describe("runLoop", () => {
 
     expect(await readEventTypes(runDir)).toContain("attempt_commit_publish_failed");
   });
+
+  it("publishes a ref for an attempt that was rejected at verification", async () => {
+    // This is the twelfth cleanup call site — the retry path, the only one
+    // that does not go through cleanupAttemptWorkspaceWithStatus because a
+    // removal failure there has to stay fatal. It is also the most interesting
+    // attempt for a downstream consumer: a rejected attempt still changed
+    // files, and those changes are exactly what someone needs to see to
+    // understand why it was rejected.
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const runId = basename(runDir);
+
+    const finalState = await runLoop(contract, runDir, new ScriptedAdapter([
+      {
+        plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+        execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "fail" },
+        verification: { approved: false, rejectCategory: "tests-failed", primaryTargetPaths: ["src/index.ts"], failingCommand: "npm test", safeToRetry: true, evidence: ["FAIL"], pauseSignals: [], stopSignals: [] },
+      },
+      successFrame(),
+    ]));
+    // Pinned so the criterion cannot pass by never reaching the retry path at
+    // all: only a rejected first attempt followed by an approved second one
+    // routes through the call site under test.
+    expect(finalState.status).toBe("succeeded");
+
+    const { stdout } = await execFileAsync(
+      "git",
+      ["for-each-ref", "--format=%(refname)", `refs/ccloop/${runId}/attempts/`],
+      { cwd: repoPath },
+    );
+    expect(stdout.trim().split("\n")).toContain(`refs/ccloop/${runId}/attempts/1`);
+  });
 });

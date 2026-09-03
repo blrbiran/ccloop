@@ -370,6 +370,36 @@ async function cleanupAttemptWorkspaceWithStatus(
   }
 }
 
+/**
+ * The retry path needs a removal failure to stay fatal — it turns the run into
+ * `failed` — so it cannot use the best-effort wrapper. It still needs the
+ * publish, though, and routing it through here rather than calling
+ * cleanupAttemptWorkspace directly is what keeps "publish precedes every
+ * removal" true of all twelve call sites instead of eleven of them.
+ *
+ * Like the with-status path, a success records nothing: the ref is the
+ * artifact, and every event here would land in an events.jsonl whose exact
+ * sequence existing criteria pin.
+ */
+async function cleanupAttemptWorkspaceOrThrow(
+  repoPath: string,
+  worktreePath: string,
+  runDir: string,
+  detail: string,
+): Promise<void> {
+  try {
+    await publishAttemptCommit(worktreePath);
+  } catch (error) {
+    await appendEvent(runDir, {
+      type: "attempt_commit_publish_failed",
+      at: new Date().toISOString(),
+      detail: `${detail}: ${String(error)}`,
+    });
+  }
+
+  await cleanupAttemptWorkspace(repoPath, worktreePath);
+}
+
 export async function cleanupAttemptWorkspaceBestEffort(
   repoPath: string,
   worktreePath: string,
@@ -1514,7 +1544,12 @@ export async function runLoopFromState(
         await heartbeat.assertHeld();
 
         try {
-          await cleanupAttemptWorkspace(contract.context.repoPath, worktreePath);
+          await cleanupAttemptWorkspaceOrThrow(
+            contract.context.repoPath,
+            worktreePath,
+            runDir,
+            "cleanup after verification rejected",
+          );
         } catch (error) {
           state = transitionRunState(state, "failed", String(error));
           await appendTransitionEvent(runDir, state, "attempt_failed", String(error));
