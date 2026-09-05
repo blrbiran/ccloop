@@ -312,80 +312,65 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ---
 
-# 📌 Orca 那条线（**单节滚动更新，最后更新 2026-09-05**）
+# 📌 Orca 那条线（**单节滚动更新；本节【整节重写】，不再追加子节**）
 
-> ⚠️ *** **本节就地更新，不新增编号章节** *** —— 规矩是人 2026-09-02 定的。
-> 合法性依据：`CLAUDE.md:74` 与本文档铁律 4 都明写 `docs/handoff/**` 是**允许整篇重写**的活文档，
-> 只是「**不得把已知为假的说法带下去**」。**历次原文可由 `git log -- docs/handoff/handoff.md` 取回。**
-> ⚠️ 本节**不写任何当前哈希，也不写「远端到第几笔」** —— 提交本文这个动作本身就会改 HEAD。
-> 要指代某一笔就**引提交主题行**。⚠️ 例外：**实测值的观测锚点 commit 必须写** —— 那是有效期，不是当前状态。
+> ⚠️ *** **本节就地重写，不新增编号章节、也不追加归属块。** *** 规矩是人 2026-09-02 定的，
+> 2026-09-05 人再次明确：**「关于 Orca 的章节不能无限增加下去」**。
+> 合法性依据：`CLAUDE.md` 与本文档铁律 4 都明写 `docs/handoff/**` 是**允许整篇重写**的活文档，
+> 只是**不得把已知为假的说法带下去**。**历次原文由 `git log -- docs/handoff/handoff.md` 取回，没有丢失。**
+> ⚠️ **本节不写任何 HEAD、不写「领先几笔」、不写发布状态** —— 提交本文就会改这些数，人也会自己推远端。
+> **要指代某一笔就引提交主题行；要判发布状态就现跑 `git ls-remote`。**
+> ⚠️ 例外：**实测值的观测锚点 commit 必须写** —— 那是有效期，不是当前状态。
 
-## 🔴 一、对本仓库的影响：**仍然是零任务，本仓库的「下一件事」没有变**
+## 一、对本仓库的影响：**零任务**
 
-*** **本仓库的下一件事仍是「⛔ 下一件事」第 2 条：E1 的 I-2 ＋ 人裁 85。** ***
+*** **本仓库的「下一件事」没有变，仍是「⛔ 下一件事」第 2 条：E1 的 I-2 ＋ 人裁 85。** ***
 **人裁 121 仍然有效**（不需要重新拿授权来开设计）；
 ⚠️ *** **E1 仍在授权面外** —— 出完设计、动生产代码之前必须另拿一次具名授权。这一条至今没有被任何裁决碰过。 ***
 
-Orca 那条线 2026-09-04 与 09-05 又跑了两轮，**两轮都没有给本仓库产生任务**。
-
-## 🔴 二、本仓库最近被 Orca 那条线动过什么（**只此一次，且只有它**）
+## 二、Orca 那条线动过本仓库什么（**只此一次**）
 
 *** **只有 P0 那一轮（2026-09-04，run `orca-dev-213d1395`）动过本仓库的产品代码。** ***
 按提交主题行找：`feat(worktree): publish each attempt as a commit reachable through a ref` →
 `feat(runLoop): publish the attempt commit before the worktree is removed` →
 `feat(runLoop): publish on the retry path too, the twelfth cleanup call site` →
 `docs(readme): document the attempt commit refs and what they cost` →
-`docs(handoff): record that P0 is done and move the baseline to 624`，
-以及随后一笔 `docs(handoff): record that subsystem C now really consumes the attempt refs`。
+`docs(handoff): record that P0 is done and move the baseline to 624`。
 
-*** **此后的每一轮（C 的执行、C 的四条 follow-up）对本仓库都是【一个跟踪字节未写】** *** ——
-只 spawn 它、读它的源码，并在**被 gitignore 的 `dist/`** 里跑过 build（`bin` 指向 `dist/cli.js`，spawn 需要它）。
-每轮开工与收尾都现测 `git status --short` 为空、HEAD 未被它改动。
+*** **此后每一轮对本仓库都是【一个跟踪字节未写】**（除本节自身的更新）*** ——
+只 spawn 它、读它的源码，并在**被 gitignore 的 `dist/`** 里跑过 build。
+每轮开工与收尾都现测 `git status --short` 为空。
 
-⚠️ **本节此前写着「HEAD 恒为 `7f2c5f6`」** —— *** **那是 P2 那一轮的观测值，早已过期**（其后至少多了一笔 handoff 提交）。
-判断本仓库现在在哪一笔，只能现跑裸 `git log` / `git ls-remote`，不许查本节。 ***
-⚠️ **本节此前还写着「Orca 本地领先它自己的远端 37 笔，一次都没 push」** —— *** **也已为假**：
-人已把 Orca 那批手动推上远端。**要判 Orca 某一笔发没发布，现跑它那边的 `git ls-remote`。** ***
-
-## 🔴 三、P0 那个 ref 命名空间的消费者**又多了两条判据在钉它**
-
-`refs/ccloop/<run-id>/attempts/<n>` 早已不是「登记的未来消费点」——
-Orca 的收产物层（`git for-each-ref` 取编号最高的一个，`base` 就是 `<sha>^`）是**执行路径上的代码**。
-⇒ *** **改这个命名规则、改 ref 的写入时机、或让某个终态不再发布 ref，都会静默弄坏一个正在运行的下游。** ***
-不是不许改，是**改之前要知道有人在读**。
-
-同理，契约的 `context.targetPaths` 与 `safetyPolicy.allowlistPaths` 是 Orca 写集判据的输入；
-**`escalationAndExit.stopOn` 与 `verification.stopSignals` 现在也是**（见下一节）。
-
-## 🔴 四、Orca 在本仓库上现测到的、**本仓库可能想知道的三条**（都是诊断，不是任务）
+## 三、本仓库可能想知道的（**都是诊断，不是任务**）
 
 **观测锚点：ccloop 主题行 `docs(handoff): record that subsystem C now really consumes the attempt refs` 那一笔，2026-09-05 现测。**
 
-1. 🆕 *** **`cancelled` 不需要给进程组发信号也能到达。** *** `runLoop.ts` 在 `evaluateStopDecision` **之前**
-   先匹配 `verification.stopSignals` ∩ `contract.escalationAndExit.stopOn`
-   （`getMatchedStopSignal`，调用点在 `runLoop.ts` 里 `matchedStopSignal` 那一处；**行号会移动，引用前现测**）。
+1. **`refs/ccloop/<run-id>/attempts/<n>` 已经有真实消费者** —— Orca 的收产物层
+   （`git for-each-ref` 取编号最高的一个，`base` 就是 `<sha>^`）是**执行路径上的代码**。
+   ⇒ 改这个命名规则、改 ref 的写入时机、或让某个终态不再发布 ref，**都会静默弄坏一个正在运行的下游**。
+   不是不许改，是**改之前要知道有人在读**。
+   同理，契约的 `context.targetPaths` / `safetyPolicy.allowlistPaths` 是 Orca 写集判据的输入，
+   `escalationAndExit.stopOn` 与 `verification.stopSignals` 也是。
+2. *** **`cancelled` 不需要给进程组发信号也能到达。** *** `runLoop.ts` 在 `evaluateStopDecision` **之前**
+   先匹配 `verification.stopSignals` ∩ `contract.escalationAndExit.stopOn`（`getMatchedStopSignal`；**行号会移动，引用前现测**）。
    ⇒ **一个 scripted frame ＋ `verifierType: "agent"` 就能跑出真的 `cancelled`，一次模型都不用跑。**
-   Orca 那边据此写了两条端到端判据。**此前双方文档都写着「只能靠信号」，那句话不完整。**
-2. **四个非成功终态仍然全部 exit 2**（`exhausted`／`failed`／`blocked_waiting_human`／`cancelled` 不可区分），
-   下游只能读 `loop-state.json` 的 `status`。（复测确认，本仓库已知。）
-3. *** **`blocked_waiting_human` 的运行不发布任何 attempt ref** *** —— 机制决定的：那两条 return 路径都跳过 cleanup，
-   而 `publishAttemptCommit` 只在 cleanup 里被调用。收产物的一侧必须显式处理，否则会把「升人」误读成「空改动」。
+   **此前双方文档都写着「只能靠信号」，那句话不完整。**
+3. **四个非成功终态仍然全部 exit 2**（`exhausted`／`failed`／`blocked_waiting_human`／`cancelled` 不可区分），
+   下游只能读 `loop-state.json` 的 `status`。
+4. *** **`blocked_waiting_human` 的运行不发布任何 attempt ref** *** —— 那两条 return 路径都跳过 cleanup，
+   而 `publishAttemptCommit` 只在 cleanup 里被调用。收产物的一侧必须显式处理。
 
-## 五、Orca 那边现在到哪了（**知情，不复述细节**）
+## 四、Orca 那边到哪了（**知情，不复述细节**）
 
-- **A′（决策台账校验器）已落地并已发布。**
-- **子系统 C（调度层）已全部落地**：`orca plan` / `orca run` 两个子命令，三层结构；
-  P2 执行后又收掉了整支复审留下的四条 follow-up（假绿的 `[pass]`、检查码的位置解构、池子的「已排队未启动」、三处副本收敛）。
-- *** **人已裁决：下一件事是【子系统 B】（ccmem 倾向 track）。** *** 它的第一件事是定
-  `corrections` / `overturned` 的字段形状 —— **纯 Orca 侧的设计工作，与本仓库无关。**
-  🆕 *** **那件事已经做完了（2026-09-05，run `orca-dev-c1c3c2ec`）** *** ——
-  两个事件的字段形状已定死、过了一轮对抗性自审、13 条裁决入了 Orca 自己的台账，
-  spec 是 `…/Orca/docs/superpowers/specs/2026-09-05-corrections-overturned-design.md`。
-  ⚠️ **只是设计：Orca 那边产品代码一行未写，且那几笔未 push。**
-  **对本仓库仍然是零任务。**
+- **A′（决策台账校验器）已落地。**
+- **子系统 C（调度层）已全部落地并收掉四条 follow-up**：`orca plan` / `orca run`，三层结构。
+- 🆕 *** **子系统 B 的第一件事已经做完（2026-09-05，run `orca-dev-c1c3c2ec`）** *** ——
+  `corrections` 与 `overturned` 的字段形状已定死、已落成代码、判据与变异齐备。
+  spec 与计划在 `…/Orca/docs/superpowers/specs/2026-09-05-corrections-overturned-design.md`
+  与 `…/plans/2026-09-05-corrections-overturned.md`。**与本仓库无关，零任务。**
 - ⚠️ **不要从本节推断 Orca 的发布状态**：现跑它那边的 `git ls-remote`。
 
-## 六、Orca 是什么、跟本仓库什么关系（**不变**）
+## 五、三个仓库的关系（**不变**）
 
 | | 角色 |
 |---|---|
@@ -393,32 +378,19 @@ Orca 的收产物层（`git for-each-ref` 取编号最高的一个，`base` 就�
 | **Orca**（`/Users/biran/code/skills/loop/Orca`） | **系统** —— 调度、决策台账、索引器、Web 面板 |
 | **ccmem** | 记忆层，走 CLI/DB 接口，**不 vendor** |
 
-**ccloop 不知道 Orca 存在，也不需要知道。** 设计与进度的真相源只在 Orca 那边
-（`…/Orca/docs/superpowers/specs/`、`…/plans/`、`…/docs/handoff/handoff.md`）。
+**ccloop 不知道 Orca 存在，也不需要知道。** 设计与进度的真相源只在 Orca 那边。
 
-## 七、归属与边界
+## 六、归属与边界
 
-⚠️ *** **本段归属已被下一次更新取代，原文保留** *** —— 现行归属见本节末尾「归属（2026-09-05 第二次更新）」。
+本节本次**整节重写**由 Orca 那条线的 run `orca-dev-c1c3c2ec` 于 2026-09-05 写入。
+写入时**现测**本仓库：在 `main`、`git status --short` 为空、只有主工作树。
+*** **本次只改本文档一个文件、且只改本节**；`src/**`、`tests/**`、`scripts/**`、`.superpowers/**` 零触碰。 ***
 
-本节上一次更新由 Orca 那条线的 run `orca-dev-99004516` 于 2026-09-05 写入，
-写入时本仓库**工作树干净、只有主工作树、本地与远端同点**（口径 `git status --short`、`git worktree list`、
-`git ls-remote origin refs/heads/main`，写入当时现测）。
-*** **本次更新只改本文档一个文件**；`src/**`、`tests/**`、`scripts/**`、`.superpowers/**` 零触碰。 ***
+⚠️ **本节此前有过两处已被现测推翻的说法，不再带下去，在此一并记明**：
+「Orca 领先它自己的远端 37 笔、一次都没 push」为假（人已推）；
+「本仓库本地领先远端一笔」也曾在同一会话中变假（人在会话进行中自己推的）。
+⇒ *** **同一会话里远端被推动是常态。要判某笔发没发布，现跑 `ls-remote`，连本节都不要信。** ***
 
-⚠️ Orca 那条线在本仓库里干活时守的是**本仓库自己的 `CLAUDE.md` 与铁律**，不是 Orca 的（Orca spec §7 ／ Orca CLAUDE.md Rule 16）。
-⚠️ *** **push 仍需人单独授权，控制器不许 push。** ***
-
-## 归属（2026-09-05 第二次更新）
-
-本节本次更新由 Orca 那条线的 run `orca-dev-c1c3c2ec` 于 2026-09-05 写入。
-*** **只改本文档一个文件、且只改本节**；`src/**`、`tests/**`、`scripts/**`、`.superpowers/**` 零触碰。 ***
-
-写入时**现测**本仓库：在 `main`、`git status --short` 为空、只有主工作树、
-*** **本地与远端【同点】** *** —— 口径 `/usr/bin/git ls-remote origin refs/heads/main` ＋ 裸 `git log`。
-
-🔴 **一处具名更正**：Orca 那条线**开工时**（本会话早些时候）现测本仓库是「本地 `cb43654` 领先远端 `2a4381e` 一笔」。
-*** **收尾现测已为假：远端也到了 `cb43654`。** *** **人在本会话进行中自己推的，控制器仍然一次都没 push。**
-⇒ 老结论第 N 次兑现：**同一会话里远端被推动是常态；要判某笔发没发布，现跑 `ls-remote`，连本节都不要信。**
-
-⚠️ Orca 那条线在本仓库里干活时守的是**本仓库自己的 `CLAUDE.md` 与铁律**，不是 Orca 的。
+⚠️ Orca 那条线在本仓库里干活时守的是**本仓库自己的 `CLAUDE.md` 与铁律**，不是 Orca 的
+（Orca spec §7 ／ Orca `CLAUDE.md` Rule 16）。
 ⚠️ *** **push 仍需人单独授权，控制器不许 push。** ***
