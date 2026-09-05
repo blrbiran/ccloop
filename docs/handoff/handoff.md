@@ -378,6 +378,11 @@ Orca 的收产物层（`git for-each-ref` 取编号最高的一个，`base` 就�
   P2 执行后又收掉了整支复审留下的四条 follow-up（假绿的 `[pass]`、检查码的位置解构、池子的「已排队未启动」、三处副本收敛）。
 - *** **人已裁决：下一件事是【子系统 B】（ccmem 倾向 track）。** *** 它的第一件事是定
   `corrections` / `overturned` 的字段形状 —— **纯 Orca 侧的设计工作，与本仓库无关。**
+  🆕 *** **那件事已经做完了（2026-09-05，run `orca-dev-c1c3c2ec`）** *** ——
+  两个事件的字段形状已定死、过了一轮对抗性自审、13 条裁决入了 Orca 自己的台账，
+  spec 是 `…/Orca/docs/superpowers/specs/2026-09-05-corrections-overturned-design.md`。
+  ⚠️ **只是设计：Orca 那边产品代码一行未写，且那几笔未 push。**
+  **对本仓库仍然是零任务。**
 - ⚠️ **不要从本节推断 Orca 的发布状态**：现跑它那边的 `git ls-remote`。
 
 ## 六、Orca 是什么、跟本仓库什么关系（**不变**）
@@ -393,10 +398,27 @@ Orca 的收产物层（`git for-each-ref` 取编号最高的一个，`base` 就�
 
 ## 七、归属与边界
 
-本节本次更新由 Orca 那条线的 run `orca-dev-99004516` 于 2026-09-05 写入，
+⚠️ *** **本段归属已被下一次更新取代，原文保留** *** —— 现行归属见本节末尾「归属（2026-09-05 第二次更新）」。
+
+本节上一次更新由 Orca 那条线的 run `orca-dev-99004516` 于 2026-09-05 写入，
 写入时本仓库**工作树干净、只有主工作树、本地与远端同点**（口径 `git status --short`、`git worktree list`、
 `git ls-remote origin refs/heads/main`，写入当时现测）。
 *** **本次更新只改本文档一个文件**；`src/**`、`tests/**`、`scripts/**`、`.superpowers/**` 零触碰。 ***
 
 ⚠️ Orca 那条线在本仓库里干活时守的是**本仓库自己的 `CLAUDE.md` 与铁律**，不是 Orca 的（Orca spec §7 ／ Orca CLAUDE.md Rule 16）。
+⚠️ *** **push 仍需人单独授权，控制器不许 push。** ***
+
+## 归属（2026-09-05 第二次更新）
+
+本节本次更新由 Orca 那条线的 run `orca-dev-c1c3c2ec` 于 2026-09-05 写入。
+*** **只改本文档一个文件、且只改本节**；`src/**`、`tests/**`、`scripts/**`、`.superpowers/**` 零触碰。 ***
+
+写入时**现测**本仓库：在 `main`、`git status --short` 为空、只有主工作树、
+*** **本地与远端【同点】** *** —— 口径 `/usr/bin/git ls-remote origin refs/heads/main` ＋ 裸 `git log`。
+
+🔴 **一处具名更正**：Orca 那条线**开工时**（本会话早些时候）现测本仓库是「本地 `cb43654` 领先远端 `2a4381e` 一笔」。
+*** **收尾现测已为假：远端也到了 `cb43654`。** *** **人在本会话进行中自己推的，控制器仍然一次都没 push。**
+⇒ 老结论第 N 次兑现：**同一会话里远端被推动是常态；要判某笔发没发布，现跑 `ls-remote`，连本节都不要信。**
+
+⚠️ Orca 那条线在本仓库里干活时守的是**本仓库自己的 `CLAUDE.md` 与铁律**，不是 Orca 的。
 ⚠️ *** **push 仍需人单独授权，控制器不许 push。** ***
