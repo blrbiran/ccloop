@@ -315,7 +315,7 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 # 📌 Orca 那条线（**单节滚动更新；本节【整节重写】，不再追加子节**）
 
 > ⚠️ *** **本节就地重写，不新增编号章节、也不追加归属块。** *** 规矩是人 2026-09-02 定的，
-> 2026-09-05 人再次明确：**「关于 Orca 的章节不能无限增加下去」**。
+> 2026-09-05 与 2026-09-06 人再次明确：**「关于 Orca 的章节不能无限增加下去」**。
 > 合法性依据：`CLAUDE.md` 与本文档铁律 4 都明写 `docs/handoff/**` 是**允许整篇重写**的活文档，
 > 只是**不得把已知为假的说法带下去**。**历次原文由 `git log -- docs/handoff/handoff.md` 取回，没有丢失。**
 > ⚠️ **本节不写任何 HEAD、不写「领先几笔」、不写发布状态** —— 提交本文就会改这些数，人也会自己推远端。
@@ -354,20 +354,29 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 2. *** **`cancelled` 不需要给进程组发信号也能到达。** *** `runLoop.ts` 在 `evaluateStopDecision` **之前**
    先匹配 `verification.stopSignals` ∩ `contract.escalationAndExit.stopOn`（`getMatchedStopSignal`；**行号会移动，引用前现测**）。
    ⇒ **一个 scripted frame ＋ `verifierType: "agent"` 就能跑出真的 `cancelled`，一次模型都不用跑。**
-   **此前双方文档都写着「只能靠信号」，那句话不完整。**
+   ⚠️ **此前双方文档都写着「只能靠信号」，那句话不完整** —— 这条更正保留在此，别再写回去。
 3. **四个非成功终态仍然全部 exit 2**（`exhausted`／`failed`／`blocked_waiting_human`／`cancelled` 不可区分），
    下游只能读 `loop-state.json` 的 `status`。
 4. *** **`blocked_waiting_human` 的运行不发布任何 attempt ref** *** —— 那两条 return 路径都跳过 cleanup，
    而 `publishAttemptCommit` 只在 cleanup 里被调用。收产物的一侧必须显式处理。
+5. 🆕 *** **Orca 正在设计一个会【往目标仓库工作树写文件并自己提交】的命令**（`orca correct`）。 ***
+   人 2026-09-06 裁定它取目标仓库的 repo 锁（`<repo>/.git/orca-lock`）并单独提交它写出的那一个台账文件。
+   ⚠️ **今天与本仓库无关**：本仓库不是 orca 的目标仓库，也没有 `.decisions/`。
+   **登记的理由只有一条**：此前 Orca 对目标仓库的写入只发生在 `orca run` 的受控路径上，
+   **这是第一个「人手动触发、会改目标工作树」的写入方** —— 若将来本仓库成为目标仓库，那是一个新的写入方。
+   *** **它目前【尚未实现，且设计已被评审判为 not ready】，别照它现在的样子做任何准备。** ***
 
 ## 四、Orca 那边到哪了（**知情，不复述细节**）
 
-- **A′（决策台账校验器）已落地。**
-- **子系统 C（调度层）已全部落地并收掉四条 follow-up**：`orca plan` / `orca run`，三层结构。
-- 🆕 *** **子系统 B 的第一件事已经做完（2026-09-05，run `orca-dev-c1c3c2ec`）** *** ——
-  `corrections` 与 `overturned` 的字段形状已定死、已落成代码、判据与变异齐备。
+- **A′（决策台账校验器）已落地。子系统 C（调度层）已全部落地并收掉四条 follow-up。**
+- **子系统 B 的入口条件已做完**：`corrections` 与 `overturned` 的字段形状已定死、已落成代码、判据与变异齐备。
   spec 与计划在 `…/Orca/docs/superpowers/specs/2026-09-05-corrections-overturned-design.md`
   与 `…/plans/2026-09-05-corrections-overturned.md`。**与本仓库无关，零任务。**
+- 🆕 *** **子系统 E 的第一刀已出设计（2026-09-06，run `orca-dev-19c594d2`）：`orca correct`。** ***
+  *** **已被一席外派评审判 `Ready to implement? No`（5 Critical／9 Important／6 Minor），一条未修。** ***
+  spec 顶部有禁止照本实施的横幅；报告在
+  `…/Orca/.superpowers/sdd/2026-09-06-corrections-store-and-writer/external-review.md`。
+  **与本仓库无关，零任务。**
 - ⚠️ **不要从本节推断 Orca 的发布状态**：现跑它那边的 `git ls-remote`。
 
 ## 五、三个仓库的关系（**不变**）
@@ -382,14 +391,15 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ## 六、归属与边界
 
-本节本次**整节重写**由 Orca 那条线的 run `orca-dev-c1c3c2ec` 于 2026-09-05 写入。
-写入时**现测**本仓库：在 `main`、`git status --short` 为空、只有主工作树。
+本节本次**整节重写**由 Orca 那条线的 run `orca-dev-19c594d2` 于 **2026-09-06** 写入。
+写入时**现测**本仓库：在 `main`、`git status --short` 输出 0 字节、只有主工作树。
 *** **本次只改本文档一个文件、且只改本节**；`src/**`、`tests/**`、`scripts/**`、`.superpowers/**` 零触碰。 ***
 
 ⚠️ **本节此前有过两处已被现测推翻的说法，不再带下去，在此一并记明**：
 「Orca 领先它自己的远端 37 笔、一次都没 push」为假（人已推）；
 「本仓库本地领先远端一笔」也曾在同一会话中变假（人在会话进行中自己推的）。
 ⇒ *** **同一会话里远端被推动是常态。要判某笔发没发布，现跑 `ls-remote`，连本节都不要信。** ***
+（Orca 那条线 2026-09-06 那一会话里，**远端又被人推动了两次** —— 这已经是常态，不是意外。）
 
 ⚠️ Orca 那条线在本仓库里干活时守的是**本仓库自己的 `CLAUDE.md` 与铁律**，不是 Orca 的
 （Orca spec §7 ／ Orca `CLAUDE.md` Rule 16）。
