@@ -311,16 +311,15 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-
 # 📌 Orca 那条线（**单节滚动更新；本节【整节重写】，不再追加子节**）
 
 > ⚠️ *** **本节就地重写，不新增编号章节、也不追加归属块。** *** 规矩是人 2026-09-02 定的，
-> 2026-09-05 与 2026-09-06 人再次明确：**「关于 Orca 的章节不能无限增加下去」**。
+> 2026-09-05／09-06 又两次明确：**「关于 Orca 的章节不能无限增加下去」**。
 > 合法性依据：`CLAUDE.md` 与本文档铁律 4 都明写 `docs/handoff/**` 是**允许整篇重写**的活文档，
 > 只是**不得把已知为假的说法带下去**。**历次原文由 `git log -- docs/handoff/handoff.md` 取回，没有丢失。**
 > ⚠️ **本节不写任何 HEAD、不写「领先几笔」、不写发布状态** —— 提交本文就会改这些数，人也会自己推远端。
 > **要指代某一笔就引提交主题行；要判发布状态就现跑 `git ls-remote`。**
-> ⚠️ 例外：**实测值的观测锚点 commit 必须写** —— 那是有效期，不是当前状态。
+> ⚠️ 例外：**实测值的观测锚点必须写** —— 那是有效期，不是当前状态。
 
 ## 一、对本仓库的影响：**零任务**
 
@@ -337,46 +336,50 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 `docs(readme): document the attempt commit refs and what they cost` →
 `docs(handoff): record that P0 is done and move the baseline to 624`。
 
-*** **此后每一轮对本仓库都是【一个跟踪字节未写】**（除本节自身的更新）*** ——
-只 spawn 它、读它的源码，并在**被 gitignore 的 `dist/`** 里跑过 build。
-每轮开工与收尾都现测 `git status --short` 为空。
+*** **此后每一轮对本仓库都是【一个跟踪字节未写】**（除本节自身的更新）。 ***
+每轮开工与收尾都现测 `git status --porcelain` 为空。
 
 ## 三、本仓库可能想知道的（**都是诊断，不是任务**）
 
-**观测锚点：ccloop 主题行 `docs(handoff): record that subsystem C now really consumes the attempt refs` 那一笔，2026-09-05 现测。**
+**观测锚点：ccloop 主题行 `docs(handoff): rewrite the Orca section in place -- subsystem E's first slice…` 那一笔，2026-09-06 现测。**
 
 1. **`refs/ccloop/<run-id>/attempts/<n>` 已经有真实消费者** —— Orca 的收产物层
    （`git for-each-ref` 取编号最高的一个，`base` 就是 `<sha>^`）是**执行路径上的代码**。
    ⇒ 改这个命名规则、改 ref 的写入时机、或让某个终态不再发布 ref，**都会静默弄坏一个正在运行的下游**。
    不是不许改，是**改之前要知道有人在读**。
-   同理，契约的 `context.targetPaths` / `safetyPolicy.allowlistPaths` 是 Orca 写集判据的输入，
-   `escalationAndExit.stopOn` 与 `verification.stopSignals` 也是。
+   同理，契约的 `context.targetPaths` / `safetyPolicy.allowlistPaths`、`escalationAndExit.stopOn`
+   与 `verification.stopSignals` 都是 Orca 判据的输入。
 2. *** **`cancelled` 不需要给进程组发信号也能到达。** *** `runLoop.ts` 在 `evaluateStopDecision` **之前**
    先匹配 `verification.stopSignals` ∩ `contract.escalationAndExit.stopOn`（`getMatchedStopSignal`；**行号会移动，引用前现测**）。
-   ⇒ **一个 scripted frame ＋ `verifierType: "agent"` 就能跑出真的 `cancelled`，一次模型都不用跑。**
-   ⚠️ **此前双方文档都写着「只能靠信号」，那句话不完整** —— 这条更正保留在此，别再写回去。
+   ⇒ **一个 scripted frame ＋ `verifierType: "agent"` 就能跑出真的 `cancelled`。**
+   ⚠️ 双方文档都曾写着「只能靠信号」，**那句不完整**；这条更正保留在此，别再写回去。
 3. **四个非成功终态仍然全部 exit 2**（`exhausted`／`failed`／`blocked_waiting_human`／`cancelled` 不可区分），
    下游只能读 `loop-state.json` 的 `status`。
 4. *** **`blocked_waiting_human` 的运行不发布任何 attempt ref** *** —— 那两条 return 路径都跳过 cleanup，
    而 `publishAttemptCommit` 只在 cleanup 里被调用。收产物的一侧必须显式处理。
-5. 🆕 *** **Orca 正在设计一个会【往目标仓库工作树写文件并自己提交】的命令**（`orca correct`）。 ***
-   人 2026-09-06 裁定它取目标仓库的 repo 锁（`<repo>/.git/orca-lock`）并单独提交它写出的那一个台账文件。
-   ⚠️ **今天与本仓库无关**：本仓库不是 orca 的目标仓库，也没有 `.decisions/`。
-   **登记的理由只有一条**：此前 Orca 对目标仓库的写入只发生在 `orca run` 的受控路径上，
-   **这是第一个「人手动触发、会改目标工作树」的写入方** —— 若将来本仓库成为目标仓库，那是一个新的写入方。
-   *** **它目前【尚未实现，且设计已被评审判为 not ready】，别照它现在的样子做任何准备。** ***
+5. *** **`orca correct` 的形状已经定下来了**（设计定稿，**尚未实现**）。 *** 它是第一个
+   「人手动触发、会改目标仓库工作树并自己提交」的写入方。确定下来的部分：
+   **闭环模式取目标仓库的 repo 锁**（`<repo>/.git/orca-lock`，与 `orca run` 同一把）、
+   **只提交它写出的那一个 `.decisions/<run>.jsonl`**、**只记模式不取任何锁**。
+   ⚠️ **今天与本仓库仍然无关**：本仓库不是 orca 的目标仓库，也没有 `.decisions/`。
+   **登记的理由只有一条**：若将来本仓库成为目标仓库，那是一个会与 `orca run` 争同一把锁的新写入方。
+6. 🆕 *** **一条与语言无关、值得记住的 git 实测**（2026-09-06，一次性仓库，非本仓库）：
+   `git add -- <path>` 之后跟一句 `git commit -m …`，提交的是【整个索引】，不是刚 add 的那条路径。** ***
+   要「只提这一个文件」必须写成 `git add -- <path>` **再** `git commit -m … -- <path>`；
+   而**单独**用 `git commit -m … -- <pathspec>` 对**未跟踪**文件会直接报
+   `error: pathspec … did not match any file(s) known to git`。
+   ⇒ *** **已替本仓库核过，本仓库没有这个形状**：现测 `src/` 里唯一的 `"commit"` 调用点是
+   `worktreeManager.ts` 的 `git add -A` ＋ 在**一次性 attempt worktree** 里提交 —— 那是有意的，不是这个坑。 ***
+   **登记在此只是为了：将来本仓库若要「只提交某一个文件」，别踩。**
 
 ## 四、Orca 那边到哪了（**知情，不复述细节**）
 
-- **A′（决策台账校验器）已落地。子系统 C（调度层）已全部落地并收掉四条 follow-up。**
-- **子系统 B 的入口条件已做完**：`corrections` 与 `overturned` 的字段形状已定死、已落成代码、判据与变异齐备。
-  spec 与计划在 `…/Orca/docs/superpowers/specs/2026-09-05-corrections-overturned-design.md`
-  与 `…/plans/2026-09-05-corrections-overturned.md`。**与本仓库无关，零任务。**
-- 🆕 *** **子系统 E 的第一刀已出设计（2026-09-06，run `orca-dev-19c594d2`）：`orca correct`。** ***
-  *** **已被一席外派评审判 `Ready to implement? No`（5 Critical／9 Important／6 Minor），一条未修。** ***
-  spec 顶部有禁止照本实施的横幅；报告在
-  `…/Orca/.superpowers/sdd/2026-09-06-corrections-store-and-writer/external-review.md`。
-  **与本仓库无关，零任务。**
+- **A′（决策台账校验器）、子系统 C（调度层）已全部落地**；**子系统 B 的入口条件已做完**（字段形状已定死、判据与变异齐备）。
+- *** **子系统 E 的第一刀（`orca correct`）的设计已定稿** *** —— 过了**三席外派评审**（共 62 条发现，全部处置完毕），
+  修订全部记在 spec 的 **§14**（`docs/superpowers/specs/2026-09-06-corrections-store-and-writer-design.md`，
+  读法是「§14.0 那张推翻对照表 → §14 全文；§14 没推翻的部分才回 §1–§13 去读」）。
+  三份评审报告在 `…/Orca/.superpowers/sdd/2026-09-06-corrections-store-and-writer/`。
+  *** **产品代码一行未写；下一步是 `writing-plans`。** ***
 - ⚠️ **不要从本节推断 Orca 的发布状态**：现跑它那边的 `git ls-remote`。
 
 ## 五、三个仓库的关系（**不变**）
@@ -391,15 +394,15 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ## 六、归属与边界
 
-本节本次**整节重写**由 Orca 那条线的 run `orca-dev-19c594d2` 于 **2026-09-06** 写入。
-写入时**现测**本仓库：在 `main`、`git status --short` 输出 0 字节、只有主工作树。
-*** **本次只改本文档一个文件、且只改本节**；`src/**`、`tests/**`、`scripts/**`、`.superpowers/**` 零触碰。 ***
+本节本次**整节重写**由 Orca 那条线的 run `orca-dev-d5eb8fa6` 于 **2026-09-06** 写入。
+写入时**现测**本仓库：在 `main`、`git status --porcelain` 输出 0 字节、与远端同点、三个分支零 worktree 变化。
+*** **本次只改本文档一个文件、且只改本节**；`src/**`、`tests/**`、`scripts/**`、`.superpowers/**` 零触碰
+（读过 `src/` 是只读普查，见第三节第 6 条）。 ***
 
-⚠️ **本节此前有过两处已被现测推翻的说法，不再带下去，在此一并记明**：
-「Orca 领先它自己的远端 37 笔、一次都没 push」为假（人已推）；
-「本仓库本地领先远端一笔」也曾在同一会话中变假（人在会话进行中自己推的）。
+⚠️ **本节此前有过几处已被现测推翻的说法，不再带下去，在此一并记明**：
+「Orca 领先它自己的远端 37 笔、一次都没 push」为假；「本仓库本地领先远端一笔」也曾在同一会话中变假。
 ⇒ *** **同一会话里远端被推动是常态。要判某笔发没发布，现跑 `ls-remote`，连本节都不要信。** ***
-（Orca 那条线 2026-09-06 那一会话里，**远端又被人推动了两次** —— 这已经是常态，不是意外。）
+（本轮 Orca 那条线的会话里，远端又被人推动了一次。）
 
 ⚠️ Orca 那条线在本仓库里干活时守的是**本仓库自己的 `CLAUDE.md` 与铁律**，不是 Orca 的
 （Orca spec §7 ／ Orca `CLAUDE.md` Rule 16）。
