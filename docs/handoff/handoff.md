@@ -549,15 +549,11 @@ rtk proxy npm run typecheck; rtk proxy npm run build
   面板写入方在文件被替换后按文件身份重建去重集。⚠️ **与本仓库仍然无关**：写的是 Orca 的用户全局数据，不读 ccloop 的任何结构。
   🆕 **又一轮（2026-09-17，Orca run `orca-dev-18c77f3e`，主题行 `fix(panel): drop a reviews.jsonl line that is not a row…`）**：
   `reviews.jsonl` 里一行 `null` 曾让面板起不来、让 `/api/metrics`／`/api/todo` 答 500 ⇒ 读取方改用压实分类器同一个「是不是一行」的定义。**与本仓库无关。**
-- 🆕 **子系统 D（检查点交接）有了设计草稿（2026-09-17，Orca run `orca-dev-bd5f202b`，Orca 主题行 `docs(spec): draft subsystem D checkpoint handoff…`）**：
-  先服务**开发会话**，按上下文窗口水位（不是累计消耗）触发，目标是交接链本身不需要人；D1＋D2 实施计划（Orca run `orca-dev-8df1943a`，Orca 主题行 `docs(plan): turn D1 and D2 into seven tasks…`）🆕 **已执行完毕（2026-09-17，Orca run `orca-dev-d5688105`，Orca 主题行 `docs(handoff): record the D1+D2 execution round…`）**：
-  Orca 现在有 `orca level --hook claude-code`（PostToolUse 钩子，告诉会话自己的窗口水位）、`orca checkpoint write`（写并只提交 `.orca/checkpoints/<run-id>.json`，数字由代码量）、`orca resume`（从检查点起步、重跑实测），钩子装在 **Orca 自己的** `.claude/settings.json` 里。
-  🆕 **活体验收（计划 Task 7 Step 3）已做（2026-09-17，同一 run `orca-dev-d5688105`，Orca 主题行 `docs(handoff): add the live check result, the Haiku window…`）**：无头 `claude -p` 下钩子投递成立；
-  subagent 的钩子输入带的是**父会话**的 `session_id`／`transcript_path`，只能靠 `agent_id`／`agent_type` 区分 —— 修它是 **Orca 自己的下一件事**。
-  *** **对本仓库仍然零任务：计划执行全程一个字节没碰本仓库。** *** 检查点住在**被干活的仓库**的 `.orca/checkpoints/` —— 本仓库不在 v1 范围内。
-  ⚠️ *** **与本仓库的关系只有一条诊断（不是任务，执行后不变）**：D 把 ccloop 的阶段 agent **暂不纳入**，理由是 Orca 现测 ——
-  每个阶段一个新 `claude -p --output-format json`（`scripts/claude-phase-runner.mjs`），结果只在进程结束时吐出；
-  记的 token 是 input＋output、**不含 cache**（同文件 `USAGE_FIELDS`，行号引用前现测）⇒ 它不是窗口占用读数。 ***
+- 🆕 **子系统 D（检查点交接）的 D1＋D2 已落地并由人推上 Orca 远端（2026-09-17，Orca run `orca-dev-d5688105`）**：`orca level --hook claude-code`（窗口水位钩子，装在 **Orca 自己的** `.claude/settings.json`）、`orca checkpoint write`、`orca resume`；
+  活体验收已做。Orca 的下一件事是修 I3（subagent 的钩子输入带父会话的 `session_id`／`transcript_path`，只能靠 `agent_id`／`agent_type` 区分）。
+  *** **对本仓库仍然零任务，一个字节没碰本仓库。** ***
+  ⚠️ *** **诊断（不是任务）**：D 把 ccloop 的阶段 agent **暂不纳入** —— 每个阶段一个新 `claude -p --output-format json`（`scripts/claude-phase-runner.mjs`），
+  记的 token 是 input＋output、**不含 cache**（同文件 `USAGE_FIELDS`，行号引用前现测）⇒ 不是窗口占用读数。 ***
   **重开条件**：实测到某个阶段的单次 `claude -p` 接近 D 的阈值。那时若要改 ccloop，照例先报、先拿具名授权。
   ⚠️ **Orca 从此有构建产物、根依赖是一棵树** —— 与本仓库仍然无关（Orca 通过 spawn 子进程用 ccloop，不是 npm 依赖）。
   ⚠️ 🔴 本节早先那句「Orca 台账里 `React` 现测仍是零命中」是假的（2026-09-10 已更正）。记法保留：
@@ -577,29 +573,10 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ## 七、归属与边界
 
-本节最近一次由 Orca 那条线的 run `orca-dev-d5688105` 于 **2026-09-17** 第二次就地更新
-（§五 D 那一条「活体验收待人」改成「活体验收已做、subagent 钩子输入的修法是 Orca 的下一件事」；§七 发布状态那句按现测改写；**一个编号项都没有新增**）。
-上一次是同一 run `orca-dev-d5688105` 于 **2026-09-17** 就地更新
-（§五 D 那一条改成「计划已执行完毕、活体验收待人」；§七 发布状态那句按现测改写；**一个编号项都没有新增**）。
-上一次是 run `orca-dev-8df1943a` 于 **2026-09-17** 就地更新
-（§五 D 那一条补上「计划已落盘、未执行」；§七 发布状态那句按现测改写；**一个编号项都没有新增**）。
-上一次是 run `orca-dev-bd5f202b` 于 **2026-09-17** 就地更新
-（§五 补上「子系统 D 有了设计草稿」及其对本仓库的一条诊断；两条新实测折进已有的第 4 条与第 6 条；**一个编号项都没有新增**）。
-上一次是 run `orca-dev-18c77f3e` 于 **2026-09-17** 就地更新
-（§五 E3 那一条补上「`reviews.jsonl` 非行不再让面板崩溃」；一条新实测折进已有的第 10 条；§七 过期的领先笔数改掉；**一个编号项都没有新增**）。
-上一次是 run `orca-dev-5e5985bc` 于 **2026-09-17** 就地更新
-（§五 E3 那一条补上「又一轮：reviews 压实」；两条新实测折进已有的第 7 条与第 10 条，**一个编号项都没有新增**）。
-上一次是 run `orca-dev-4ccc0a0b` 于 **2026-09-16** 就地更新
-（§五 E3 那一条补上「又一轮清掉三条登记挂账」；两条新实测分别折进已有的第 7 条与第 11 条，
-**一个编号项都没有新增**）。上一次是 run `orca-dev-cbe8dda3` 于 **2026-09-16** 就地更新
-（§五 E3 那一条改写成「parked N-1 已修，`key` 那一半经实测判为冗余」；一条新实测**折进已有的第 7 条**，
-**一个编号项都没有新增** —— 规矩是人 2026-09-02 定的「关于 Orca 的章节不能无限增加下去」）。
-上一次是 run `orca-dev-5d5c8055` 于 2026-09-16 更新
-（§五 E3 改写成「计划全部执行完、留一条 parked」；三条新实测折进已有的第 3、7、11 条）。
-上一次是 run `orca-dev-bad904b1` 于 2026-09-15 更新（E3 改写成「Task 0–5 已实施过审」，三条实测折进第 3、4、11 条）；
-再上一次是 run `orca-dev-5d7759dc` 于 2026-09-15 更新（E3 改写成「Task 0–3 已实施过审」）。
+本节最近一次由 Orca 那条线的 run `orca-dev-d5688105` 于 **2026-09-17** 收尾时就地更新（§五 D 那一条压到要点；本段归属链收成这一句；**一个编号项都没有新增**）。
+更早各轮的就地更新由 `git log -- docs/handoff/handoff.md` 取回。
 写入前**现测**本仓库：在 `main`、`git status --porcelain` 输出为空、
-*** **本地领先远端 1 笔、落后 0（run `orca-dev-d5688105` 第二次写入前现测，2026-09-17T14:29Z，`git ls-remote origin refs/heads/main` ＋ `rev-list --left-right --count`；领先的是同一 run 上一次那笔本节更新 `docs(handoff): update the Orca section in place -- D1 and D2 executed, live check awaits the person`，未推）。** ***
+*** **本地领先远端 0 笔、落后 0（run `orca-dev-d5688105` 收尾写入前现测，2026-09-17T14:39Z，`git ls-remote origin refs/heads/main` ＋ `rev-list --left-right --count`）。** ***
 ⚠️ 这一句只在写下的那一秒为真，**人随时会自己推；要判发布状态就现跑 `ls-remote`。**
 *** **本次只改本文档一个文件、且只改本节**；`src/**`、`tests/**`、`scripts/**`、`.superpowers/**` 零触碰。 ***
 **节外内容（本节标题行之前的全部字节）的 sha256 在改写前后逐字相同**，这是「没碰到别人的东西」的证明。
