@@ -550,7 +550,9 @@ rtk proxy npm run typecheck; rtk proxy npm run build
   🆕 **又一轮（2026-09-17，Orca run `orca-dev-18c77f3e`，主题行 `fix(panel): drop a reviews.jsonl line that is not a row…`）**：
   `reviews.jsonl` 里一行 `null` 曾让面板起不来、让 `/api/metrics`／`/api/todo` 答 500 ⇒ 读取方改用压实分类器同一个「是不是一行」的定义。**与本仓库无关。**
 - 🆕 **子系统 D（检查点交接）的 D1＋D2 已落地并由人推上 Orca 远端（2026-09-17，Orca run `orca-dev-d5688105`）**：`orca level --hook claude-code`（窗口水位钩子，装在 **Orca 自己的** `.claude/settings.json`）、`orca checkpoint write`、`orca resume`；
-  活体验收已做。**I3 已修（2026-09-17，Orca run `orca-dev-c30670af`）**：subagent 的工具调用（钩子输入带 `agent_id`）不再收到父会话的水位与写检查点指令；无头 `claude -p` 判别性活体验收已确认（子代理调用收不到注入，主会话照常）。Orca 的下一件事是 Tier 0 机械闸门。
+  活体验收已做；I3（subagent 的调用收到父会话的水位与写检查点指令）已修并经无头 `claude -p` 判别性验收。
+  🆕 **Tier 0 机械闸门已落地（2026-09-18，Orca run `orca-dev-c30670af`）**：Orca 自己的 `.claude/settings.json` 里一个 PreToolUse 钩子 ＋ 仓库级 deny 规则，拦 **Orca 仓库** agent 会话的 push／合并进 main／删分支／删 worktree／`gh` 对外写（三种权限模式、父会话与子代理都实测拦住；活体验收 A／B／C 全过）。
+  *** **对本仓库仍然零任务：它只装在 Orca 自己的仓库里，一个字节没碰本仓库；本仓库的 push 与合并纪律不变。** *** Orca 的下一件事是 D-launch（无人值守拉起下一个会话）。
   *** **对本仓库仍然零任务，一个字节没碰本仓库。** ***
   ⚠️ *** **诊断（不是任务）**：D 把 ccloop 的阶段 agent **暂不纳入** —— 每个阶段一个新 `claude -p --output-format json`（`scripts/claude-phase-runner.mjs`），
   记的 token 是 input＋output、**不含 cache**（同文件 `USAGE_FIELDS`，行号引用前现测）⇒ 不是窗口占用读数。 ***
@@ -573,7 +575,7 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ## 七、归属与边界
 
-本节最近一次由 Orca 那条线的 run `orca-dev-c30670af` 于 **2026-09-17** 就地更新（只改 §五 D 那一条：I3 已修；**一个编号项都没有新增**）。
+本节最近一次由 Orca 那条线的 run `orca-dev-c30670af` 于 **2026-09-18** 就地更新（只改 §五 D 那一条：I3 已修 ＋ Tier 0 闸门已落地；**一个编号项都没有新增**）。
 更早各轮的就地更新由 `git log -- docs/handoff/handoff.md` 取回。
 写入前**现测**本仓库：在 `main`、`git status --porcelain` 输出为空、
 *** **本地领先远端 1 笔、落后 0（上一轮 `docs(handoff): trim the Orca section in place …` 那笔未推；run `orca-dev-c30670af` 写入前现测，`/usr/bin/git ls-remote origin refs/heads/main` ＋ `rev-list --left-right --count origin/main...HEAD`）。** ***
