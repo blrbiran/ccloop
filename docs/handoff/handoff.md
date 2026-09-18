@@ -552,8 +552,9 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 - 🆕 **子系统 D（检查点交接）的 D1＋D2 已落地并由人推上 Orca 远端（2026-09-17，Orca run `orca-dev-d5688105`）**：`orca level --hook claude-code`（窗口水位钩子，装在 **Orca 自己的** `.claude/settings.json`）、`orca checkpoint write`、`orca resume`；
   活体验收已做；I3（subagent 的调用收到父会话的水位与写检查点指令）已修并经无头 `claude -p` 判别性验收。
   🆕 **Tier 0 机械闸门已落地（2026-09-18，Orca run `orca-dev-c30670af`）**：Orca 自己的 `.claude/settings.json` 里一个 PreToolUse 钩子 ＋ 仓库级 deny 规则，拦 **Orca 仓库** agent 会话的 push／合并进 main／删分支／删 worktree／`gh` 对外写（三种权限模式、父会话与子代理都实测拦住；活体验收 A／B／C 全过）。
-  *** **对本仓库仍然零任务：它只装在 Orca 自己的仓库里，一个字节没碰本仓库；本仓库的 push 与合并纪律不变。** *** Orca 的下一件事是 D-launch（无人值守拉起下一个会话）。
-  *** **对本仓库仍然零任务，一个字节没碰本仓库。** ***
+  *** **对本仓库仍然零任务：它只装在 Orca 自己的仓库里，一个字节没碰本仓库；本仓库的 push 与合并纪律不变。** ***
+  🆕 **D-launch 已实施（2026-09-18，Orca run `orca-dev-6662000e`）**：`orca chain start|stop|unlock` —— 一个外部监督进程，串行以无头 `claude -p` 拉起 Claude Code 会话，由代码判续停，面板可开链／停链／看状态。
+  *** **v1 只能在装有 Tier 0 闸门的仓库里开链（今天即 Orca 自己或其 clone）⇒ 对本仓库仍然零任务，一个字节没碰本仓库。** *** 真钱活体验收尚未跑（待 Orca 那边的人点头）。
   ⚠️ *** **诊断（不是任务）**：D 把 ccloop 的阶段 agent **暂不纳入** —— 每个阶段一个新 `claude -p --output-format json`（`scripts/claude-phase-runner.mjs`），
   记的 token 是 input＋output、**不含 cache**（同文件 `USAGE_FIELDS`，行号引用前现测）⇒ 不是窗口占用读数。 ***
   **重开条件**：实测到某个阶段的单次 `claude -p` 接近 D 的阈值。那时若要改 ccloop，照例先报、先拿具名授权。
@@ -575,10 +576,10 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ## 七、归属与边界
 
-本节最近一次由 Orca 那条线的 run `orca-dev-c30670af` 于 **2026-09-18** 就地更新（只改 §五 D 那一条：I3 已修 ＋ Tier 0 闸门已落地；**一个编号项都没有新增**）。
+本节最近一次由 Orca 那条线的 run `orca-dev-6662000e` 于 **2026-09-18** 就地更新（只改 §五 D 那一条：D-launch 已实施；**一个编号项都没有新增**）。再上一次是 run `orca-dev-c30670af`（I3 ＋ Tier 0 闸门）。
 更早各轮的就地更新由 `git log -- docs/handoff/handoff.md` 取回。
 写入前**现测**本仓库：在 `main`、`git status --porcelain` 输出为空、
-*** **本地领先远端 1 笔、落后 0（上一轮 `docs(handoff): trim the Orca section in place …` 那笔未推；run `orca-dev-c30670af` 写入前现测，`/usr/bin/git ls-remote origin refs/heads/main` ＋ `rev-list --left-right --count origin/main...HEAD`）。** ***
+*** **本地与远端同点（run `orca-dev-6662000e` 写入前现测，`/usr/bin/git ls-remote origin refs/heads/main` 与 `rev-parse HEAD` 相同）；本次提交之后本地领先 1 笔。** ***
 ⚠️ 这一句只在写下的那一秒为真，**人随时会自己推；要判发布状态就现跑 `ls-remote`。**
 *** **本次只改本文档一个文件、且只改本节**；`src/**`、`tests/**`、`scripts/**`、`.superpowers/**` 零触碰。 ***
 **节外内容（本节标题行之前的全部字节）的 sha256 在改写前后逐字相同**，这是「没碰到别人的东西」的证明。
