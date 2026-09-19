@@ -586,3 +586,40 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ⚠️ Orca 那条线在本仓库里干活时守的是**本仓库自己的 `CLAUDE.md` 与铁律**，不是 Orca 的。
 ⚠️ *** **push 仍需人单独授权，控制器不许 push。** ***
+
+
+## 2026-09-19 Codex Native 切片实施（task 01a0b792）
+
+用户批准 Orca task-control spec §13 后选择 Native。此次产品实施仅在 ccloop 隔离工作树
+`/tmp/ccloop-codex-0919`，分支 `codex/codex-adapter-0919`，起点 `befb91f9e581ea1369d0ca796246847fa2e6a967`。
+既有 main 工作树未修改。五个实施提交：0a833cc 协议、e2821d1 进程、ea784a3 adapter、8454a41 CLI、2792d96 验收。
+计划：Orca `docs/superpowers/plans/2026-09-19-ccloop-codex-adapter.md`。
+
+已实现 Codex fresh exec 的 plan/execute/verify；strict 配置拒绝、明确 soft；原始JSONL用量、证据落盘、进程组取消/超时；
+run/resume/sweep 具名接线。Orca未加入具体agent执行逻辑；ccmem未改。
+长期优先级仍 Claude Code > Codex CLI > OpenCode > oh-my-pi > pi。
+本切片没有实现 Web任务组、goal/DAG、严格token封顶、组账本、新任务handoff协议或D3。
+
+验证：开工原有624测试第一次1条5秒timeout，未改测试原样重跑624通过。
+独立审查前全量43文件703测试通过，typecheck/build通过；源码所涉变异均在clone打红并完整读日志，
+每轮还原tracked diff/cached diff均0字节。旧判据文件未修改。
+SDD ledger及全部证据保留于隔离树 `.superpowers/sdd/2026-09-19-ccloop-codex-adapter/`，不得删除历史。
+
+仅一次真钱验收：`/tmp/ccloop-codex-live-20260919-01`，codex-cli0.155.1，沿用本机明确配置gpt-6-astra。
+三阶段各CLI0，controller succeeded，独立Git ref answer字节34320a。首次phase F=20605；
+后两phase43222、64399；实际累计128226 tokens，soft预算100000，超额28226，美元unknown。
+原wrapper退出1：误把controller截零余额与负数比较。新离线回归复现并修复为max(0,budget-usage)，
+保留原summary.json；新offline-audit.json核对raw usage、Git产物和余额，没有第二次模型调用。
+修正后的wrapper未重跑真钱，不能把离线核对冒充重跑。此F只属于本次Codex配置，不自动等于Orca chain阈值测量。
+独立进程核对：本次登记组无活进程；真实 ~/.orca 不存在。
+
+实施中必要偏差均记ledger：execute用严格result包装绕开根anyOf的不兼容，内部业务协议不变；
+新增共享fixture；新写且从未通过的超时测试改读实际execution-recovery.json；新增明确watchdog断言；
+测试专用短outerTimeout；软预算截零核对；保留隔离树和台账。未放宽既有判据。
+
+awaitingHuman：本地分支整合/推送/清理由人单独操作；没有push、合并main、删开发分支/worktree。
+Claude额度需等2026-09-22 09:00 Asia/Shanghai之后，仍不自动调用；Orca chain活体验收仍须人提交.orca/chain.json选model并点头，先测F，副本T1>F。
+下一切片是spec§13.6控制底座，之后ccloop交接/D3，再Web可恢复任务控制和ccmem决策闭环。
+
+最终独立审查：3项Important、无Critical/Minor，均修复于ff7d97a：FIFO输出非阻塞拒绝、历史ps日期空白规范化、观测文件写失败仍回收已登记进程并保留错误。每项新增回归均亲自读完整RED/GREEN日志；没有第二轮审查或真钱重跑。最终45文件/706测试全部通过，typecheck/build通过；相关6个变异复跑行为断言失败，clone两种diff为0字节。最终登记组和fake进程核对为空，~/.orca仍不存在。
+SDD新增review-fix-evidence目录，保留全部旧台账与证据。产品已提交，工作树只保留不入库的node_modules软链。
