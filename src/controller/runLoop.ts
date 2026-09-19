@@ -1095,7 +1095,9 @@ export async function runLoop(
   });
 
   try {
-    return await runLoopFromState(contract, runDir, adapter, state, heartbeat, leaseLoss, hooks);
+    const result = await runLoopFromState(contract, runDir, adapter, state, heartbeat, leaseLoss, hooks);
+    await hooks?.onRunSettledBeforeLeaseRelease?.(result);
+    return result;
   } finally {
     // §6.0: every exit path — normal completion, stop-boundary exit, and any throw.
     await heartbeat.stop();
@@ -1149,6 +1151,7 @@ export interface RunControlHooks {
     startedAt: string;
     phase: string;
   }) => Promise<void>;
+  onRunSettledBeforeLeaseRelease?: (state: RunState) => Promise<void>;
 }
 
 // A8 §4.3/§5.4: the seventh parameter is an OBJECT, not a scalar, so later layers (B2, C1) add
@@ -1189,6 +1192,13 @@ export async function runLoopFromState(
       usageEvidence: result?.usageEvidence,
     });
   };
+  const persistHandoffBoundary = async (type: "handoff_boundary" | "handoff_interrupted", detail: string): Promise<RunState> => {
+    await appendEvent(runDir, { type, at: new Date().toISOString(), detail });
+    await writeOwnedRunState(runDir, state);
+    return state;
+  };
+  const handoffRequested = (): boolean => options?.stopRequested?.requested === true;
+  const handoffAborted = (): boolean => options?.phaseSignal?.aborted === true;
 
   // Package 2 / debt 2, review round 1: created per invocation, so the abandonment-event latch is
   // scoped to this run of the loop rather than to the process. Every loop-state.json write below
@@ -1303,6 +1313,11 @@ export async function runLoopFromState(
         adapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options)),
       );
 
+      if (handoffAborted()) {
+        await settlePhase("plan", attempt, planOutcome.elapsedMs, planOutcome.result);
+        return await persistHandoffBoundary("handoff_interrupted", `handoff deadline interrupted plan in attempt ${attempt}`);
+      }
+
       if (planOutcome.timedOut) {
         await settlePhase("plan", attempt, planOutcome.elapsedMs);
         state = await persistTerminalState(
@@ -1326,6 +1341,11 @@ export async function runLoopFromState(
 
       plan = planOutcome.result;
       await settlePhase("plan", attempt, planOutcome.elapsedMs, plan);
+
+      if (handoffRequested()) {
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+        return await persistHandoffBoundary("handoff_boundary", `handoff requested after plan in attempt ${attempt}`);
+      }
 
       if (hasBudgetExceeded(state)) {
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
@@ -1354,6 +1374,13 @@ export async function runLoopFromState(
         (abortSignal) => adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options)),
         { awaitAbortedResult: true },
       );
+
+      if (handoffAborted()) {
+        execution = executeOutcome.result ?? null;
+        await settlePhase("execute", attempt, executeOutcome.elapsedMs, execution);
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+        return await persistHandoffBoundary("handoff_interrupted", `handoff deadline interrupted execute in attempt ${attempt}`);
+      }
 
       let executeUsageAlreadyApplied = false;
 
@@ -1437,6 +1464,11 @@ export async function runLoopFromState(
 
       if (!executeUsageAlreadyApplied) {
         await settlePhase("execute", attempt, executeOutcome.elapsedMs, completedExecution);
+      }
+
+      if (handoffRequested()) {
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
+        return await persistHandoffBoundary("handoff_boundary", `handoff requested after execute in attempt ${attempt}`);
       }
 
       if (isPartialExecutionResult(completedExecution)) {
@@ -1529,6 +1561,12 @@ export async function runLoopFromState(
         ),
       );
 
+      if (handoffAborted()) {
+        await settlePhase("verify", attempt, verifyOutcome.elapsedMs, verifyOutcome.result);
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
+        return await persistHandoffBoundary("handoff_interrupted", `handoff deadline interrupted verify in attempt ${attempt}`);
+      }
+
       if (verifyOutcome.timedOut) {
         await settlePhase("verify", attempt, verifyOutcome.elapsedMs);
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
@@ -1556,6 +1594,10 @@ export async function runLoopFromState(
       await guardedWriteArtifacts(() =>
         writeCompletedAttemptArtifacts(runDir, attempt, plan, execution, completedVerification),
       );
+
+      if (handoffRequested()) {
+        return await persistHandoffBoundary("handoff_boundary", `handoff requested after verify in attempt ${attempt}`);
+      }
 
       const humanGateHit =
         pathPolicy.humanGateHit ||
@@ -1721,7 +1763,17 @@ export async function runLoopFromState(
       const failureReason = error instanceof PhaseExecutionError ? error.message : String(error);
 
       if (error instanceof PhaseExecutionError) {
+        const failedPhase = activePhase;
         if (activePhase !== null) await settlePhase(activePhase, attempt, error.elapsedMs);
+
+        if (handoffAborted() || handoffRequested()) {
+          await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+          const interrupted = handoffAborted();
+          return await persistHandoffBoundary(
+            interrupted ? "handoff_interrupted" : "handoff_boundary",
+            `${interrupted ? "handoff deadline interrupted" : "handoff requested during"} ${failedPhase ?? "phase"} in attempt ${attempt}`,
+          );
+        }
 
         if (execution !== null && isPartialExecutionResult(execution)) {
           await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);

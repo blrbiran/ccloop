@@ -149,7 +149,7 @@ const startEnvelopeSchema = z
     work: workSchema,
   })
   .strict();
-const handoffRequestSchema = z
+export const handoffRequestSchema = z
   .object({
     protocol: z.literal(1),
     requestId: idSchema,

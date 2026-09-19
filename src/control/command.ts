@@ -9,9 +9,10 @@ import {
   type ControlMethodV1,
   type ControlRequestV1,
 } from "./protocol.js";
-import { acceptStart, inspectStart } from "./accept.js";
-import { collectExecution } from "./collect.js";
+import { acceptStart } from "./accept.js";
+import { collectExecution, inspectExecution } from "./collect.js";
 import { MAX_CONTROL_BYTES, readEvidence } from "./evidence.js";
+import { requestHandoff } from "./handoff.js";
 
 export interface ControlCommandResult {
   code: number;
@@ -78,7 +79,15 @@ const terminalSchema = z.object({
 }).strict();
 const collectionSchema = z.object({
   events: z.array(usageEventSchema),
-  candidate: z.null(),
+  candidate: z.object({
+    groupId: z.string().min(1), workItemId: z.string().min(1), taskId: z.string().min(1).nullable(), runId: z.string().min(1),
+    generation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), graphVersion: safeInteger, targetVersion: safeInteger,
+    checkpointId: z.string().min(1), usageHighWater: safeInteger, result: z.enum(["complete", "partial", "failed"]),
+    artifacts: z.array(artifactRefSchema), snapshot: artifactRefSchema.nullable(), missing: z.array(z.string()),
+    unresolvedRequestIds: z.array(z.string()),
+    stopProof: z.object({ executionId: z.string().min(1), generation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), isolated: z.literal(true), source: artifactRefSchema }).strict().nullable(),
+    terminalOutcome: z.string().min(1), handoff: artifactRefSchema,
+  }).strict().nullable(),
   terminal: terminalSchema.nullable(),
 }).strict();
 
@@ -136,7 +145,10 @@ async function defaultHandler(
     return await acceptStart(request.input, context);
   }
   if (request.method === "inspect") {
-    return await inspectStart(request.input);
+    return await inspectExecution(request.input);
+  }
+  if (request.method === "handoff") {
+    return await requestHandoff(request.input, request.request);
   }
   if (request.method === "collect") {
     return await collectExecution(request.input, request.afterSeq);

@@ -1,0 +1,328 @@
+import { constants } from "node:fs";
+import { open, readdir, unlink } from "node:fs/promises";
+import { join, relative } from "node:path";
+import { isTerminalRunStatus } from "../state/stateMachine.js";
+import type { RunState } from "../state/types.js";
+import { atomicReplacePrivateFile, ensurePrivateDirectory, readPrivateFile } from "./paths.js";
+import {
+  canonicalHash,
+  canonicalJson,
+  ControlProtocolError,
+  handoffRequestSchema,
+  type ArtifactRefV1,
+  type HandoffRequestV1,
+  type StartEnvelopeV1,
+} from "./protocol.js";
+import { writeEvidence } from "./evidence.js";
+import { readAcceptedOptional } from "./store.js";
+
+export type HandoffAckV1 =
+  | { kind: "latched"; requestId: string }
+  | { kind: "complete"; requestId: string; checkpointId: string };
+
+export interface HandoffIdentityV1 {
+  groupId: string;
+  workItemId: string;
+  taskId: string | null;
+  runId: string;
+  generation: number;
+  graphVersion: number;
+  targetVersion: number;
+}
+
+export interface HandoffPacketV1 {
+  protocol: 1;
+  identity: HandoffIdentityV1;
+  request: HandoffRequestV1 | null;
+  runState: RunState;
+  completed: string[];
+  unfinished: string[];
+  pendingDecisions: string[];
+  awaitingHuman: string[];
+  validationCommands: string[];
+  rawLogs: ArtifactRefV1[];
+  usageHighWater: number;
+  unresolvedRequestIds: string[];
+  artifacts: ArtifactRefV1[];
+}
+
+export interface BuiltHandoffPacketV1 {
+  packet: HandoffPacketV1;
+  handoff: ArtifactRefV1;
+  artifacts: ArtifactRefV1[];
+  missing: string[];
+}
+
+export interface CandidateV1 extends HandoffIdentityV1 {
+  checkpointId: string;
+  usageHighWater: number;
+  result: "complete" | "partial" | "failed";
+  artifacts: ArtifactRefV1[];
+  snapshot: ArtifactRefV1 | null;
+  missing: string[];
+  unresolvedRequestIds: string[];
+  stopProof: null;
+  terminalOutcome: string;
+  handoff: ArtifactRefV1;
+}
+
+function controlDir(sourceDir: string): string {
+  return join(sourceDir, "control");
+}
+
+function requestPath(sourceDir: string): string {
+  return join(controlDir(sourceDir), "handoff-request.json");
+}
+
+function candidatePath(sourceDir: string): string {
+  return join(controlDir(sourceDir), "candidate.json");
+}
+
+async function withHandoffLock<T>(sourceDir: string, action: () => Promise<T>): Promise<T> {
+  const root = controlDir(sourceDir);
+  await ensurePrivateDirectory(sourceDir, root);
+  const path = join(root, "handoff.lock");
+  let handle;
+  const deadline = Date.now() + 2_000;
+  while (handle === undefined) {
+    try {
+      handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (Date.now() >= deadline) throw new ControlProtocolError("control-handoff-busy");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  try {
+    return await action();
+  } finally {
+    await handle.close();
+    await unlink(path);
+  }
+}
+
+export async function readHandoffRequest(sourceDir: string): Promise<HandoffRequestV1> {
+  try {
+    const parsed = handoffRequestSchema.safeParse(
+      JSON.parse((await readPrivateFile(sourceDir, requestPath(sourceDir))).toString("utf8")) as unknown,
+    );
+    if (!parsed.success) throw new ControlProtocolError("control-handoff-invalid");
+    return parsed.data;
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new ControlProtocolError("control-handoff-invalid");
+    throw error;
+  }
+}
+
+export async function readHandoffRequestOptional(sourceDir: string): Promise<HandoffRequestV1 | null> {
+  try {
+    return await readHandoffRequest(sourceDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+export async function readHandoffCandidate(sourceDir: string): Promise<CandidateV1 | null> {
+  try {
+    return JSON.parse((await readPrivateFile(sourceDir, candidatePath(sourceDir))).toString("utf8")) as CandidateV1;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if (error instanceof SyntaxError) throw new ControlProtocolError("control-candidate-invalid");
+    throw error;
+  }
+}
+
+export async function requestHandoff(
+  envelope: StartEnvelopeV1,
+  request: HandoffRequestV1,
+): Promise<HandoffAckV1> {
+  if (request.runId !== envelope.claim.runId || request.generation !== envelope.claim.generation) {
+    throw new ControlProtocolError("control-handoff-identity-mismatch");
+  }
+  const accepted = await readAcceptedOptional(envelope.work.sourceDir);
+  if (accepted === null) throw new ControlProtocolError("control-handoff-not-accepted");
+  if (accepted.envelopeHash !== canonicalHash(envelope)) {
+    throw new ControlProtocolError("control-envelope-conflict");
+  }
+  return await withHandoffLock(envelope.work.sourceDir, async () => {
+    const existing = await readHandoffRequestOptional(envelope.work.sourceDir);
+    if (existing !== null) {
+      if (canonicalHash(existing) !== canonicalHash(request)) {
+        throw new ControlProtocolError("control-handoff-conflict");
+      }
+      const candidate = await readHandoffCandidate(envelope.work.sourceDir);
+      return candidate === null
+        ? { kind: "latched", requestId: request.requestId }
+        : { kind: "complete", requestId: request.requestId, checkpointId: candidate.checkpointId };
+    }
+    await atomicReplacePrivateFile(
+      envelope.work.sourceDir,
+      requestPath(envelope.work.sourceDir),
+      Buffer.from(`${canonicalJson(request)}\n`),
+    );
+    return { kind: "latched", requestId: request.requestId };
+  });
+}
+
+function identity(envelope: StartEnvelopeV1): HandoffIdentityV1 {
+  const claim = envelope.claim;
+  return {
+    groupId: claim.groupId,
+    workItemId: claim.workItemId,
+    taskId: claim.taskId,
+    runId: claim.runId,
+    generation: claim.generation,
+    graphVersion: claim.graphVersion,
+    targetVersion: claim.targetVersion,
+  };
+}
+
+async function retainFile(
+  sourceDir: string,
+  path: string,
+  label: string,
+  artifacts: ArtifactRefV1[],
+  missing: string[],
+): Promise<ArtifactRefV1 | null> {
+  try {
+    const ref = await writeEvidence(sourceDir, await readPrivateFile(sourceDir, path));
+    artifacts.push(ref);
+    return ref;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      missing.push(label);
+      return null;
+    }
+    throw error;
+  }
+}
+
+const RAW_CODEX_FILES = new Set([
+  "events.jsonl",
+  "stderr.log",
+  "outcome.json",
+  "final.json",
+  "process.json",
+  "usage.json",
+  "decode-error.txt",
+]);
+
+async function retainCodexLogs(
+  sourceDir: string,
+  runDir: string,
+  directory: string,
+  artifacts: ArtifactRefV1[],
+  rawLogs: ArtifactRefV1[],
+  depth = 0,
+): Promise<void> {
+  if (depth > 8 || rawLogs.length >= 256) return;
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (rawLogs.length >= 256) break;
+    if (entry.isSymbolicLink()) continue;
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await retainCodexLogs(sourceDir, runDir, path, artifacts, rawLogs, depth + 1);
+    } else if (entry.isFile() && RAW_CODEX_FILES.has(entry.name)) {
+      const ref = await retainFile(sourceDir, path, relative(runDir, path), artifacts, []);
+      if (ref !== null) rawLogs.push(ref);
+    }
+  }
+}
+
+export async function buildHandoffPacket(
+  envelope: StartEnvelopeV1,
+  request: HandoffRequestV1 | null,
+  runState: RunState,
+  usageHighWater: number,
+  result: CandidateV1["result"] = request === null && runState.status === "succeeded" ? "complete" : "partial",
+): Promise<BuiltHandoffPacketV1> {
+  if (request === null && !isTerminalRunStatus(runState.status)) {
+    throw new ControlProtocolError("control-handoff-request-required");
+  }
+  const runDir = join(envelope.work.sourceDir, "run");
+  const artifacts: ArtifactRefV1[] = [];
+  const missing: string[] = [];
+  const eventRef = await retainFile(envelope.work.sourceDir, join(runDir, "events.jsonl"), "events.jsonl", artifacts, missing);
+  const rawLogs = eventRef === null ? [] : [eventRef];
+  await retainCodexLogs(envelope.work.sourceDir, runDir, join(runDir, "codex"), artifacts, rawLogs);
+  await retainFile(envelope.work.sourceDir, join(runDir, "loop-state.json"), "loop-state.json", artifacts, missing);
+  await retainFile(envelope.work.sourceDir, join(runDir, "loop-contract.json"), "loop-contract.json", artifacts, missing);
+  if (runState.currentAttempt > 0) {
+    for (const name of ["plan.json", "execution.json", "verify.json"]) {
+      await retainFile(
+        envelope.work.sourceDir,
+        join(runDir, "attempts", String(runState.currentAttempt), name),
+        `attempts/${runState.currentAttempt}/${name}`,
+        artifacts,
+        missing,
+      );
+    }
+  }
+  const pendingDecisions = [
+    ...runState.recentFailures.map((failure) => failure.rejectCategory).filter(Boolean),
+    ...(runState.waitingOnHuman && runState.stopReason !== null ? [runState.stopReason] : []),
+  ];
+  const packet: HandoffPacketV1 = {
+    protocol: 1,
+    identity: identity(envelope),
+    request,
+    runState,
+    completed: runState.attemptsUsed > 0 ? [`${runState.attemptsUsed} attempt(s) entered`] : [],
+    unfinished: runState.status === "succeeded" ? [] : [envelope.work.contract.objective.successCondition],
+    pendingDecisions,
+    awaitingHuman: runState.waitingOnHuman ? [runState.stopReason ?? "human input required"] : [],
+    validationCommands: [...envelope.work.contract.verification.requiredChecks],
+    rawLogs,
+    usageHighWater,
+    unresolvedRequestIds: request === null || result === "complete" ? [] : [request.requestId],
+    artifacts: [...artifacts],
+  };
+  const handoff = await writeEvidence(envelope.work.sourceDir, Buffer.from(canonicalJson(packet)));
+  return { packet, handoff, artifacts, missing };
+}
+
+export async function persistHandoffCandidate(
+  envelope: StartEnvelopeV1,
+  request: HandoffRequestV1 | null,
+  runState: RunState,
+  built: BuiltHandoffPacketV1,
+  options: { result: CandidateV1["result"]; usageHighWater: number },
+): Promise<CandidateV1> {
+  const candidate: CandidateV1 = {
+    ...identity(envelope),
+    checkpointId: `checkpoint-${canonicalHash({ handoff: built.handoff, usageHighWater: options.usageHighWater }).slice(0, 48)}`,
+    usageHighWater: options.usageHighWater,
+    result: options.result,
+    artifacts: [...built.artifacts, built.handoff],
+    snapshot: null,
+    missing: [...built.missing],
+    unresolvedRequestIds: request === null || options.result === "complete" ? [] : [request.requestId],
+    stopProof: null,
+    terminalOutcome: runState.status,
+    handoff: built.handoff,
+  };
+  await atomicReplacePrivateFile(
+    envelope.work.sourceDir,
+    candidatePath(envelope.work.sourceDir),
+    Buffer.from(`${canonicalJson(candidate)}\n`),
+  );
+  return candidate;
+}
+
+export async function finalizeHandoffCandidate(
+  envelope: StartEnvelopeV1,
+  request: HandoffRequestV1 | null,
+  runState: RunState,
+  options: { result: CandidateV1["result"]; usageHighWater: number },
+): Promise<CandidateV1> {
+  const built = await buildHandoffPacket(envelope, request, runState, options.usageHighWater, options.result);
+  return await persistHandoffCandidate(envelope, request, runState, built, options);
+}

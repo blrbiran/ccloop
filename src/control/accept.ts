@@ -24,7 +24,16 @@ import {
 export type ExecutionStatusV1 =
   | { kind: "absent" }
   | { kind: "accepted"; executionId: string; configHash: string }
-  | { kind: "unknown" };
+  | { kind: "unknown" }
+  | {
+      kind: "stopped";
+      proof: {
+        executionId: string;
+        generation: number;
+        isolated: true;
+        source: { artifactId: string; hash: string };
+      };
+    };
 
 export interface AdapterBindingV1 {
   adapter: "codex";
