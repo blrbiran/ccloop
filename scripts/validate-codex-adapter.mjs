@@ -42,7 +42,9 @@ function watchdog(runDir, output) {
   const observations = [];
   let chain = Promise.resolve(), timer, observationError;
   const register = identity => {
-    if (!Number.isInteger(identity.pid) || identity.pid <= 1 || identity.pgid !== identity.pid || !identity.startedAt) throw new Error("invalid process identity");
+    if (!Number.isInteger(identity.pid) || identity.pid <= 1 || identity.pgid !== identity.pid || typeof identity.startedAt !== "string" || !identity.startedAt.trim()) throw new Error("invalid process identity");
+    // ps pads single-digit dates; normalize historical files as well as fresh observations.
+    identity = {...identity, startedAt: identity.startedAt.trim().replace(/\s+/g, " ")};
     const key = `${identity.pgid}:${identity.startedAt}`;
     if (!groups.has(key)) groups.set(key, {leader: identity, members: new Map()});
   };
@@ -69,7 +71,9 @@ function watchdog(runDir, output) {
       await tick(); timer = setInterval(poll, 100);
     },
     async cleanup(cliPid) {
-      clearInterval(timer); await chain; await tick();
+      clearInterval(timer); await chain;
+      // Evidence persistence must never prevent cleanup of identities already registered.
+      try { await tick(); } catch (error) { observationError = String(error); }
       const unresolved = [];
       if (observationError) unresolved.push(observationError);
       // Detached agent groups precede the controller group.

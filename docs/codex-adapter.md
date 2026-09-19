@@ -91,3 +91,8 @@ The inherited CLI configuration emitted warnings about skill-description
 truncation, an unknown feature key, plugin icon paths and Figma MCP authorization.
 These did not stop the three phases. No configuration, hooks, or trust rules were
 disabled for acceptance. Claude live acceptance remains separately pending.
+
+
+### Native final review — 2026-09-19
+
+Three review findings fixed: reject FIFO final output without blocking; normalize historical process start-time whitespace; continue registered-process cleanup when observation persistence fails while retaining the error. All three have RED→GREEN regression tests. Final offline suite: 45 files / 706 tests; typecheck and build pass. Affected mutation checks fail at behavior assertions and restore the clone to zero tracked/cached diff. Corrected acceptance harness has not been rerun against a live model; the original live result and separate offline audit above remain distinct.

@@ -97,7 +97,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest):Pr
   });
   if(result.reason==="completed") {
     try {
-      const file=await open(finalPath,constants.O_RDONLY|constants.O_NOFOLLOW);
+      const file=await open(finalPath,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
       try{
         const s=await file.stat();
         if(!s.isFile())throw new Error("final is not a regular file");
