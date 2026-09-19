@@ -7,6 +7,7 @@ import { isTerminalRunStatus } from "../state/stateMachine.js";
 import { atomicReplacePrivateFile, readPrivateFile } from "./paths.js";
 import { appendUsageObservation, readUsageEvents } from "./usage.js";
 import { canonicalJson, parseControlRequest, type StartEnvelopeV1 } from "./protocol.js";
+import { prepareContinuationContract } from "./materialize.js";
 import {
   buildHandoffPacket,
   persistHandoffCandidate,
@@ -100,7 +101,6 @@ export async function runControlWorker(argv: string[]): Promise<void> {
   try {
     const envelope = parseControlRequest("accept", await readJson(sourceDir, "envelope.json")) as StartEnvelopeV1;
     const config = parseCodexConfig(await readJson(sourceDir, "config.json"));
-    const adapter = new CodexAdapter(config);
     await initializeProcessRegistry(sourceDir);
     let cumulativeTokens = 0;
     const stopRequested = createStopRequestSignal();
@@ -141,7 +141,12 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       stopRequested.requested = true;
       phaseAbort.abort();
     });
-    await runLoop(envelope.work.contract, join(sourceDir, "run"), adapter, {
+    const runDir = join(sourceDir, "run");
+    const contract = envelope.inputCheckpoint === null
+      ? envelope.work.contract
+      : await prepareContinuationContract(envelope.work.contract, runDir, envelope.inputCheckpoint);
+    await runLoop(contract, runDir, () => new CodexAdapter(config), {
+      firstWorkspaceInput: envelope.inputCheckpoint ?? undefined,
       stopRequested,
       phaseSignal: phaseAbort.signal,
       onProcessRegistered: async (registration) => {

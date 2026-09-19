@@ -14,7 +14,7 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-export async function createAttemptWorkspace(repoPath: string, runDir: string, attempt: number): Promise<{ worktreePath: string }> {
+export async function createAttemptWorkspace(repoPath: string, runDir: string, attempt: number, startPoint?: string): Promise<{ worktreePath: string }> {
   const worktreePath = join(runDir, "worktrees", `attempt-${attempt}`);
   await mkdir(join(runDir, "worktrees"), { recursive: true });
 
@@ -22,7 +22,7 @@ export async function createAttemptWorkspace(repoPath: string, runDir: string, a
     throw new Error(`attempt workspace path already exists: ${worktreePath}`);
   }
 
-  await execFileAsync("git", ["worktree", "add", "--detach", worktreePath], { cwd: repoPath });
+  await execFileAsync("git", ["worktree", "add", "--detach", worktreePath, ...(startPoint === undefined ? [] : [startPoint])], { cwd: repoPath });
   return { worktreePath };
 }
 

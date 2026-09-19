@@ -45,6 +45,8 @@ import { isPartialExecutionResult } from "../runtime/types.js";
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { FailureFingerprint, LastTrustedBoundary, RunState, StopDecision } from "../state/types.js";
 import { cleanupAttemptWorkspace, createAttemptWorkspace, publishAttemptCommit } from "../workspace/worktreeManager.js";
+import { materializeFirstWorkspace } from "../control/materialize.js";
+import type { InputCheckpointV1 } from "../control/protocol.js";
 
 export type { AttemptContext } from "../runtime/types.js";
 
@@ -1050,7 +1052,7 @@ async function persistTerminalState(
 export async function runLoop(
   contract: LoopContract,
   runDir: string,
-  adapter: RuntimeAdapter,
+  adapter: RuntimeAdapter | (() => RuntimeAdapter),
   hooks?: RunControlHooks,
 ): Promise<RunState> {
   const state = transitionRunState(initialState(contract), "planning");
@@ -1136,6 +1138,7 @@ export function createStopRequestSignal(): StopRequestSignal {
 }
 
 export interface RunControlHooks {
+  firstWorkspaceInput?: InputCheckpointV1;
   stopRequested?: StopRequestSignal;
   phaseSignal?: AbortSignal;
   onPhaseSettled?: (observation: {
@@ -1164,13 +1167,14 @@ export type RunLoopFromStateOptions = RunControlHooks & {
 export async function runLoopFromState(
   contract: LoopContract,
   runDir: string,
-  adapter: RuntimeAdapter,
+  adapter: RuntimeAdapter | (() => RuntimeAdapter),
   initialLoopState: RunState,
   heartbeat: LeaseHeartbeat = INERT_LEASE_HEARTBEAT,
   leaseLoss: LeaseLossSignal = { lost: null },
   options?: RunLoopFromStateOptions,
 ): Promise<RunState> {
   let state = initialLoopState;
+  let activeAdapter: RuntimeAdapter | null = typeof adapter === "function" ? null : adapter;
   let activePhase: PhaseName | null = null;
   const settledPhases = new Set<string>();
   const settlePhase = async (
@@ -1266,7 +1270,9 @@ export async function runLoopFromState(
         // §8.1: adding a worktree mutates the repository, so the lease is re-checked here —
         // inside the retry loop, because the retry can be a long way from the first attempt.
         await heartbeat.assertHeld();
-        worktreePath = (await createAttemptWorkspace(contract.context.repoPath, runDir, attempt)).worktreePath;
+        worktreePath = (attempt === 1 && options?.firstWorkspaceInput
+          ? await materializeFirstWorkspace(contract.context.repoPath, runDir, attempt, options.firstWorkspaceInput)
+          : await createAttemptWorkspace(contract.context.repoPath, runDir, attempt)).worktreePath;
       } catch (error) {
         // §8.1: a refused lease is not a workspace-infrastructure failure and must consume
         // neither the infra retry nor the blocked_waiting_human escalation below. No worktree
@@ -1297,6 +1303,10 @@ export async function runLoopFromState(
       }
     }
 
+    // A continuation workspace is fully hash- and state-verified before an
+    // adapter can observe it or create an external agent process.
+    const attemptAdapter = activeAdapter ??= (adapter as () => RuntimeAdapter)();
+
     let plan: AttemptPlan | null = null;
     let execution: ExecutionResult | null = null;
     let verification: VerificationResult | null = null;
@@ -1310,7 +1320,7 @@ export async function runLoopFromState(
       await heartbeat.assertHeld();
       activePhase = "plan";
       const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal) =>
-        adapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options)),
+        attemptAdapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options)),
       );
 
       if (handoffAborted()) {
@@ -1371,7 +1381,7 @@ export async function runLoopFromState(
       activePhase = "execute";
       const executeOutcome = await runPhaseWithTimeout(
         executeTimeoutMs,
-        (abortSignal) => adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options)),
+        (abortSignal) => attemptAdapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options)),
         { awaitAbortedResult: true },
       );
 
@@ -1554,7 +1564,7 @@ export async function runLoopFromState(
       const verifyOutcome = await runPhaseWithTimeout(verifyTimeoutMs, (abortSignal) =>
         runVerification(
           contract,
-          adapter,
+          attemptAdapter,
           buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution, options),
           plan,
           completedExecution,
