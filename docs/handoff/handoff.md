@@ -345,3 +345,15 @@ Orca 消费 `refs/ccloop/<run-id>/attempts/<n>` 及契约／终态；改变 ref 
 分支整合、push、删除分支／worktree 由人另行操作；保留开发树、证据和未入库的 node_modules 软链，不绕闸门。
 按用户通知 Claude 额度须等 2026-09-22 09:00 Asia/Shanghai 后，届时仍需确认可用；Orca chain 真钱验收还须人提交 `.orca/chain.json` 选 model 并点头，先现测 F，再在副本设 T1 > F。
 开工与发布前各自运行 `rtk proxy /usr/bin/git ls-remote origin refs/heads/main`，与本地引用比较；不从本文或缓存 ahead 数推断发布状态。本次仅更新 handoff；本节前 ccloop 原生交接字节保持不变。
+
+## 2026-09-19 公共控制协议、handoff 与 D3 完成（task 01a0b8f9）
+
+本节取代上节“生产 ccloop 尚缺新协议／下一步先写协议”的状态判断。用户已批准的计划 `docs/superpowers/plans/2026-09-19-ccloop-control-handoff-d3.md` 八任务全部完成；勿从 Task 1 重做。ccloop 实现仍在 `/tmp/ccloop-codex-0919`、分支 `codex/codex-adapter-0919`，Orca 消费端仍在 `/Users/biran/.codex/worktrees/control-foundation-0919/Orca`、分支 `codex/control-foundation-0919`；两者都尚未整合各自主线。按本节后的实际 `git log/status` 和提交主题 `feat(control): verify cross-repo recovery protocol`、`test(control): verify real ccloop recovery protocol` 定位，不要求固定 HEAD。
+
+ccloop `control` v1 六个方法均已可用：严格 JSON/stdin 协议、先落盘 accepted 后启动、同 envelope 幂等与冲突拒绝、阶段末累计 usage、具名 handoff、两次全进程组静止探测、原始证据读取、候选与终态门控、完整恢复包物化。Codex 仍只声明 `phase-end + soft`，没有 strict token 封顶。新 continuation 使用新 runId，从 Orca 已提交的完整脏快照恢复；不是旧 `resumeLoop`，也不允许受控路径回退旧 runner。agent 参数、进程、停止和候选仍归 ccloop；Orca 负责独立归档、检查点提交、预算继承和 D3 投影。
+
+实际跨仓验收使用构建后的 `/tmp/ccloop-codex-0919/dist/cli.js` 和只指向 fake Codex 的私有配置，完成 accept/replay → 三阶段 usage → handoff/quiet proof → Orca archive/commit → 脏快照 bundle → 新 run materialization → collect。六个同步 SIGKILL 边界通过且不重复 agent、usage、checkpoint、continuation 或 Markdown。最终 ccloop：`verify:control` 24 文件/306 测试、全套 56/771、typecheck/build RC0；Orca：cross-repo 1/3、control 19/120、完整 verify 主套 148/1195 两次、scheduler 51/167、chain 13/213、panel PASS0–14、Web 9/34，均 RC0、正式日志无 skipped/todo。证据与精确哈希见 Orca 开发树 `.superpowers/sdd/2026-09-19-ccloop-control-handoff-d3/`，ccloop Task 8 原始日志在本开发树同名 SDD 目录。
+
+关键修复事实：Orca 轮询曾以会创建目录的 helper 提前造出空 `sourceDir/repo`，使 ccloop 无法物化真实结果仓库。现由 ccloop 在候选 durable 后才暴露 terminal，并生产精确 Git 结果仓库；Orca 只读校验；既存空目录按失败关闭。保留诊断根 `.../orca-real-ccloop-MyDo5O` 及 fixture 根 `/private/tmp/orca-ccloop-d3-task8`，勿清理。真实 `/Users/biran/.orca` 验收后仍不存在。
+
+下一切片改为 Web 可恢复控制，其后自动拆分与 ccmem 决策闭环；本轮没有实施这三项。一次 Codex 真钱三阶段功能成功、原 wrapper 已离线修复但未真钱重跑的事实不变。整合、push、删分支/worktree和证据清理由人操作。Claude 额度只能在 2026-09-22 09:00 Asia/Shanghai 后核实；Orca chain 活验仍须人选择 model 并明确点头。本轮没有真实模型调用。
