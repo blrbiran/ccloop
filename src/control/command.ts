@@ -9,6 +9,7 @@ import {
   type ControlMethodV1,
   type ControlRequestV1,
 } from "./protocol.js";
+import { acceptStart, inspectStart } from "./accept.js";
 
 export interface ControlCommandResult {
   code: number;
@@ -89,7 +90,10 @@ async function parseCommand(argv: string[]): Promise<{
   return { method, adapter: "codex", adapterConfigPath };
 }
 
-async function defaultHandler(request: ControlRequestV1): Promise<unknown> {
+async function defaultHandler(
+  request: ControlRequestV1,
+  context: { adapter: "codex"; adapterConfigPath: string },
+): Promise<unknown> {
   if (request.method === "capabilities") {
     return {
       protocol: 1,
@@ -100,6 +104,12 @@ async function defaultHandler(request: ControlRequestV1): Promise<unknown> {
       budgetEnforcement: "soft",
       requestBoundEvidence: null,
     };
+  }
+  if (request.method === "accept") {
+    return await acceptStart(request.input, context);
+  }
+  if (request.method === "inspect") {
+    return await inspectStart(request.input);
   }
   throw new ControlProtocolError("control-method-unavailable");
 }

@@ -181,10 +181,14 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-export function canonicalHash(value: unknown): string {
+export function canonicalJson(value: unknown): string {
   const encoded = JSON.stringify(canonicalize(value));
   if (encoded === undefined) throw new ControlProtocolError("control-request-invalid");
-  return createHash("sha256").update(encoded).digest("hex");
+  return encoded;
+}
+
+export function canonicalHash(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
 
 function isWithin(parent: string, child: string): boolean {

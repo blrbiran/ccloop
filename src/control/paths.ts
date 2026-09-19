@@ -29,6 +29,7 @@ async function canonicalRoot(root: string): Promise<string> {
     return canonical;
   } catch (error) {
     if (error instanceof Error && error.message === "control-path-invalid") throw error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw error;
     throw invalid();
   }
 }
@@ -74,7 +75,11 @@ export async function ensurePrivateDirectory(root: string, target: string): Prom
         if (error instanceof Error && error.message === "control-path-invalid") throw error;
         throw invalid();
       }
-      await mkdir(current, { mode: 0o700 });
+      try {
+        await mkdir(current, { mode: 0o700 });
+      } catch (mkdirError) {
+        if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError;
+      }
       const metadata = await lstat(current);
       if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw invalid();
     }
@@ -91,6 +96,7 @@ export async function readPrivateFile(root: string, target: string): Promise<Buf
     return await handle.readFile();
   } catch (error) {
     if (error instanceof Error && error.message === "control-path-invalid") throw error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw error;
     throw invalid();
   } finally {
     await handle?.close();
