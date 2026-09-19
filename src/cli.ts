@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { runControlCommand } from "./control/command.js";
 import { loadContract } from "./contract/loadContract.js";
 import { resumeLoop } from "./controller/resumeLoop.js";
 import { createStopRequestSignal, runLoop } from "./controller/runLoop.js";
@@ -263,6 +264,15 @@ export function registerStopHandlers(
 
 export async function main(argv: string[]): Promise<number> {
   try {
+    if (argv[0] === "control") {
+      let stdin = "";
+      for await (const chunk of process.stdin) stdin += String(chunk);
+      const result = await runControlCommand(argv.slice(1), stdin);
+      if (result.stdout !== "") process.stdout.write(result.stdout);
+      if (result.stderr !== "") process.stderr.write(result.stderr);
+      return result.code;
+    }
+
     const parsed = parseArgs(argv);
 
     // `ls` runs no loop and has no run outcome to report, so it never goes through the
