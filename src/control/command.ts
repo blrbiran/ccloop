@@ -10,6 +10,8 @@ import {
   type ControlRequestV1,
 } from "./protocol.js";
 import { acceptStart, inspectStart } from "./accept.js";
+import { collectExecution } from "./collect.js";
+import { MAX_CONTROL_BYTES, readEvidence } from "./evidence.js";
 
 export interface ControlCommandResult {
   code: number;
@@ -54,6 +56,31 @@ const handoffAckSchema = z.discriminatedUnion("kind", [
 const evidenceSchema = z
   .object({ artifactId: z.string().min(1), hash: z.string().regex(/^[a-f0-9]{64}$/), base64: z.string() })
   .strict();
+const safeInteger = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const amountSchema = z.object({ tokens: safeInteger, activeMs: safeInteger, attempts: safeInteger, sessions: safeInteger }).strict();
+const usageEventSchema = z.object({
+  runId: z.string().min(1),
+  generation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  eventSeq: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  bucket: z.enum(["work", "handoff"]),
+  cumulative: amountSchema.nullable(),
+  source: artifactRefSchema,
+}).strict();
+const terminalSchema = z.object({
+  status: z.enum(["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"]),
+  currentAttempt: safeInteger,
+  attemptsUsed: safeInteger,
+  lastTransitionAt: z.string(),
+  waitingOnHuman: z.boolean(),
+  stopReason: z.string().nullable(),
+  budgetSnapshot: z.object({ attemptsRemaining: safeInteger, timeRemainingMs: safeInteger, tokenBudgetRemaining: safeInteger }).strict(),
+  recentFailures: z.array(z.object({ rejectCategory: z.string(), primaryTargetPaths: z.array(z.string()), failingCommand: z.string().nullable() }).strict()),
+}).strict();
+const collectionSchema = z.object({
+  events: z.array(usageEventSchema),
+  candidate: z.null(),
+  terminal: terminalSchema.nullable(),
+}).strict();
 
 const METHODS = new Set<ControlMethodV1>([
   "capabilities",
@@ -111,6 +138,13 @@ async function defaultHandler(
   if (request.method === "inspect") {
     return await inspectStart(request.input);
   }
+  if (request.method === "collect") {
+    return await collectExecution(request.input, request.afterSeq);
+  }
+  if (request.method === "read-evidence") {
+    const bytes = await readEvidence(request.input.work.sourceDir, request.ref);
+    return { ...request.ref, base64: bytes.toString("base64") };
+  }
   throw new ControlProtocolError("control-method-unavailable");
 }
 
@@ -119,6 +153,7 @@ function validateResponse(method: ControlMethodV1, value: unknown): unknown {
     if (method === "capabilities") return capabilitiesSchema.parse(value);
     if (method === "accept" || method === "inspect") return executionStatusSchema.parse(value);
     if (method === "handoff") return handoffAckSchema.parse(value);
+    if (method === "collect") return collectionSchema.parse(value);
     if (method === "read-evidence") return evidenceSchema.parse(value);
     return value;
   } catch {
@@ -146,7 +181,11 @@ export async function runControlCommand(
       adapterConfigPath: command.adapterConfigPath,
     });
     const validated = validateResponse(command.method, value);
-    return { code: 0, stdout: `${JSON.stringify(validated)}\n`, stderr: "" };
+    const stdout = `${JSON.stringify(validated)}\n`;
+    if (Buffer.byteLength(stdout) > MAX_CONTROL_BYTES) {
+      throw new ControlProtocolError("control-response-too-large");
+    }
+    return { code: 0, stdout, stderr: "" };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {

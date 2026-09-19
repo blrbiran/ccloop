@@ -104,6 +104,11 @@ export async function acceptStart(
       join(controlDir, "config.json"),
       Buffer.from(`${canonicalJson(config)}\n`),
     );
+    await atomicReplacePrivateFile(
+      input.work.sourceDir,
+      join(controlDir, "envelope.json"),
+      Buffer.from(`${canonicalJson(input)}\n`),
+    );
     await writeAccepted(input.work.sourceDir, proposed);
     return { created: true as const, record: proposed };
   });
@@ -113,7 +118,7 @@ export async function acceptStart(
   }
   const record = prepared.record;
 
-  const defaultWorker = [process.execPath, fileURLToPath(new URL("./workerLauncher.js", import.meta.url))];
+  const defaultWorker = [process.execPath, fileURLToPath(new URL("./worker.js", import.meta.url))];
   const launchDeps: WorkerLaunchDeps = {
     sourceDir: input.work.sourceDir,
     workerCommand: adapterBinding.workerCommand ?? defaultWorker,

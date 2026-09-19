@@ -89,7 +89,9 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest):Pr
         try {
           const {stdout}=await execFileAsync("ps",["-o","lstart=","-p",String(child.pid)],{env:{...process.env,TZ:"UTC",LC_ALL:"C"},timeout:1000});
           if(!stdout.trim())throw new Error("process identity unavailable");
-          await save("process.json",JSON.stringify({pid:child.pid,pgid:child.pid,startedAt:stdout.trim()},null,2));
+          const registration={pid:child.pid!,pgid:child.pid!,startedAt:stdout.trim(),phase};
+          await save("process.json",JSON.stringify(registration,null,2));
+          await context.onProcessRegistered?.(registration);
           if(!done&&result.reason==="completed")child.stdin.end(request.prompt);
         } catch(e) {ioError=String(e);stop("io-error");}
       })();
