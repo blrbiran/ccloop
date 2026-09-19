@@ -87,7 +87,7 @@ export type SweepDeps = {
 
 export type SweepOptions = {
   root: string;
-  adapterName: "scripted" | "claude";
+  adapterName: "scripted" | "claude" | "codex";
   // §8: a CLOSURE, not an already-constructed adapter. §8's first line requires that a failure
   // READING the adapter config exits 1 without scanning, while §8/§12 require the banner to be
   // printed after the scan and before the adapter is constructed. The only shape satisfying both
