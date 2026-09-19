@@ -19,7 +19,13 @@ process.stdin.on("end",()=>{
   let body={summary:"fixture",primaryTargetPaths:["answer.txt"]};
   if(schema.anyOf) body={changedFiles:["answer.txt"],diffPatch:"fixture patch",commandOutputs:["changed answer"],stdoutStderrLog:"fixture execution"};
   if(schema.properties?.approved) body={approved:true,rejectCategory:"",primaryTargetPaths:["answer.txt"],failingCommand:null,safeToRetry:false,evidence:[],pauseSignals:[],stopSignals:[]};
+  const phase=schema.anyOf?"execute":schema.properties?.approved?"verify":"plan";
+  appendFileSync(marker+".calls",phase+"\n");
+  if(phase==="execute" && ["integration","write-hang","no-usage"].includes(mode)) writeFileSync("answer.txt","42\n");
+  if(phase==="execute" && mode==="write-hang") {setInterval(()=>{},1000);return;}
+  if(phase==="execute" && mode==="partial") Object.assign(body,{completionStatus:"partial",failureType:"error",failureMessage:"fixture partial"});
   if(mode!=="missing-final") writeFileSync(value("-o"),JSON.stringify(body));
+  if(phase==="execute" && mode==="no-usage") return;
   const events=JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"中文"}})+"\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:12,output_tokens:3}})+"\n";
   if(mode==="child-holds-pipe") {
     const child=spawn(process.execPath,["-e",'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'],{stdio:["ignore","inherit","inherit"]});
