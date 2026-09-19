@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
@@ -15,7 +16,7 @@ export class CodexAdapter implements RuntimeAdapter {
       throw new Error(`codex-${outcome.reason}: ${outcome.evidenceDir}`);
     }
     try {
-      const result = decodeCodexResult(phase, outcome.events, outcome.final);
+      const result = decodeCodexResult(phase, outcome.events, phase === "execute" ? JSON.stringify(z.object({result:z.unknown()}).strict().parse(JSON.parse(outcome.final)).result) : outcome.final);
       await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(result.usageEvidence, null, 2), { mode: 0o600 });
       return result;
     } catch (error) {
@@ -26,7 +27,7 @@ export class CodexAdapter implements RuntimeAdapter {
 
   plan(context: AttemptContext) { return this.phase("plan", buildPlannerPrompt(context.contract), context); }
   async execute(context: AttemptContext) {
-    try { return await this.phase("execute", buildExecutorPrompt(context), context); }
+    try { return await this.phase("execute", buildExecutorPrompt(context) + "\nWrap the complete or partial result in a single object with the sole key result, as required by the output schema.", context); }
     catch (error) { if (context.abortSignal?.aborted) return null; throw error; }
   }
   verify(context: AttemptContext) { return this.phase("verify", buildVerifierPrompt(context), context); }

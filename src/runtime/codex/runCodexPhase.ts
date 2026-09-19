@@ -36,7 +36,9 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest):Pr
   if(context.abortSignal?.aborted){result.reason="aborted";return persist();}
   const timeout=Math.min(config.timeoutMs,context.state.budgetSnapshot.timeRemainingMs);
   if(timeout<=0){result.reason="timeout";return persist();}
-  await save("schema.json",JSON.stringify(phaseJsonSchema(phase)));
+  const businessSchema=phaseJsonSchema(phase);
+  const wireSchema=phase==="execute"?{type:"object",properties:{result:businessSchema},required:["result"],additionalProperties:false}:businessSchema;
+  await save("schema.json",JSON.stringify(wireSchema));
   // Pre-create files with private permissions before handing paths to the CLI.
   await save("final.json","");await save("events.jsonl","");await save("stderr.log","");logsCreated=true;
   await new Promise<void>(resolve=>{

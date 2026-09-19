@@ -48,3 +48,46 @@ does not resume a Codex native session or implement the future per-task handoff
 protocol. This slice also does not implement Orca's Web UI, task groups, or group
 budget ledger. Claude remains the first long-term adapter priority; its live test
 is deferred until separate human approval after quota is available.
+
+
+## Isolated acceptance — 2026-09-19
+
+`node scripts/validate-codex-adapter.mjs --codex <absolute-bin> --model <name> --output <new-dir>`
+creates a fresh repository without remotes. It allows one attempt, 120 seconds per
+phase, 360 seconds total, and a 420 second outer watchdog. Its 100,000-token
+budget is soft. Existing output directories are refused; there are no retries.
+The outer watchdog records process identities and cleans registered detached
+Codex groups before the controller group.
+
+Structured Outputs disallows a root `anyOf`; execute therefore uses the wire
+shape `{"result": <complete-or-partial-result>}`. The adapter validates this
+strict wrapper and the business result separately. The original phase schema
+and controller result types remain unchanged.
+
+One real run used codex-cli 0.155.1 and the user's configured `gpt-6-astra`.
+Evidence is retained at `/tmp/ccloop-codex-live-20260919-01`.
+All three processes exited 0; ccloop status was `succeeded`; the published Git
+answer is bytes `34 32 0a`; watchdog unresolved list is empty.
+
+| Phase | Input | Output | Total |
+| --- | ---: | ---: | ---: |
+| plan | 20,528 | 77 | 20,605 |
+| execute | 42,893 | 329 | 43,222 |
+| verify | 63,999 | 400 | 64,399 |
+
+Total reported usage: 128,226 tokens; soft-budget overrun: 28,226. Dollar cost:
+unknown. The first-phase observation F is 20,605 for this configuration/run;
+it is not a universal per-call estimate or an Orca strict-cap measurement.
+
+The original harness returned 1 because it incorrectly compared the controller's
+zero-clamped remaining budget with a negative number. That evidence is preserved
+in `summary.json`. A new offline regression reproduced the defect and the harness
+now compares against `max(0, budget - usage)` while reporting the full overrun.
+`offline-audit.json` independently checks the retained raw usage and Git artifact.
+No second model run was made; this is a functional live result with a corrected
+offline accounting audit, not a fresh live run of the corrected harness.
+
+The inherited CLI configuration emitted warnings about skill-description
+truncation, an unknown feature key, plugin icon paths and Figma MCP authorization.
+These did not stop the three phases. No configuration, hooks, or trust rules were
+disabled for acceptance. Claude live acceptance remains separately pending.
