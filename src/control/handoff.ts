@@ -13,6 +13,7 @@ import {
   type HandoffRequestV1,
   type StartEnvelopeV1,
 } from "./protocol.js";
+import { testCrashPoint } from "./testCrashPoint.js";
 import { writeEvidence } from "./evidence.js";
 import { readAcceptedOptional } from "./store.js";
 
@@ -145,7 +146,7 @@ export async function requestHandoff(
   if (accepted.envelopeHash !== canonicalHash(envelope)) {
     throw new ControlProtocolError("control-envelope-conflict");
   }
-  return await withHandoffLock(envelope.work.sourceDir, async () => {
+  const ack: HandoffAckV1 = await withHandoffLock(envelope.work.sourceDir, async () => {
     const existing = await readHandoffRequestOptional(envelope.work.sourceDir);
     if (existing !== null) {
       if (canonicalHash(existing) !== canonicalHash(request)) {
@@ -163,6 +164,8 @@ export async function requestHandoff(
     );
     return { kind: "latched", requestId: request.requestId };
   });
+  await testCrashPoint("handoff-fsynced");
+  return ack;
 }
 
 function identity(envelope: StartEnvelopeV1): HandoffIdentityV1 {
@@ -314,6 +317,7 @@ export async function persistHandoffCandidate(
     candidatePath(envelope.work.sourceDir),
     Buffer.from(`${canonicalJson(candidate)}\n`),
   );
+  await testCrashPoint("candidate-fsynced");
   return candidate;
 }
 

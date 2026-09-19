@@ -18,6 +18,8 @@ import {
   sealAcceptedWorker,
 } from "./store.js";
 import { readProcessStartedAt } from "./workerLauncher.js";
+import { testCrashPoint } from "./testCrashPoint.js";
+import { materializeResultRepository } from "./resultRepository.js";
 
 interface ManagedProcessV1 {
   pid: number;
@@ -96,6 +98,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
     startedAt,
   });
   if (!claimed) throw new Error("control-worker-claim-lost");
+  await testCrashPoint("worker-claimed");
 
   let sealed = false;
   try {
@@ -186,6 +189,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
         if (request === null && !isTerminalRunStatus(runState.status)) {
           throw new Error("control-handoff-request-required");
         }
+        await materializeResultRepository(envelope, runDir, runState.currentAttempt);
         const existingEvents = await readUsageEvents(sourceDir);
         const predictedHighWater = (existingEvents.at(-1)?.eventSeq ?? 0) + 1;
         const result = deadlineInterrupted

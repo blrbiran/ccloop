@@ -41,7 +41,7 @@ export async function collectExecution(input: StartEnvelopeV1, afterSeq: number)
   return {
     events,
     candidate: storedCandidate === null ? null : { ...storedCandidate, stopProof: proof },
-    terminal: await readTerminal(input.work.sourceDir),
+    terminal: storedCandidate === null ? null : await readTerminal(input.work.sourceDir),
   };
 }
 

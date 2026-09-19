@@ -20,6 +20,7 @@ import {
   writeAccepted,
   type AcceptedRecordV1,
 } from "./store.js";
+import { testCrashPoint } from "./testCrashPoint.js";
 
 export type ExecutionStatusV1 =
   | { kind: "absent" }
@@ -126,6 +127,7 @@ export async function acceptStart(
     return await status(prepared.record);
   }
   const record = prepared.record;
+  await testCrashPoint("accepted-fsynced");
 
   const defaultWorker = [process.execPath, fileURLToPath(new URL("./worker.js", import.meta.url))];
   const launchDeps: WorkerLaunchDeps = {

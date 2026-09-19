@@ -121,6 +121,7 @@ export async function proveStopped(record: StopProofRecord, deps: StopProofDeps 
   const evidence = {
     executionId: record.accepted.executionId,
     generation: record.accepted.generation,
+    isolated: true,
     probedAt: new Date().toISOString(),
     graceMs: deps.graceMs ?? 100,
     registered: second.map(({ pid, pgid, startedAt, phase }) => ({ pid, pgid, startedAt, phase })),
