@@ -311,7 +311,7 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（单节滚动更新，2026-09-20）
+# 📌 Orca 那条线（单节滚动更新，2026-09-21）
 
 本节按用户要求整节收敛，不再追加 Orca 子会话日志；历版由 `git log -- docs/handoff/handoff.md` 取回。
 状态同步至 Codex task `01a0b8f9-cbae-7f82-a20b-2c43251d5492`。提交定位用主题行、分支和开发树，不把 handoff 提交前后的 HEAD、ahead 数或历史 SHA 当作当前版本要求。
@@ -335,10 +335,10 @@ Codex 适配审查的 45 文件／706 测试、typecheck/build RC0 和三项 Imp
 ## 下游契约与下一步
 
 Orca 通过显式子进程 port 控制 ccloop；具体 adapter、agent 事件、进程、停止和候选留在 ccloop，受控路径禁止回退旧 runner。Orca 独立归档并重读证据、提交 checkpoint、按 predecessor grant 减累计用量领取新 run，并从已提交 JSON 确定性投影 task/group D3。新 continuation 使用新 runId 和完整恢复包；改变 `refs/ccloop/<run-id>/attempts/<n>`、结果仓库或协议字段必须同步核对 Orca consumer。
-架构真相源仍是 Orca `docs/superpowers/specs/2026-09-19-task-control-design.md` §13。控制底座八任务、Codex 五任务、公共协议／handoff／D3 八任务均完成，勿重复实施。Orca Web Task 1–6 已合入并提交在其本地 `main`；Task 6 原审查的 4 个 Important 与 1 个 Minor，以及复审追加发现的 schema-valid 非规范 lone surrogate／`-0` 输出问题，均已完成 RED→GREEN 修复。最终独立复审为 Approved，无 Critical/Important/Minor 遗留；最终全套为主套 163 文件／1384 测试、control 32／287（真实 ccloop 3／3）、scheduler 51／167、chain 13／213、chain 环境主套 163／1384、Web build、panel PASS0–14、Web 9／34，RC0。下一位直接从 Web 计划 Task 7 的 durable start、proof recovery 与 context-watermark control 接手，再依次自动拆分、ccmem 纠正闭环／组 goal 验收；Web > CLI。
+架构真相源仍是 Orca `docs/superpowers/specs/2026-09-19-task-control-design.md` §13。控制底座八任务、Codex 五任务、公共协议／handoff／D3 八任务均完成，勿重复实施。Orca Web 可恢复控制计划的 **Task 1–8 已提交在其本地 `main`**，按主题定位：Task 7 是 `feat(control): dispatch recoverable web runs`，Task 8 是 `feat(control): orchestrate recoverable web stops`（前一节的审查修复仍见 `fix(control): close Task 6 settlement review gaps`、`fix(control): reject noncanonical validated estimates`）。Task 8 给下游的新契约是：handoff-stop 与 panel shutdown 都靠 `control handoff` ＋ `control inspect` 把冻结集合收口（pause 只挡新 claim，不触碰已接受 run），`beginHandoffAttempt` 每次现探测能力并把 proof 身份钉在 attempt ordinal 上，`failed-before-provider` 的 re-arm 复用同一 continuation intent 身份只推进 ordinal；改这些字段或 `collect`／`read-evidence` 语义要同步核对 Orca consumer。Orca 最终全套现测为 167 文件通过／1 跳过、1484 passed／3 skipped，typecheck 干净（本轮验证未走 rtk proxy，原因见 Orca handoff 同日期一节）。下一位从 Web 计划 Task 9（薄 Web 客户端）接手，再 Task 10 验收，再依次自动拆分、ccmem 纠正闭环／组 goal 验收；Web > CLI。
 
 ## awaitingHuman 与边界
 
-分支整合已按用户授权在本地完成，未 push、未删除分支/worktree；保留开发树、证据和未入库的 node_modules 软链，不绕闸门。Task 6 复现与实现报告位于 Orca 开发树 `.superpowers/sdd/2026-09-20-web-recoverable-control/`，作为历史证据保留；下一位从 Orca `docs/superpowers/plans/2026-09-20-web-recoverable-control.md` Task 7 开始。
+分支整合已按用户授权在本地完成，未 push、未删除分支/worktree；保留开发树、证据和未入库的 node_modules 软链，不绕闸门。Orca Web 计划各任务的复现与实现报告都在 Orca 开发树 `.superpowers/sdd/2026-09-20-web-recoverable-control/`（该目录 gitignored，main 树没有），作为历史证据保留、一字不改；下一位从 Orca `docs/superpowers/plans/2026-09-20-web-recoverable-control.md` Task 9 开始，Task 7–8 勿重做。
 按用户通知 Claude 额度须等 2026-09-22 09:00 Asia/Shanghai 后，届时仍需确认可用；Orca chain 真钱验收还须人提交 `.orca/chain.json` 选 model 并点头，先现测 F，再在副本设 T1 > F。
 开工先现查三仓 status/worktree/remote，不从本文或缓存 ahead 数推断发布状态；真实 `/Users/biran/.orca` 在最终离线验收后仍不存在。保留诊断根 `.../orca-real-ccloop-MyDo5O`、fixture `/private/tmp/orca-ccloop-d3-task8`、两开发树、node_modules 和全部证据。整合、push、删除分支/worktree与证据清理由人操作。Claude 额度须在 2026-09-22 09:00 Asia/Shanghai 后重新核实；Orca chain 真钱验收仍须人选 model 并明确点头。本次只收敛这一 Orca 滚动节，没有新增第二节。
