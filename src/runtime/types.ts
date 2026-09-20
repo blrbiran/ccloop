@@ -10,6 +10,12 @@ export type AttemptContext = {
   abortSignal?: AbortSignal;
   plan?: AttemptPlan;
   execution?: ExecutionResult;
+  onProcessRegistered?: (process: {
+    pid: number;
+    pgid: number;
+    startedAt: string;
+    phase: string;
+  }) => Promise<void>;
 };
 
 export type UsageFieldEvidence = {

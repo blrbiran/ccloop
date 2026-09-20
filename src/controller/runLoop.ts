@@ -38,12 +38,15 @@ import type {
   ReconciliationDraft,
   ReconciliationRecord,
   RuntimeAdapter,
+  UsageEvidence,
   VerificationResult,
 } from "../runtime/types.js";
 import { isPartialExecutionResult } from "../runtime/types.js";
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { FailureFingerprint, LastTrustedBoundary, RunState, StopDecision } from "../state/types.js";
 import { cleanupAttemptWorkspace, createAttemptWorkspace, publishAttemptCommit } from "../workspace/worktreeManager.js";
+import { materializeFirstWorkspace } from "../control/materialize.js";
+import type { InputCheckpointV1 } from "../control/protocol.js";
 
 export type { AttemptContext } from "../runtime/types.js";
 
@@ -311,14 +314,22 @@ function buildAttemptContext(
   abortSignal?: AbortSignal,
   plan?: AttemptPlan | null,
   execution?: ExecutionResult | null,
+  hooks?: Pick<RunControlHooks, "phaseSignal" | "onProcessRegistered">,
 ): AttemptContext {
+  const combinedSignal =
+    abortSignal === undefined
+      ? hooks?.phaseSignal
+      : hooks?.phaseSignal === undefined
+        ? abortSignal
+        : AbortSignal.any([abortSignal, hooks.phaseSignal]);
   return {
     contract,
     state,
     runDir,
     attempt,
     worktreePath,
-    abortSignal,
+    abortSignal: combinedSignal,
+    onProcessRegistered: hooks?.onProcessRegistered,
     ...(plan === undefined || plan === null ? {} : { plan }),
     ...(execution === undefined || execution === null ? {} : { execution }),
   };
@@ -1038,7 +1049,12 @@ async function persistTerminalState(
   return terminalState;
 }
 
-export async function runLoop(contract: LoopContract, runDir: string, adapter: RuntimeAdapter): Promise<RunState> {
+export async function runLoop(
+  contract: LoopContract,
+  runDir: string,
+  adapter: RuntimeAdapter | (() => RuntimeAdapter),
+  hooks?: RunControlHooks,
+): Promise<RunState> {
   const state = transitionRunState(initialState(contract), "planning");
   const ownerRecord = buildInitialOwnerRecord(contract, state);
   await initializeRunFiles(runDir, contract, state);
@@ -1081,7 +1097,9 @@ export async function runLoop(contract: LoopContract, runDir: string, adapter: R
   });
 
   try {
-    return await runLoopFromState(contract, runDir, adapter, state, heartbeat, leaseLoss);
+    const result = await runLoopFromState(contract, runDir, adapter, state, heartbeat, leaseLoss, hooks);
+    await hooks?.onRunSettledBeforeLeaseRelease?.(result);
+    return result;
   } finally {
     // §6.0: every exit path — normal completion, stop-boundary exit, and any throw.
     await heartbeat.stop();
@@ -1119,24 +1137,72 @@ export function createStopRequestSignal(): StopRequestSignal {
   return { requested: false };
 }
 
+export interface RunControlHooks {
+  firstWorkspaceInput?: InputCheckpointV1;
+  stopRequested?: StopRequestSignal;
+  phaseSignal?: AbortSignal;
+  onPhaseSettled?: (observation: {
+    phase: "plan" | "execute" | "verify";
+    attempt: number;
+    elapsedMs: number;
+    tokenUsage: number | null;
+    usageEvidence: UsageEvidence | undefined;
+  }) => Promise<void>;
+  onProcessRegistered?: (process: {
+    pid: number;
+    pgid: number;
+    startedAt: string;
+    phase: string;
+  }) => Promise<void>;
+  onRunSettledBeforeLeaseRelease?: (state: RunState) => Promise<void>;
+}
+
 // A8 §4.3/§5.4: the seventh parameter is an OBJECT, not a scalar, so later layers (B2, C1) add
 // KEYS here rather than further positional parameters. The parameter count stops growing at
 // seven.
-export type RunLoopFromStateOptions = {
+export type RunLoopFromStateOptions = RunControlHooks & {
   onReconciliationWriteAbandoned?: (detail: string) => void;
-  stopRequested?: StopRequestSignal;
 };
 
 export async function runLoopFromState(
   contract: LoopContract,
   runDir: string,
-  adapter: RuntimeAdapter,
+  adapter: RuntimeAdapter | (() => RuntimeAdapter),
   initialLoopState: RunState,
   heartbeat: LeaseHeartbeat = INERT_LEASE_HEARTBEAT,
   leaseLoss: LeaseLossSignal = { lost: null },
   options?: RunLoopFromStateOptions,
 ): Promise<RunState> {
   let state = initialLoopState;
+  let activeAdapter: RuntimeAdapter | null = typeof adapter === "function" ? null : adapter;
+  let activePhase: PhaseName | null = null;
+  const settledPhases = new Set<string>();
+  const settlePhase = async (
+    phase: PhaseName,
+    attempt: number,
+    elapsedMs: number,
+    result?: { tokenUsage?: number; usageEvidence?: UsageEvidence } | null,
+  ): Promise<void> => {
+    const key = `${attempt}:${phase}`;
+    if (settledPhases.has(key)) return;
+    state = applyPhaseUsage(state, elapsedMs, result?.tokenUsage);
+    settledPhases.add(key);
+    if (activePhase === phase) activePhase = null;
+    await options?.onPhaseSettled?.({
+      phase,
+      attempt,
+      elapsedMs,
+      tokenUsage: result?.tokenUsage ?? null,
+      usageEvidence: result?.usageEvidence,
+    });
+  };
+  const persistHandoffBoundary = async (type: "handoff_boundary" | "handoff_interrupted", detail: string): Promise<RunState> => {
+    await appendEvent(runDir, { type, at: new Date().toISOString(), detail });
+    await writeOwnedRunState(runDir, state);
+    return state;
+  };
+  const handoffRequested = (): boolean => options?.stopRequested?.requested === true;
+  const handoffAborted = (): boolean => options?.phaseSignal?.aborted === true;
 
   // Package 2 / debt 2, review round 1: created per invocation, so the abandonment-event latch is
   // scoped to this run of the loop rather than to the process. Every loop-state.json write below
@@ -1204,7 +1270,9 @@ export async function runLoopFromState(
         // §8.1: adding a worktree mutates the repository, so the lease is re-checked here —
         // inside the retry loop, because the retry can be a long way from the first attempt.
         await heartbeat.assertHeld();
-        worktreePath = (await createAttemptWorkspace(contract.context.repoPath, runDir, attempt)).worktreePath;
+        worktreePath = (attempt === 1 && options?.firstWorkspaceInput
+          ? await materializeFirstWorkspace(contract.context.repoPath, runDir, attempt, options.firstWorkspaceInput)
+          : await createAttemptWorkspace(contract.context.repoPath, runDir, attempt)).worktreePath;
       } catch (error) {
         // §8.1: a refused lease is not a workspace-infrastructure failure and must consume
         // neither the infra retry nor the blocked_waiting_human escalation below. No worktree
@@ -1235,6 +1303,10 @@ export async function runLoopFromState(
       }
     }
 
+    // A continuation workspace is fully hash- and state-verified before an
+    // adapter can observe it or create an external agent process.
+    const attemptAdapter = activeAdapter ??= (adapter as () => RuntimeAdapter)();
+
     let plan: AttemptPlan | null = null;
     let execution: ExecutionResult | null = null;
     let verification: VerificationResult | null = null;
@@ -1246,12 +1318,18 @@ export async function runLoopFromState(
       const planTimeoutMs = getPhaseTimeoutMs(contract, state);
       // §8.1: launching a Claude call is a side effect.
       await heartbeat.assertHeld();
+      activePhase = "plan";
       const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal) =>
-        adapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal)),
+        attemptAdapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options)),
       );
 
+      if (handoffAborted()) {
+        await settlePhase("plan", attempt, planOutcome.elapsedMs, planOutcome.result);
+        return await persistHandoffBoundary("handoff_interrupted", `handoff deadline interrupted plan in attempt ${attempt}`);
+      }
+
       if (planOutcome.timedOut) {
-        state = applyPhaseUsage(state, planOutcome.elapsedMs, undefined);
+        await settlePhase("plan", attempt, planOutcome.elapsedMs);
         state = await persistTerminalState(
           runDir,
           writeOwnedRunState,
@@ -1272,7 +1350,12 @@ export async function runLoopFromState(
       }
 
       plan = planOutcome.result;
-      state = applyPhaseUsage(state, planOutcome.elapsedMs, plan.tokenUsage);
+      await settlePhase("plan", attempt, planOutcome.elapsedMs, plan);
+
+      if (handoffRequested()) {
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+        return await persistHandoffBoundary("handoff_boundary", `handoff requested after plan in attempt ${attempt}`);
+      }
 
       if (hasBudgetExceeded(state)) {
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
@@ -1295,16 +1378,24 @@ export async function runLoopFromState(
       const executeTimeoutMs = getPhaseTimeoutMs(contract, state);
       // §8.1: launching a Claude call is a side effect.
       await heartbeat.assertHeld();
+      activePhase = "execute";
       const executeOutcome = await runPhaseWithTimeout(
         executeTimeoutMs,
-        (abortSignal) => adapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan)),
+        (abortSignal) => attemptAdapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options)),
         { awaitAbortedResult: true },
       );
+
+      if (handoffAborted()) {
+        execution = executeOutcome.result ?? null;
+        await settlePhase("execute", attempt, executeOutcome.elapsedMs, execution);
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+        return await persistHandoffBoundary("handoff_interrupted", `handoff deadline interrupted execute in attempt ${attempt}`);
+      }
 
       let executeUsageAlreadyApplied = false;
 
       if (executeOutcome.timedOut) {
-        state = applyPhaseUsage(state, executeOutcome.elapsedMs, executeOutcome.result?.tokenUsage);
+        await settlePhase("execute", attempt, executeOutcome.elapsedMs, executeOutcome.result);
         executeUsageAlreadyApplied = true;
         execution = executeOutcome.result ?? null;
 
@@ -1382,7 +1473,12 @@ export async function runLoopFromState(
       const completedExecution = execution;
 
       if (!executeUsageAlreadyApplied) {
-        state = applyPhaseUsage(state, executeOutcome.elapsedMs, completedExecution.tokenUsage);
+        await settlePhase("execute", attempt, executeOutcome.elapsedMs, completedExecution);
+      }
+
+      if (handoffRequested()) {
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
+        return await persistHandoffBoundary("handoff_boundary", `handoff requested after execute in attempt ${attempt}`);
       }
 
       if (isPartialExecutionResult(completedExecution)) {
@@ -1464,18 +1560,25 @@ export async function runLoopFromState(
       // §8.1: launching a Claude call is a side effect. runVerification also shells out to the
       // contract's required checks inside the attempt worktree, which is one too.
       await heartbeat.assertHeld();
+      activePhase = "verify";
       const verifyOutcome = await runPhaseWithTimeout(verifyTimeoutMs, (abortSignal) =>
         runVerification(
           contract,
-          adapter,
-          buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution),
+          attemptAdapter,
+          buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution, options),
           plan,
           completedExecution,
         ),
       );
 
+      if (handoffAborted()) {
+        await settlePhase("verify", attempt, verifyOutcome.elapsedMs, verifyOutcome.result);
+        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
+        return await persistHandoffBoundary("handoff_interrupted", `handoff deadline interrupted verify in attempt ${attempt}`);
+      }
+
       if (verifyOutcome.timedOut) {
-        state = applyPhaseUsage(state, verifyOutcome.elapsedMs, undefined);
+        await settlePhase("verify", attempt, verifyOutcome.elapsedMs);
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
         state = await persistTerminalState(
           runDir,
@@ -1495,12 +1598,16 @@ export async function runLoopFromState(
       }
 
       verification = verifyOutcome.result;
-      state = applyPhaseUsage(state, verifyOutcome.elapsedMs, verification.tokenUsage);
+      await settlePhase("verify", attempt, verifyOutcome.elapsedMs, verification);
       // Captured because the guard's closure widens the `verification` let back to `| null`.
       const completedVerification = verification;
       await guardedWriteArtifacts(() =>
         writeCompletedAttemptArtifacts(runDir, attempt, plan, execution, completedVerification),
       );
+
+      if (handoffRequested()) {
+        return await persistHandoffBoundary("handoff_boundary", `handoff requested after verify in attempt ${attempt}`);
+      }
 
       const humanGateHit =
         pathPolicy.humanGateHit ||
@@ -1666,7 +1773,17 @@ export async function runLoopFromState(
       const failureReason = error instanceof PhaseExecutionError ? error.message : String(error);
 
       if (error instanceof PhaseExecutionError) {
-        state = applyPhaseUsage(state, error.elapsedMs, undefined);
+        const failedPhase = activePhase;
+        if (activePhase !== null) await settlePhase(activePhase, attempt, error.elapsedMs);
+
+        if (handoffAborted() || handoffRequested()) {
+          await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+          const interrupted = handoffAborted();
+          return await persistHandoffBoundary(
+            interrupted ? "handoff_interrupted" : "handoff_boundary",
+            `${interrupted ? "handoff deadline interrupted" : "handoff requested during"} ${failedPhase ?? "phase"} in attempt ${attempt}`,
+          );
+        }
 
         if (execution !== null && isPartialExecutionResult(execution)) {
           await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);

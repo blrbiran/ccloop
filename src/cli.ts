@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { runControlCommand } from "./control/command.js";
 import { loadContract } from "./contract/loadContract.js";
 import { resumeLoop } from "./controller/resumeLoop.js";
 import { createStopRequestSignal, runLoop } from "./controller/runLoop.js";
@@ -8,6 +9,7 @@ import type { StopRequestSignal } from "./controller/runLoop.js";
 import { renderScanTable, scanRootFailureDetail, toScanResult } from "./registry/renderRuns.js";
 import { defaultScanDeps, scanRuns } from "./registry/scanRuns.js";
 import { SubprocessClaudeAdapter } from "./runtime/claude/subprocessClaudeAdapter.js";
+import { CodexAdapter } from "./runtime/codex/codexAdapter.js";
 import { ScriptedAdapter } from "./runtime/scriptedAdapter.js";
 import type { RuntimeAdapter } from "./runtime/types.js";
 import { sweepRuns } from "./sweep/sweepRuns.js";
@@ -18,19 +20,19 @@ export type ParsedArgs =
       command: "run";
       contractPath: string;
       runDir: string;
-      adapter: "scripted" | "claude";
+      adapter: "scripted" | "claude" | "codex";
       adapterConfigPath: string;
     }
   | {
       command: "resume";
       runDir: string;
-      adapter: "scripted" | "claude";
+      adapter: "scripted" | "claude" | "codex";
       adapterConfigPath: string;
     }
   | {
       command: "sweep";
       root: string;
-      adapter: "scripted" | "claude";
+      adapter: "scripted" | "claude" | "codex";
       adapterConfigPath: string;
       maxRuns: number;
     }
@@ -151,7 +153,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       throw new Error("missing required flags");
     }
 
-    if (sweepAdapter !== "scripted" && sweepAdapter !== "claude") {
+    if (sweepAdapter !== "scripted" && sweepAdapter !== "claude" && sweepAdapter !== "codex") {
       throw new Error("invalid adapter");
     }
 
@@ -180,7 +182,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     throw new Error("missing required flags");
   }
 
-  if (adapter !== "scripted" && adapter !== "claude") {
+  if (adapter !== "scripted" && adapter !== "claude" && adapter !== "codex") {
     throw new Error("invalid adapter");
   }
 
@@ -211,10 +213,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
 // adapter config BEFORE the scan (§8's first line: a config that cannot be read exits 1 without
 // scanning) yet must not construct the adapter until sweepRuns adopts a run — the two halves that
 // run/resume perform together happen at different times there.
-function buildAdapter(adapter: "scripted" | "claude", config: unknown): RuntimeAdapter {
+function buildAdapter(adapter: "scripted" | "claude" | "codex", config: unknown): RuntimeAdapter {
   if (adapter === "scripted") {
     return new ScriptedAdapter((config as ScriptedAdapterConfig).frames);
   }
+
+  if (adapter === "codex") return new CodexAdapter(config);
 
   return new SubprocessClaudeAdapter(config as ConstructorParameters<typeof SubprocessClaudeAdapter>[0]);
 }
@@ -260,6 +264,15 @@ export function registerStopHandlers(
 
 export async function main(argv: string[]): Promise<number> {
   try {
+    if (argv[0] === "control") {
+      let stdin = "";
+      for await (const chunk of process.stdin) stdin += String(chunk);
+      const result = await runControlCommand(argv.slice(1), stdin);
+      if (result.stdout !== "") process.stdout.write(result.stdout);
+      if (result.stderr !== "") process.stderr.write(result.stderr);
+      return result.code;
+    }
+
     const parsed = parseArgs(argv);
 
     // `ls` runs no loop and has no run outcome to report, so it never goes through the
@@ -304,6 +317,8 @@ export async function main(argv: string[]): Promise<number> {
     // exit 2 is not among them. Placing it after loadAdapter would still satisfy "before the
     // mappings" while constructing the adapter before the sweep has scanned or printed its
     // banner, breaking §8's ordering and C1's createAdapter contract.
+    if (parsed.adapter === "codex") console.error("Codex budgetMode=soft: token usage is accounted after each phase; no strict token cap is guaranteed.");
+
     if (parsed.command === "sweep") {
       // §8's first line: read and parse the config before scanning, so an unreadable config
       // exits 1 having swept nothing. What crosses into sweepRuns is a closure that does no I/O.
