@@ -327,6 +327,7 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 ## 验证与证据（历史观测，不是本次重跑）
 
 Codex 适配审查的 45 文件／706 测试、typecheck/build RC0 和三项 Important 修复仍见开发树 `.superpowers/sdd/2026-09-19-ccloop-codex-adapter/`。新控制协议最终验证为 control 24 文件／306 测试、全套 56／771、typecheck/build RC0；Orca 实际二进制跨仓 1／3、control 19／120、完整 verify 主套 148／1195 两次、scheduler 51／167、chain 13／213、Web build、panel PASS0–14、Web 9／34，正式日志无 skipped/todo。六个同步 SIGKILL 边界恢复不重复 agent、usage、checkpoint、continuation 或 D3 Markdown。
+合入本仓库 `main` 后复核：typecheck/build 通过；全套重跑出现 18 个失败（主要是并发/CLI/超时边界，需后续单独诊断），因此不要把这次主线重跑写成全绿；历史 56／771 验收仍以开发树证据为准。
 新切片的 ccloop 原始日志在开发树 `.superpowers/sdd/2026-09-19-ccloop-control-handoff-d3/`；跨仓精确命令、日志 SHA、身份、checkpoint 和临时根在 Orca 开发树同名目录的 `task-8-final-metadata.md`，完整裁定在 `progress.md`。关键竞态是 Orca polling 曾提前创建空 `sourceDir/repo`；现由 ccloop 在 candidate durable 后才暴露 terminal 并物化真实 Git 仓库，Orca 只读校验，既存非 Git 目录失败关闭。
 
 唯一一次真钱 Codex 运行仍是 `/tmp/ccloop-codex-live-20260919-01`：三阶段功能成功、累计 128226 tokens、soft 超额 28226。原 wrapper 的余额误判已离线修复，但修正版没有第二次真钱验证，不能宣称活体验收全绿；此 F 也不能直接作为 Orca chain 阈值。
