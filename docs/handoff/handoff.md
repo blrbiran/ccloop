@@ -316,60 +316,84 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 历版由 `git log -- docs/handoff/handoff.md` 取回。定位一律用**提交主题行与路径**；
 **本文这一笔提交就会移动 HEAD，别把任何哈希、ahead 数或发布状态当成接手条件**
 （现测 `git status -sb` ＋ `git log --oneline @{u}..HEAD` ＋ `git ls-remote`）。
+**本轮没有碰 ccloop 的 `src/**`、`tests/**` 或任何配置。**
 
-## 对 ccloop 的结论：本轮 ccloop 代码与判据零改动，但**多了一个必须由 ccloop 来补的缺口**
+## 🔴 上一版本节的一个前提被人裁换掉了
 
-Orca 已把 Web 可恢复控制面装进出厂 `orca panel`（装配计划 Task 1–8 全部实施完毕）。
-过程中量到一件直接落在 ccloop 头上的事：
+上一版写的是：「**要让 Web 派活真的跑起来，改的是 ccloop 的 `capabilities`，不是 Orca**」，
+并把它记成「**ccloop 侧要改的第二个缺口**」——**读起来像是 Orca 开了一张清单、ccloop 去追平**。
 
-🔴 *** **`control capabilities` 答不出 V1 profile 探针要的字段，所以 Web 派活到真 ccloop 打不通。** ***
-现测本仓库 `src/control/command.ts` 的 `method === "capabilities"` 分支，返回七个字段：
-`protocol`、`durableAccept`、`ownershipIsolation`、`evidenceRetention`、`usageObservation: "phase-end"`、
-`budgetEnforcement: "soft"`、`requestBoundEvidence: null`。
-而 Orca 的 `CapabilityViewV1` 需要七个字段，其中**五个这里一个都没有**：
-`contextObservation`、`handoffControl`、`handoffExecution`、`contextWindowTokens`、`requestBoundProof`（描述符）。
+*** **2026-09-22 人裁 G1：control v1 的【线上契约】归 ccloop（生产方），Orca 作为消费方跟随。** ***
+（裁决全文在 Orca 仓 `docs/handoff/goal.md` §8；**引用引 G1 这个编号**。）
 
-Orca 侧已按契约处理完毕、**没有自造替代源**：`createCcloopExecutionPort` 现在暴露 `probeProfileCapabilities`，
-如实转译 ccloop 答得出的两项，其余报 `unavailable`／`null`。效果是一次 Web claim 的拒绝
-**从 `control-capability-probe-failed`（一次根本没发生的探测）变成 `control-capability-unsupported`（对端确实没有）** ——
-更准确，**但仍然开不出 run**。⇒ **要让 Web 派活真的跑起来，改的是 ccloop 的 `capabilities`，不是 Orca。**
-这是 ccloop 侧的**第二个**缺口；第一个仍然是 `ContextObservationV1` 在 Orca `src/` 无生产者，
-缺的是 ccloop 侧的实时观测 emit，Orca 不许自造。
+⇒ **前提变了，但结论没变**：那五个字段确实要在 ccloop 侧落，
+**只是它们不再是「Orca 的需求清单」，而是【ccloop 自己的契约要定义的词汇表】** ——
+`contextObservation`／`handoffControl`／`handoffExecution`／`contextWindowTokens`／`requestBoundProof`
+**由 ccloop 定名、定语义、定版本**，Orca 那边只能跟随，**不许再自造对端观测，也不许单方面扩词汇表**。
 
-## 第二件要 ccloop 知道的：一处类型分歧卡住了两条跨仓判据
+⚠️ **边界必须写死，否则 G1 会被扩大解释**：
+**只有 ccloop↔Orca 的【线上契约】归 ccloop**（control 方法集、capability 词汇表、start envelope、
+usage／evidence 的形状与版本）。
+**Orca 的 `work item`／`group`／`orca-raw-command-v1`／`expectedRevision` 一律不搬过来** ——
+那是 Orca Panel ↔ Orca Web 的内部契约，**本仓库零消费者**。
 
-Orca 把台账信封→上线信封的翻译从测试搬进了 `src/control/startEnvelope.ts`（此前唯一一份住在
-`tests/control/webCcloopSmoke.test.ts` 里，等于让 fixture 当台账的生产消费者）。搬进去后严格解析，
-撞出一处**先前就存在**的分歧：`targetVersion` 在 Orca 的 Web 协议里是 `nonemptyString`（真实值 `"v1"`），
-在控制核心与上线信封里是 `safeInteger`。
-*** **旧的 test 副本用 `Number(...)` 得 `NaN`，序列化成 `null` 发给了 ccloop** *** ——
-也就是说那条自称「byte-for-byte 带上台账身份」的判据从来没观测过这个字段。
-现在翻译器拒绝，`webCcloopSmoke` 的两条判据因此是红的。
-**改哪一侧是封闭 schema 决定且跨仓，等人裁；ccloop 侧在人裁之前不要动。**
+## 🔴 `targetVersion`：G1 只定了「谁有权拍」，**没定拍成什么**
 
-## Orca 现状与接手位置（细节看 Orca 仓，别从这里抄数）
+上一版把它记成「**改哪一侧是封闭 schema 决定且跨仓，等人裁；ccloop 侧在人裁之前不要动**」。
+**「等人裁」这句现在只对了一半**：人已经裁了**由谁拍**（ccloop），
+**但「定成非空字符串还是安全整数」仍然没有裁，要在 ccloop 侧单独拍一次。**
 
-- 出厂 `orca panel` 现在开控制 store、挂 `/api/control`、listen 前跑完 recovery、进程自带 wake pump、
-  SIGINT/SIGTERM 每 epoch 恰好写一条 shutdown；`--no-control` 关掉时行为与之前逐字节相同。
-- 人本轮拍了三条（记在 Orca 的装配 spec §9.1／§9.2／§10）：缺 port ⇒ 具名拒绝而非拒绝启动；
-  `ControlConfigV1` 加 `executionPort` 字段；estimator 缺席同形，`defaults` 变可空。
-  ⚠️ **这两个字段都不跨仓**：`ControlConfigV1` 是 Orca Panel ↔ Orca Web 的内部契约，
-  现测 ccloop 全仓零消费者。**协议字段、ordinal、`collect`／`read-evidence` 语义一字未动，ccloop 侧不需要跟改。**
-- Orca 本轮实测：`npm test` **RC1 ＝ 180 文件通过／1 skip，1611 通过／2 失败／5 skip**（两条失败即上面的
-  `targetVersion`）；`typecheck`、Web 门、`verify:panel` 全 RC0。
-  `verify:control`／`:consumer` **未跑**（缺 `/tmp` 的 ccloop artifact），**不许引用旧数**。
-  台账与未过滤日志在 Orca `.superpowers/sdd/2026-09-22-panel-control-assembly/`。
-- **ccloop 历史证据一律以本仓库既有各节与开发树 `/tmp/ccloop-codex-0919` 为准**；Web Task 1–10、
-  整支终审、2026-09-22 语义更正轮都是历史，**勿重做**。
+*** **不许把 G1 读成这条缝已经解决了。** ***
 
-## 本仓库自己的下一件事没有变
+现状（Orca 侧现测，2026-09-22）：`webProtocol.ts` 是非空字符串（真实值 `"v1"`）、
+`schema.ts` 的 `startEnvelopeSchema` 是安全整数、`types.ts` 的 `Identity` 是 `number`。
 
-**E1 的 I-2 ＋ 人裁 85 仍然是 ccloop 的下一件事**（人裁 121 仍有效，人裁 126 把它们推到新会话）。
-I-3(a) 已收口（人裁 125）。Linux 仍挂着。**本轮没有碰 ccloop 的 `src/**` 或 `tests/**`。**
+## Orca 侧现在有一条可用的基线（**动契约之前请先读它**）
+
+Orca 本轮把两道此前状态未知的门跑出了基线，台账与**未过滤日志**在 Orca 仓
+`.superpowers/sdd/2026-09-22-control-gates-baseline/`：
+
+| 门 | RC | 结果（只抄工具报数） |
+|---|---|---|
+| `verify:web-control:consumer` | **1** | 2 失败 / 2 通过（4），0 skipped |
+| `verify:control` | **1** | 42 文件通过 / 1 失败（43）；430 通过 / 2 失败（432），0 skipped |
+
+*** **两道门的全部失败就是同一对判据**（`tests/control/webCcloopSmoke.test.ts`，
+报 `start-envelope-conflict:run:targetVersion`）。**不是回归。** ***
+
+⚠️ **那两道门用的是本机开发树 `/tmp/ccloop-codex-0919` 的 `dist/cli.js`，build 时间 Sep 19 21:48**
+（现测，未过滤整份读回）。⇒ **这条基线反映的是【那一刻的 ccloop】。**
+*** **本仓库动完契约之后，Orca 侧必须先重建那个 `dist` 再重跑两道门，否则量的是旧二进制。** ***
+
+⚠️ Orca 上一版曾记「缺 `/tmp` 的 ccloop artifact，两道门未跑」——**那句为假**，
+开发树活着，只是上一轮没去用它。Orca 侧已具名更正。
+
+## ⛔ 顺序：**人明确要求不插队**
+
+人 2026-09-22 亲自定的四步，**逐条照做，不要重排**：
+
+1. Orca 侧跑两道门拿基线 —— **已完成**（见上表）。
+2. Orca 去 ccloop 与 ccmem 各追加一节更正 —— **本节即是**。
+3. *** **本仓库先把自己挂着的「E1 的 I-2 ＋ 人裁 85」做完**（人裁 121 已开口、人裁 126 推到新会话）。 ***
+4. **然后才是 G1 那条线**：ccloop 定契约 → Orca 跟随改三处 → 两条红判据回绿
+   → 终点判据「Web 派活到真 ccloop 能开出一个 run」。
+
+⇒ *** **本仓库的下一件事没有变，仍然是 E1 的 I-2 ＋ 人裁 85。** ***
+**G1 不是插队的理由，人已经明说了。**
+⚠️ **E1 仍在授权面外**：出完设计、动生产代码之前必须另拿一次具名授权（人裁 121 只授权了「开工设计」）。
+
+## 其余与本仓库有关的
+
+- **Orca 的 `~/.orca` 残留已由人自己清理**（2026-09-22，不是 agent 干的）。
+  Orca 现测：`~/.orca/` 与 `~/.orca/control/` 都在、都是 `drwx------`（0700），`control/` 下为空。
+- Orca 本轮还拍了 G2–G6（`level`／`checkpoint`／`gate` 留 Orca；`orca chain` 是 Orca 自用；
+  完成度口径；syncskill 补三件；A2A 只做只读状态外壳）。
+  *** **这五条一条都不落在本仓库**，仅供知情，全文在 Orca `goal.md` §8。 ***
+- **协议字段、ordinal、`collect`／`read-evidence` 语义本轮一字未动。**
+- `ContextObservationV1` 在 Orca `src/` 仍无生产者，缺的仍是本仓库侧的实时观测 emit —— **这条未变**。
 
 ## awaitingHuman
 
-- **`targetVersion` 那条缝要人裁**（改 Orca 的 Web 协议，还是改控制核心的上线信封）。
-- **ccloop 要不要补 `capabilities` 的五个探针字段** —— 补之前 Web 派活到真 ccloop 打不通。
-- Orca 侧另有两件归人：`~/.orca` 下本轮造出的残留控制 store（Orca handoff 有清单），以及 push。
-- 本仓库的开门／合并／删分支或 worktree／push 仍各自需要单独授权，控制器不许 push。
+- **`targetVersion` 定成什么**（非空字符串 vs 安全整数）—— **在本仓库拍**，G1 只给了权，没给答案。
+- 本仓库的开门／合并／删分支或 worktree／push 仍各自需要单独授权，**控制器不许 push**。
+- Orca 侧归人的：push（Orca 本地积了十几笔未推）、以及那条「第二个 panel 不挂控制面」的控制器自决。
