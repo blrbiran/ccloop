@@ -28,7 +28,7 @@ import { chmod, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OWNER_TRANSFER_LOCK_FILE } from "../../src/persistence/fileStore.js";
+import { isProcessActive, OWNER_TRANSFER_LOCK_FILE } from "../../src/persistence/fileStore.js";
 import { inspectOwnerTransferLock } from "../../src/unlock/inspectLock.js";
 
 async function makeRunDir(): Promise<string> {
@@ -293,5 +293,70 @@ describe("inspectOwnerTransferLock", () => {
     expect(inspection).toMatchObject({ state: "file-unreadable" });
     expect(inspection).not.toHaveProperty("digest");
     expect((inspection as { reason: string }).reason).not.toBe("");
+  });
+
+  // HUMAN RULING 127 (2026-09-23), I-2. A holder that is not a string at all used to reach the
+  // liveness gate, because RegExp.prototype.exec coerces its argument through String(). On this
+  // path that cost more than it did in the redline function: the inspection answered "dead", and
+  // unlockCommand's dead branch deletes with NO --force and NO --expect digest.
+  //
+  // The state assertions and the rendering assertion are deliberately SEPARATE `it` blocks with
+  // NARROW assertions, rather than one toEqual over the whole inspection the way the criteria
+  // above are written. That is not style: deleting parsePid's guard and deleting the rendering are
+  // two different mutations, and a single toEqual would go red for both, so neither mutation could
+  // be shown to hold up its own branch.
+  describe("a holder that is not a string at all (human ruling 127)", () => {
+    const NON_STRING_STATE_CASES = [
+      { name: "an array wrapping a dead bare pid", holder: ["pid:999999"] },
+      { name: "an array wrapping pid:0, which the liveness probe cannot answer for", holder: ["pid:0"] },
+    ];
+
+    const NON_STRING_RENDER_CASES = [
+      { name: "an array", holder: ["pid:999999"], rendered: '["pid:999999"]' },
+      { name: "an object", holder: {}, rendered: "{}" },
+    ];
+
+    it("covers every non-string holder shape this round measured", () => {
+      // "One case fewer" is GREEN in vitest -- it only shows up in a count. Both tables are
+      // pinned so a case cannot be quietly dropped.
+      expect(NON_STRING_STATE_CASES).toHaveLength(2);
+      expect(NON_STRING_RENDER_CASES).toHaveLength(2);
+    });
+
+    for (const { name, holder } of NON_STRING_STATE_CASES) {
+      it(`classifies ${name} as unrecognized-holder, never as a liveness verdict`, async () => {
+        // Premise, asserted not assumed: 999999 must really be dead, or this would be pinning the
+        // ordinary refusal instead of the coercion.
+        expect(isProcessActive(999999)).toBe(false);
+
+        const runDir = await makeRunDir();
+        await writeLock(
+          runDir,
+          JSON.stringify({ holderProcessInstanceId: holder, acquiredAt: "2026-09-23T00:00:00.000Z" }),
+        );
+
+        const inspection = await inspectOwnerTransferLock(runDir);
+
+        // Only the state. The rendering has its own criterion below.
+        expect(inspection.state).toBe("unrecognized-holder");
+      });
+    }
+
+    for (const { name, holder, rendered } of NON_STRING_RENDER_CASES) {
+      it(`renders ${name} holder as what is actually on disk, not as String() sees it`, async () => {
+        const runDir = await makeRunDir();
+        await writeLock(
+          runDir,
+          JSON.stringify({ holderProcessInstanceId: holder, acquiredAt: "2026-09-23T00:00:00.000Z" }),
+        );
+
+        const inspection = await inspectOwnerTransferLock(runDir);
+
+        // The literal, not the shape: a "shape" assertion stays green under any mutation that
+        // swaps in another well-formed string. `["pid:999999"]` and `pid:999999` are both
+        // well-formed; only one of them tells the operator the record is malformed.
+        expect(inspection).toHaveProperty("holder", rendered);
+      });
+    }
   });
 });

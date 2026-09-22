@@ -159,13 +159,28 @@ export async function inspectOwnerTransferLock(runDir: string): Promise<LockInsp
 
   const digest = digestLockContents(contents);
 
+  // TWO values, not one, and this split is load-bearing. `rawHolder` is what the record actually
+  // holds and it is what gets CLASSIFIED; `holder` is a rendering of it and it is only ever
+  // DISPLAYED. Collapsing them back into one variable silently disarms parsePid's type guard on
+  // this path: the rendering would turn an array into a string before parsePid ever saw it, and
+  // the guard would stop being reachable. Measured 2026-09-23 -- with them collapsed, deleting
+  // parsePid's guard changes nothing here at all.
   let holder: string;
+  let rawHolder: unknown;
   try {
-    const parsed = JSON.parse(contents.toString("utf8")) as Partial<OwnerTransferLockRecord>;
+    // `unknown` per field, not `string`: this is JSON, and the record's declared field types are
+    // a statement about what WE write, not about what is on disk. OwnerTransferLockRecord itself
+    // is unchanged -- only this read is honest about what it got.
+    const parsed = JSON.parse(contents.toString("utf8")) as Partial<Record<keyof OwnerTransferLockRecord, unknown>>;
     // `JSON.parse("null")` succeeds and the property read below throws a TypeError, which belongs
     // with the parse failures rather than escaping as a crash — the same grouping the redline
     // function gets from having one catch around both.
-    holder = parsed.holderProcessInstanceId ?? "";
+    rawHolder = parsed.holderProcessInstanceId ?? "";
+    // AFTER the `??`, never before. TypeScript declares JSON.stringify's return type as `string`
+    // rather than `string | undefined`, so a `undefined` slipping through here would reach the
+    // operator as the word "undefined" with tsc saying nothing. Past the `??` the value is
+    // always a JSON value, and no JSON value makes JSON.stringify return undefined.
+    holder = typeof rawHolder === "string" ? rawHolder : JSON.stringify(rawHolder);
   } catch (error) {
     return {
       state: "unparseable",
@@ -175,7 +190,7 @@ export async function inspectOwnerTransferLock(runDir: string): Promise<LockInsp
     };
   }
 
-  const pid = holder === "" ? null : parsePid(holder);
+  const pid = rawHolder === "" ? null : parsePid(rawHolder);
   if (pid === null) {
     return { state: "unrecognized-holder", holder, digest, identity };
   }
