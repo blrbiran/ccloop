@@ -968,7 +968,19 @@ function sameOwnerRecord(left: OwnerRecord, right: OwnerRecord): boolean {
 // implementation could drift into either, so the sentence is true where it sits; only its
 // antecedent moved. This repository records where its text went rather than quietly putting it
 // back. ***
-export function parsePid(processInstanceId: string): number | null {
+export function parsePid(processInstanceId: unknown): number | null {
+  // The parameter is `unknown` rather than `string` because that is what it actually is: both
+  // callers hand over a value that came out of JSON.parse, and JSON is free to put an array
+  // there. The old `string` annotation was not a description, it was a claim nobody checked --
+  // and RegExp.prototype.exec coerces through String(), so `["pid:999999"]` used to match.
+  //
+  // This guard is LOAD-BEARING and criteria are what hold it: `unknown` makes a naive deletion
+  // fail tsc, but a tidy-up that writes `exec(processInstanceId as string)` typechecks clean and
+  // reopens the hole. Measured, 2026-09-23. Do not read the signature as the defence.
+  if (typeof processInstanceId !== "string") {
+    return null;
+  }
+
   const match = /^pid:(\d+)$/.exec(processInstanceId);
   return match === null ? null : Number.parseInt(match[1], 10);
 }

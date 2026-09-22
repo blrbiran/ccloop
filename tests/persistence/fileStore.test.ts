@@ -1046,17 +1046,18 @@ describe("fileStore", () => {
     }
   });
 
-  it("reclaims a lock whose holder is an ARRAY that String()s into pid:<n> -- pinned as measured", async () => {
-    // Encodes human ruling 99 (Mi-2). ADDED, never rewritten -- human ruling 4 covers adding a
-    // criterion, so no naming under ruling 88 was needed. It pins TODAY'S BEHAVIOUR ON PURPOSE,
-    // not the behaviour anyone would design: parsePid matches with /^pid:(\d+)$/.exec(holder),
-    // and exec coerces its argument through String(), so a holder that is not a string at all
-    // still reaches the liveness gate and can license the unlink. Human ruling 94 chose to
-    // record that widening in a comment rather than close it, and a claim with nothing
-    // enforcing it is this package's signature defect -- so this test is what goes red if
-    // someone "tidies" parsePid into a typeof guard, or widens the coercion further. If a later
-    // ruling closes the gap, THIS TEST IS THE ONE TO REWRITE (human ruling 88): its failure is
-    // then the intended signal, not a regression.
+  it("refuses a lock whose holder is an ARRAY that String()s into pid:<n>, and leaves the owner epoch alone", async () => {
+    // Encodes HUMAN RULING 127 (2026-09-23). This criterion was rewritten under human ruling 88:
+    // the human named this test by name and authorised rewriting it whole. It used to pin the
+    // DEFECT -- that the coercion let the lock be reclaimed -- and the original note said so:
+    //
+    //   "If a later ruling closes the gap, THIS TEST IS THE ONE TO REWRITE (human ruling 88): its
+    //    failure is then the intended signal, not a regression."
+    //
+    // That is what happened. It now pins the gap CLOSED, and it pins BOTH halves the original
+    // measured, because the second is why this ever mattered: the coercion did not merely widen an
+    // unlink, it let an owner epoch advance behind a holder nobody could attribute. The epoch
+    // assertion below is the positive observation -- "nothing happened" cannot be polled for.
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const initialOwnerRecord = {
       runId: "task-1",
@@ -1091,18 +1092,29 @@ describe("fileStore", () => {
       join(runDir, ".owner-transfer.transaction.json"),
       JSON.stringify({ version: 1, stagedAt: transfer.transferRecord.transferredAt, finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
     );
-    await writeFile(
-      join(runDir, ".owner-transfer.lock"),
-      JSON.stringify({ holderProcessInstanceId: arrayHolder, acquiredAt: "2026-07-22T10:05:00.000Z" }),
+    const lockContents = JSON.stringify({ holderProcessInstanceId: arrayHolder, acquiredAt: "2026-07-22T10:05:00.000Z" });
+    await writeFile(join(runDir, ".owner-transfer.lock"), lockContents);
+
+    // .then(onFulfilled, onRejected) rather than .catch(e => e): a .catch on a promise that
+    // RESOLVES hands back undefined, and every assertion below would then be asserting about
+    // undefined while reporting green. Throwing from onFulfilled makes a resolve a failure.
+    const error = await readOwnerRecord(runDir).then(
+      () => {
+        throw new Error("expected readOwnerRecord to reject on an unattributable lock, but it resolved");
+      },
+      (rejection: unknown) => rejection,
     );
 
-    const owner = await readOwnerRecord(runDir);
+    expect(error).toBeInstanceOf(OwnerTransferLockUnattributableError);
+    expect(String(error)).toContain("no-pid-holder");
 
-    // Measured consequence, both halves. The second is why this matters: the coercion does not
-    // merely widen an unlink, it lets an owner epoch advance behind a holder nobody could
-    // attribute.
-    await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).rejects.toThrow();
-    expect(owner.currentOwnerEpoch).toBe(2);
+    // The lock is byte-for-byte still on disk -- not merely "present".
+    expect(await readFile(join(runDir, ".owner-transfer.lock"), "utf8")).toBe(lockContents);
+
+    // The half that matters. Read the file directly: readOwnerRecord itself now rejects, so it
+    // cannot be the observer here.
+    const persisted = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as OwnerRecord;
+    expect(persisted.currentOwnerEpoch).toBe(1);
   });
 
   it("keeps a malformed lock without staged artifacts non-recoverable", async () => {
