@@ -957,6 +957,14 @@ function sameOwnerRecord(left: OwnerRecord, right: OwnerRecord): boolean {
 // transfer behind a stale lock blocks until a human runs `ccloop unlock`. The failure changed sign;
 // the reason not to grow a second identity notion did not. ***
 //
+// *** ERRATUM (I-2, HUMAN RULING 127) -- the paragraph above is kept verbatim. "Under ruling 83 an
+// unparsed holder returns false" was true when written and stopped being literal once human ruling
+// 106 changed this function's return type from boolean to a tagged outcome: the exits this erratum
+// describes now return `{ kind: "unattributable", ... }`, never the literal value `false`. The
+// DISPOSITION the erratum is about -- nothing is ever reclaimed, the mutation makes an unconditional
+// REFUSER -- is unchanged; only the return value it names by word is gone. Which exit returns what
+// is recorded in the ledger, not here. ***
+//
 // A separate liveness implementation inside the unlock command would be free to
 // drift into that same failure, on the one command whose purpose is to not delete live locks.
 //
@@ -968,6 +976,14 @@ function sameOwnerRecord(left: OwnerRecord, right: OwnerRecord): boolean {
 // implementation could drift into either, so the sentence is true where it sits; only its
 // antecedent moved. This repository records where its text went rather than quietly putting it
 // back. ***
+//
+// *** ERRATUM (I-2, HUMAN RULING 127) -- everything above is kept verbatim. It argues about what a
+// second, "upgraded" IDENTITY NOTION would do, and that argument is untouched. What this function
+// gained is different in kind: a type guard, because the parameter was annotated `string` while
+// both callers hand it a value straight out of JSON.parse. exec() coerces through String(), so an
+// array holder used to produce a pid. The signature now says `unknown`, which is what it always
+// was. ⚠️ The signature is NOT the defence -- a tidy-up that casts the argument back to `string`
+// typechecks clean and reopens the hole. The criteria are the defence; the ledger names them. ***
 export function parsePid(processInstanceId: unknown): number | null {
   // The parameter is `unknown` rather than `string` because that is what it actually is: both
   // callers hand over a value that came out of JSON.parse, and JSON is free to put an array
@@ -1068,6 +1084,17 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<StaleOw
   // has none: board C-a made it presence-only, so it never reads or parses this file). The
   // array case is pinned by a criterion under human ruling 99, so it cannot be "tidied" away
   // silently. ***
+  //
+  // *** ERRATUM (I-2, HUMAN RULING 127) -- THE THREE SENTENCES ABOVE ARE KEPT VERBATIM AND WERE
+  // NEVER FALSE. Two of them are INDEXED to a round: "outside ruling 83's authorisation" and "E1
+  // is outside this round's authorisation" both described the authorisation surface of ruling 94's
+  // round, and both are still true of that round. What changed is that ruling 121 opened E1 and
+  // ruling 127 authorised closing this cell on both sides -- so a reader must not take those two
+  // sentences for the CURRENT disposition. The third, "pinned by a criterion under human ruling
+  // 99, so it cannot be 'tidied' away silently", has inverted: that criterion was rewritten whole
+  // under ruling 127 (named under ruling 88) and now pins the cell CLOSED. parsePid no longer
+  // reads a pid out of a non-string, so the coercion this paragraph describes cannot happen here
+  // at all. Which criterion pins which exit is recorded in the ledger, not here. ***
   //
   // *** ERRATUM (I-3(b), HUMAN RULING 106) -- "returns false and leaves the lock on disk" above is
   // kept verbatim and still describes exactly what happens; only the VALUE changed. This function
@@ -1359,6 +1386,13 @@ async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () =
       // leave them; naming them would be new logic outside ruling 106(a). Recorded, not fixed --
       // the same disposition the redline function's own ruling-94 erratum gives its array-holder
       // cell. ***
+      //
+      // *** ERRATUM (I-2, HUMAN RULING 127) -- the sentence above is kept verbatim. It cites
+      // ruling 94's array-holder disposition as a live precedent for leaving a cell "recorded, not
+      // fixed". That precedent no longer stands: ruling 127 closed the array-holder cell. The
+      // cells THIS erratum is about -- pid:0, an out-of-range pid, an EPERM refusal -- are
+      // untouched by that and are still recorded rather than fixed, so the disposition it
+      // describes for ITSELF is unchanged; only the precedent it leans on is gone. ***
       if (outcome.kind === "not-determined-dead") {
         throw new OwnerTransferLockBusyError("owner transfer already in progress");
       }

@@ -33,6 +33,16 @@
 // three as alive. Both directions happen to refuse on those inputs today, but that is a coincidence
 // of two different predicates, not one shared answer. ***
 //
+// *** ERRATUM (I-2, HUMAN RULING 127) -- kept verbatim, and one clause in it was TOO WIDE WHEN
+// WRITTEN rather than overtaken later. "On BOTH cases it names -- an unrecognizable holder
+// identity, ... -- the redline function no longer steals" was measured on holders that are
+// STRINGS. A holder that is not a string at all -- `["pid:999999"]`, which String()s into
+// `pid:999999` -- was unrecognizable in exactly the same sense, and on that sub-cell BOTH sides
+// deleted: the redline function unlinked, and this command's `dead` branch removed the lock with
+// no --force and no --expect. Ruling 127 made the sentence true for that sub-cell too, by giving
+// parsePid a type guard and by classifying the value the record carries rather than a rendering
+// of it. The sentence is now what it always claimed to be. ***
+//
 // The liveness predicate is the bare-pid one and can be nothing else. pointC-design.md §4.2
 // mutation C measured the alternative: "upgrading" the holder identity makes parsePid return null,
 // which skips the liveness guard entirely. Hence fileStore's own parsePid/isProcessActive here,
@@ -47,6 +57,14 @@
 // fileStore's own predicates rather than grow a second one is unchanged. The other errata in this
 // file carry that correction already; this paragraph was missed until the human ruling 96 review
 // found it. ***
+//
+// *** ERRATUM (I-2, HUMAN RULING 127) -- the paragraph above is kept verbatim. The clause "a null
+// pid short-circuits `pid === null || isProcessActive(pid)`" named an expression that no longer
+// appears in this module in that form: this function calls classifyHolderLiveness, not
+// isProcessActive, and does not combine that call with `pid === null` in one expression. What the
+// clause is about -- a null pid short-circuits before any liveness probe runs -- is still how this
+// module's control flow behaves; only the literal expression it quotes is gone. Where that control
+// flow lives now is recorded in the ledger, not here. ***
 
 import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";
