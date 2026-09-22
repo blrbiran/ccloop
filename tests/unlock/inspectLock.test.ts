@@ -306,8 +306,16 @@ describe("inspectOwnerTransferLock", () => {
   // two different mutations, and a single toEqual would go red for both, so neither mutation could
   // be shown to hold up its own branch.
   describe("a holder that is not a string at all (human ruling 127)", () => {
-    const NON_STRING_STATE_CASES = [
-      { name: "an array wrapping a dead bare pid", holder: ["pid:999999"] },
+    const NON_STRING_STATE_CASES: { name: string; holder: unknown; assertPremise?: () => void }[] = [
+      {
+        name: "an array wrapping a dead bare pid",
+        holder: ["pid:999999"],
+        // Premise, asserted not assumed: 999999 must really be dead, or this would be pinning the
+        // ordinary refusal instead of the coercion.
+        // RULING 7-B (2026-09-23): carried on this row's own data instead of the shared loop body,
+        // because it says nothing about the pid:0 row below — that row does not depend on 999999.
+        assertPremise: () => expect(isProcessActive(DEAD_PID)).toBe(false),
+      },
       { name: "an array wrapping pid:0, which the liveness probe cannot answer for", holder: ["pid:0"] },
     ];
 
@@ -316,18 +324,40 @@ describe("inspectOwnerTransferLock", () => {
       { name: "an object", holder: {}, rendered: "{}" },
     ];
 
-    it("covers every non-string holder shape this round measured", () => {
-      // "One case fewer" is GREEN in vitest -- it only shows up in a count. Both tables are
-      // pinned so a case cannot be quietly dropped.
+    // Minimal local shape for the task tree Vitest collects for this file: the full `Task`/`File`
+    // typings live in "vitest", but importing that name would touch the top-of-file import line,
+    // which sits outside this round's own describe block. All the count below needs is `.type`
+    // and `.tasks`, which every suite/file task carries regardless of which typing names it.
+    interface CollectedTask {
+      type: string;
+      tasks?: CollectedTask[];
+    }
+
+    function countCollectedTests(task: CollectedTask): number {
+      if (task.type === "test") {
+        return 1;
+      }
+      return (task.tasks ?? []).reduce((sum, child) => sum + countCollectedTests(child), 0);
+    }
+
+    it("covers every non-string holder shape this round measured, and is actually consumed", (context) => {
+      // Two shapes of "one fewer" and both are GREEN in vitest unless something counts.
+      // (1) a row quietly dropped from a table -- the length assertions below catch that;
+      // (2) a whole generating loop deleted, so the table is still the right length but nothing
+      //     consumes it -- MEASURED 2026-09-23: deleting the NON_STRING_STATE_CASES loop leaves
+      //     16 tests, all green, and the two "classifies" criteria vanish without a trace.
+      // Pinning this file's own collected test count catches the second shape, which the length
+      // assertions alone cannot: it counts what Vitest actually collected to run in this file,
+      // not the source text and not the tables.
       expect(NON_STRING_STATE_CASES).toHaveLength(2);
       expect(NON_STRING_RENDER_CASES).toHaveLength(2);
+      const collectedTestCount = countCollectedTests(context.task.file as unknown as CollectedTask);
+      expect(collectedTestCount).toBe(18);
     });
 
-    for (const { name, holder } of NON_STRING_STATE_CASES) {
+    for (const { name, holder, assertPremise } of NON_STRING_STATE_CASES) {
       it(`classifies ${name} as unrecognized-holder, never as a liveness verdict`, async () => {
-        // Premise, asserted not assumed: 999999 must really be dead, or this would be pinning the
-        // ordinary refusal instead of the coercion.
-        expect(isProcessActive(999999)).toBe(false);
+        assertPremise?.();
 
         const runDir = await makeRunDir();
         await writeLock(

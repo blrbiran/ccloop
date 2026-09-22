@@ -681,4 +681,33 @@ describe("unlockOwnerTransferLock", () => {
     expect(out).toEqual(["absent   no owner-transfer lock present"]);
     expect(err).toEqual([]);
   });
+
+  it("refuses an ARRAY holder that String()s into a dead pid, and leaves the lock exactly where it was", async () => {
+    // HUMAN RULING 127 (2026-09-23), I-2. This cell used to exit 0 and DELETE, with no --force and
+    // no --expect digest, because the inspection answered "dead" for a holder nobody could
+    // attribute. This file's header says it plainly: this file is the only thing standing between
+    // a new delete surface and no supervision.
+    const runDir = await makeRunDir();
+    const contents = JSON.stringify({
+      holderProcessInstanceId: [`pid:${DEAD_PID}`],
+      acquiredAt: "2026-09-23T00:00:00.000Z",
+    });
+    await seedLock(runDir, contents);
+
+    // The existence assertion this file requires before every deletion assertion: without it,
+    // "the lock is still there" would pass against a run directory where it was never created.
+    expect(await lockExists(runDir)).toBe(true);
+
+    const { code, out, err } = await run(runDir);
+
+    expect(await lockExists(runDir), "an unattributable holder's lock was deleted").toBe(true);
+    // Byte-for-byte, not merely present.
+    expect(await readFile(join(runDir, OWNER_TRANSFER_LOCK_FILE), "utf8")).toBe(contents);
+    expect(code).toBe(1);
+    expect(out).toEqual([]);
+    // The PREFIX only. The holder's rendering has its own criterion in inspectLock.test.ts, and
+    // pinning the whole line here would make the rendering mutation go red in two places, so
+    // neither place could be shown to carry its own branch.
+    expect(err[0]).toMatch(/^refused  unrecognized holder identity: /);
+  });
 });
