@@ -4837,3 +4837,101 @@ I-1 那处三条断言一字未改，只是顺序变了，其中一条就此不�
 3. **Linux 仍挂着**：OrbStack daemon 实测未起，**要人自己开**（`! open -a OrbStack`）。
 4. **控制器不许 push。**
 5. ⚠️ *** **整包已发布** ***：所有既有注释与 ERRATUM 都是已发布文本，被推翻时只能**再追加具名 ERRATUM**。
+
+46. 人裁 127／128 —— E1 的 I-2 落地（`parsePid` 强转口关闭）
+--------------------------------------------------------------------------------
+
+*** **人裁 127。2026-09-23。「两侧一起闭」＋ 走人裁 88 的指名程序，授权整条改写
+`tests/persistence/fileStore.test.ts` 的
+`reclaims a lock whose holder is an ARRAY that String()s into pid:<n> -- pinned as measured`。** ***
+
+*** **人裁 128。同日。「动生产代码，走 `superpowers:subagent-driven-development` 实施。」** ***
+⇒ 人裁 121 只授权了「开工设计」，**这一条补上了缺的那半**（E1 此前一直在授权面外）。
+
+### 缺陷（实测复现，不是读代码推的）
+
+`parsePid` 形参标着 `string`，但值来自 `JSON.parse`；`RegExp.prototype.exec` 把参数过一遍 `String()`，
+于是 `["pid:999999"]` 强转成 `"pid:999999"` 匹配成功。两个调用方代价不同：
+红线函数那侧**有界**（pid 仍须死）；**E1 那侧把一格从「拒绝」挪进了「无人值守删除」**。
+
+真实构建的 CLI 两臂对照（`git clone --local` 副本，`node dist/cli.js unlock <dir>`）：
+
+| | exit | 输出 | 锁 |
+|---|---|---|---|
+| 修之前 | **0** | `removed  holder=pid:999999 was not alive` | **被删** |
+| 修之后 | **1** | `refused  unrecognized holder identity: ["pid:999999"]` ＋ `--force --expect` | **留盘** |
+
+⚠️ *** **这一格此前【零判据覆盖】** *** —— 缺陷能活到今天，正因为没有任何判据会因它而红。
+
+### 做了什么（按提交主题行找，**别数笔数**）
+
+1. `fix(fileStore): stop parsePid from reading a pid out of a value that is not a string`
+   —— 签名 `string` → `unknown` ＋ `typeof` 守卫；**同笔按人裁 127 改写了那条既有判据**（含改名）。
+2. `fix(inspectLock): classify the holder the record actually carries, and render it honestly`
+3. `test(unlock): pin unattributable-holder survival at the command layer, and harden the I-2 non-string-holder criteria`
+4. `docs(comments): record what ruling 127 changed about the array-holder cell, and what it did not`
+   —— **纯注释追加，删除行 0、非注释新增行 0、控制字节 0**（机械验过两遍）。
+
+⚠️ **`src/sweep/**`、`OwnerTransferLockRecord` 的类型声明、任何写入方：一个字节没动。**
+
+### *** 第一版设计被推翻 —— 这是本轮最值钱的一条 ***
+
+*** **spec 第一版把「渲染成 `JSON.stringify`」直接贴在 `inspectLock.ts` 的 holder 赋值处。** ***
+那个变量**既要渲染给人看、又要喂去分类** ⇒ 数组先变成字符串，`parsePid` 拿到时已不匹配，
+**守卫在 E1 路径上完全不承重**。实测：只落渲染、`parsePid` 保持原样，洞照样关上，**全套零新红**。
+
+由一位独立挑错席发现（4 Critical／9 Important／6 Minor），**控制器逐条复核、没有照收**，三臂实测复现。
+⇒ 第二版改成**把分类值 `rawHolder` 与渲染值 `holder` 拆成两个变量**，并放宽读取处的 parse 断言。
+
+*** **一般教训：当一个变量同时承担「被判断」和「被展示」，任何一端的规范化都会静默解除另一端的守卫。** ***
+
+### 变异电池（**每条都被【看到】打红**，副本里做，主树零触碰）
+
+| 变异 | 实测红在 |
+|---|---|
+| **M1** 删 `parsePid` 守卫（写 `as string`，裸删过不了 tsc） | 两条 `classifies` ＋ 改写后的 fileStore 那条 ＋ unlockCommand 新判据；**两条 `renders` ＋ 计数判据保持绿** |
+| **M3** 删渲染（`rawHolder as string`） | **两条 `renders`，且仅这两条** |
+| **M5** `why` 换字面量 | 改写后那条 ＋ 既有的 `refuses a lock whose holder identity is not a pid as unattributable, never as busy` |
+
+⚠️ *** **M1 期间 `tsc` RC=0** ***（用了 `as string`）⇒ **不要把 typecheck 绿读成变异没落上去**，看 `shasum`。
+⇒ 由此得一条：*** **签名改 `unknown` 不是防线** *** —— 裸删 RC=2，但 `as string` 的 tidy-up RC=0、洞照样重开。
+**真正的防线是判据。**
+
+### 实测数（只抄工具报数）
+
+- 全套 **777 条**（本轮前 771 ＋ 新增 6）。红的集合恒为已知集合的子集。
+- `inspectLock.test.ts` 13 → **18**；`unlockCommand.test.ts` 32 → **33**；`fileStore.test.ts` **91**（改写不增减）。
+- `typecheck` RC=0、`build` RC=0。
+
+### ⚠️ 基线不是全绿 —— 已知红集合本轮从 5 条升到 **7 条**
+
+- **稳定红 1 条（非 flake，根因未查，无人授权动）**：
+  `tests/control/stopProof.test.ts > quiet execution proof > does not treat leader exit as group quiet and proves only after the full tree is gone`。
+  判别过程：副本单跑 **3/3 红**、主树单跑也红、单跑耗时 **5.37s**（远低于 flake 画像 25–29s）。
+- **负载 flake 6 条**（原 4 条 ＋ 本轮新发现 2 条）：
+  `SubprocessClaudeAdapter > waits for close before interrupting a close-pending successful execute`、
+  `Codex phase process > kills a TERM-ignoring process before returning abort`。
+  两条都用「零因果面 ＋ 单跑 5/5 绿」判定。
+⇒ *** **判别式：红的集合 ⊆ 这 7 条，按【名字】核对，不要只数条数。** ***
+
+### 本轮 11 条控制器裁决（**摘要；全文与代价在**
+`.superpowers/sdd/2026-09-23-i2-array-holder-coercion/progress.md`）
+
+1. 在 main 上做、只落本地提交（skill 要求隔离 worktree，但 CLAUDE.md 优先且 Tier 0 闸门会拦）。
+2. 接受 Task 3 的 TDD 偏离（判据写在改动之后），红证指派给 M1。
+3. 基线口径写成「⊆ 已知集合」而非「恰好 N 条红」。
+4. 第 5 条 flake 判定（零因果面 ＋ 5/5 绿）。
+5. 计划 Task 2 Step 2 的「应红 3 条」**写错了**，实测 2 条 —— 守卫按 `typeof` 拦、不看值。
+6. *** **拆分本身在输出层钉不住 —— 如实登记，不编判据。** *** 守卫在位时拆与不拆输出不可区分。
+7. 三条 Minor 当场修（计数判据钉表长没钉表被消费等）。
+8. 第 6 条 flake 判定。
+9. *** **计划给的字节扫描命令是坏的** *** —— bash 在 NUL 处截断 `$'\x00…'`，模式变空、命中每一行。
+10. 注释已引用人裁 127 而台账尚无记录 ⇒ **本节即是补记**。
+11. `verify:control` 需要两个环境变量，ccloop 自己的文档没记 ⇒ 补进 handoff。
+
+### ⛔ 下一件事
+
+1. **人裁 85 —— `ls` 也报锁**（人裁 121 已开口）：先 `superpowers:brainstorming`。
+2. **Linux 仍挂着**：OrbStack daemon 要人自己起（`! open -a OrbStack`）。
+3. **`stopProof` 那条稳定红**：根因未查，**要人先开口**。
+4. **控制器不许 push。** 发布状态一律现跑 `/usr/bin/git ls-remote` 判，不查任何文档。
