@@ -710,4 +710,66 @@ describe("unlockOwnerTransferLock", () => {
     // neither place could be shown to carry its own branch.
     expect(err[0]).toMatch(/^refused  unrecognized holder identity: /);
   });
+
+  // I-1 (2026-09-23 review of human ruling 127): ruling 127 routed an ARRAY holder into
+  // "unrecognized-holder", which lands in the SAME --force arm as an unparseable lock — and that
+  // arm had zero coverage before this pair. The two tests below are the ones the review found
+  // missing: one pins that a CORRECT --force digest still clears this holder shape, the other
+  // pins the safety property — that a WRONG digest is still checked and still refuses — since the
+  // pre-127 code let an array holder's `dead` classification skip the digest gate entirely.
+  it("removes an ARRAY holder under --force with the matching digest, and labels the removal forced", async () => {
+    const runDir = await makeRunDir();
+    const contents = JSON.stringify({
+      holderProcessInstanceId: [`pid:${DEAD_PID}`],
+      acquiredAt: "2026-09-23T00:00:00.000Z",
+    });
+    const digest = await seedLock(runDir, contents);
+
+    // The existence assertion this file requires before every deletion assertion.
+    expect(await lockExists(runDir)).toBe(true);
+
+    const { code, out, err } = await run(runDir, { expectedDigest: digest });
+
+    expect(await lockExists(runDir), "an array holder was not removed despite a matching --force digest").toBe(
+      false,
+    );
+    expect(code).toBe(0);
+    expect(err).toEqual([]);
+    // The PREFIX only, for the same reason as the refusal test above: the holder's rendering has
+    // its own criterion in inspectLock.test.ts, and pinning the whole line here would make that
+    // rendering mutation go red in two places.
+    expect(out[0]).toMatch(/^removed  forced past unrecognized holder identity: /);
+  });
+
+  it("refuses an ARRAY holder under --force when the digest does not match, and leaves the lock on disk byte for byte", async () => {
+    // This is the safety assertion. Before ruling 127, an array holder was classified `dead`, and
+    // the `dead` branch sits BEFORE the `--force` / `--expect` gate in unlockCommand.ts — so the
+    // digest was never even read for this holder shape, and this exact input deleted the lock
+    // under ANY --expect value, correct or not. If that gate is ever skipped again for this shape,
+    // this is the assertion that goes red.
+    const runDir = await makeRunDir();
+    const contents = JSON.stringify({
+      holderProcessInstanceId: [`pid:${DEAD_PID}`],
+      acquiredAt: "2026-09-23T00:00:00.000Z",
+    });
+    await seedLock(runDir, contents);
+
+    // The existence assertion this file requires before every deletion assertion.
+    expect(await lockExists(runDir)).toBe(true);
+
+    // A hardcoded, deliberately-wrong digest — not one derived from `contents` or from seedLock's
+    // hash, so the expectation cannot be satisfied by construction.
+    const wrongDigest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const { code, out, err } = await run(runDir, { expectedDigest: wrongDigest });
+
+    expect(
+      await lockExists(runDir),
+      "an array holder's lock was deleted despite a mismatched --force digest",
+    ).toBe(true);
+    expect(await readFile(join(runDir, OWNER_TRANSFER_LOCK_FILE), "utf8")).toBe(contents);
+    expect(code).toBe(1);
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain("--expect does not match");
+  });
 });

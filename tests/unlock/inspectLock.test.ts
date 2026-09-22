@@ -309,7 +309,7 @@ describe("inspectOwnerTransferLock", () => {
     const NON_STRING_STATE_CASES: { name: string; holder: unknown; assertPremise?: () => void }[] = [
       {
         name: "an array wrapping a dead bare pid",
-        holder: ["pid:999999"],
+        holder: [`pid:${DEAD_PID}`],
         // Premise, asserted not assumed: 999999 must really be dead, or this would be pinning the
         // ordinary refusal instead of the coercion.
         // RULING 7-B (2026-09-23): carried on this row's own data instead of the shared loop body,
@@ -320,7 +320,12 @@ describe("inspectOwnerTransferLock", () => {
     ];
 
     const NON_STRING_RENDER_CASES = [
-      { name: "an array", holder: ["pid:999999"], rendered: '["pid:999999"]' },
+      // `holder` is built from DEAD_PID, matching this file's convention at :228/:251. `rendered`
+      // is a hardcoded literal on purpose -- expected values are never computed from the code
+      // under test. Their consistency (DEAD_PID stringifying to "999999") is therefore held up by
+      // this comment and by the adjacent premise assertion in NON_STRING_STATE_CASES above it, not
+      // by any code here: if DEAD_PID ever changes, this row fails loudly instead of drifting.
+      { name: "an array", holder: [`pid:${DEAD_PID}`], rendered: '["pid:999999"]' },
       { name: "an object", holder: {}, rendered: "{}" },
     ];
 

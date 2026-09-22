@@ -183,6 +183,14 @@ export async function inspectOwnerTransferLock(runDir: string): Promise<LockInsp
   // this path: the rendering would turn an array into a string before parsePid ever saw it, and
   // the guard would stop being reachable. Measured 2026-09-23 -- with them collapsed, deleting
   // parsePid's guard changes nothing here at all.
+  //
+  // The regression this guards against is narrower than "delete the guard" and easier to miss:
+  // leave parsePid's type guard exactly where it is, and just change the call below to pass
+  // `holder` instead of `rawHolder`. That alone typechecks clean -- `tsc` exits 0 -- and the suite
+  // shows no NEW red: measured 2026-09-23, 778/779 tests still pass, and the one failure is the
+  // pre-existing, unrelated stopProof timeout already on this repo's known-red list. The only
+  // things standing between an operator and that regression are this comment and the M1 mutation
+  // entry in the ledger.
   let holder: string;
   let rawHolder: unknown;
   try {
