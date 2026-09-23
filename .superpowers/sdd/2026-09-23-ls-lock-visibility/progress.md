@@ -248,3 +248,293 @@ npx tsc --noEmit                                                    # RC 0
 
 **提交**：`fix(test): record the no-derived-fields guard's blind spot on lock/state, drop the last unchecked cast`
 （修复轮 1，紧跟在 `2e918a7` 之后）。
+
+## 11. Task 11–12：勘误补全 ＋ run-registry 更正节 ＋ 全树扫描 ＋ 判据脚本 ＋ 变异总账
+
+> **归属**：本节由本轮控制器会话 `1de723ea`（与本文件头部同一会话）在 BASE `bdaa92c`
+> 上直接执行，未开 worktree，未 push。落地提交见 §11.7。
+
+### 11.1 全树扫描
+
+**词表机械导出**（来自本轮已落地的勘误句子，覆盖英文源注释与中文活文档两种语料）：
+
+```
+英文：not-determined-dead, two-state, three-state, classifyHolderLiveness, isProcessActive,
+     "no derived field", "no derived judgment", "judging liveness in a reporting path",
+     "will never be released", "exported for `ccloop unlock`", schemaVersion
+中文：两态, 三态, 报告路径, 永不, 派生, 名单
+自测控制词：zzz-not-present-anywhere-in-this-repo（已知必不命中）
+```
+扫描范围 `src tests docs .superpowers`，后缀 `.ts .md .mjs .js`，脚本见
+`/private/tmp/claude-501/-Users-biran-code-skills-loop-Orca/1de723ea-71e0-4d2e-99b6-7d1116658c4f/scratchpad/scan_terms.py`。
+
+**扫描器自测**（跑于 pass 1，命令 `python3 scan_terms.py`，整份读回 `/tmp/t11-scan-pass1.txt`）：
+- 已知必命中词 `isProcessActive` → **251**（> 0，未恒零）
+- 已知必不命中词 `zzz-not-present-anywhere-in-this-repo` → **0**（未恒命中全部行）
+⇒ 扫描器不是"恒返回 0"也不是"逢词必中"的空判据。
+
+**Pass 1**（改动前基线扫描，`/tmp/t11-scan-pass1.txt`，929 行）：18 个词共约数百行命中，
+逐词过一遍上下文（非机械计数，读原文判断是否为"本轮弄假但没人改"），命中大多数是：
+① 本轮已落地的 ERRATUM 自身引用旧词（预期，不是问题）；② 历史台账/评审 diff 的叙述性引用
+（`.superpowers/sdd/**` 除本轮目录外，铁律 4 冻结，不碰）；③ 与本轮话题无关的同词重名
+（如 `名单` 在 handoff.md 里指的是另一份 flake 名单，`派生` 在 2026-08-01 那份 spec 里说的是另一件事）。
+
+**逐条定位到的、需要处理的真命中**（本轮弄假、且此前没有勘误覆盖）：
+
+1. `src/sweep/lockPresence.ts:15` 的「judging liveness in a reporting path」段——spec §7 清单里
+   点名的一处，Task 1–10 里没人接。**已处理**：块末追加 ERRATUM（人裁 131），写明两半——
+   `ls` 那半被推翻，`sweep` 自身那半原样成立（§11.2 第 1 条）。
+2. `docs/superpowers/specs/2026-07-28-run-registry-design.md` §6／§15#3——spec §7 清单里点名的
+   第二处。**已处理**：文件末尾追加 `## ERRATUM (ls lock visibility, HUMAN RULING 131)` 节
+   （§11.2 第 2 条）。
+3. `src/persistence/fileStore.ts:973` 起「parsePid and isProcessActive are exported for
+   \`ccloop unlock\`」——spec §7／§10 都点名。**已处理**：块末（`export function parsePid` 之前）
+   追加 ERRATUM，写清 `isProcessActive` 今天零生产调用点、只剩两处测试 import，删不删是人的事
+   （§11.2 第 3 条）。
+4. `src/persistence/fileStore.ts:1143` 附近「"No longer alive" means TODAY's two-state
+   isProcessActive ... not E1's three-state classifyHolderLiveness」——**扫描新捞到，spec §7
+   清单没列**：这段紧邻的、稍后的另一段（原 ruling-108 段）已经有人裁 132 的 ERRATUM 说
+   "isProcessActive now sits OUTSIDE the try"，但**这一段自己没有**，逐字核对后确认它现在也假
+   （今天走的是 `classifyProcessLiveness`，不是 `isProcessActive`）。**已处理**：块末追加 ERRATUM。
+5. `src/persistence/fileStore.ts:1389` 附近「not alive under isProcessActive (two-state, human
+   ruling 86)」——**扫描新捞到，同一份说法在文件里第三处重复**（`acquireOwnerTransferLock`
+   上方那段），恰好呼应它自己邻近那条「I-1 ... MISSED when the same sentence was corrected
+   earlier in this file: one claim in three places, two of them left standing」的自嘲。**已处理**：
+   块末追加 ERRATUM，并在文中点名"这是第三处，别再漏"。
+6. `src/unlock/inspectLock.ts:29-34`（人裁 83 那段 ERRATUM 的收尾句）「the redline function's
+   isProcessActive has two [states] and reads all three as alive」——**扫描新捞到**：现测这句已假，
+   红线函数今天对 pid:0／越界 pid／EPERM 三格给的是独立的 `liveness-undetermined` 出口，
+   不再折叠进 "alive"。**已处理**：块末（imports 之前）追加 ERRATUM。
+
+**评估后判定"不在本轮范围"的命中**（记录理由，不动手，避免多 agent 仓库里越界改别的完成轮次）：
+- `docs/superpowers/specs/2026-08-01-sweep-and-transactional-continuation-design.md`、
+  `2026-08-26-i3-unattributable-lock-design.md` 里对 `isProcessActive` 的描述——这些是**更早、
+  已完成轮次**自己的设计存档，其中对 isProcessActive 角色的描述本来就已经被【那些轮次之间】
+  的多次改动（不只本轮）逐步稀释；本轮的 spec §7／§11 都没有点名它们，扫描的目的是「本轮弄假的
+  没人记得改」，不是「审计全仓库有史以来的每一份 spec」。留给未来若真要处理它们的轮次。
+- `docs/superpowers/specs/2026-09-23-i2-array-holder-coercion-design.md`——这是**另一个已完成的
+  平行轮次**（i2-array-holder-coercion）自己的勘误清单草稿，其中提到的 `isProcessActive`
+  短路表达式是**那一轮自己**要处理的既有技术债，不是本轮 ls-lock-visibility 弄出来的。
+- `docs/handoff/handoff.md` 里的 `永不`／`名单` 命中——逐条读过，说的是另一件事（一次"绿本身
+  可能是空"的教训、以及另一份 flake 名单），与本轮的 liveness/derived-field 话题无关。
+
+**Pass 2**（改动后重扫，`/tmp/t11-scan-pass2.txt`，946 行）：各词命中数按预期**上升**
+（如 `isProcessActive` 251→259，`two-state` 16→19），因为新增的 ERRATUM 本身引用了这些词——
+这是预期行为，不是残留。**逐条核对新增的命中全部落在刚写的 ERRATUM 文本里**，没有新的"未勘误"命中。
+
+**Pass 3**（收敛确认，`/tmp/t11-scan-pass3.txt`）：与 pass 2 **逐字节相同**
+（`diff /tmp/t11-scan-pass2.txt /tmp/t11-scan-pass3.txt` 无输出）⇒ **跑到收敛，不是跑一次就停**。
+
+`npm run typecheck` 于全部勘误落地后：`RC=0`（`/tmp/t11-typecheck-after-errata.txt`）。
+
+### 11.2 勘误清单（本节逐条对应 §11.1 第 1–6 条的落点）
+
+| # | 文件 | 原句 | 处置 |
+|---|---|---|---|
+| 1 | `src/sweep/lockPresence.ts` | "judging liveness in a reporting path would put a decision where an observation belongs" | 块末追加 ERRATUM（人裁 131）：`sweep` 本身不变，`ls` 被推翻，两半都写 |
+| 2 | `docs/superpowers/specs/2026-07-28-run-registry-design.md` | §6 "no derived field of any kind"／§15#3 "no derived judgment ... enforced by a test" | 文件末尾追加 `## ERRATUM (ls lock visibility, HUMAN RULING 131)` 节，原文一字不改，含 §15#3 判据接不住新列的现测事实（详见 §10 本文件） |
+| 3 | `src/persistence/fileStore.ts:~973` | "parsePid and isProcessActive are exported for `ccloop unlock`" | 块末（`parsePid` 定义前）追加 ERRATUM：`isProcessActive` 零生产调用点，只剩 `tests/persistence/fileStore.test.ts:1086`／`tests/unlock/inspectLock.test.ts:317` 两处测试 import；删不删留给人 |
+| 4 | `src/persistence/fileStore.ts:~1143` | "'No longer alive' means TODAY's two-state isProcessActive ... not E1's three-state classifyHolderLiveness" | 块末（`let pid: number \| null;` 前）追加 ERRATUM |
+| 5 | `src/persistence/fileStore.ts:~1389` | "not alive under isProcessActive (two-state, human ruling 86)" | 块末（`acquireOwnerTransferLock` 定义前）追加 ERRATUM，点名"同一句子在本文件第三处" |
+| 6 | `src/unlock/inspectLock.ts:~29-34` | "the redline function's isProcessActive has two and reads all three as alive" | 块末（imports 前）追加 ERRATUM |
+
+⚠️ **spec §7 清单里 `fileStore.ts:881`「applied to a third meaning」一项——控制器已撤回，本轮不追
+ERRATUM。** 理由（spec §11.2 现测已记）：那句话说的是 `OwnerTransferLockUnattributableError`
+**这个类自己**是该 doctrine 的第三种含义，新类自己的注释已写明「A fourth meaning, and a THIRD
+sibling」——加一个兄弟不会让"它自己是第三种含义"变假。追 ERRATUM 只会是噪音。
+
+### 11.3 `scripts/check-known-reds.mjs`
+
+脚本见 `scripts/check-known-reds.mjs`。判据 1 的机械子集判定：失败集合的**全名**必须是
+roster 的子集，比较用双向 `endsWith`（不是相等）——因为 vitest 的 `fullName` 字段是
+`ancestorTitles` 与 `title` 用**空格**拼接，不是 `" > "`；脚本自己用
+`[...ancestorTitles, title].join(" > ")` 重建全名，再和 roster 按后缀双向比对
+（roster 第 1 条自带文件路径前缀，其余不带，双向 `endsWith` 两种形状都接得住）。
+
+**Roster 是十三个全名**（十二条编号项，第 12 项是 `codexWatchdog` 的一对，算两个全名）——
+不是脚本草稿里写的七条：
+
+```
+1. tests/control/stopProof.test.ts > quiet execution proof > does not treat leader exit as
+   group quiet and proves only after the full tree is gone
+2. run-scenario CLI > records env names only and tracks descendants rooted at the spawned pid
+3. runLoop > persists phase usage evidence from the subprocess adapter without recomputing
+   controller totals
+4. runLoop > accounts an execute timeout that rejects after the abort as exhaustion
+5. run-scenario CLI > fails on an existing run directory without creating evidence or
+   harvesting stale run data
+6. SubprocessClaudeAdapter > waits for close before interrupting a close-pending successful
+   execute
+7. Codex phase process > kills a TERM-ignoring process before returning abort
+8. run-scenario CLI > runs when invoked through a canonical-path alias
+9. run-scenario CLI > creates a fresh nested evidence directory when its parent does not exist
+10. isolated Codex acceptance harness > succeeds only with real controller, three phases and
+    published answer
+11. accepts the controller's zero-clamped soft budget and records the overrun
+12a. matches historical double-space start identities on single-digit days
+12b. still reaps registered groups when the observation file becomes unwritable
+```
+
+**脚本自测（两个方向都跑，都记 RC）**：
+```
+node scripts/check-known-reds.mjs /tmp/fake-ok.json   → RC=0（只含已知红，见 /tmp/selftest-ok.txt）
+node scripts/check-known-reds.mjs /tmp/fake-bad.json  → RC=1（含一条未知红，见 /tmp/selftest-bad.txt）
+```
+`/tmp/fake-ok.json` 含 1 号与 8 号已知红 ＋ 1 条 `passed`；`/tmp/fake-bad.json` 含 1 号已知红
+＋ 1 条全新未知红 `something brand new > that nobody has seen`。两个方向都对，脚本才算数——
+只跑「必不抓」那一半，恒返回 0 的脚本也能过，这里两半都真的跑了。
+
+**真实跑一次**（`export ECC_GATEGUARD=off DISABLE_OMC=1`）：
+```
+./node_modules/.bin/vitest run --reporter=json --outputFile=/tmp/reds.json > /tmp/reds.log 2>&1
+node scripts/check-known-reds.mjs /tmp/reds.json > /tmp/reds-verdict.txt 2>&1; echo "RC=$?" >> /tmp/reds-verdict.txt
+```
+**结果**（`/tmp/reds-verdict.txt`，整份读回）：
+```
+known reds in roster: 13
+failed: 1
+  known  quiet execution proof > does not treat leader exit as group quiet and proves only after the full tree is gone
+unexpected: 0
+RC=0
+```
+全量 `numTotalTestSuites` 59 files（*）／`numTotalTests` 814，`numFailedTests` 1（就是 roster 第 1 条那条
+稳定红），`success: false`（因为那一条红），但 `check-known-reds` 判定 **RC 0**，与 Global
+Constraints §8「baseline 失败集合 ⊆ roster」一致。
+（*）文件数与开工基线 58 有 +1 出入，未深究——不影响判据 1 的子集判定，判据按全名不按文件数。
+
+### 11.4 变异电池总账（Task 1–10 全量，逐条"期望红／实际红／sha256 前后"）
+
+⚠️ **口径说明**：Task 1、Task 8–10 的原始报告本身已经记了全 64 位 sha256，下表直接照抄。
+Task 2、Task 3–7 的原始报告把 sha256 写成了省略号截断形式（`sdd-ledger.md` 里已有 deferred
+minor 记录这件事，裁定"不回溯改，只从下一 Task 起收紧"）。**为了满足本批次"每次引用都给全
+64 位"的要求**，本节没有凭空补全那些截断值，而是**在同一份 HEAD（`bdaa92c`）上真实重放了
+这些变异**：核实过 `fileStore.ts`／`runLoop.ts`／`resumeLoop.ts`／`leaseHeartbeat.ts` 四个文件
+从 Task 3–7 落地到今天**字节未变**（Task 8–10 没碰它们，`shasum` 全部与截断引用的前后缀吻合），
+所以在同一份 pristine 源码上重放同一处删除/替换，得到的就是当年本该测到、只是没被完整记下来
+的**同一个**全 64 位值——不是另编的近似值。命令与结果见
+`/private/tmp/claude-501/-Users-biran-code-skills-loop-Orca/1de723ea-71e0-4d2e-99b6-7d1116658c4f/scratchpad/run_mutations.py`
+与其输出 `/tmp/mutation_run.log`（整份读回，20 条全部 RC=1，即红被看见）。
+**六条重放结果与原报告截断值完全吻合**（M4-1、M4-4、M5-1、M5-2、M5-3、M6-3 的全 64 位前
+若干／后若干字符与原表一致），其余条目的具体删除文本无法逐字节还原原始 diff（原报告没留
+下确切 diff），但删除的**分支/位置**与预测一致、且**实际红的测试名与原报告记录的完全一致**
+——记为"今日重放测得"，不冒称"原始测量"。`M5-3` 的具体变异写法是从中文 brief
+"把两处的 detail 改成共用一个字面量（让事件与错误漂移）" ＋ 原报告"drift 落在 claim-catch
+共用的 appendEvent 调用上"反推重建的：把 claim-catch 的 `appendEvent` 的 `detail` 硬编码成
+字面量、`throw` 那侧仍用计算值——**测得 5 条红，与原报告"5 tests"完全一致**，且 sha256 也
+全 64 位吻合，判定重建准确。
+
+#### Task 1（`fileStore.ts` 红线活性下沉 ＋ `noUnlockValueImport.structure.test.ts` 守卫）
+
+| 变异 | 场景/改动 | 期望红 | 实际红 | sha256 前 | sha256 后 |
+|---|---|---|---|---|---|
+| M1-1 | 删 `classifyProcessLiveness` 的 `pid < 1` 提前返回 | pid-0 判据 | `classifyProcessLiveness > answers unknown for pid 0 WITHOUT issuing the syscall, and names why`（1/4，与预测一致） | `a7ec324812fe998f3f74eb43496920d570eff69b55733d551ade70614832ee73` | `05abfb1b66fe1ad42aab80b394ebbf8771994e1d256999153d4d2fe8efb121e1` |
+| M1-2 | `reason` 字面量改成 `"unknown"` | 越界 pid 判据 | `... answers unknown with the errno for a pid too large to be one`（1/4，与预测一致） | 同上 | `75e1c865818dc5d9b48a059247b65c8b8cbbacc023ec9dd1eaeeb8cb1329e655` |
+| M1-3 | `code === "ESRCH"` 取反 | brief 预言 ESRCH＋alive 两条 | **预言错**：实际是 ESRCH 判据 ＋ 越界-pid 判据（2/3）——"alive" 那条走 `process.kill(process.pid,0)` 成功路径，结构上进不了被变异的 `catch`；brief-anchor 错误，非实现缺陷 | 同上 | `f0a51226155c7b01d9614bdf27974dceb485a45f55b8f0c9fc104042b275d22b` |
+| M1-4 | 单行值导入 `ownerTransferLockPath` from `../unlock/inspectLock.js` | 模块边界判据 | `fileStore module boundary > never value-imports from src/unlock...`（1/4，与预测一致） | 同上 | `be1b1ba56dd7c2e9e6de6fb0960ec83480f8931fe5d08113be584bad593ed33f` |
+| M1-5（修复轮1新增） | 多行值导入（无注释） | 同上，验证收紧后的解析器仍抓多行 | 同上判据（1/5） | 同上 | `695e98432f30e9fc9a8ce87bbe3ec0971ccd4dd48ed465ff06475215523d562c` |
+| M1-6（修复轮2新增） | 多行值导入，续行带 `// TODO;` 注释（分号在注释里） | 同上，验证"先剥注释再判" | 同上判据（1/7） | 同上 | `88edd9854fe4bf57a12aac90fbf46ec3f0849bc38cf52d4c60c7dfc8362154b7` |
+| M1-7（修复轮3新增） | 测试文件自身：`stripComments` 换成恒等函数（针对测试自身的空判据发现） | 前一轮新增的两条判据都应变红 | 两条判据同时变红（2/6）：`... does not let a semicolon inside a trailing comment truncate...` 与 `... treats a mention of ../unlock/ inside a trailing comment as gone...` | `e97b90923562e3f51b97a5b4340edb2b1aeb38c6a3d3c44c09900adb877de3d7`（测试文件自身） | `1ae33adfc3f8d0699a131ad0a0872520a2f862eda45c7ec90ce2afe64a49e356` |
+
+来源：`task-1-report.md`（全 64 位原文已给）。M1-4／M1-5 在修复轮 2 重跑回归检查，红不变。
+
+#### Task 2（红线函数分格 ＋ 新错误类 ＋ 构造点）
+
+| 变异 | 场景/改动 | 期望红 | 实际红 | sha256 前 | sha256 后（今日在 HEAD 重放，含义见口径说明） |
+|---|---|---|---|---|---|
+| M2-1 | 删 `liveness.verdict === "unknown"` 分支 | unprobeable-holder 判据 | 原报告：1/4，`refuses with a named liveness error...`。**今日在 HEAD `bdaa92c` 重放**：2 条红（多出 Task 3 后来加的"spends the whole reconciliation retry bound"判据，因为它也走同一分支——本轮之后新增判据覆盖面变宽，是预期的，不是缺陷） | `3bd418243959c276803512eac65c9efd6553086cf1da7b2d40a9c6546aba713c` | `3d9ef258f50f66559cb8c4f09ea0374753bf83d60e313ca1a82314be37b25f47` |
+| M2-2 | 构造点 liveness-undetermined 分支改抛 `OwnerTransferLockBusyError` | 同上 | `refuses with a named liveness error...`（1/4，与预测一致） | 同上 | `a201621faaad9c626d9367600467c37f629e5a76e8c1145c4458198e5865816f` |
+| M2-3 | 消息文案 "may or may not clear" → "will not clear" | 同上 | 同上（1/4，与预测一致） | 同上 | `6aad7d4d8e5ce2f9d047993c7a7af0464868ea41e5c9781678fc08b1a27ed146` |
+| M2-4 | holder-alive 分支也抛新类 | `still calls a genuinely live holder busy...` | 同上（1/4，与预测一致） | 同上 | `e2acdc774dfdb2ab21d4efdc5e7815131303d36b5c8f2d2c9a1e35776f9be944` |
+| M2-5 | `liveness.verdict === "alive"` 取反 | brief 预言 2 条红 | **预言错（原报告已记）**：实际 3 条红——取反后 `"dead" !== "alive"` 也为真，dead-holder 判据被连带带红。今日重放：3/4，测试名与原报告一致 | 同上 | `5c735b6cded89627f5ad50f680ae67ad38d8e9765be72f46256b7441f92cf110` |
+
+来源：`task-2-report.md` 记录了原始测试名与截断 sha；后一栏全 64 位为今日重放（口径见 §11.4 开头）。
+
+#### Task 3–7（三处重试闸门 ＋ 两处处置点 ＋ 逃逸点，合并派发）
+
+| 变异 | 场景/改动 | 期望红 | 实际红 | sha256 前 | sha256 后（今日重放） |
+|---|---|---|---|---|---|
+| M3-1 | 删 `fileStore.ts` 调解重试闸门新增的 `\|\| ...LivenessUndeterminedError` 分支 | 调解重试判据 | `spends the whole reconciliation retry bound on an unprobeable holder...`（1/1，与预测一致；今日重放因新增判据覆盖变成 1/95 skip 形态，同一条判据命中） | `3bd418243959c276803512eac65c9efd6553086cf1da7b2d40a9c6546aba713c` | `9d99dfe2ce9392e68534e3456f205a23dcfdca7976e6f33b3323a9f6411daa67` |
+| M3-2（重跑，Task4 之后） | `runLoop.ts` 重试闸门同一分支 | brief 预言由 Task4/5 判据接住 | **预言错（第一次跑 0 红）**：实施席补了专门判据后才捕获，`lease heartbeat lifecycle > retries a liveness-undetermined owner-transfer lock to the same bound a busy one gets, before abandoning`。今日重放（对最终已含该新判据的 HEAD）：1/32，同一条判据命中 | `62d3a3b73c59e77259b9a4430d554e6425d41a8e54f361e8284b9154f570131a` | `97e98b255747445bf64df95e5f5bd3ba11fb7be9101053b619733596f34b8252` |
+| M3-3（重跑，Task5 之后） | `resumeLoop.ts` 同一分支 | 同上，Task4/5 判据接住 | **预言错（第一次 0 红）**，补判据后：`resumeLoop > retries a liveness-undetermined owner-transfer lock during the resume claim to the same bound a busy one gets`。今日重放：1/20，同一条命中 | `0c89587eb17b5f04b92d2a490082a582b96fbb061672ecaf161650be641831a2` | `5222268d5011000a50b787971079f4836c6e681a4579a9d9ecd3168131e1a3e9` |
+| M4-1 | 删 `runLoop.ts` 第一处处置点新分支 | 2 条判据 | `contains an undetermined-liveness transfer lock...` ＋ `retries a liveness-undetermined...`（2/32，与预测一致；今日重放 sha256 后**与原报告截断值完全吻合**：`12a86f31...c508016ea50`） | `62d3a3b73c59e77259b9a4430d554e6425d41a8e54f361e8284b9154f570131a` | `12a86f31c2e7ae16fb9e6a6208c36551db31604e7f7cd179db0f8c508016ea50` |
+| M4-2 | 删 `runLoop.ts` 第二处处置点新分支 | 1 条判据 | `abandons the attempt in place when the ownership read hits an undetermined-liveness transfer lock...`（1/32，与预测一致） | 同上 | `276005b2258a319ce44a56b19ab8c5fc5ab3f60e56aaedbba6d14ced5932e173` |
+| M4-3 | 两处新分支都去掉 `${String(error)}` | 2 条判据 | 同 M4-1 的两条（2/32，与预测一致） | 同上 | `b537ca1dc3f21accc8dec3acd61a1ae8ed9df3af001327709fff017a2e826191` |
+| M4-4 | 第二处处置点删 `writeOwnedRunState` | 1 条判据（推翻人裁 118 对该分支的"钉不住"） | `abandons the attempt in place...`（1/1，与预测一致；今日重放 sha256 后**与原报告截断值完全吻合**：`e6329edd...b481f9a233da3`） | 同上 | `e6329edd9a7b88365b5c0ae179569d653ea1000fee8f8fa03efb481f9a233da3` |
+| M5-1 | 删 `resumeLoop.ts` 读-catch 新增三元分支 | 1 条判据 | `names an undetermined-liveness transfer lock on the entry read...`（1/20，与预测一致；今日重放 sha256 后**与原报告截断值完全吻合**：`9e25bc4a...4de318681404c34fce80a82f`） | `0c89587eb17b5f04b92d2a490082a582b96fbb061672ecaf161650be641831a2` | `9e25bc4a1efb1c46b3a44e154fcb53883fc1f8744de318681404c34fce80a82f` |
+| M5-2 | 删 `resumeLoop.ts` claim-catch 新增三元分支 | 2 条判据 | `says the liveness could not be determined...` ＋ `retries a liveness-undetermined...`（2/20，与预测一致；今日重放 sha256 后**与原报告截断值完全吻合**：`31062cd7...981589fcc7c46594cbd4`） | 同上 | `31062cd7340f3b99e0b0af120fd50e994c55e1a2a58d981589fcc7c46594cbd4` |
+| M5-3 | 两处 detail 改成共用一个字面量（事件与错误漂移） | brief 预言仅命中判据 2 | **比预言宽**：5 条红（原报告已记"wider than predicted"）——今日重放同样测得 **5/20**，与原报告"5 tests"一致；sha256 后**与原报告截断值完全吻合**：`ef74c0b3...397135e7ea6a0d8389bf` | 同上 | `ef74c0b3d4ea0baf5095de091ff2e6c632d0a05ada67397135e7ea6a0d8389bf` |
+| M6-1 | 删 `leaseHeartbeat.ts` affirm-path 新分支 | 2 条判据 | `records an undetermined-liveness owner-transfer lock once...` ＋ `records both lock errors in one run...`（2/28，与预测一致） | `51159f2ed227be050c32bde2c3a6c6edd5817e80a0e19ab90537ba289b038990` | `7f76df67c3ab52a62d9d35da44b8813e4d27721e12f1294c883193dbbddd65b3` |
+| M6-2 | 删 `leaseHeartbeat.ts` release-path 新分支 | 1 条判据 | `records an undetermined-liveness lock when stop() is the first to meet it...`（1/28，与预测一致） | 同上 | `03a2767a4ed62c6a4b948aace214a9e669f7474f0e006a4011211ccf9ab59bef` |
+| M6-3 | 事件类型改回 `owner_transfer_lock_unattributable` | 3 条判据 | criteria 1/2/3 全红（3/28，与预测一致；今日重放 sha256 后**与原报告截断值完全吻合**：`64a6e883...274fef3d928fa4c6b0`） | 同上 | `64a6e883def4536dfb95f995473a37944d7f4b006b97c7274fef3d928fa4c6b0` |
+| M6-4 | 两个 flag 合并成一个 | 1 条判据 | `records both lock errors in one run, because one flag cannot speak for the other`（1/28，与预测一致） | 同上 | `6341079b8759f8e65a13182a597db1d75416f29ead2f7f8ed5e9d0222ad9fd62` |
+| Task7 逃逸点 | `fileStore.ts` `readOwnerRecord` 逃逸条件删掉 `\|\|` 那支 | 判据 ＋ 意外收获 | `fileStore > lets an undetermined-liveness lock escape the read...`（预测）**AND** `lease heartbeat lifecycle > abandons the attempt in place...`（意外收获，证实 Task7→Task4 的隐藏依赖）；今日重放 2/148，测试名与原报告一致 | `3bd418243959c276803512eac65c9efd6553086cf1da7b2d40a9c6546aba713c` | `1b63a264dbe8c1b43bee6991f49b747c5a9d432af711b102c3ff55360ad0e975` |
+
+来源：`task-3-7-report.md`（原始截断 sha ＋ 原始判据名）。后一栏全 64 位为今日在 HEAD `bdaa92c`
+重放所测（口径见 §11.4 开头），命令与整份日志见 `/tmp/mutation_run.log`。
+
+**登记为"钉不住"的项**：本轮 Task 1–7 **没有**任何一条变异最终登记为"钉不住"——
+两处预告过"可能钉不住"的（`runLoop.ts` 第二处处置点的 `writeOwnedRunState`、
+`leaseHeartbeat.ts` 两个独立 once 标志）最终都造出了判据（M4-4、Task6 criterion 3），
+详见 `task-3-7-report.md`"Registered as unpinnable"一节：**None**。
+
+#### Task 8–10（`ccloop ls` 锁可见层）
+
+| 变异 | 场景/改动 | 期望红 | 实际红 | sha256 前 | sha256 后 |
+|---|---|---|---|---|---|
+| M8-1 | 删 `row.kind !== "run"` 判断（issue 行也被探测） | never-probes-issue-row 判据 | 该判据 ＋ 连带命中 in-scan-order 判据（2 条，符合预期加连带） | `9949dd69e43bb2c774f2eb11d143dd6d2879255e54aaffc11a2685c58672cae5` | `c3991e6de664d70fd5334bdfc33eac32e8cd7bf3ea4fdffa43309e38f31d3d8a` |
+| M8-2 | 只在 `state !== "absent"` 时挂 `lock` | attaches-inspection-to-every-run-row 判据 | 该判据（1 条，与预测一致） | 同上 | `8271f3f822798bb07dedf05864ff4b3facc2683718c72827ae8cf19b89edab7a` |
+| M8-3 | `Promise.all` ＋ `.reverse()` | brief 预言"in scan order"判据 | **预言不准（原报告已记）**：`in scan order` 判据只钉调用序不钉结果序，**不红**；实际是 never-probes-issue-row 判据被打红（2 元反转导致 `attached[0]` 互换）。不是覆盖缺口（该变异确实被逮住），但诊断精度被记为"registered as unpinnable / flagged"里的一条 | 同上 | `25207d90dc3d75322432f79a19cd810ecde768fd392f768ef7fe2954d817031e` |
+| M8-4 | 探测总用 `rows[0].path` 而非 `row.path` | 2 条判据 | never-probes-issue-row ＋ in-scan-order（2 条，与预测一致） | 同上 | `f84884b91a1958bdaa35a70a13cc2c42ad6df21630371d869c41781bb007d4ea` |
+| M9-absent | 删 `absent` 早退早返回 | absent 渲染判据 | 只有该判据（1/18，与预测一致） | `9c8d08cf250291b44764a5ebe89831173cb7039e56785504d4d0ced9fab63837` | `2e0be8fe4e182771e37656870a045e6b9aeef573213adc6493f48ed738036786` |
+| M9-dead | 删共用分支的 `case "dead":` | dead 渲染判据 | 只有该判据（与预测一致） | 同上 | `9d79aa29028d6b6f1de0d714977c1da74da532b33bef6e2bb0e72c6554716edd` |
+| M9-alive | 删共用分支的 `case "alive":` | alive 渲染判据 | 只有该判据（与预测一致） | 同上 | `f39ee06dad32dec3b4b633d3218960127b7ba7c6d109d3410c55a29ef2c097a2` |
+| M9-liveness-unknown | 删该 case | liveness-unknown 渲染判据 | 只有该判据（与预测一致） | 同上 | `f08e2ab93eb44a9288ddd5b02bde5a73db5f5e53b5e25c583330ed5b5643ccbc` |
+| M9-unrecognized-holder | 删该 case | unrecognized-holder 渲染判据 | 只有该判据（与预测一致） | 同上 | `559e8192508767bbb29b19a7ba94e0b72ac79c82efaf5af7a68076e3a8d8d02c` |
+| M9-unparseable | 删该 case | unparseable 渲染判据 | 只有该判据（与预测一致） | 同上 | `0eaed8850b699c1199849e7158cdae28ec61f8ca9e98b3843a4033cd3eef1bc6` |
+| M9-file-unreadable | 删该 case | file-unreadable 渲染判据 | 只有该判据（与预测一致） | 同上 | `4af858063055f227a291245707de62f85ae855b88f0240f8158412e8afef3457` |
+| M9-8 | 让 file-unreadable 也渲染 digest | file-unreadable 判据（第 2 断言） | 只有该判据（与预测一致，brief 明确"期望红在第 2 条"） | 同上 | `7435554487094c09adec215a9885e213c3ac65be7750c223b5e0909026b2f039` |
+| M10-1 | 跳过 `attachLockInspections`，直接 `toScanResult(rows as never)` | 判据1／2 | 判据1/2 ＋ 3 条连带（共 5 条，全部因同一根因：`row.lock.state` 无条件访问），与预测一致外加连带说明 | `92e37f2daf52d762889471667f8b2b1c61000773235b8fe474ea17b6b01b74de` | `e84d971a681cc76181340660df3ea52e9121ec90eec546988934a512b87ef453` |
+| M10-2 | 把 `attachLockInspections` 挪到 `scanRootFailureDetail` 之前 | brief 明确预言"无红" | **无红**，41/41 全绿——今日重放**证实同一结果**（41/41），这是性能排序决策，本身就不该有判据钉它，无红不是缺口 | 同上 | `8e7433c2b65bf2a9b27f77ede9831c197350f9fffbb149984b3110c4337a254d` |
+| M10-3 | 遇到 `file-unreadable` 时 `return 1` | 判据2 | 只有判据2（与预测一致），今日重放证实同一结果 | 同上 | `32255339bd008d4ef198827b72ba12cfcc41652dcc75d65b3705944d7c575a29` |
+| M10-4（第一次） | 在 `attachLockInspections` 里对每个 run 目录 `utimes` | 零写判据 | ⭐ **意外全绿（44/44），真缺口**：共用的 `snapshotTree` 从未记录目录自身 mtime——零写证明对"目录被 touch"这一类回归结构性看不见（本轮之前就存在，本轮发现） | `src/unlock/lockRows.ts` 前 `9949dd69e43bb2c774f2eb11d143dd6d2879255e54aaffc11a2685c58672cae5` | 后 `00de62d5de82728fa96c4ca8eb485dccf772aca4a27715198c1caf96cb24c866` |
+| M10-4（修复 `snapshotTree` 后重跑） | 同一变异，`2e918a7` 之后的新 clone | 零写判据 | 正确单条变红（43/44），无连带损伤 | 同上（`2e918a7` 提交前后的 `lockRows.ts`） | 同上 |
+
+来源：`task-8-10-report.md`（M8/M9/M10-1/M10-4 全 64 位原文已给）；M10-2／M10-3 原报告 sha256
+栏是空的（`—`），**今日在 HEAD 用同一段代码重放补齐**（同一份 `src/cli.ts` pristine sha
+`92e37f2d...b74de` 与原报告完全一致，说明这两条变异是在同一份源码上重放，不是近似值）。
+
+**登记为"钉不住"的项**：Task 8–10 也没有正式登记任何一条为"钉不住"；M8-3 被记为
+"registered as unpinnable / flagged, not silently smoothed over"里的一条，但它**不是**判据看不见
+这个变异（它确实被逮住），只是诊断精度不如 brief 预期精准——已如实记录，未改代码。
+
+### 11.5 全量结果对照（判据 1、typecheck、build）
+
+命令（`export ECC_GATEGUARD=off DISABLE_OMC=1`，全部重定向到文件再整份读回）：
+```
+./node_modules/.bin/vitest run --reporter=json --outputFile=/tmp/final.json > /tmp/final.log 2>&1
+node scripts/check-known-reds.mjs /tmp/final.json > /tmp/final-verdict.txt 2>&1; echo "RC=$?" >> /tmp/final-verdict.txt
+npm run typecheck > /tmp/final-tc.txt 2>&1; echo "RC=$?" >> /tmp/final-tc.txt
+npm run build     > /tmp/final-build.txt 2>&1; echo "RC=$?" >> /tmp/final-build.txt
+```
+结果见任务收尾报告 `task-11-12-report.md`。
+
+### 11.6 变异副本处置
+
+本节所有变异重放都在会话 scratchpad 目录下的 `git clone --local` 副本
+（`ccloop-mutclone-t1112`）里进行，主工作树全程未被写入——每条变异跑完都用
+`git checkout -- <file>` 复原并用 `shasum -a 256` 核对复原后与变异前完全一致；主树的
+`fileStore.ts`／`runLoop.ts`／`resumeLoop.ts`／`leaseHeartbeat.ts`／`cli.ts` 在整个变异电池
+期间 `git status --porcelain` 全程为空。副本用完后按人裁 137 的站立授权（同时满足：不在
+`git worktree list` 里／HEAD 是主仓库已有提交／除变异残留与 `node_modules` 软链外无未跟踪
+内容）清理：先 `/bin/rm -f` 软链，再 `/bin/rm -rf` 目录，删后核对主树 `node_modules` 完好。
+
+### 11.7 提交
+
+本节改动分两笔提交：
+1. 代码勘误（`src/sweep/lockPresence.ts`、`src/persistence/fileStore.ts`、
+   `src/unlock/inspectLock.ts`）＋ `docs/superpowers/specs/2026-07-28-run-registry-design.md`
+   更正节 ＋ `scripts/check-known-reds.mjs`。
+2. `.superpowers/sdd/2026-09-23-ls-lock-visibility/progress.md`（本节）── 该目录整体
+   gitignored，需单独 `git add -f`，不与第 1 笔混在一次 `git add` 里。
+
+具体 SHA 见任务收尾报告 `task-11-12-report.md`。
