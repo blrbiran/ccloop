@@ -248,3 +248,20 @@ tests/validation/codexSoftBudget.test.ts tests/validation/codexWatchdog.test.ts`
   可保留注入版，但必须写明 (a) 是注入的 (b) 为什么真锁版不可用、量到了什么
   (c) 哪些判据钉住「真锁确实产生这个类」。**带证据走逃生口可以，不试就走不行。**
   **若错的代价**：多一轮修复；若真锁版反而钉不住变异，那就是更坏的判据，已要求它在那种情况下停下来报。
+- Task 3–7: fix round 1/5 复审 —— **All findings addressed: YES**，无新破损，`src/**` 本轮未动。
+  - `resumeLoop` 的判据**真改成了真锁**：写真 `.owner-transfer.lock`、调真 `resumeLoop()`、
+    `process.kill` 的 EPERM mock **只对持有者 pid** 生效（别的 liveness 提问不会被遮蔽），
+    计数断言是裸字面量 `3`。复审席还独立核了 `src/controller/resumeLoop.ts` 的控制流
+    （心跳只在 claim 成功后才起）⇒ 失败的 claim 不会再碰这把锁，所以 3 这个数是干净的。
+  - `leaseLifecycle` 走逃生口，**三条披露齐全且可核**：(a) 明说是注入；
+    (b) 实测 7 次的拆解 —— 3 次来自 `runLoop.ts:761` 的重试、3 次来自 `fileStore.ts:474` 的
+    reconciliation 闸门、1 次来自 `heartbeat.stop()` 清理；(c) 点名了哪些判据钉住「真锁 → 这个类」。
+  - 两条 Minor 都修了。
+- ⚠️ **deferred minor（复审席提，控制器采纳）**：变异表里的 sha256 被写成 `62d3a3b7...f570131a` 这样的**截断值**。
+  按 Rule 14「报实测值要连口径一起报全」，**后续 brief 一律写死「全 64 位十六进制，不许省略号」**。
+  这是历轮沿用下来的表格惯例，不是本轮引入的 ⇒ 不回溯改，只从下一 Task 起收紧。
+- **Task 3–7: complete (commits 8b8bddb..d093eee, review clean, 1 deferred minor)**
+
+## Task 8–10（合并派发，Ruling Q）
+
+- BASE `d093eee`。合并理由：8 产出的类型 9 要消费、10 要接线，拆开跑每一步的判据都得等下一步才能验。
