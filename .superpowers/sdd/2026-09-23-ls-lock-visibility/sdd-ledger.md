@@ -91,3 +91,14 @@ Spec: `docs/superpowers/specs/2026-09-23-ls-lock-visibility-design.md`（已读�
   **若错的代价**：几乎没有，收紧解析是纯加法。
 - ⚠️ 评审席提的 ⚠️ 项已现测核实：`c186195` 的归属行是 `Co-Authored-By: Claude Sonnet 5`，与 Ruling F 一致。
 - Minor（记录，不进修复轮）：`sdd-ledger.md` 随 `c186195` 一起进了提交 —— 是控制器先 `git add -f` 的，实施席只是没 unstage。无害。
+- Task 1: fix round 1/5 —— 实施席（resume，sonnet）改用 `importStatements()`（`/^import\b[\s\S]*?;/gm`）
+  把整条 import 语句拼起来再判，`import type` 豁免作用在拼接后的语句上；加了**反向对照**
+  （对 `fileStore.ts` 真实存在的多行 `../runtime/types.js` 类型导入必不误报）＋ 一条 anti-vacuity
+  （证明拼接确实跨了换行）。新变异 **M1-5**（多行值导入）**被看见红**，M1-4 在同一副本里重跑仍捕获。
+  覆盖判据 6/6 绿，RC 0。提交 `6a3fbab`。
+- ⚠️ **评审席报的「206 处多行 import」不准** —— 控制器现测 `^import {$` 在 `src/` 下是 **15 处**
+  （命令 `/usr/bin/grep -rn "^import {$" "--include=*.ts" src | wc -l`）。**结论不变**：那 15 处正好落在
+  Task 3–6 要改的 `runLoop.ts`／`resumeLoop.ts`／`leaseHeartbeat.ts` 里，缺陷是现实的。
+  ⇒ 又一次兑现「评审员的数字要自己核」。
+- ⚠️ 顺带踩到一次 `zsh` 吃掉无引号 `--include=*.ts`（整条命令 exit 1、输出为空，看起来像「零命中」）。
+  **加引号后才量到真值。** handoff §7.3 那条，实测再次成立。
