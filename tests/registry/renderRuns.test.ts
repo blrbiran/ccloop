@@ -5,10 +5,17 @@
 import { describe, expect, it } from "vitest";
 import { toScanResult, renderScanTable, scanRootFailureDetail } from "../../src/registry/renderRuns.js";
 import { scanRuns, MAX_SCAN_DEPTH } from "../../src/registry/scanRuns.js";
-import type { DirEntry, DirReader, ScanDeps, ScanRow } from "../../src/registry/scanRuns.js";
+import type { DirEntry, DirReader, ScanDeps, ScanIssue, ScanRow } from "../../src/registry/scanRuns.js";
 import type { RunFileReaders } from "../../src/registry/readObservedFile.js";
+import type { ReportedRunRow, ReportedScanRow } from "../../src/unlock/lockRows.js";
 
-const fullyObservedRun: ScanRow = {
+// Task 9 (human ruling 131) widened toScanResult/renderScanTable's row type from ScanRow to
+// ReportedScanRow, so every RUN fixture below now needs a `lock` field to satisfy the type AND
+// to avoid a real runtime crash in renderRunRow's lock-block renderer (it reads `row.lock.state`
+// unconditionally). This is the only change made to these two pre-existing fixtures; every
+// `it(...)` body below is untouched, and `lock: { state: "absent" }` does not change what any of
+// them assert.
+const fullyObservedRun: ReportedRunRow = {
   kind: "run",
   path: "/fake/root/run-1",
   observedAt: "2026-07-28T00:00:00.000Z",
@@ -40,9 +47,10 @@ const fullyObservedRun: ScanRow = {
       },
     },
   ],
+  lock: { state: "absent" },
 };
 
-const allAbsentRun: ScanRow = {
+const allAbsentRun: ReportedRunRow = {
   kind: "run",
   path: "/fake/root/run-empty",
   observedAt: "2026-07-28T00:00:00.000Z",
@@ -51,15 +59,16 @@ const allAbsentRun: ScanRow = {
     { file: "owner-record.json", fields: { runId: { kind: "absent" } } },
     { file: "owner-transfer.json", fields: { eligibleForContinuation: { kind: "absent" } } },
   ],
+  lock: { state: "absent" },
 };
 
-const directoryUnreadableRow: ScanRow = {
+const directoryUnreadableRow: ScanIssue = {
   kind: "directory_unreadable",
   path: "/fake/root/locked",
   detail: "EACCES: permission denied",
 };
 
-const depthTruncatedRow: ScanRow = { kind: "depth_truncated", path: "/fake/root/very/deep/path" };
+const depthTruncatedRow: ScanIssue = { kind: "depth_truncated", path: "/fake/root/very/deep/path" };
 
 // Walks every object/array in a value and collects every object key seen, recursively.
 function collectKeys(value: unknown, keys: Set<string>): void {
@@ -226,7 +235,11 @@ describe("toScanResult", () => {
     expect(rows.some((r) => r.kind === "directory_unreadable" && r.path === lockedDir)).toBe(true);
     expect(rows.some((r) => r.kind === "depth_truncated" && r.path === truncatedPath)).toBe(true);
 
-    const result = toScanResult(rows);
+    // This test's whole point is the RAW registry pipeline (scanRuns/observeRun), deliberately
+    // never passed through Task 8's attachLockInspections -- so these rows genuinely have no
+    // `lock` field at runtime, and toScanResult's type (widened for Task 9) does not describe
+    // them. The cast is honest about that gap rather than papering over it with a synthetic lock.
+    const result = toScanResult(rows as unknown as ReportedScanRow[]);
     const serialized = JSON.parse(JSON.stringify(result)) as unknown;
 
     const keys = new Set<string>();
@@ -299,5 +312,145 @@ describe("scanRootFailureDetail", () => {
 
   it("does not report a failure for a normal successful scan", () => {
     expect(scanRootFailureDetail([fullyObservedRun], "/fake/root")).toBeUndefined();
+  });
+});
+
+// Task 9 (human ruling 131): the seven-state owner-transfer.lock block. Each state gets its own
+// criterion asserting LITERAL text, not shape (design spec §5.3 #2) -- a criterion that only
+// checked "a lock block appeared" would stay green under a mutation that renders the wrong state's
+// words. digest values are hand-written literals (spec §5.3 #3), never computed by calling
+// digestLockContents, so the expectation cannot be produced by the same code path it is checking.
+describe("renderScanTable — owner-transfer.lock block (human ruling 131, spec §3.5)", () => {
+  const baseRun = {
+    kind: "run" as const,
+    path: "/runs/run-1",
+    observedAt: "2026-09-23T00:00:00.000Z",
+    files: [],
+  };
+
+  it("renders the absent state with only a state line, and no next: line", () => {
+    const row: ReportedRunRow = { ...baseRun, lock: { state: "absent" } };
+    const out = renderScanTable(toScanResult([row]));
+
+    expect(out).toContain("  owner-transfer.lock");
+    expect(out).toContain("    state: absent");
+    // Nothing to clear -- absent renders no next: line at all.
+    expect(out).not.toContain("next:");
+  });
+
+  it("renders the dead state with holder, pid, full digest and a next command", () => {
+    const row: ReportedRunRow = {
+      ...baseRun,
+      lock: {
+        state: "dead",
+        holder: "pid:12345",
+        pid: 12345,
+        digest: "a".repeat(64),
+        identity: { dev: 1, ino: 2 },
+      },
+    };
+    const out = renderScanTable(toScanResult([row]));
+
+    expect(out).toContain("    state: dead");
+    expect(out).toContain("    holder: pid:12345");
+    expect(out).toContain("    pid: 12345");
+    expect(out).toContain(`    digest: ${"a".repeat(64)}`);
+    expect(out).toContain("    next: ccloop unlock /runs/run-1");
+  });
+
+  it("renders the alive state with holder, pid, full digest and a next command", () => {
+    const row: ReportedRunRow = {
+      ...baseRun,
+      lock: {
+        state: "alive",
+        holder: "pid:12345",
+        pid: 12345,
+        digest: "b".repeat(64),
+        identity: { dev: 1, ino: 2 },
+      },
+    };
+    const out = renderScanTable(toScanResult([row]));
+
+    expect(out).toContain("    state: alive");
+    expect(out).toContain("    holder: pid:12345");
+    expect(out).toContain("    pid: 12345");
+    expect(out).toContain(`    digest: ${"b".repeat(64)}`);
+    expect(out).toContain("    next: ccloop unlock /runs/run-1");
+  });
+
+  it("renders the liveness-unknown state with holder, pid, reason, full digest and a next command", () => {
+    const row: ReportedRunRow = {
+      ...baseRun,
+      lock: {
+        state: "liveness-unknown",
+        holder: "pid:1",
+        pid: 1,
+        reason: "EPERM",
+        digest: "c".repeat(64),
+        identity: { dev: 1, ino: 2 },
+      },
+    };
+    const out = renderScanTable(toScanResult([row]));
+
+    expect(out).toContain("    state: liveness-unknown");
+    expect(out).toContain("    holder: pid:1");
+    expect(out).toContain("    pid: 1");
+    expect(out).toContain("    reason: EPERM");
+    expect(out).toContain(`    digest: ${"c".repeat(64)}`);
+    expect(out).toContain("    next: ccloop unlock /runs/run-1");
+  });
+
+  it("renders an unrecognized holder with its holder text and its full digest", () => {
+    const row: ReportedRunRow = {
+      ...baseRun,
+      lock: {
+        state: "unrecognized-holder",
+        holder: '["pid","1"]',
+        // A literal digest, written out rather than computed: an expectation the code under test
+        // produces can never fail.
+        digest: "a".repeat(64),
+        identity: { dev: 1, ino: 2 },
+      },
+    };
+    const out = renderScanTable(toScanResult([row]));
+
+    expect(out).toContain("  owner-transfer.lock");
+    expect(out).toContain("    state: unrecognized-holder");
+    expect(out).toContain('    holder: ["pid","1"]');
+    expect(out).toContain(`    digest: ${"a".repeat(64)}`);
+    expect(out).toContain("    next: ccloop unlock /runs/run-1");
+  });
+
+  it("renders the unparseable state with its parse-failure reason and full digest", () => {
+    const row: ReportedRunRow = {
+      ...baseRun,
+      lock: {
+        state: "unparseable",
+        reason: "Unexpected token } in JSON at position 4",
+        digest: "d".repeat(64),
+        identity: { dev: 1, ino: 2 },
+      },
+    };
+    const out = renderScanTable(toScanResult([row]));
+
+    expect(out).toContain("    state: unparseable");
+    expect(out).toContain("    reason: Unexpected token } in JSON at position 4");
+    expect(out).toContain(`    digest: ${"d".repeat(64)}`);
+    expect(out).toContain("    next: ccloop unlock /runs/run-1");
+  });
+
+  it("renders an unreadable lock file with no digest line at all, because it has no credential", () => {
+    const row: ReportedRunRow = {
+      ...baseRun,
+      lock: { state: "file-unreadable", reason: "EACCES" },
+    };
+    const out = renderScanTable(toScanResult([row]));
+
+    expect(out).toContain("    state: file-unreadable");
+    expect(out).toContain("    reason: EACCES");
+    // The one state with no digest: --force's credential is a hash of bytes that cannot be read.
+    // Printing a digest line here would advertise an escape hatch that does not exist.
+    expect(out).not.toContain("digest:");
+    expect(out).toContain("    next: ccloop unlock /runs/run-1");
   });
 });

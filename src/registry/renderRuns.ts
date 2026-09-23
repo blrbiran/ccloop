@@ -4,14 +4,22 @@
 // docs/superpowers/specs/2026-07-28-run-registry-design.md §6.3, §8.2, §9, §10.
 
 import type { FieldObservation, FileObservation } from "./types.js";
-import type { RunObservation } from "./observeRun.js";
 import type { ScanIssue, ScanRow } from "./scanRuns.js";
+// type-only: renderRuns.ts consumes the lock shape Task 8 produces, but must never VALUE-import
+// from src/unlock/ -- sweepRuns.ts value-imports scanRootFailureDetail FROM this file, so a value
+// import the other way would close a runtime cycle. `import type` is erased at compile time and
+// carries no such risk (design spec §3.2, human ruling 131).
+import type { LockInspection } from "../unlock/inspectLock.js";
+import type { ReportedRunRow, ReportedScanRow } from "../unlock/lockRows.js";
 
-export type ScanResult = { schemaVersion: 1; rows: ScanRow[] };
+export type ScanResult = { schemaVersion: 1; rows: ReportedScanRow[] };
 
 // Spec §6.3: the JSON output carries a schemaVersion because it is an interface a later queue
 // layer will consume. This layer neither renames nor drops any row — it only wraps.
-export function toScanResult(rows: ScanRow[]): ScanResult {
+//
+// schemaVersion stays 1, not 2 (design spec §3.4 decision A): the lock block is a new key on an
+// existing row shape, not a change to any field an old consumer already reads.
+export function toScanResult(rows: ReportedScanRow[]): ScanResult {
   return { schemaVersion: 1, rows };
 }
 
@@ -34,13 +42,60 @@ function renderFileObservation(file: FileObservation): string[] {
   return lines;
 }
 
+// Human ruling 131: the full seven states of inspectOwnerTransferLock, not just presence.
+// `ls` reports the structured state name, the state's own fields, and the next command --
+// never its own prose. `ccloop unlock` already owns the honest wording for each state (design
+// spec §3.4 decision F); a second, ls-authored account of the same lock could drift from it.
+//
+// `digest` renders in FULL (64 hex), never truncated -- it is the credential `ccloop unlock
+// --force --expect` needs, and a truncated one could not be pasted back in. `identity`
+// (dev/ino) is never rendered: it is an internal re-check fact for the delete path, not
+// something an operator acts on.
+//
+// `file-unreadable` is the one state that renders no `digest:` line at all: its credential is a
+// hash of bytes that could not be read, so there is nothing to show (inspectLock.ts's own
+// comment on that state says the same). `absent` renders no `next:` line: there is no lock to
+// clear.
+function renderLockBlock(lock: LockInspection, runPath: string): string[] {
+  const lines: string[] = ["  owner-transfer.lock", `    state: ${lock.state}`];
+  if (lock.state === "absent") {
+    return lines;
+  }
+  switch (lock.state) {
+    case "dead":
+    case "alive":
+      lines.push(`    holder: ${lock.holder}`, `    pid: ${lock.pid}`, `    digest: ${lock.digest}`);
+      break;
+    case "liveness-unknown":
+      lines.push(
+        `    holder: ${lock.holder}`,
+        `    pid: ${lock.pid}`,
+        `    reason: ${lock.reason}`,
+        `    digest: ${lock.digest}`,
+      );
+      break;
+    case "unrecognized-holder":
+      lines.push(`    holder: ${lock.holder}`, `    digest: ${lock.digest}`);
+      break;
+    case "unparseable":
+      lines.push(`    reason: ${lock.reason}`, `    digest: ${lock.digest}`);
+      break;
+    case "file-unreadable":
+      lines.push(`    reason: ${lock.reason}`);
+      break;
+  }
+  lines.push(`    next: ccloop unlock ${runPath}`);
+  return lines;
+}
+
 // Spec §15 #1: no row is ever omitted, including one whose every field is absent — this
 // function always emits the path line first, unconditional on what the fields contain.
-function renderRunRow(row: RunObservation): string[] {
+function renderRunRow(row: ReportedRunRow): string[] {
   const lines: string[] = [`RUN  ${row.path}  observed ${row.observedAt}`];
   for (const file of row.files) {
     lines.push(...renderFileObservation(file));
   }
+  lines.push(...renderLockBlock(row.lock, row.path));
   return lines;
 }
 
