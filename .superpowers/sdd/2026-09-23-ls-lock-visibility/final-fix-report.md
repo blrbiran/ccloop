@@ -355,3 +355,45 @@ pre-fix comparison — the main tree was never written to for M1).
    showed at the pre-fix-wave HEAD (59 files / 814 tests — file count off by one, test count
    matched). Not investigated further since it doesn't change the fix wave's correctness; noted
    under "Full-suite verification" above with the actual measured numbers at both HEADs.
+
+---
+
+## Post-review correction: this wave's own bonus erratum contradicted itself
+
+The scoped re-review confirmed all five named findings (C1, I1, I2, M1, M2) ADDRESSED and M3/M4
+correctly carried, but caught a defect in the unrequested "bonus" erratum I added beside I1's edit
+(documented under "Finding C1" above, "same falsity, different location"). That erratum's opening
+clause read "no longer holds for **two of its three** named cells" — measured false:
+`classifyProcessLiveness`'s behaviour (`pid < 1` → `unknown`; `ESRCH` → `dead`; every other branch,
+including `ERR_INVALID_ARG_TYPE`/`ERR_OUT_OF_RANGE` and `EPERM` → `unknown`) puts all three named
+cells (`pid:0`, an out-of-range pid, an EPERM refusal) into `liveness-undetermined`, none into
+`holder-alive`. The erratum's own later sentences already said this, so the clause contradicted the
+rest of its own block — an error introduced while writing the very fix this wave exists to make.
+
+**Fix.** `038d00f` (which carries the falsified erratum) is an ancestor of `origin/main`, confirmed
+published, so it was not edited in place. Appended a further erratum at the end of the same block
+(`src/persistence/fileStore.ts`, commit `46f2e98`) that: states the "two of its three" clause is
+wrong and that none of the three named cells reach the throw it was talking about; points out the
+block already contradicted itself in its own later sentences; states that a count should not have
+been written into an erratum at all, per this repository's own rule (design spec §7: an erratum
+must not carry a new count a later ruling could falsify — point at the ledger instead); and itself
+carries no new count, naming the three cells rather than tallying them.
+
+Recorded in `progress.md` §12.4 (commit `d0a1eb4`), including the process lesson: **this defect was
+introduced by an unrequested fix made inside the very wave that was closing this defect class** —
+the right move would have been to report the falsified comment I noticed and let it be reviewed,
+not fix it myself. Per the coordinator's explicit instruction for this correction, no other
+statement was touched or re-checked beyond this one, even where noticed.
+
+**Re-verification** (no source logic changed, comment-only):
+```
+export ECC_GATEGUARD=off DISABLE_OMC=1
+./node_modules/.bin/vitest run --reporter=json --outputFile=/tmp/ccloop-verify2-run.json > /tmp/ccloop-verify2-run.log 2>&1
+node scripts/check-known-reds.mjs /tmp/ccloop-verify2-run.json > /tmp/ccloop-verify2-verdict.txt 2>&1; echo "RC=$?" >> /tmp/ccloop-verify2-verdict.txt
+npm run typecheck > /tmp/ccloop-verify2-typecheck.txt 2>&1; echo "RC=$?" >> /tmp/ccloop-verify2-typecheck.txt
+```
+`check-known-reds.mjs`: `known reds in roster: 13`, `failed: 1` (the standing stopProof red),
+`unexpected: 0`, **RC=0** — unchanged. `npm run typecheck`: **RC=0** — unchanged. Nothing moved, as
+expected for a comment-only change.
+
+Commits: `46f2e98` (code/comment), `d0a1eb4` (progress.md §12.4).
