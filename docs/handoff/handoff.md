@@ -1,4 +1,4 @@
-# ccloop Handoff — *** **E1 的 I-2 已做完（2026-09-23，人裁 127／128）** ***；**下一件事是人裁 85（`ls` 也报锁）**；I-3(a) 已收口（人裁 125）
+# ccloop Handoff — *** **人裁 85（`ls` 也报锁）＋ I-3 已做完（2026-09-23，人裁 129–138）** ***；**下一件事是 G1（control v1 线上契约）**
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -24,23 +24,24 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 长 grep 截断成「[+N more]」，含括号的正则直接报错。
 **任何还原证明／字节比较／整份读回一律 `rtk proxy … > 文件` 再 `cat`／`wc -c`；读大文件用 `sed -n 'a,bp'` 或 python，不要用 grep。** ***
 
-### 2026-09-23 现测 —— *** **开工核对里那个期望值已过期，以本段为准** ***
+### 2026-09-23 现测（**本轮收尾**）—— *** **开工核对里那个期望值早已过期，以本段为准** ***
 
 命令 `./node_modules/.bin/vitest run`（`ECC_GATEGUARD=off DISABLE_OMC=1`，重定向到文件再整份读回）。
-**观测锚点** ＝ 提交主题行 `docs(handoff): roll the Orca section onto ruling G1, and say what it does not settle` 那一笔。
+**观测锚点** ＝ 提交主题行 `docs(sdd): append the post-review correction section to final-fix-report.md` 那一笔。
 
-- *** **现测 `56 files / 771 tests`。** *** control 子系统整个是 624 之后落的。
-  ⇒ *** **`35 files / 624 tests` 作为【今天的期望值】已为假**，照它判红会得出错误结论。 ***
-- 🔴 *** **稳定红 1 条，【不是】 flake** ***：`tests/control/stopProof.test.ts > quiet execution proof >
-  does not treat leader exit as group quiet and proves only after the full tree is gone`，报 `Test timed out in 5000ms`。
-  **怎么判出来的**：`git clone --local` 副本里单跑 **3/3 红**，**主工作树单跑也红**，
-  单跑耗时 **5.37s** —— 远低于 flake 画像的 25–29s ⇒ **与负载无关**。
-  ⇒ **开工看到它红是正常的。** 判别式是「**除它之外**有没有新的红」。
-  ⚠️ **根因未查，没有人授权动它**；它与 E1／I-2 无关。
-- 下一段那四条已知 flake 的名单**仍然有效**：本轮实测 `run-scenario CLI > records env names only …`
-  一轮红、下一轮绿，红的那轮总耗时 29.01s，**符合画像**。
-- ⚠️ *** **`dist/` 被 gitignore ⇒ `git clone --local` 副本里必须先 `npm run build`** ***，
-  否则 `tests/control/endToEnd.test.ts` 的 6 条会以 `ENOENT … dist/cli.js` **假红**（本轮踩过）。
+- *** **现测 `818 tests / 817 passed / 1 failed`。** *** `typecheck` RC 0、`build` RC 0。
+- 🔴 *** **已知红名单是 13 个名字，不是 7 个。** *** 本轮实测把它从 7 补到 13 —— 多出来的 6 个
+  **一直都在 flake，只是没人把名字记下来**，于是判别式会把它们误报成回归。
+  ⇒ **不要再靠肉眼核名单**：跑 `node scripts/check-known-reds.mjs <vitest --reporter=json 的输出>`，
+  它按**全名**做子集判定，RC 0 才算绿。**该脚本两个方向都验过**（名单内退 0、名单外退 1、
+  以及「名字是某条名单项的裸后缀」这种伪装也退 1）。
+- ⚠️ *** **那条稳定红仍然红着**：`tests/control/stopProof.test.ts > quiet execution proof >
+  does not treat leader exit as group quiet and proves only after the full tree is gone`。
+  根因未查，无人授权动它。** ***
+- ⚠️ *** **`git clone --local` 副本必须先 `npm run build`** *** —— `dist/` 被 gitignore，
+  不 build 会让 `tests/control/endToEnd.test.ts` 的 6 条以 `ENOENT … dist/cli.js` **假红**。
+  ⚠️ **副本一律建在会话 scratchpad 目录下，不要建在仓库旁边**（人裁 137）。
+
 
 ### 2026-08-28 那一次会话的实测基线 —— 未过滤整份读回，`RUN` 路径已核
 
@@ -159,63 +160,92 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 
 ## ⛔ 下一件事
 
-### 0. ✅ **P0 已经做完（2026-09-04）—— 不要重做**
+### 0. ✅ **P0（2026-09-04）／E1 的 I-2（2026-09-23，人裁 127／128）／I-3(a)（人裁 125）都已收口 —— 不要重做**
 
-> **原文（2026-09-03 写下时为真）**：人裁「现在就动 ccloop，先做 Orca 这部分工作，
-> **E1 的 I-2 ＋ 人裁 85 顺延**，**人裁 121 仍有效**。」
+### 0.1 ✅ *** **人裁 85（`ls` 也报锁）＋ I-3 也做完了（2026-09-23，人裁 129–138）—— 不要重做** ***
 
-*** **P0 已由 Orca 那条线的 run `orca-dev-213d1395` 在本仓库执行完毕，四笔本地提交，未 push。** ***
-细节、实测数与全部更正见本文档末尾「📌 Orca 那条线」一节。
+两件合并为一轮（人裁 129）。**做出来的东西**（按提交主题行找，**别数笔数、别记哈希**）：
 
-⚠️ *** **本节下面那句「下一件事回到 E1 的 I-2」已经过期** *** —— 见紧接着的 §0.1。
-⚠️ *** **push 仍需每次单独授权。控制器不许 push。** ***
-*** **本文不记发布状态** *** —— 「有没有未推的笔」是一条一秒后就可能变的现测，
-要知道就跑 `/usr/bin/git ls-remote origin refs/heads/main` 与本地比。
+- `ccloop ls` 现在为每个 run 报告 owner-transfer 锁的**全部七态**
+  （`absent`／`dead`／`alive`／`liveness-unknown`／`unrecognized-holder`／`unparseable`／`file-unreadable`），
+  带 holder、pid、**全长 sha256 digest**、以及下一条命令。
+  ⚠️ `file-unreadable` **不印 digest**（它是唯一拿不到 `--force --expect` 凭证的态），
+  `absent` **不印 next**，而且**这两种都仍然 exit 0** —— 一行里的坏消息是报告内容，不是命令失败。
+- 红线函数的 `not-determined-dead` 拆成了 **`holder-alive`** 与 **`liveness-undetermined`**。
+  `pid:0`、越界 pid、EPERM 三格现在抛 `OwnerTransferLockLivenessUndeterminedError`，
+  消息**点名 pid 与理由**，并且**不说「永不自清」** —— 因为 EPERM 的持有者通常是别人的活进程。
+- ⚠️ *** **人裁 83 的删锁条件逐字节未动。** *** 全函数仍只有一处 `safeUnlink`，
+  仍只有 `dead` 那条 fallthrough 能到，**新增的两格一个都不删东西**。
+- ⚠️ *** **三处重试闸门各加了一支，接住新错误类 —— 这是为了【保住】今天的行为，不是改它。** ***
+  那三格今天本来就走满重试预算；不加闸门它们会变成第一次尝试就放弃。
+- ⚠️ **但有一处行为确实变了**：一把**瞬态的 EPERM 锁**现在会在 `readOwnerRecord` 的逃逸点
+  就地放弃本次尝试，而以前它会让 run 带着 pre-transfer 记录继续。**这是 I-3(a) 的既定方向、有判据覆盖，
+  但它是常见情形上的真实行为改变**，不要读成「什么都没变」。
 
-### 0.1 ✅ **E1 的 I-2 也做完了（2026-09-23）—— 不要重做**
+**细节**：spec `docs/superpowers/specs/2026-09-23-ls-lock-visibility-design.md`（§10／§11 记着
+**18 条被实测推翻的初版结论**）、计划 `docs/superpowers/plans/2026-09-23-ls-lock-visibility.md`、
+台账 `.superpowers/sdd/2026-09-23-ls-lock-visibility/progress.md`（含 43 行变异总表，全 64 位 sha256）。
 
-*** **人裁 127**：「两侧一起闭」＋ 走人裁 88 的指名程序，授权整条改写
-`tests/persistence/fileStore.test.ts` 里钉住该缺陷的那条既有判据。 ***
-*** **人裁 128**：「动生产代码，走 `subagent-driven-development`。」 *** ——
-这一条补上了此前缺的那半（**E1 不再在授权面外**）。
+### 1. ⛔ **下一件事是 G1 那条线**
 
-**做出来的东西**（按提交主题行找，**别数笔数、别记哈希**）：
-`fix(fileStore): stop parsePid from reading a pid out of a value that is not a string`、
-`fix(inspectLock): classify the holder the record actually carries, and render it honestly`、
-`test(unlock): pin unattributable-holder survival at the command layer, …`、
-`docs(comments): record what ruling 127 changed about the array-holder cell, and what it did not`、
-以及最终评审后的修复一笔（补 `--force` 那一臂的判据）。
-**全部细节、11 条控制器裁决、变异逐格表在台账 §46。**
+人定的顺序里，ccloop 这边的挂账**清空了**。下一件是 **G1：control v1 的线上契约归 ccloop**（人裁 G1，2026-09-22）——
+要定 capability 词汇表（`contextObservation`／`handoffControl`／`handoffExecution`／
+`contextWindowTokens`／`requestBoundProof`）＋ **`targetVersion` 定型**。
+⚠️ *** **G1 只定了「由 ccloop 拍」，没定 `targetVersion` 拍成什么。别读成这条缝已解决。** ***
+⚠️ 它有实质设计成分 ⇒ **先 `superpowers:brainstorming`，再 `writing-plans`**。
 
-⚠️ *** **本轮最值钱的一条教训**：spec 第一版把「渲染」贴在了那个【既要被判断、又要被展示】的变量上，
-于是守卫在 E1 路径上完全不承重 —— 删掉它行为一格不变。
-**当一个变量同时承担这两件事，任何一端的规范化都会静默解除另一端的守卫。** *** 
+### 2. 仍然挂着的
 
-### 1. **I-3(a) 已收口（人裁 125）—— 不要重开，也不要重做**
-复审判 **0 Critical／1 Important（文档性：整包已推远端）／4 Minor**，四条修复各有红证。
-⚠️ **人裁 125 是人主动开的一个例，不是人裁 100 的适用**（人裁 100 要「连续两轮 0 Critical」，首审有 1 Critical）。
-**以后引用引人裁 125 本身。**
+| 挂账 | 现场 |
+|---|---|
+| **`stopProof` 那条稳定红** | 根因未查，**要人先开口**。判别过程：副本单跑 3/3 红、主树也红、单跑 5.37s（远低于 flake 画像 25–29s） |
+| **Linux** | 整套在 Linux 上本来就红 5 条（先于点 B 的包级缺口）；本机 OrbStack daemon 实测未起。**要人自己开** |
+| **M3（本轮登记，未修）** | 一把锁若**同时**是 liveness-undetermined 且带 transaction marker，会记**两条** `owner_transfer_contended`，而所有判据都断言一条。**形状是既有的**（unattributable 那支一模一样），但新错误类让它从一个**平常得多**的起因就能到达 |
+| **M4（本轮登记，未修）** | `tests/registry/zeroWrite.test.ts` 的 `snapshotTree` **不记录扫描根自身的 mtime** ⇒ 探测若 touch 了根目录仍然隐形 |
 
-### 2. **下一件事就是这两件**（人裁 121 已开口，人裁 126 把它们推到了新会话）
+⚠️ M3／M4 都**要改既有判据**，需人按**人裁 88** 指名，故本轮只登记不修。
 
-| 挂账 | 现场（已实测记录，代码一行未改） | 开工方式 |
-|---|---|---|
-| ~~**E1 的 I-2**~~ | ✅ **2026-09-23 做完**（人裁 127／128），见 §0.1 与台账 §46。**不要重做。** | —— |
-| **人裁 85 —— `ls` 也报锁** | 已立项挂账，无现场包袱 | 同样先 brainstorming |
-| **Linux（仍挂着，唯一的真覆盖缺口）** | 整套在 Linux 上本来就红 5 条（**先于点 B 存在的包级缺口**）；本机 OrbStack daemon 实测未起（socket 不存在） | **要人自己开**（`! open -a OrbStack`）。⚠️ 历轮文档里那个「$5–15」**是自估，不是工具报数** —— 按铁律 8，开工前重新问工具或问人 |
+### 3. 方法论（**前七条是历轮攒的，仍然活着；后五条是本轮新的**）
 
-⇒ 前两件都有实质设计成分 ⇒ **先 `superpowers:brainstorming`，再 `writing-plans`**。
+**历轮攒下的（不要因为压缩就丢掉）：**
 
-### 3. 近两轮留下的方法论（**下一轮直接用**）
-1. *** **「红在哪条断言」不是可靠的判别方式。** *** 前面的断言会先短路。**要量什么就直接量什么**（定向探针打印值）。
-2. *** **「没跑过的那条变异」也不是证据。** *** 八条变异看着完备，`stop()` 那一支却只被别的分支的变异间接掠过，
-   结果它**删掉全套照绿**。⇒ **机械检查：每新增一个分支，点名那条删掉【它自己】的变异，并确认它存在。**
-3. *** **改写判据时，断言的【位置】和它的【文字】一样承重。** *** I-1 那处三条断言一字未改、只是顺序变了，
-   其中一条就此不再观测任何生产行为。**「逐字保留」≠「承重保留」；验收改写要看「它还能不能红」。**
-   ⇒ **一条不用跑变异就能查的形状**（复审员提的）：*** **排在被测调用【之前】、读回测试自己刚写进去的值的断言，
-   永远不可能红。** *** 验收任何改写时先扫这个形状。
-4. **一笔提交里的两处注释可以互相打脸**（K-1：`runLoop.ts` 说 M8 没红，同一笔的判据注释说 M8 证明了承重）。
-   ⇒ **写完注释做一次「同一事实在别处怎么说」的对照。**
+1. *** **「红在哪条断言」不是可靠的判别方式** *** —— 前面的断言会先短路。
+   **要量什么就直接量什么**（定向探针打印值）。
+2. *** **「没跑过的那条变异」不是证据。** *** 八条变异看着完备，`stop()` 那一支只被别的分支的
+   变异间接掠过，结果它**删掉全套照绿**。⇒ **每新增一个分支，点名那条删掉【它自己】的变异，
+   并确认它存在且被看见红。**
+3. *** **改写判据时，断言的【位置】和它的【文字】一样承重。** *** 有一处三条断言一字未改、只是顺序变了，
+   其中一条就此不再观测任何生产行为。**「逐字保留」≠「承重保留」。**
+   ⇒ 一条不跑变异就能查的形状：*** **排在被测调用【之前】、读回测试自己刚写进去的值的断言，
+   永远不可能红。** ***
+4. *** **一笔提交里的两处注释可以互相打脸。** *** ⇒ **写完注释做一次「同一事实在别处怎么说」的对照。**
+   ⚠️ **本轮又栽了一次**（见下面第 10 条），所以这条不是历史，是现行。
+5. *** **一个变量同时承担「被判断」和「被展示」时，任何一端的规范化都会【静默解除】另一端的守卫。** ***
+   E1／I-2 那轮：把「渲染成 `JSON.stringify`」贴在既喂分类又喂显示的变量上，于是类型守卫在那条路径上
+   **完全不承重 —— 删掉它行为一格不变、全套零红**。⇒ **修法是拆成两个变量；
+   判别办法是删掉你新加的那个守卫，看行为变不变。**
+6. *** **`grep` 配 `$'\x00\|…'` 在 bash 里会在 NUL 处截断参数** *** ⇒ 模式变空串、**命中每一行**，
+   报出的数正好等于文件总行数。**扫控制字节一律用 python 直接读字节。**
+7. *** **扫描词从英文源码机械导出，对中文活文档恒零命中。** *** 曾有一轮全树扫描**范围覆盖到了**
+   中文 handoff 却一条都没捞到。⇒ **导出扫描词时要覆盖语料的语言。**
+
+**本轮新的：**
+
+8. *** **「别人会接住」本身就是一条预言，而预言会错。** *** 本轮**四条**红预言被实测推翻，
+   最贵的一条是「这两处闸门的变异由另外两个 Task 的判据接住」—— **实测零红**，只好另写两条判据。
+   ⇒ **跨 Task 的红证必须在两个 Task 都落地后真的重跑一次。**
+9. *** **护栏自己也有盲区，而盲区看起来和「通过」一模一样。** *** 零写证明用的 `snapshotTree`
+   **从来没记过目录的 mtime**，于是「探测时 touch 了 run 目录」这条变异**跑出全绿**。
+   ⇒ **补护栏时先写一条打它盲区的变异。**
+10. *** **erratum 里不许写计数。** *** 本轮自己犯了：一条 erratum 写「不再适用于三格中的两格」，
+    实测是**三格全部**，而**同一段的下一句自己就说了三格**。**点名，不要计数。**
+11. *** **在「关闭某类缺陷」的那一波里顺手多修一处，正是新引入该类缺陷的地方。** ***
+    上面第 10 条就是这么来的 —— 那处修改不在命名的发现清单里。**看见了就报，不要顺手修。**
+12. *** **扫描器要有【必抓】和【必不抓】两组样本，而且要跑到收敛。** *** 一个结构判据本轮修了三轮：
+    单行解析 → 被续行注释里的分号截断 → 必不抓样本本身是空判据（删掉整个机制它照绿）。
+
+⚠️ **人裁 125 的引用方式（未变）**：它是**人主动开的一个例**，不是人裁 100 的适用
+（人裁 100 要「连续两轮 0 Critical」，而那次首审有 1 Critical）。**以后引用引人裁 125 本身。**
 
 ## 铁律与边界（**违反即事故**）
 
@@ -352,25 +382,20 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 ---
 # 📌 Orca 那条线（**单节滚动更新，2026-09-23**；本节整节替换上一版，**不追加子会话日志**）
 
-⚠️ **本节不写任何哈希、不记发布状态** —— 提交本文这个动作本身就会移动 HEAD，而人也会自己推远端。
+⚠️ **本节不写任何哈希、不记发布状态** —— 提交本文这个动作就会移动 HEAD，而人也会自己推远端。
 指代某一笔引**提交主题行**，判发布只跑 `/usr/bin/git ls-remote origin refs/heads/main` 与本地比。
-**本轮没有碰 Orca 仓库的任何文件。**
 
 ## 本仓库该知道的三件
 
-1. *** **E1 的 I-2 已由本仓库自己做完**（2026-09-23，人裁 127／128）。 *** 细节在台账 §46，
-   不在 Orca 那边。**Orca 本轮只是调度方，生产改动全在 ccloop。**
-2. *** **G1 那条线仍然没开工** ***：control v1 的**线上契约归 ccloop**（人裁 G1，2026-09-22）。
-   要定的是 capability 词汇表（`contextObservation`／`handoffControl`／`handoffExecution`／
-   `contextWindowTokens`／`requestBoundProof`）＋ **`targetVersion` 定型**。
-   ⚠️ *** **G1 只定了「由 ccloop 拍」，没定 `targetVersion` 拍成什么。别读成这条缝已解决。** ***
-3. **顺序是人定的**：E1 的 I-2（✅）→ **人裁 85** → 才是 G1。**不要插队。**
-
-⚠️ *** **G1 的边界必须写死，否则会被扩大解释** ***（上一版本节的结论，逐条保留）：
-**只有 ccloop↔Orca 的【线上契约】归 ccloop** —— control 方法集、capability 词汇表、start envelope、
-usage／evidence 的形状与版本。
-*** **Orca 的 `work item`／`group`／`orca-raw-command-v1`／`expectedRevision` 一律不搬过来** *** ——
-那是 Orca Panel ↔ Orca Web 的内部契约，**本仓库零消费者**。
+1. *** **本轮（人裁 85 ＋ I-3）全程在本仓库里干活**，Orca 只是调度方，生产改动全在 ccloop。 ***
+   细节见上文 §0.1 与 `.superpowers/sdd/2026-09-23-ls-lock-visibility/`。
+2. *** **下一件事是 G1**：control v1 的**线上契约归 ccloop**（人裁 G1）。 ***
+   ⚠️ **G1 只定了「谁有权拍」，没定 `targetVersion` 拍成什么。**
+3. ⚠️ *** **G1 的边界必须写死，否则会被扩大解释**（上一版结论，逐条保留）**：
+   只有 ccloop↔Orca 的【线上契约】归 ccloop** *** —— control 方法集、capability 词汇表、
+   start envelope、usage／evidence 的形状与版本。
+   *** **Orca 的 `work item`／`group`／`orca-raw-command-v1`／`expectedRevision` 一律不搬过来** ***
+   —— 那是 Orca Panel ↔ Orca Web 的内部契约，**本仓库零消费者**。
 
 ⚠️ **另两条仍然成立的跨仓结论**：
 - *** **本仓库动完契约之后，Orca 侧必须先重建 `/tmp/ccloop-codex-0919/dist` 再重跑它那两道门** ***
@@ -379,34 +404,20 @@ usage／evidence 的形状与版本。
 
 ## 本轮给本仓库留下的环境事实（**下一轮直接用，别再反推**）
 
-- *** **全套现测 `56 files / 779 tests`。** *** 开工核对里那个「35 files / 624 tests」早已过期。
-- *** **基线【不是全绿】，已知 7 条** ***（判别式：**红的集合 ⊆ 这 7 条，按名字核，别只数条数**）：
-  - **稳定红 1 条，不是 flake**：`tests/control/stopProof.test.ts > quiet execution proof >
-    does not treat leader exit as group quiet and proves only after the full tree is gone`。
-    判别过程：副本单跑 **3/3 红**、主树也红、单跑 **5.37s**（远低于 flake 画像 25–29s）。
-    ⚠️ **根因未查，无人授权动它。**
-  - **负载 flake 6 条**（全部 `Test timed out in 5000ms`）：原 4 条，加本轮新发现两条 ——
-    `SubprocessClaudeAdapter > waits for close before interrupting a close-pending successful execute`、
-    `Codex phase process > kills a TERM-ignoring process before returning abort`。
-- ⚠️ *** **`scripts/verify-control-protocol.mjs` 硬要求两个环境变量**（`:9-12`）*** ——
-  本仓库此前**一处都没记**，有人为此白花过时间反推 fixture：
+- *** **已知红是 13 个名字，用 `node scripts/check-known-reds.mjs` 机械判，别用肉眼。** ***
+- ⚠️ *** **`scripts/verify-control-protocol.mjs` 硬要求两个环境变量** *** ——
   `ORCA_CCLOOP_BIN=/tmp/ccloop-codex-0919/dist/cli.js`、
-  `ORCA_CCLOOP_ADAPTER_CONFIG=/tmp/orca-ccloop-d3-task8/fake-codex-config.json`（2026-09-23 现测两者都在）。
-  ⚠️ **它跑的 vitest 子集含 `stopProof` ⇒ 它现在退出 1 的根因就是那条稳定红。**
-- ⚠️ *** **`git clone --local` 副本必须先 `npm run build`** *** —— `dist/` 被 gitignore，
-  不 build 会让 `tests/control/endToEnd.test.ts` 的 6 条以 `ENOENT … dist/cli.js` **假红**。
-
-## 本轮踩出来的两条方法论（**都是「扫描器没在做它声称的事」**）
-
-1. *** **`grep` 配 `$'\x00\|…'` 在 bash 里会于 NUL 处截断参数** *** ⇒ 模式变空串、**命中每一行**。
-   实测报的数正好等于文件总行数。**扫控制字节要用 python 直接读字节。**
-2. *** **扫描词从英文源码注释机械导出，对中文活文档恒零命中。** ***
-   本轮的全树扫描范围覆盖到了 `docs/handoff/**`，却一条都没捞到 —— 因为这里的句子是中文。
-   ⇒ **导出扫描词时要同时覆盖语料的语言。**
+  `ORCA_CCLOOP_ADAPTER_CONFIG=/tmp/orca-ccloop-d3-task8/fake-codex-config.json`。
+  ⚠️ **它跑的 vitest 子集含 `stopProof` ⇒ 它退出 1 的根因就是那条稳定红。**
+- ⚠️ **变异副本一律建在会话 scratchpad 目录下**（人裁 137）——本轮之前有两个建在仓库旁边，要人手工清。
 
 ## awaitingHuman
 
 - **push／合并／删分支或 worktree**：四件各自需人单独授权，**控制器不许 push**。
-- **`targetVersion` 定成非空字符串还是安全整数** —— G1 给了权，**没给答案**，要在本仓库单独拍一次。
+  ⚠️ *** **本轮发现：这台机器上有东西在把提交推到真实的 GitHub 远端，而控制器一次 `push` 都没跑过。** ***
+  三个仓都装着同一个 `post-commit` 钩子（`Qoder CN` 的 AI tracker，调一个**混淆过的**二进制）。
+  **时间线不支持「每笔自动推」**（一度 23 笔全在本地），更像是某一刻的批量推送。**要人自己查并决定。**
+- **`targetVersion` 定成非空字符串还是安全整数** —— G1 给了权，**没给答案**。
 - **`stopProof` 那条稳定红的根因** —— 未查，要人先开口。
 - **Linux 覆盖** —— 仍挂着，要人自己起 OrbStack daemon。
+- **M3／M4**（见 §2）—— 要改既有判据，需人按人裁 88 指名。
