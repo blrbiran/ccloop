@@ -661,66 +661,78 @@ describe("resumeLoop", () => {
     }
   });
 
-  // ls lock visibility, Task 3/5 (human ruling 133). Same mocked-claim seam as the busy-lock
-  // exhaustion criterion directly above, with OwnerTransferLockLivenessUndeterminedError thrown
-  // instead of OwnerTransferLockBusyError. This is the criterion that actually observes the retry
-  // gate at resumeLoop.ts:75 admitting the new class: the two message/detail criteria elsewhere in
-  // this file only check the FINAL refusal text, and a direct measurement found that reverting that
-  // gate (mutation M3-3) leaves both of them green -- the sibling class still gets caught and
-  // reported with the same wording, just after one attempt instead of three, which neither existing
-  // assertion can see. claimCalls is what makes the retry COUNT itself the pinned fact.
+  // ls lock visibility, Task 3/5 (human ruling 133), REWRITTEN under fix round 1 (Important finding
+  // in the task review). The first version of this criterion mocked claimOwnerRecordWithPrecondition
+  // to throw a CONSTRUCTED OwnerTransferLockLivenessUndeterminedError -- which pins "the gate
+  // retries this class" but not "a real lock on disk actually produces this class and the gate
+  // retries it". This version writes a REAL lock, same fixture shape as the disposition criterion
+  // above ("says the liveness could not be determined ..."), and counts attempts from something
+  // real: process.kill, mocked to refuse only the held pid with EPERM.
+  // tryRecoverStaleOwnerTransferLock (via classifyProcessLiveness) asks the liveness question
+  // exactly once per acquisition attempt, so counting process.kill calls against the held pid IS
+  // counting attempts, with no injection anywhere in the chain from "lock on disk" to "gate
+  // retried it".
+  //
+  // This is the criterion that actually observes the retry gate at resumeLoop.ts:75 admitting the
+  // new class: the message/detail criteria elsewhere in this file only check the FINAL refusal
+  // text, and a direct measurement found that reverting that gate (mutation M3-3) leaves them green
+  // -- the sibling class still gets caught and reported with the same wording, just after one
+  // attempt instead of three, which neither existing assertion can see.
   it("retries a liveness-undetermined owner-transfer lock during the resume claim to the same bound a busy one gets", async () => {
     const repoPath = await createRepo();
     const contract = createContract(repoPath);
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     await seedEligibleRun(runDir, contract, 1);
 
-    let claimCalls = 0;
-
-    vi.resetModules();
-    vi.doMock("../../src/persistence/fileStore.js", async () => {
-      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
-        "../../src/persistence/fileStore.js",
-      );
-
-      return {
-        ...actual,
-        claimOwnerRecordWithPrecondition: async () => {
-          claimCalls += 1;
-          throw new actual.OwnerTransferLockLivenessUndeterminedError(
-            "liveness of the owner-transfer lock holder cannot be determined (EPERM); this lock may or may not clear on its own -- inspect it with: ccloop unlock",
-          );
-        },
-      };
+    const heldPid = process.pid;
+    // Discriminated by pid: only the lock-liveness probe's own call (against this process's own
+    // pid) is refused. This fixture never calls process.kill for any other pid, so the mock's
+    // else-branch is never exercised here; it returns `true` (not a real pass-through) purely to
+    // give the spy a total, non-throwing implementation in case it ever is.
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+      if (pid === heldPid) {
+        const errno = new Error("operation not permitted") as NodeJS.ErrnoException;
+        errno.code = "EPERM";
+        throw errno;
+      }
+      return true;
     });
 
+    // No transaction marker: recovery on the entry read returns before it ever reaches for the
+    // lock (same premise as the busy-lock sibling earlier in this file), so it is the CLAIM that
+    // meets it -- and each of its retry attempts is a real acquisition against a real lock file.
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: `pid:${heldPid}`, acquiredAt: new Date().toISOString() }),
+    );
+
+    let thrown: unknown = null;
+    let attemptsAgainstHeldPid = 0;
     try {
-      const { resumeLoop: observedResumeLoop, ResumeNotEligibleError: ObservedResumeNotEligibleError } =
-        await import("../../src/controller/resumeLoop.js");
-      const { OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS } = await import("../../src/controller/runLoop.js");
-
-      let thrown: unknown = null;
-      try {
-        await observedResumeLoop(runDir, new ScriptedAdapter([successFrame()]));
-      } catch (error) {
-        thrown = error;
-      }
-
-      expect(thrown).toBeInstanceOf(ObservedResumeNotEligibleError);
-      // The decisive assertion: the retry bound was spent, exactly as it is for a busy lock, not
-      // abandoned on the first attempt.
-      expect(claimCalls).toBe(OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS);
-      const denied = (await readFile(join(runDir, "events.jsonl"), "utf8"))
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as { type: string; detail: string })
-        .filter((event) => event.type === "resume_denied");
-      expect(denied).toHaveLength(1);
-      expect(denied[0].detail).toContain("owner-transfer lock liveness undetermined");
+      await resumeLoop(runDir, new ScriptedAdapter([successFrame()]));
+    } catch (error) {
+      thrown = error;
     } finally {
-      vi.doUnmock("../../src/persistence/fileStore.js");
-      vi.resetModules();
+      // Captured BEFORE mockRestore(), which -- like mockReset() -- clears mock.calls along with
+      // restoring the real implementation. Reading the call history after restoring always reads
+      // zero, whether or not the branch under test ran.
+      attemptsAgainstHeldPid = killSpy.mock.calls.filter(([pid]) => pid === heldPid).length;
+      // process.kill is global: leaking this spy would poison every later criterion in this file.
+      killSpy.mockRestore();
     }
+
+    expect(thrown).toBeInstanceOf(ResumeNotEligibleError);
+    // The decisive assertion: the retry bound was spent, exactly as it is for a busy lock, not
+    // abandoned on the first attempt. Filtered to the held pid so a stray, unrelated process.kill
+    // call elsewhere could not inflate the count.
+    expect(attemptsAgainstHeldPid).toBe(3);
+    const denied = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; detail: string })
+      .filter((event) => event.type === "resume_denied");
+    expect(denied).toHaveLength(1);
+    expect(denied[0].detail).toContain("owner-transfer lock liveness undetermined");
   });
 
   it("aborts when a concurrent owner-record change breaks the claim CAS", async () => {

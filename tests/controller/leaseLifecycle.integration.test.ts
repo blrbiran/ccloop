@@ -731,8 +731,10 @@ describe("lease heartbeat lifecycle", () => {
 
     const heldPid = process.pid;
     // Discriminated by pid: only the lock-liveness probe's own call (against this process's own
-    // pid) is refused. Anything else calling process.kill during this attempt (there is none in
-    // this fixture -- execute() is a plain callback, not a real subprocess) passes through.
+    // pid) is refused. This fixture never calls process.kill for any OTHER pid (execute() is a
+    // plain callback, not a real subprocess), so the mock's else-branch is never exercised here;
+    // it returns `true` (not a real pass-through) purely to give the spy a total, non-throwing
+    // implementation in case it ever is.
     const killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number) => {
       if (pid === heldPid) {
         const errno = new Error("operation not permitted") as NodeJS.ErrnoException;
@@ -1079,16 +1081,48 @@ describe("lease heartbeat lifecycle", () => {
     }
   });
 
-  // ls lock visibility, Task 3/4 (human ruling 133). Same mocked-write seam as the busy-lock
-  // exhaustion criterion directly above, with OwnerTransferLockLivenessUndeterminedError thrown
-  // instead of OwnerTransferLockBusyError. This is the criterion that actually observes runLoop.ts's
-  // retry gate admitting the new class: the two criteria immediately above (`contains an
-  // undetermined-liveness transfer lock ...` / `abandons the attempt in place ...`) only check the
-  // FINAL detail and status, and a real, direct measurement found that reverting the gate at
-  // runLoop.ts:761 (mutation M3-2/M4's own retry-gate mutation) leaves BOTH of those green: the
-  // sibling class still gets caught and reported by the disposition branch one level up, just after
-  // one attempt instead of three, which neither existing assertion can see. writeCalls is what
-  // makes the retry COUNT itself the pinned fact, exactly as the busy-lock sibling does.
+  // ls lock visibility, Task 3/4 (human ruling 133). ESCAPE HATCH TAKEN, under fix round 1's
+  // Important finding, after a real-lock rewrite was tried and MEASURED not to work here. Full
+  // disclosure, as the ruling that authorized this requires:
+  //
+  // (a) The error below IS INJECTED (a constructed OwnerTransferLockLivenessUndeterminedError
+  //     thrown from a mocked writeOwnerTransferArtifacts), not produced by a real lock on disk.
+  //
+  // (b) WHY: a real-lock version was built and run -- write a real `pid:<this process>` lock,
+  //     mock process.kill to refuse only that pid with EPERM, run the real runLoop, and count
+  //     process.kill calls against that pid (exactly the technique the resumeLoop.ts sibling
+  //     criterion below uses successfully). MEASURED result: 7 calls, not 3. Traced by stack trace
+  //     on every call: 3 come from persistOwnerTransfer's own retry loop (the gate this criterion
+  //     means to pin, runLoop.ts:761) -- but 3 MORE come from a SECOND, independent retry loop this
+  //     same attempt also triggers: when the transfer fails, persistBoundaryAnalysis still writes a
+  //     reconciliation record for the loser's view (§5.3), which goes through
+  //     writeBoundaryArtifacts -> publishReconciliationUnderTransferLock ->
+  //     acquireOwnerTransferLockForReconciliation -- fileStore.ts's OWN, separately-bound retry
+  //     gate (Task 3's own territory, RECONCILIATION_LOCK_RETRY_ATTEMPTS = 3), hitting the SAME
+  //     lock file and therefore the SAME held pid. The 7th comes from a THIRD, unrelated site:
+  //     runLoop()'s own cleanup calls heartbeat.stop() -> releaseOwnerLease ->
+  //     updateOwnerRecordWithPrecondition -> acquireOwnerTransferLock, one more single acquisition
+  //     attempt against the same lock. All three are real, correct, unavoidable behaviour of a full
+  //     end-to-end run against a lock that never clears -- not a fixture defect -- so there is no
+  //     way to seed a real on-disk lock that drives ONLY runLoop.ts:761's own retry loop without
+  //     also touching two other real call sites that share the same lock file. A global
+  //     process.kill counter cannot tell those three apart without resorting to stack-trace
+  //     filtering, which is not a stable test technique. The count (7) IS deterministic --
+  //     nothing here races a clock -- but it is not an ISOLATED measurement of the gate this
+  //     criterion exists to pin, and it would silently break (for reasons having nothing to do
+  //     with this gate) if the reconciliation gate's own bound, or the heartbeat's release
+  //     behaviour, ever changed. Mocking `writeOwnerTransferArtifacts` directly is what isolates
+  //     the one loop under test from those two others.
+  //
+  // (c) Other criteria that DO pin a real lock actually produces this class and reaches this exact
+  //     branch: `contains an undetermined-liveness transfer lock as a recorded contention ...` and
+  //     `abandons the attempt in place when the ownership read hits an undetermined-liveness
+  //     transfer lock ...` (both above, in this file) drive a REAL EPERM-refused lock through the
+  //     real runLoop and assert the resulting disposition and detail; `spends the whole
+  //     reconciliation retry bound on an unprobeable holder ...` in fileStore.test.ts pins the
+  //     RECONCILIATION gate this same measurement found with a real `pid:0` lock. This criterion is
+  //     the only one in the batch testing a gate in isolation via injection, and should not be
+  //     mistaken for end-to-end coverage on its own -- the criteria just named supply that.
   it("retries a liveness-undetermined owner-transfer lock to the same bound a busy one gets, before abandoning", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
