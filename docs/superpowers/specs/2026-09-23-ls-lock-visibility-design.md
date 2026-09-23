@@ -619,3 +619,66 @@ ccloop ls "$ROOT" > out.txt 2>&1; rc=$?
 | 「`sweep` 只用 `scanRootFailureDetail`」 | `isObservedEligible`（`sweepRuns.ts:108`）消费 `ScanRow` 的内容 | 删掉该说法（§3.3 只声称 sweep 跑 `scanRuns`） |
 | outcome 字段名 `why` | `LivenessVerdict` 用的是 `reason` | 统一为 **`reason`**（§4.2） |
 | 终点判据 6 条（4 条散文） | —— | **7 条全部可跑**（§8） |
+
+---
+
+## 11. 实施期间的更正（**2026-09-23，Task 1–7 落地后现测**）
+
+> 本节按活文档规矩**追加**，上文一字不改。下列四条是上文**已知为假**的说法，
+> 留在上面是为了让读的人看得见原话与它错在哪。
+
+### 11.1 §9 的「已知红 7 条」**不全，现测是 12 条**
+
+Task 2 之后全量跑出 8 条红，其中 5 条不在 §9 的名单里。
+判别命令（单跑那四个文件）：
+
+```bash
+./node_modules/.bin/vitest run tests/validation/evidence.test.ts \
+  tests/validation/codexAdapter.test.ts tests/validation/codexSoftBudget.test.ts \
+  tests/validation/codexWatchdog.test.ts
+```
+⇒ **4 files / 49 tests 全绿，RC 0，19.37s。** 三条证据判定为负载 flake 而非回归：
+① 零因果面（改动在 owner-transfer 红线路径，红在 `ENOTEMPTY`／`ENOENT`／`outer timeout`）；
+② 单跑 49/49 绿；③ 全量那次耗时 32.40s，高于红轮画像 25–29s。
+
+**补进名单的 5 条（全名）：**
+8. `run-scenario CLI > runs when invoked through a canonical-path alias`
+9. `run-scenario CLI > creates a fresh nested evidence directory when its parent does not exist`
+10. `isolated Codex acceptance harness > succeeds only with real controller, three phases and published answer`
+11. `accepts the controller's zero-clamped soft budget and records the overrun`
+12. `matches historical double-space start identities on single-digit days` 与
+    `still reaps registered groups when the observation file becomes unwritable`（均在 `codexWatchdog`）
+    ＋ 2 条 `Unhandled Rejection: outer timeout`（源自 `scripts/validate-codex-adapter.mjs:139`）
+
+⇒ *** **「名单」本身是会过期的现测。判别式（红 ⊆ 名单，按名字核）是对的，
+但名单不全时它会把 flake 误报成回归。** *** 引用名单前先确认它是哪一轮测的。
+
+### 11.2 §7 的 `fileStore.ts:881` 那一项写得不准 —— **不需要追 ERRATUM**
+
+§7 说该处的「applied to a third meaning」**将变成第四种**。现测：那句话说的是
+`OwnerTransferLockUnattributableError` **这个类自己**是那条 doctrine 的第三种含义 ——
+**再加一个兄弟不会让它变假**。而新类自己的注释已写明「A fourth meaning, and a THIRD sibling」，自带说明。
+⇒ **该处不追 ERRATUM。§7 清单里这一项作废。**
+
+### 11.3 §5.1 关于 M3-2／M3-3 的红证预言**是错的**
+
+上文把 `runLoop.ts` 与 `resumeLoop.ts` 两处重试闸门的红证记为「由 Task 4／5 的判据接住」。
+**实测：第一次跑这两条变异，零红。** 那两个 Task 的判据看不见它们。
+实施席补了两条专门钉住这两处闸门的判据（提交主题行
+`test(locks): pin the retry-gate mutation the disposition criteria could not see`）。
+
+⇒ *** **跨 Task 的红证预言必须在两个 Task 都落地之后【真的重跑一次】，不许只在纸上推。** ***
+这是「没跑过的那条变异不是证据」的一个更隐蔽的形状：**连「别人会接住」这句话本身也是一条预言。**
+
+### 11.4 §4.4 的落地顺序有**隐藏依赖**，上文的排序是错的
+
+上文把逃逸点（`fileStore.ts` 的 `readOwnerRecord` 那处）排在处置点之后。
+**实测：它必须先落地**，否则 `runLoop` 第二处处置点的判据路由不到。
+实际执行顺序是 **3 → 7 → 4 → 5 → 6**。
+
+### 11.5 计划正文里的示例夹具**自相矛盾**（已由实施席逐条解决）
+
+计划给的示例用 `pid:0` 的锁，断言却写 `"cannot be determined (EPERM)"`。
+**这两者不可能同时成立** —— `pid:0` 走的是 `classifyProcessLiveness` 的 `pid < 1` 提前返回，
+reason 是 `pid 0 does not name a process that can be probed`；要得到 `EPERM` 必须 mock `process.kill`。
+⇒ **写示例判据时，夹具与期望的理由字面量要一起推一遍**，不能一边抄夹具一边抄断言。

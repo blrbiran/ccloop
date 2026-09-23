@@ -215,3 +215,20 @@ tests/validation/codexSoftBudget.test.ts tests/validation/codexWatchdog.test.ts`
 
 - BASE `8b8bddb`。合并理由：十一处路由点里的十处形状相同、共用同一个错误类、改的是同三个文件，
   分开派会让彼此行号互相移动。
+- 实施席回 DONE，7 笔提交 `8b8bddb..9b971ba`。控制器独立现测：
+  **58 files / 801 tests，1 failed = stopProof**（已知 12 条的第 1 条），typecheck RC 0，build RC 0，
+  工作树干净，**仓库旁边零残留副本**（人裁 137 的 scratchpad 规则生效）。
+- **实施席捞到三件控制器【计划】里的错，逐条记下**：
+  1. *** **M3-2／M3-3 第一次跑出 0 红。** *** 计划预言「由 Task 4／5 的判据接住那两处重试闸门」，
+     **实测没接住**。实施席补了 2 条判据单独钉它们（`9b971ba`）。
+     ⇒ **「没跑过的那条变异不是证据」的第 N 次兑现 —— 而这次连「跨 Task 接住」的预言也是错的。**
+     ⇒ **教训升级：跨 Task 的红证预言必须在两个 Task 都落地后【真的重跑一次】，不许只在纸上推。**
+  2. **任务顺序有隐藏依赖**：Task 7（逃逸点）必须先于 Task 4 的第二条判据落地，否则路由走不对。
+     实施席自行重排为 3 → 7 → 4 → 5 → 6。**计划的顺序是错的。**
+  3. *** **控制器的 brief 自相矛盾** *** —— 示例夹具用 `pid:0` 的锁，断言却写
+     `"cannot be determined (EPERM)"`。**这两者不可能同时成立**（`pid:0` 给的 reason 是
+     `pid 0 does not name a process that can be probed`；EPERM 要 mock `process.kill`）。
+     实施席逐条按真实 reason 解决并把理由留在注释里。
+- **两处预告「可能钉不住」的最后【都钉住了】** —— `runLoop` 第二处的 `writeOwnedRunState`
+  与 `leaseHeartbeat` 的两个独立 once 标志。⇒ **「先试着造，造不出再登记」这条指令是对的：
+  直接抄人裁 118 的「继承钉不住」会白白少两条判据。**
