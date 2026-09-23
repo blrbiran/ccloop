@@ -232,3 +232,19 @@ tests/validation/codexSoftBudget.test.ts tests/validation/codexWatchdog.test.ts`
 - **两处预告「可能钉不住」的最后【都钉住了】** —— `runLoop` 第二处的 `writeOwnedRunState`
   与 `leaseHeartbeat` 的两个独立 once 标志。⇒ **「先试着造，造不出再登记」这条指令是对的：
   直接抄人裁 118 的「继承钉不住」会白白少两条判据。**
+- 评审席判 **Approved**，0 Critical / **1 Important** / 2 Minor。
+  ⭐ 评审席给的一条硬证据：**顺序依赖不是听说的，是变异证明的** —— 删掉 Task 7 的逃逸支，
+  红的不只是 Task 7 自己的判据，**连 Task 4 的第二条也红** ⇒ `runLoop.ts` 第二处处置点
+  确实只能经 `readOwnerRecord` → `recoverInterruptedOwnerTransfer` 到达。
+- 评审席的 ⚠️（`withLockAttemptCounter` 是不是真在数 link 尝试）**控制器现测核实**：
+  它包住 `node:fs/promises`、只在目标 lockPath 上计数、**全部转发不伪造**，
+  而且它自己的注释里记着上一轮评审用实测推翻过一个等价性说法。⇒ 可信。
+- **Ruling P：那条 Important 成立，进修复轮 1。**
+  两条 M3-2／M3-3 的后续判据用 `vi.doMock` **扔构造出来的错误对象**给分支，
+  而本批硬约束是「**往磁盘写一把真锁**」。真锁版**严格更好** —— 一条判据同时钉住
+  「这个锁形状产生这个类」与「闸门重试它」，而注入版只钉住后半。
+  评审席还证明了真锁方案可行（Task 4／5 在同一个 diff 里就是那么做的）。
+  **给了带条件的逃生口**：真锁版若拿不到确定的重试计数（定时器／退避导致不稳），
+  可保留注入版，但必须写明 (a) 是注入的 (b) 为什么真锁版不可用、量到了什么
+  (c) 哪些判据钉住「真锁确实产生这个类」。**带证据走逃生口可以，不试就走不行。**
+  **若错的代价**：多一轮修复；若真锁版反而钉不住变异，那就是更坏的判据，已要求它在那种情况下停下来报。
