@@ -55,6 +55,14 @@ async function snapshotTree(root: string): Promise<Record<string, FileSnapshot>>
       }
 
       if (entry.isDirectory()) {
+        // Directories are snapshotted too (Task 10, M10-4 measured this as a real gap): a probe
+        // that touches a run directory's own mtime -- e.g. `utimes(runDir, ...)` -- without
+        // writing any file inside it changes nothing this function recorded before this line was
+        // added, and every zero-write proof in this file would have stayed green regardless.
+        // `size`/`sha256` carry no meaning for a directory; they are fixed sentinels so the type
+        // stays uniform rather than growing a second snapshot shape.
+        const dirStat = await lstat(fullPath);
+        snapshot[relPath] = { size: -1, mtimeMs: dirStat.mtimeMs, sha256: "directory" };
         await walk(fullPath);
         continue;
       }
