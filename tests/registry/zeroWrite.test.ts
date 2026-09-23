@@ -15,8 +15,9 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { main } from "../../src/cli.js";
 import { scanRuns, defaultScanDeps } from "../../src/registry/scanRuns.js";
 import type { ScanRow } from "../../src/registry/scanRuns.js";
 import { readOwnerRecord, writeOwnerRecord, writeOwnerTransferRecord } from "../../src/persistence/fileStore.js";
@@ -824,6 +825,60 @@ describe("sweep write surface", () => {
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
       await rm(repoPath, { recursive: true, force: true });
+    }
+  });
+});
+
+// =================================================================================================
+// Task 10, criterion 3 -- design spec §5.4: "A scan is provably byte-for-byte non-mutating" (run-
+// registry spec §15 #2) only covers `scanRuns` today; Task 8's lock probing runs OUTSIDE scanRuns,
+// on `ls`'s real read path, and that path had no zero-write coverage at all until this test. The
+// subject here is `main(["ls", root])` itself -- not `scanRuns` -- because that is the actual
+// function whose read path grew a new, previously-unproven segment.
+//
+// inspectOwnerTransferLock only ever opens a file with `open(path, "r")` (inspectLock.ts), so it
+// SHOULD pass -- but per spec §5.4, passing is only evidence once it has actually been run, and
+// the fixture includes a real owner-transfer.lock so the probe has something to open rather than
+// short-circuiting on ENOENT for every run in the tree.
+// =================================================================================================
+
+describe("ls's real read path writes nothing, including while probing owner-transfer.lock (Task 10)", () => {
+  it("leaves the whole tree byte-for-byte identical across main([\"ls\", root])", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "ccloop-ls-zerowrite-"));
+    try {
+      const root = join(tempRoot, "scan-root");
+      const runWithLock = join(root, "run-with-lock");
+      await mkdir(runWithLock, { recursive: true });
+      await writeFile(join(runWithLock, "events.jsonl"), "");
+      // A real, parseable lock naming a pid inspectOwnerTransferLock will actually classify
+      // (not just ENOENT-short-circuit) -- so the probe genuinely opens and reads this file.
+      await writeFile(
+        join(runWithLock, ".owner-transfer.lock"),
+        JSON.stringify({ holderProcessInstanceId: "pid:0", acquiredAt: "2026-09-23T00:00:00.000Z" }),
+      );
+
+      const runWithoutLock = join(root, "run-without-lock");
+      await mkdir(runWithoutLock, { recursive: true });
+      await writeFile(join(runWithoutLock, "events.jsonl"), "");
+
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const before = await snapshotTree(tempRoot);
+        const code = await main(["ls", root]);
+        const after = await snapshotTree(tempRoot);
+
+        expect(code).toBe(0);
+        // Non-vacuity: the printed table really did see the lock (otherwise "wrote nothing" would
+        // be true for the trivial reason that the probe never ran at all).
+        const printed = logSpy.mock.calls[0]?.[0] as string;
+        expect(printed).toContain("state: liveness-unknown");
+
+        expect(after).toEqual(before);
+      } finally {
+        logSpy.mockRestore();
+      }
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
     }
   });
 });

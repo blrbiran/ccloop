@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -175,6 +175,61 @@ describe("main ls (spec §9, §12.8)", () => {
       expect(printed).toMatch(/independent observation/i);
     } finally {
       logSpy.mockRestore();
+    }
+  });
+
+  // Task 10, criterion 1 -- human ruling 85's actual endpoint: `ls` must SHOW a stuck lock, not
+  // merely observe run files. pid:0 signals the caller's own process group and never throws
+  // (inspectLock.ts), so it lands on liveness-unknown -- the state human ruling 74 invented
+  // specifically because a false "alive" here would leave an operator with no escape hatch.
+  it("reports a pid:0 owner-transfer lock as liveness-unknown, and still exits 0", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ccloop-ls-lock-liveness-"));
+    const runDir = join(root, "run-1");
+    await mkdir(runDir, { recursive: true });
+    await writeFile(join(runDir, "events.jsonl"), "");
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: "pid:0", acquiredAt: "2026-09-23T00:00:00.000Z" }),
+    );
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const code = await main(["ls", root]);
+      expect(code).toBe(0);
+      const printed = logSpy.mock.calls[0]![0] as string;
+      expect(printed).toContain("state: liveness-unknown");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  // Task 10, criterion 2 -- spec §3.6: an unreadable lock file is a reported fact, never a command
+  // failure. file-unreadable is the one state with no --force route (its credential is a hash of
+  // bytes that could not be read), and losing exit 0 here would be a second, harsher way of saying
+  // the same thing the missing digest line already says honestly.
+  it("reports an EACCES owner-transfer lock as file-unreadable, and still exits 0", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ccloop-ls-lock-eacces-"));
+    const runDir = join(root, "run-1");
+    await mkdir(runDir, { recursive: true });
+    await writeFile(join(runDir, "events.jsonl"), "");
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    await writeFile(
+      lockPath,
+      JSON.stringify({ holderProcessInstanceId: "pid:1", acquiredAt: "2026-09-23T00:00:00.000Z" }),
+    );
+    await chmod(lockPath, 0o000);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const code = await main(["ls", root]);
+      expect(code).toBe(0);
+      const printed = logSpy.mock.calls[0]![0] as string;
+      expect(printed).toContain("state: file-unreadable");
+    } finally {
+      logSpy.mockRestore();
+      // Restore permissions so the temp-dir cleanup this test relies on (mkdtemp's OS-level
+      // reaping) does not itself get blocked by an unreadable file.
+      await chmod(lockPath, 0o600);
     }
   });
 });

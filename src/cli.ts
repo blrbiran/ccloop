@@ -13,6 +13,7 @@ import { CodexAdapter } from "./runtime/codex/codexAdapter.js";
 import { ScriptedAdapter } from "./runtime/scriptedAdapter.js";
 import type { RuntimeAdapter } from "./runtime/types.js";
 import { sweepRuns } from "./sweep/sweepRuns.js";
+import { attachLockInspections, defaultLockRowDeps } from "./unlock/lockRows.js";
 import { unlockOwnerTransferLock } from "./unlock/unlockCommand.js";
 
 export type ParsedArgs =
@@ -285,7 +286,10 @@ export async function main(argv: string[]): Promise<number> {
         console.error(failureDetail);
         return 1;
       }
-      const result = toScanResult(rows);
+      // Lock probing happens AFTER the root-failure check, deliberately: when the root itself
+      // failed there are no runs to probe, and probing earlier would spend I/O on a path already
+      // headed for exit 1 (human ruling 131, design spec §3.6 / task-10-brief.md M10-2).
+      const result = toScanResult(await attachLockInspections(rows, defaultLockRowDeps));
       console.log(parsed.json ? JSON.stringify(result, null, 2) : renderScanTable(result));
       return 0;
     }
