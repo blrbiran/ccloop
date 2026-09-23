@@ -682,3 +682,36 @@ Task 2 之后全量跑出 8 条红，其中 5 条不在 §9 的名单里。
 **这两者不可能同时成立** —— `pid:0` 走的是 `classifyProcessLiveness` 的 `pid < 1` 提前返回，
 reason 是 `pid 0 does not name a process that can be probed`；要得到 `EPERM` 必须 mock `process.kill`。
 ⇒ **写示例判据时，夹具与期望的理由字面量要一起推一遍**，不能一边抄夹具一边抄断言。
+
+### 11.6 §4.5 的措辞硬约束当初只字面兑现了一半 —— 人裁 138 定案（整支复审 Finding I1）
+
+**§4.5 说了什么**：新错误的 message 是硬约束，必须是
+
+> `liveness of pid <n> cannot be determined (<reason>); this lock may or may not clear on its own -- inspect it with: ccloop unlock <runDir>`
+
+**实施最初做了什么**：construction 点（`fileStore.ts`，`writeOwnerTransferArtifacts` 内
+`if (outcome.kind === "liveness-undetermined")` 那一支）写的是
+
+> `liveness of the owner-transfer lock holder cannot be determined (${outcome.reason}); ...`
+
+`pid:0` 与越界 pid 两格里，数字还能从 `reason` 字面量里间接读到；但 **EPERM 格**——本轮论证（§4.5）
+自己点名「最常见」的那一格——message 里完全不点名任何进程。终点判据 6（§8）只断言
+`DETAIL_UNKNOWN` 含 `cannot be determined`，从未断言含 pid，所以这处偏差在 Task 1–12 全程照绿，
+直到整支复审才抓到（Finding I1）——又一次「判据看不见的偏差不是没有偏差」。
+
+**人裁 138 定案**：照 §4.5 的字面执行。message 改回上面那句硬约束原文，`<n>` 取自
+`liveness-undetermined` 这一格自己的 `pid` 字段。
+
+**对人裁 108 的推翻范围，只有这一格**：人裁 108 当年把 `pid` 字段从这个 outcome 里删掉，理由现测
+（`fileStore.ts` 红线函数上方那段注释）是「nothing read it, and carrying it made the exit read as
+a determination that was never made」。**人裁 138 只推翻这条理由对 `liveness-undetermined` 这一格
+的适用** —— construction 点现在真的读它了，且这一格陈述的不再是「假装没做过的判断」，而是在指名
+「判不了活性的是哪个进程」。**`holder-alive` 不受影响**：那一格仍不带 `pid`，人裁 108 的理由对它
+继续成立，本轮没有理由也没有去动它。
+
+**落地**：`StaleOwnerTransferLockOutcome` 的 `liveness-undetermined` 变体加回 `pid: number`，
+在三态折叠处填充；construction 点 message 改字面量；`fileStore.ts` 里陈述人裁 108 该条理由的注释块
+追加具名人裁 138 的 ERRATUM，说明推翻范围止于这一格；新判据用 EPERM 格钉住 message 里的 pid ——
+选它是因为该格的 `reason` 就是裸的 `"EPERM"`，不含任何数字，所以 message 里出现的 pid 只能来自
+新加的字段，不会与 `pid:0` 格里「reason 自己就含数字」的情形混淆，钉不出字段来源。变异证据（从
+message 里去掉 pid、确认判据现场翻红，附前后 sha256）记在本轮 `final-fix-report.md`。
