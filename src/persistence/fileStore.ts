@@ -1016,8 +1016,9 @@ function sameOwnerRecord(left: OwnerRecord, right: OwnerRecord): boolean {
 // isProcessActive are exported for `ccloop unlock`") is kept verbatim, and it was already stale
 // before this round: `ccloop unlock` classifies liveness through classifyHolderLiveness
 // (src/unlock/inspectLock.ts), not through isProcessActive -- src/unlock/inspectLock.ts imports
-// only `parsePid` and `LivenessVerdict`/`classifyProcessLiveness` as of Task 1 of this round, never
-// `isProcessActive`. After this round, `isProcessActive` has ZERO production call sites anywhere in
+// `OWNER_TRANSFER_LOCK_FILE`, `OwnerTransferLockRecord`, `parsePid` and
+// `LivenessVerdict`/`classifyProcessLiveness` as of Task 1 of this round, never `isProcessActive`.
+// After this round, `isProcessActive` has ZERO production call sites anywhere in
 // `src/`; the only remaining references are `tests/persistence/fileStore.test.ts:1086` and
 // `tests/unlock/inspectLock.test.ts:317`, both test-only imports. `parsePid` is still genuinely
 // exported for `ccloop unlock` and the paragraph's argument about it is unaffected. Whether
@@ -1114,10 +1115,61 @@ export function isProcessActive(pid: number): boolean {
 // leave them, with the lock on disk; widening `unattributable` to cover them would be new logic
 // outside ruling 106(a)'s authorisation, which reaches the return type and its consumers and no
 // further. Recorded, not fixed. ***
+//
+// *** ERRATUM (ls lock visibility, HUMAN RULINGS 132 AND 133) -- the two paragraphs above (the
+// ruling 106 paragraph and the ruling 108 erratum on it) are kept verbatim, and three of their
+// statements no longer hold.
+//
+// (1) "so this exit means 'NOT DETERMINED DEAD', not 'alive'. The variant is named for what it
+// computes" -- that variant does not exist any more. Ruling 132 split it into two exits:
+// `holder-alive`, which fires only when the holder is genuinely alive, and `liveness-undetermined`,
+// which carries exactly the three cells this paragraph is about (`pid:0`, an out-of-range pid,
+// EPERM). The half named `holder-alive` is now named for precisely the thing ruling 108 said this
+// exit could not be named for: an alive holder.
+//
+// (2) "The BEHAVIOUR is deliberately unchanged. Those cells stay REFUSED... widening `unattributable`
+// to cover them would be new logic outside ruling 106(a)'s authorisation... Recorded, not fixed." --
+// THIS ROUND IS THAT FIX, under a separate authorisation (human ruling 133), and it did not widen
+// `unattributable`. Those three cells now raise a new sibling class,
+// `OwnerTransferLockLivenessUndeterminedError`; the three retry gates (`fileStore.ts`, `runLoop.ts`,
+// `resumeLoop.ts`) admit it so the retry budget is kept instead of abandoning on the first attempt
+// (human ruling 133, §4.5); it escapes `readOwnerRecord` the same way
+// `OwnerTransferLockUnattributableError` does; and it has its own event type,
+// `owner_transfer_lock_liveness_undetermined`, rather than reusing
+// `owner_transfer_lock_unattributable`'s. "Recorded, not fixed" named a disposition; this round is
+// what ended it.
+//
+// (3) The ruling 108 erratum's own claim that "a lock a LIVE holder is using (transient: it clears
+// when that process exits)" is NOT what this exit means is correct for `pid:0` and an out-of-range
+// pid, which name no process at all -- but it is OVERSTATED for the EPERM cell now inside
+// `liveness-undetermined`: that holder is usually another user's live process (see the doctrine
+// comment on `OwnerTransferLockLivenessUndeterminedError`'s class declaration, and that error's own
+// message, neither of which claims the lock will not clear on its own). Ruling 108 was right to
+// reject "a lock a live holder is using" as a description of the variant it was correcting; it does
+// not hold for every cell now inside the variant that replaced it.
+//
+// Further down in this file, the erratum on `acquireOwnerTransferLock`'s comment (the one ending
+// "recorded here so this one is not the next miss") names the exact failure this is: the same claim
+// about the same exit, left standing in one place after it was corrected in another. THIS comment
+// block was that next miss -- three of its statements went unfollowed-up through the round (Tasks
+// 1-12) that made them false, and only this final fix wave caught it. Say so plainly, because the
+// pattern -- not just the correction -- is what the next reader needs. ***
+//
+// *** ERRATUM (ls lock visibility, HUMAN RULING 138) -- one clause above survives only for HALF of
+// what it used to describe, and this erratum says which half. "the `pid` field it used to carry is
+// gone: nothing read it, and carrying it made the exit read as a determination that was never made"
+// is human ruling 108's reasoning for dropping `pid`. Ruling 138 OVERTURNS that reasoning for the
+// `liveness-undetermined` variant specifically: something now reads it. The disposition site's
+// message names the pid whose liveness could not be determined ("liveness of pid <n> cannot be
+// determined ..."), and the exit is no longer claiming a determination it never made -- it is naming
+// the process whose liveness could not be determined. `liveness-undetermined` therefore carries
+// `pid: number` again, populated where the outcome is built. Ruling 108's reasoning is UNCHANGED for
+// `holder-alive`: nothing reads a pid there, so ruling 108 continues to govern it and it carries
+// none. ***
 type StaleOwnerTransferLockOutcome =
   | { kind: "cleared" }
   | { kind: "holder-alive" }
-  | { kind: "liveness-undetermined"; reason: string }
+  | { kind: "liveness-undetermined"; pid: number; reason: string }
   | { kind: "unattributable"; why: "unparseable" | "no-pid-holder" };
 
 async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<StaleOwnerTransferLockOutcome> {
@@ -1230,7 +1282,7 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<StaleOw
     return { kind: "holder-alive" };
   }
   if (liveness.verdict === "unknown") {
-    return { kind: "liveness-undetermined", reason: liveness.reason };
+    return { kind: "liveness-undetermined", pid, reason: liveness.reason };
   }
 
   await safeUnlink(lockPath);
@@ -1507,9 +1559,24 @@ async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () =
       // cells THIS erratum is about -- pid:0, an out-of-range pid, an EPERM refusal -- are
       // untouched by that and are still recorded rather than fixed, so the disposition it
       // describes for ITSELF is unchanged; only the precedent it leans on is gone. ***
+      //
+      // *** ERRATUM (ls lock visibility, HUMAN RULINGS 132 AND 133) -- the ruling-108 paragraph
+      // above is kept verbatim, and "ALL reach the throw below and all get 'owner transfer already
+      // in progress'" no longer holds for two of its three named cells. Ruling 132 split what used
+      // to be a single not-determined-dead exit into `holder-alive` and `liveness-undetermined`;
+      // ruling 133 gave the latter its own error class. `pid:0`, an out-of-range pid and an EPERM
+      // refusal are now `liveness-undetermined` and throw
+      // `OwnerTransferLockLivenessUndeterminedError` with a message naming the pid and the reason
+      // ("liveness of pid <n> cannot be determined ..."), not `OwnerTransferLockBusyError`'s "owner
+      // transfer already in progress" -- only a genuinely live holder (`holder-alive`) still reaches
+      // that throw. "None of them will ever clear on its own either" is also no longer asserted of
+      // the EPERM cell: its own message deliberately does not say that, because that holder is
+      // usually another user's live process (see the class declaration above,
+      // `OwnerTransferLockLivenessUndeterminedError`). Which throw each cell reaches is recorded in
+      // the code immediately below, not here. ***
       if (outcome.kind === "liveness-undetermined") {
         throw new OwnerTransferLockLivenessUndeterminedError(
-          `liveness of the owner-transfer lock holder cannot be determined (${outcome.reason}); ` +
+          `liveness of pid ${outcome.pid} cannot be determined (${outcome.reason}); ` +
             `this lock may or may not clear on its own -- inspect it with: ccloop unlock ${runDir}`,
         );
       }

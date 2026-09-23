@@ -17,6 +17,22 @@
 // test names in specs, reports and this roster) and then compares by suffix so a roster entry that
 // also names its file (only entry 1 does, as an anchor) still matches the reconstructed
 // describe/it chain, which never includes the file path.
+//
+// *** ERRATUM (final whole-branch review, fix wave, FINDING M1) -- the paragraph above is kept
+// verbatim, and the direction it describes as symmetric is not safe. `known.endsWith(name)` is the
+// direction entry 1 actually needs (its file-path prefix means `name`, the reconstructed
+// describe/it chain, is a proper suffix of `known`). `name.endsWith(known)` is the OTHER direction,
+// and no roster entry needed it -- every entry from 2 through 13 IS the exact reconstructed
+// describe/it chain the real test reports, so plain equality already matched them. That unneeded
+// direction opened a hole the design spec's own controller-proof never reached: it lets ANY new
+// failing test whose full name is a literal suffix of a roster entry pass as "known", independent
+// of ancestors. A bare-titled test "the overrun" with no ancestors, for example, would satisfy
+// `"accepts the controller's zero-clamped soft budget and records the overrun".endsWith("the
+// overrun")` and be waved through as roster entry 11. Fixed below by requiring a match to land at
+// an ancestor boundary -- exact equality, or the roster entry ending with "> " followed by the
+// reported name -- so a suffix can only match at a "> " separator, never at an arbitrary character
+// inside a title. See the round's final-fix-report.md for the reproduction: a synthetic report
+// naming a bare-suffix failure, run through this script before and after this change. ***
 import { readFileSync } from "node:fs";
 
 const KNOWN_REDS = new Set([
@@ -58,7 +74,7 @@ for (const file of report.testResults ?? []) {
   }
 }
 
-const isKnown = (name) => [...KNOWN_REDS].some((known) => known.endsWith(name) || name.endsWith(known));
+const isKnown = (name) => [...KNOWN_REDS].some((known) => known === name || known.endsWith(`> ${name}`));
 const unexpected = failed.filter((name) => !isKnown(name));
 
 console.log(`known reds in roster: ${KNOWN_REDS.size}`);

@@ -6,8 +6,14 @@
 import type { FieldObservation, FileObservation } from "./types.js";
 import type { ScanIssue, ScanRow } from "./scanRuns.js";
 // type-only: renderRuns.ts consumes the lock shape Task 8 produces, but must never VALUE-import
-// from src/unlock/ -- sweepRuns.ts value-imports scanRootFailureDetail FROM this file, so a value
-// import the other way would close a runtime cycle. `import type` is erased at compile time and
+// from src/unlock/. The reason is NOT a cycle: measured (final fix wave of this round),
+// src/unlock/lockRows.ts type-only imports back into ../registry/observeRun.js and
+// ../registry/scanRuns.js, src/unlock/inspectLock.ts value-imports only ../persistence/fileStore.js,
+// and fileStore.ts value-imports nothing from src/ -- so renderRuns -> lockRows -> inspectLock ->
+// fileStore is a terminating DAG and closes nothing. The real reason is weaker but genuine:
+// sweepRuns.ts VALUE-imports scanRootFailureDetail FROM this file, so a value import the other way
+// would drag the lock inspector into sweep's runtime graph -- and sweep deliberately does no
+// liveness probing (§3.3; src/sweep/lockPresence.ts). `import type` is erased at compile time and
 // carries no such risk (design spec §3.2, human ruling 131).
 import type { LockInspection } from "../unlock/inspectLock.js";
 import type { ReportedRunRow, ReportedScanRow } from "../unlock/lockRows.js";

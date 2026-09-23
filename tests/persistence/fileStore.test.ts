@@ -1340,6 +1340,66 @@ describe("fileStore", () => {
     expect(String(error)).toContain("may or may not clear on its own");
   });
 
+  // Human ruling 138 (spec §4.5's hard-constraint wording, "liveness of pid <n> cannot be
+  // determined (<reason>)"): the message must name the process whose liveness could not be
+  // determined, not just the reason the probe failed. The EPERM cell is the one that can pin this
+  // -- in the pid:0 cell the numeral would also appear inside `reason` itself
+  // ("pid 0 does not name a process that can be probed"), so a criterion there could not tell
+  // whether the pid in the message came from ruling 138's new field or merely from the reason
+  // string. Here `reason` is the bare errno "EPERM" and carries no pid, so `pid ${process.pid}`
+  // in the message can only come from the outcome's own `pid` field.
+  it("names the pid in the liveness-undetermined message, not just the reason (human ruling 138)", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-07-22T10:04:59.000Z" }, null, 2),
+    );
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      const errno = new Error("operation not permitted") as NodeJS.ErrnoException;
+      errno.code = "EPERM";
+      throw errno;
+    });
+
+    let error: unknown;
+    try {
+      error = await writeOwnerTransferArtifacts(
+        runDir,
+        initialOwnerRecord,
+        transfer.nextOwnerRecord,
+        transfer.transferRecord,
+      ).then(
+        () => {
+          throw new Error("expected writeOwnerTransferArtifacts to reject, but it resolved");
+        },
+        (rejection: unknown) => rejection,
+      );
+    } finally {
+      killSpy.mockRestore();
+    }
+
+    expect(error).toBeInstanceOf(OwnerTransferLockLivenessUndeterminedError);
+    expect(String(error)).toContain(`liveness of pid ${process.pid} cannot be determined`);
+  });
+
   it("cleans up staged owner transfer files when the lock-holder sees leftover pending files without a marker", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const initialOwnerRecord = {
