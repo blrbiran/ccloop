@@ -580,3 +580,27 @@ npm run build     > /tmp/final-build.txt 2>&1; echo "RC=$?" >> /tmp/final-build.
 在整段变异电池期间为空（今测：仅有本轮自己尚待提交的修复本身，无变异残留）。M1 的两个既有方向
 与洞的复现样本无需 build/clone（纯 Node 脚本 + 构造好的 JSON 报告），直接在主树用
 `git show HEAD:scripts/check-known-reds.mjs` 取出修复前的版本对照复现，未触碰主树任何文件。
+
+### 12.4 §12.1 里 C1 的"附带"修复自己造了一处假话 —— 外派复审抓到，已改
+
+`fileStore.ts` disposition 点那处"附带"追加的 ERRATUM（§12.1 表格 C1 行里提到的"disposition 点
+另一处同源假话"）里写了「no longer holds for two of its three named cells」。**现测为假**：
+用 `classifyProcessLiveness` 逐支核对——`pid < 1` 返回 `unknown`（即 `pid:0`）；`ESRCH` 返回
+`dead`；**其余全部**返回 `unknown`（覆盖越界 pid 与 EPERM）——`pid:0`、越界 pid、EPERM 三格
+**全部**落在 `unknown`，没有一格落在 `alive`。也就是说该 ERRATUM 点名的三格**没有一格**还会走到
+下面那个 Busy 的 throw，不是"三格里的两格"。该段自己后面几句话已经把这件事说对了（"pid:0, an
+out-of-range pid and an EPERM refusal are now liveness-undetermined... only a genuinely live
+holder (holder-alive) still reaches that throw"），所以这段话是**自相矛盾**的——前半句和后半句
+打架，写的时候没人核对过。
+
+**破的规矩**：本仓库对 ERRATUM 的铁律是"不许在里面写一个会被后续裁决推翻的新计数——指向台账即可"
+（design spec §7 明说）。这次错的不是"两"该改成"三"，而是**一个计数压根不该被写进 ERRATUM**——
+这条 ERRATUM 是本轮自己在处理 C1 时"顺手"追加的（不在 C1/I1/I2/M1/M2 五条具名 finding 之列），
+外派复审逐字核对时抓到。**已用同一手法（追加新 ERRATUM，不改历史）改正**：新 ERRATUM 指出那句
+"two of its three"为假、指出段落自相矛盾、指出计数本不该出现在 ERRATUM 里，且**自己也不带任何
+计数**——不写"三"作为断言，只点名三格各自的名字（`pid:0`、越界 pid、EPERM 拒绝），照抄 spec §7
+的规矩。
+
+**过程教训（本轮最锋利的一条）**：这个缺陷是在**关闭同一类缺陷的这一轮修复里，被一次未被要求
+的"顺手"修复自己引入的**。正确的做法本该是发现即报告、交给复审处置，而不是自己动手——这正是
+外派复审这次纠正想说的话。
