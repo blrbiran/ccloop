@@ -34,6 +34,14 @@ describe("fileStore module boundary", () => {
   // stripped either). Line comments are removed up to but NOT including their trailing newline, so
   // line boundaries are preserved for the `^import` anchor below; block comments are removed
   // wholesale, including any newlines inside them.
+  //
+  // Known limitations (traced, fix round 3; neither can produce a false negative on
+  // src/persistence/fileStore.ts as it exists today, and this helper reads only that one file):
+  // a regex literal containing an escaped slash followed by `*` (e.g. `/\/\*/`) would be misread
+  // as the start of a block comment, since this function has no notion of regex-literal syntax;
+  // and a template literal containing a nested `${...}` interpolation with its own backtick string
+  // would be mis-spanned, since the quote-matching below looks only for the next matching backtick
+  // and does not track interpolation nesting.
   function stripComments(source: string): string {
     let result = "";
     let i = 0;
@@ -105,13 +113,23 @@ describe("fileStore module boundary", () => {
     expect(importStatements(source)).toEqual(['import {\n  foo, \n} from "../bar.js";']);
   });
 
-  it("does not flag a comment that only MENTIONS ../unlock/ with no real import present", () => {
-    // The flip side of the same rule: a scanner that fires on its own warning text, or on a
-    // comment discussing the forbidden path, is exactly as broken as one that misses a real
-    // import. This file's own header comments say "../unlock/" and "src/unlock" repeatedly and
-    // must never be mistaken for an import themselves.
-    const source = '// never import from ../unlock/ here; it would close the cycle\nexport const x = 1;\n';
-    expect(importStatements(source)).toEqual([]);
+  it("treats a mention of ../unlock/ inside a trailing comment as gone once the import is stripped and joined", () => {
+    // *** ERRATUM (ls lock visibility, HUMAN RULING 132, fix round 3) -- this test replaces one
+    // that asserted the same conclusion over a BARE comment line ('// ... ../unlock/ ...' with no
+    // import at all). That version was vacuous: `^import` never anchors to a line starting with
+    // `//` regardless of whether stripComments runs, so it could not observe stripComments being
+    // deleted (external review, fix round 3, mechanically confirmed by the controller: identity
+    // stripComments left that test green). This version routes the mention through a REAL import
+    // statement, so it actually depends on stripping running before joining. ***
+    //
+    // Without stripComments, the comment's OWN `;` (right after "../unlock/") would end the raw
+    // statement at `...../unlock/;` -- which DOES contain "../unlock/" and is NOT `import type`,
+    // so an unstripped scan would falsely flag this legitimate `../runtime/types.js` import. With
+    // stripComments, the comment is gone before the statement is joined, and the joined statement
+    // contains no `../unlock/` at all. Asserted on the joined statement's literal text (not merely
+    // "nothing was flagged"), so the assertion shows exactly what stripping produced.
+    const source = 'import {\n  a, // do not pull this from ../unlock/; use fileStore\n} from "../runtime/types.js";\n';
+    expect(importStatements(source)).toEqual(['import {\n  a, \n} from "../runtime/types.js";']);
   });
 
   it("never value-imports from src/unlock, which would close the cycle inspectLock opens", async () => {
