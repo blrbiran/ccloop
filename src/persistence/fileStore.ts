@@ -1657,7 +1657,19 @@ async function recoverInterruptedOwnerTransfer(runDir: string, options?: { lockH
       // OwnerTransferLockUnattributableError is neither of those two: nothing will ever release
       // that lock, so returning here published a pre-transfer record for the rest of the run's
       // life with nobody told. It is the ONLY class that escapes; busy and errno are unchanged.
-      if (error instanceof OwnerTransferLockUnattributableError) {
+      // *** ERRATUM (ls lock visibility, HUMAN RULING 133) -- the paragraph above is kept verbatim,
+      // and "It is the ONLY class that escapes" is superseded: the class this escapes to a caller
+      // is now TWO, not one. OwnerTransferLockLivenessUndeterminedError belongs beside
+      // OwnerTransferLockUnattributableError for the same reason -- a lock nobody can attribute
+      // will never release, and a lock whose liveness cannot be determined might never release
+      // either, so recovery cannot simply be skipped and the read allowed to succeed on a
+      // pre-transfer record either way. Busy and errno are still unchanged: a lock a LIVE holder
+      // demonstrably has really will clear, so skipping recovery and reading what is on disk for
+      // now is still the right call for that one case. ***
+      if (
+        error instanceof OwnerTransferLockUnattributableError
+        || error instanceof OwnerTransferLockLivenessUndeterminedError
+      ) {
         throw error;
       }
 

@@ -1903,6 +1903,61 @@ describe("fileStore", () => {
     await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe("not-json\n");
   });
 
+  // ls lock visibility, Task 7 (human ruling 133). Same fixture as the criterion directly above --
+  // a transaction marker present, so recoverInterruptedOwnerTransfer actually attempts recovery --
+  // with ONE change: the lock parses fine and names a holder in the `pid:<n>` form (pid:0), so it
+  // is attributable and only the liveness probe fails. Before this branch existed,
+  // recoverInterruptedOwnerTransfer's catch re-threw only OwnerTransferLockUnattributableError and
+  // silently returned for every other lock error -- including this one -- so readOwnerRecord's
+  // caller would go on deciding ownership from a record the transfer had already superseded, with
+  // nobody told, for the rest of the run's life. This is the ONLY place that silence happens: it is
+  // "recorded, not fixed" nowhere else in this file for OwnerTransferLockLivenessUndeterminedError.
+  it("lets an undetermined-liveness lock escape the read, instead of publishing a pre-transfer record", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
+    await writeFile(join(runDir, ".owner-transfer.pending.json"), JSON.stringify(transfer.transferRecord, null, 2));
+    await writeFile(join(runDir, ".owner-record.pending.json"), JSON.stringify(transfer.nextOwnerRecord, null, 2));
+    await writeFile(
+      join(runDir, ".owner-transfer.transaction.json"),
+      JSON.stringify({ version: 1, stagedAt: transfer.transferRecord.transferredAt, finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
+    );
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: "pid:0", acquiredAt: "2026-09-23T00:00:00.000Z" }),
+    );
+
+    const error = await readOwnerRecord(runDir).then(
+      () => {
+        throw new Error("expected the read to surface the lock error");
+      },
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(OwnerTransferLockLivenessUndeterminedError);
+    expect(error).not.toBeInstanceOf(OwnerTransferLockUnattributableError);
+    expect(String(error)).toContain("pid 0 does not name a process that can be probed");
+    // Left on disk, same disposition as the unattributable sibling: ruling 83's single deletion
+    // condition needs a parsed, DEAD pid:<n> holder, and pid:0 can never satisfy it.
+    expect(await readFile(join(runDir, ".owner-transfer.lock"), "utf8")).toContain("pid:0");
+  });
+
   it("publishes the transaction marker by rename, leaving only .owner-transfer.transaction.tmp when the rename fails", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const initialOwnerRecord = {
