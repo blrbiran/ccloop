@@ -661,6 +661,68 @@ describe("resumeLoop", () => {
     }
   });
 
+  // ls lock visibility, Task 3/5 (human ruling 133). Same mocked-claim seam as the busy-lock
+  // exhaustion criterion directly above, with OwnerTransferLockLivenessUndeterminedError thrown
+  // instead of OwnerTransferLockBusyError. This is the criterion that actually observes the retry
+  // gate at resumeLoop.ts:75 admitting the new class: the two message/detail criteria elsewhere in
+  // this file only check the FINAL refusal text, and a direct measurement found that reverting that
+  // gate (mutation M3-3) leaves both of them green -- the sibling class still gets caught and
+  // reported with the same wording, just after one attempt instead of three, which neither existing
+  // assertion can see. claimCalls is what makes the retry COUNT itself the pinned fact.
+  it("retries a liveness-undetermined owner-transfer lock during the resume claim to the same bound a busy one gets", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    let claimCalls = 0;
+
+    vi.resetModules();
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+
+      return {
+        ...actual,
+        claimOwnerRecordWithPrecondition: async () => {
+          claimCalls += 1;
+          throw new actual.OwnerTransferLockLivenessUndeterminedError(
+            "liveness of the owner-transfer lock holder cannot be determined (EPERM); this lock may or may not clear on its own -- inspect it with: ccloop unlock",
+          );
+        },
+      };
+    });
+
+    try {
+      const { resumeLoop: observedResumeLoop, ResumeNotEligibleError: ObservedResumeNotEligibleError } =
+        await import("../../src/controller/resumeLoop.js");
+      const { OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS } = await import("../../src/controller/runLoop.js");
+
+      let thrown: unknown = null;
+      try {
+        await observedResumeLoop(runDir, new ScriptedAdapter([successFrame()]));
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(ObservedResumeNotEligibleError);
+      // The decisive assertion: the retry bound was spent, exactly as it is for a busy lock, not
+      // abandoned on the first attempt.
+      expect(claimCalls).toBe(OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS);
+      const denied = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type: string; detail: string })
+        .filter((event) => event.type === "resume_denied");
+      expect(denied).toHaveLength(1);
+      expect(denied[0].detail).toContain("owner-transfer lock liveness undetermined");
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
+
   it("aborts when a concurrent owner-record change breaks the claim CAS", async () => {
     const repoPath = await createRepo();
     const contract = createContract(repoPath);

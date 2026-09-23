@@ -1079,6 +1079,94 @@ describe("lease heartbeat lifecycle", () => {
     }
   });
 
+  // ls lock visibility, Task 3/4 (human ruling 133). Same mocked-write seam as the busy-lock
+  // exhaustion criterion directly above, with OwnerTransferLockLivenessUndeterminedError thrown
+  // instead of OwnerTransferLockBusyError. This is the criterion that actually observes runLoop.ts's
+  // retry gate admitting the new class: the two criteria immediately above (`contains an
+  // undetermined-liveness transfer lock ...` / `abandons the attempt in place ...`) only check the
+  // FINAL detail and status, and a real, direct measurement found that reverting the gate at
+  // runLoop.ts:761 (mutation M3-2/M4's own retry-gate mutation) leaves BOTH of those green: the
+  // sibling class still gets caught and reported by the disposition branch one level up, just after
+  // one attempt instead of three, which neither existing assertion can see. writeCalls is what
+  // makes the retry COUNT itself the pinned fact, exactly as the busy-lock sibling does.
+  it("retries a liveness-undetermined owner-transfer lock to the same bound a busy one gets, before abandoning", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 200,
+      },
+    };
+
+    vi.resetModules();
+    let writeCalls = 0;
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>(
+        "../../src/persistence/fileStore.js",
+      );
+
+      return {
+        ...actual,
+        writeOwnerTransferArtifacts: async () => {
+          writeCalls += 1;
+          throw new actual.OwnerTransferLockLivenessUndeterminedError(
+            "liveness of the owner-transfer lock holder cannot be determined (EPERM); this lock may or may not clear on its own -- inspect it with: ccloop unlock",
+          );
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop, OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS } = await import(
+        "../../src/controller/runLoop.js"
+      );
+
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+            runId: "task-1",
+            logicalSessionId: "task-1:lost",
+            currentOwnerEpoch: 1,
+            currentProcessInstanceId: buildProcessInstanceId(),
+            lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+            ownerStatus: "lost",
+            supersededByEpoch: null,
+          }, null, 2));
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const finalState = await observedRunLoop(contract, runDir, adapter as never);
+
+      const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+        currentOwnerEpoch: number;
+      };
+
+      // The decisive assertion: the retry bound was spent, exactly as it is for a busy lock, not
+      // abandoned on the first attempt.
+      expect(writeCalls).toBe(OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS);
+      expect(owner.currentOwnerEpoch).toBe(1); // never transferred
+      expect(finalState.status).toBe("exhausted");
+      expect(
+        (await readEvents(runDir)).filter((event) => event.type === "owner_transfer_contended"),
+      ).toHaveLength(1);
+      expect(await readEventTypes(runDir)).not.toContain("owner_epoch_transferred");
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
+
   // Task 2 / spec §5.2 requirement 3, and the trap the plan calls out explicitly: retrying a CAS
   // mismatch would re-run the CAS against evidence this transfer never evaluated — a new
   // ownership decision wearing an old one's justification. Asserts the ATTEMPT COUNT, not just
