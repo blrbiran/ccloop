@@ -700,6 +700,188 @@ describe("lease heartbeat lifecycle", () => {
     expect(persisted.attemptsUsed).toBe(finalState.attemptsUsed);
   });
 
+  // ls lock visibility, Task 4 (human ruling 133). Same fixture shape as the unattributable
+  // sibling above (`contains an unattributable transfer lock ...`), with one change: the lock's
+  // holder parses fine and names a real, attributable pid (this process's own), but process.kill
+  // is made to refuse it with EPERM -- so the record IS attributable and only the probe fails,
+  // raising OwnerTransferLockLivenessUndeterminedError rather than
+  // OwnerTransferLockUnattributableError. Without a branch for this sibling class the error would
+  // escape the attempt entirely, exactly as the unattributable one did before ruling 106's branch
+  // existed.
+  //
+  // ⚠️ The task brief's own sample fixture writes a `pid:0` lock and asserts
+  // `toContain("cannot be determined (EPERM)")` in the same breath -- those do not agree. `pid:0`
+  // never reaches process.kill at all: classifyProcessLiveness's `pid < 1` guard returns "pid 0
+  // does not name a process that can be probed" BEFORE calling it, so it can never produce an
+  // EPERM reason (see the escape-point criterion in Task 7, which pins that literal for a real
+  // `pid:0` lock instead). This criterion seeds the scenario that actually produces the literal
+  // the brief asks to pin, mirroring the existing EPERM-refusal precedent in fileStore.test.ts
+  // ("refuses a lock as liveness-undetermined ... naming the EPERM reason").
+  it("contains an undetermined-liveness transfer lock as a recorded contention, not a failed attempt", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 200,
+      },
+    };
+
+    const heldPid = process.pid;
+    // Discriminated by pid: only the lock-liveness probe's own call (against this process's own
+    // pid) is refused. Anything else calling process.kill during this attempt (there is none in
+    // this fixture -- execute() is a plain callback, not a real subprocess) passes through.
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+      if (pid === heldPid) {
+        const errno = new Error("operation not permitted") as NodeJS.ErrnoException;
+        errno.code = "EPERM";
+        throw errno;
+      }
+      return true;
+    });
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+          runId: "task-1",
+          logicalSessionId: "task-1:lost",
+          currentOwnerEpoch: 1,
+          currentProcessInstanceId: buildProcessInstanceId(),
+          lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+          ownerStatus: "lost",
+          supersededByEpoch: null,
+        }, null, 2));
+        await writeFile(
+          join(runDir, ".owner-transfer.lock"),
+          JSON.stringify({ holderProcessInstanceId: `pid:${heldPid}`, acquiredAt: "2026-09-23T00:00:00.000Z" }),
+        );
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    let finalState: RunState;
+    try {
+      finalState = await runLoop(contract, runDir, adapter);
+    } finally {
+      // process.kill is global: leaking this spy would poison every later criterion in this file.
+      killSpy.mockRestore();
+    }
+
+    expect(finalState.status).toBe("exhausted");
+    const contended = (await readEvents(runDir)).filter(
+      (event) => event.type === "owner_transfer_contended",
+    );
+    expect(contended).toHaveLength(1);
+    expect(contended[0].detail).toContain("cannot be determined (EPERM)");
+    expect(contended[0].detail).toContain("owner transfer abandoned");
+    expect(await readEventTypes(runDir)).not.toContain("owner_epoch_transferred");
+  });
+
+  // ls lock visibility, Task 4 (human ruling 133). Same fixture shape as the unattributable
+  // sibling above (`abandons the attempt in place when the ownership read hits an unattributable
+  // transfer lock ...`), with the transaction marker present (so the ownership read's
+  // readOwnerRecord actually attempts recovery) and an EPERM-refused, attributable lock in place
+  // of the unparseable one, for the same reason given on the transfer-path criterion above.
+  it("abandons the attempt in place when the ownership read hits an undetermined-liveness transfer lock, without failing the run", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      executionPolicy: {
+        ...baseContract.executionPolicy,
+        perAttemptTimeoutMs: 200,
+      },
+    };
+
+    const heldPid = process.pid;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+      if (pid === heldPid) {
+        const errno = new Error("operation not permitted") as NodeJS.ErrnoException;
+        errno.code = "EPERM";
+        throw errno;
+      }
+      return true;
+    });
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute(context) {
+        await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+          runId: "task-1",
+          logicalSessionId: "task-1:lost",
+          currentOwnerEpoch: 1,
+          currentProcessInstanceId: buildProcessInstanceId(),
+          lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+          ownerStatus: "lost",
+          supersededByEpoch: null,
+        }, null, 2));
+        // Both are load-bearing, same as the unattributable sibling: the marker is what sends the
+        // ownership read into recovery; the EPERM-refused lock is what makes that recovery's
+        // liveness undetermined rather than clean.
+        await writeFile(
+          join(runDir, ".owner-transfer.transaction.json"),
+          JSON.stringify({ version: 1, stagedAt: "2026-07-23T00:00:00.000Z", finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
+        );
+        await writeFile(
+          join(runDir, ".owner-transfer.lock"),
+          JSON.stringify({ holderProcessInstanceId: `pid:${heldPid}`, acquiredAt: "2026-09-23T00:00:00.000Z" }),
+        );
+        await waitForAbort(context.abortSignal);
+        return null;
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    let finalState: RunState;
+    try {
+      finalState = await runLoop(contract, runDir, adapter);
+    } finally {
+      killSpy.mockRestore();
+    }
+
+    const contended = (await readEvents(runDir)).filter(
+      (event) => event.type === "owner_transfer_contended",
+    );
+    expect(contended).toHaveLength(1);
+    expect(contended[0].detail).toContain("cannot be determined (EPERM)");
+    expect(contended[0].detail).toContain("owner transfer recovery blocked");
+    expect(finalState.status).not.toBe("failed");
+    expect(finalState.status).not.toBe("cancelled");
+    expect(finalState.status).toBe("executing");
+    // Nothing was reclaimed on the way out: an EPERM-refused, attributable lock is never a
+    // deletion candidate either (ruling 83's single deletion condition needs a DEAD holder).
+    expect(JSON.parse(await readFile(join(runDir, ".owner-transfer.lock"), "utf8")).holderProcessInstanceId)
+      .toBe(`pid:${heldPid}`);
+    const persisted = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8")) as RunState;
+    expect(persisted.status).toBe(finalState.status);
+    expect(persisted.attemptsUsed).toBe(finalState.attemptsUsed);
+    // Human ruling 118 found this pair unpinned on the sibling (unattributable) branch's own
+    // criterion, because that criterion only compares `status` and `attemptsUsed` -- neither of
+    // which applyPhaseUsage touches. This attempt's execute phase times out waiting for abort
+    // (perAttemptTimeoutMs 200ms) and settlePhase runs BEFORE this branch's persistBoundaryAnalysis
+    // call, applying that elapsed time to `state.budgetSnapshot.timeRemainingMs` -- so the
+    // returned `state` really does diverge from what was last written to disk (the "executing"
+    // transition write, before the phase ran). Comparing budgetSnapshot is what makes that
+    // divergence, and therefore this branch's writeOwnedRunState call, observable: deleting that
+    // call leaves the disk copy at its pre-phase-usage value while `finalState` reflects the
+    // reduction, and this assertion is what catches it (mutation M4-4).
+    expect(persisted.budgetSnapshot.timeRemainingMs).toBe(finalState.budgetSnapshot.timeRemainingMs);
+  });
+
   // Task 2 / spec §5.2 requirement 1: a transfer whose first attempt finds the owner-transfer
   // lock busy, and whose next attempt finds it free, must still complete. `writeOwnerTransferArtifacts`
   // is mocked (rather than using a real lock file, as the test above does) so the lock's

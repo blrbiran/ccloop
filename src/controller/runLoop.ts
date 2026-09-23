@@ -952,6 +952,21 @@ async function persistBoundaryAnalysis(
               at: new Date().toISOString(),
               detail: `owner transfer abandoned: ${String(error)}`,
             });
+          } else if (error instanceof OwnerTransferLockLivenessUndeterminedError) {
+            // *** ERRATUM (ls lock visibility, HUMAN RULING 133) -- the paragraph above is kept
+            // verbatim and still applies to this sibling class, word for word: a refusal to
+            // overwrite must not be upgraded into a failed attempt, and this is contained exactly
+            // like the busy and unattributable branches for that same reason. What differs is only
+            // the detail: this lock's liveness could not be determined at all (not "busy", not
+            // "unattributable"), so the event carries String(error), which already names the
+            // reason and the ccloop unlock escape hatch. Deliberately NOT a new event type, for
+            // the same reason the busy and unattributable branches give: this stream already names
+            // "a transfer abandoned to a lock", and a second type would split every consumer of it.
+            await appendEvent(runDir, {
+              type: "owner_transfer_contended",
+              at: new Date().toISOString(),
+              detail: `owner transfer abandoned: ${String(error)}`,
+            });
           } else if (!(error instanceof OwnerTransferPreconditionError)) {
             throw error;
           }
@@ -1755,6 +1770,26 @@ export async function runLoopFromState(
       // write. Kept for parity with the sibling branch rather than removed, and said out loud so
       // the next reader does not mistake an unpinned line for a proven one.
       if (error instanceof OwnerTransferLockUnattributableError) {
+        await appendEvent(runDir, {
+          type: "owner_transfer_contended",
+          at: new Date().toISOString(),
+          detail: `owner transfer recovery blocked: ${String(error)}`,
+        });
+        await writeOwnedRunState(runDir, state);
+        return state;
+      }
+
+      // *** ERRATUM (ls lock visibility, HUMAN RULING 133) -- both paragraphs above (ruling 114 and
+      // ruling 118) are kept verbatim and still apply to this sibling class: it is routed here, once,
+      // for the same reason, and contained the same way -- an abandonment, not an attempt failure.
+      // The writeOwnedRunState line is NOT inherited as unpinned this time: ruling 118 found it
+      // unobservable only because that criterion compares `status` and `attemptsUsed`, neither of
+      // which applyPhaseUsage touches. Task 4's criterion for this branch adds a comparison of
+      // `budgetSnapshot.timeRemainingMs` instead, on a fixture where settlePhase's phase-usage
+      // update runs before this branch's persistBoundaryAnalysis call -- so the returned state
+      // really does diverge from the last disk write, and deleting this line (mutation M4-4) is
+      // caught by that comparison. ***
+      if (error instanceof OwnerTransferLockLivenessUndeterminedError) {
         await appendEvent(runDir, {
           type: "owner_transfer_contended",
           at: new Date().toISOString(),
