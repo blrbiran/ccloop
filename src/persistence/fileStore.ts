@@ -1574,6 +1574,25 @@ async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () =
       // usually another user's live process (see the class declaration above,
       // `OwnerTransferLockLivenessUndeterminedError`). Which throw each cell reaches is recorded in
       // the code immediately below, not here. ***
+      //
+      // *** ERRATUM (final whole-branch review, fix wave, self-correction) -- the erratum
+      // immediately above is kept verbatim, and one of its own clauses is wrong. "no longer holds
+      // for two of its three named cells" is false: it holds for NONE of them. `pid:0`, an
+      // out-of-range pid, and an EPERM refusal -- the cells that erratum itself names -- all take
+      // the `liveness-undetermined` exit, and none of them reaches the throw below; only a
+      // genuinely live holder (`holder-alive`) does. The erratum's own later sentences already say
+      // this -- "pid:0, an out-of-range pid and an EPERM refusal are now liveness-undetermined...
+      // only a genuinely live holder (holder-alive) still reaches that throw" -- so the clause
+      // contradicted the rest of its own block, and that contradiction was published without being
+      // caught before now.
+      //
+      // The deeper miss is not the wrong tally: a COUNT should not have been written into an
+      // erratum at all. This repository's own rule for errata is that they must not carry a new
+      // count a later ruling could falsify -- point at the ledger instead. What the rest of this
+      // block already does -- naming the cells rather than counting them -- is what this clause
+      // should have done too. See
+      // .superpowers/sdd/2026-09-23-ls-lock-visibility/progress.md for this round's record of how
+      // this was found. ***
       if (outcome.kind === "liveness-undetermined") {
         throw new OwnerTransferLockLivenessUndeterminedError(
           `liveness of pid ${outcome.pid} cannot be determined (${outcome.reason}); ` +
