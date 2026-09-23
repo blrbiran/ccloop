@@ -70,3 +70,24 @@ Spec: `docs/superpowers/specs/2026-09-23-ls-lock-visibility-design.md`（已读�
 
 ## 执行记录
 
+## Task 1
+
+- BASE `91bd1ed` → HEAD `c186195`。实施席 sonnet，状态 DONE。
+- 实测 `58 files / 784 tests`（+2 文件 / +5 判据），2 failed，失败集 = {stopProof leader-exit, SubprocessClaudeAdapter close-pending} ⊆ 允许的 7 条（按名字核）。typecheck RC 0。
+- 四条变异 M1-1..M1-4 全部在 `git clone --local` 副本里跑过，sha256 前后不等，红被看见；主树 sha 前后相等。
+- **Ruling F：实施席用自己模型的 Co-Authored-By 是对的**，后续 brief 不再写死归属行。
+  依据：那笔提交的作者确实是 Sonnet 席，写成 Opus 是假话。**若错的代价**：本轮归属行不统一（不许 amend，最终报告里列给人）。
+- **Ruling G：M1-3 的红预言写错在控制器（计划）一侧，不是实施缺陷。**
+  预言「dead ＋ alive 两条红」，实测是「dead ＋ 越界 pid 两条」——`alive` 那条结构上进不了被变异的 `catch`。
+  实施席手工追踪代码路径捞回，未改任何判据。**若错的代价**：无（已现测纠正）。
+  ⇒ **这是「防假预言」那条教训的第 N 次兑现：预言要在脑内把变异跑到底，问「X 之前有没有别的断言先炸／这一支走不走得到」。**
+- 评审席（sonnet）判 **Needs fixes**：0 Critical / **1 Important（plan-mandated）** / 1 Minor。
+  Important：结构判据只在 `import ` 与模块路径**同一行**时才捕获；多行 `import {` 是本仓库既有写法，
+  一个换行就能让值导入**静默绕过守卫**，而 M1-4 只测了单行那种 ⇒ **变异电池给的是假信心**。
+- **Ruling H：该 Important 成立且承重，必须修。**
+  依据：spec §4.1 存在的全部理由就是「那个环不许重开」；一个被普通换行绕过的守卫，正是本仓库反复栽的
+  「扫描器没在做它声称的事」（本轮 spec 自审刚栽过一次：`grep` 配 `$'\x00'` 在 NUL 处截断）。
+  **缺陷在【计划】一侧，不是实施席** —— 那段判据代码是计划逐字给的。
+  **若错的代价**：几乎没有，收紧解析是纯加法。
+- ⚠️ 评审席提的 ⚠️ 项已现测核实：`c186195` 的归属行是 `Co-Authored-By: Claude Sonnet 5`，与 Ruling F 一致。
+- Minor（记录，不进修复轮）：`sdd-ledger.md` 随 `c186195` 一起进了提交 —— 是控制器先 `git add -f` 的，实施席只是没 unstage。无害。
