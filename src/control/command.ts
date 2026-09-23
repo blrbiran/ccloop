@@ -26,13 +26,23 @@ export interface ControlCommandDeps {
 
 const capabilitiesSchema = z
   .object({
-    protocol: z.literal(1),
-    durableAccept: z.boolean(),
-    ownershipIsolation: z.boolean(),
-    evidenceRetention: z.boolean(),
+    protocol: z.literal(2),
     usageObservation: z.enum(["realtime", "phase-end", "unavailable"]),
-    budgetEnforcement: z.enum(["bounded", "soft", "unsupported"]),
-    requestBoundEvidence: z.string().min(1).nullable(),
+    budgetEnforcement: z.enum(["bounded", "soft", "unavailable"]),
+    contextObservation: z.enum(["realtime", "phase-end", "unavailable"]),
+    handoffControl: z.enum(["durable", "phase-end", "unavailable"]),
+    handoffExecution: z.enum(["mechanical-in-run-v1", "model-assisted-v1"]).nullable(),
+    contextWindowTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable(),
+    requestBoundProof: z
+      .object({
+        scheme: z.literal("adapter-request-bound-v1"),
+        version: z.string().min(1),
+        workDimensions: z.array(z.string()),
+        handoffDimensions: z.array(z.string()),
+        evidenceKind: z.string().min(1),
+      })
+      .strict()
+      .nullable(),
   })
   .strict();
 const executionStatusSchema = z.discriminatedUnion("kind", [
@@ -132,13 +142,14 @@ async function defaultHandler(
 ): Promise<unknown> {
   if (request.method === "capabilities") {
     return {
-      protocol: 1,
-      durableAccept: true,
-      ownershipIsolation: true,
-      evidenceRetention: true,
+      protocol: 2,
       usageObservation: "phase-end",
       budgetEnforcement: "soft",
-      requestBoundEvidence: null,
+      contextObservation: "unavailable",
+      handoffControl: "durable",
+      handoffExecution: "mechanical-in-run-v1",
+      contextWindowTokens: null,
+      requestBoundProof: null,
     };
   }
   if (request.method === "accept") {

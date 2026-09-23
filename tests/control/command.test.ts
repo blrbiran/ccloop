@@ -100,6 +100,10 @@ describe("control command boundary", () => {
     expect(result.stderr).toContain("control-response-invalid");
   });
 
+  // This criterion was rewritten in place under human authorization (2026-09-24,
+  // "task 1 3 5 6 都同意授权") to assert the v2 eight-field capability vocabulary
+  // instead of the v1 seven-field one. See ccloop/CLAUDE.md Rule 15 and
+  // docs/superpowers/specs/2026-09-24-g1-control-wire-contract-design.md §5.1.
   it("routes the real CLI through control before legacy parsing and emits one JSON value", async () => {
     const { config } = await configFixture();
     const result = await runCli(
@@ -109,13 +113,14 @@ describe("control command boundary", () => {
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
     expect(JSON.parse(result.stdout)).toEqual({
-      protocol: 1,
-      durableAccept: true,
-      ownershipIsolation: true,
-      evidenceRetention: true,
+      protocol: 2,
       usageObservation: "phase-end",
       budgetEnforcement: "soft",
-      requestBoundEvidence: null,
+      contextObservation: "unavailable",
+      handoffControl: "durable",
+      handoffExecution: "mechanical-in-run-v1",
+      contextWindowTokens: null,
+      requestBoundProof: null,
     });
     expect(result.stdout.trim().split("\n")).toHaveLength(1);
   });
