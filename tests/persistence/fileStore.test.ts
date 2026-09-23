@@ -3257,6 +3257,52 @@ describe("fileStore", () => {
     });
   });
 
+  // ls lock visibility, Task 3 (human ruling 133). The brief's own sample fixture warns that
+  // counting process.kill calls cannot measure this: pid:0 never reaches the syscall at all
+  // (classifyProcessLiveness's `pid < 1` guard returns "unknown" before calling process.kill), so
+  // a kill-call counter would read zero regardless of how many attempts ran. The directed probe
+  // this criterion uses instead is withLockAttemptCounter, already established above for the
+  // sibling busy-lock test: it counts real `link(staging, lockPath)` calls, one per
+  // acquireOwnerTransferLock iteration, regardless of which exit (holder-alive or
+  // liveness-undetermined) that iteration's catch takes. Measured directly, not inferred from
+  // which assertion goes red.
+  it("spends the whole reconciliation retry bound on an unprobeable holder, exactly as it does on a busy one", async () => {
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const lockPath = join(runDir, ".owner-transfer.lock");
+    // Never released, and never probeable: pid:0 cannot be probed at all, so
+    // tryRecoverStaleOwnerTransferLock reports liveness-undetermined on every attempt, exactly as
+    // a live holder reports holder-alive on every attempt in the sibling test above.
+    await writeFile(
+      lockPath,
+      JSON.stringify({ holderProcessInstanceId: "pid:0", acquiredAt: "2026-09-23T00:00:00.000Z" }),
+    );
+
+    const attemptsTaken = await withLockAttemptCounter(runDir, async (fileStore, attempts) => {
+      await fileStore.writeBoundaryArtifacts(runDir, {
+        boundaryAnalysis: staleCandidateAnalysis(),
+        reconciliationRecord: winnerReconciliation(),
+      });
+
+      return attempts();
+    });
+
+    // The bound itself, as a literal (mirrors the busy-lock sibling's `toBe(3)` above). Without
+    // the gate admitting OwnerTransferLockLivenessUndeterminedError alongside
+    // OwnerTransferLockBusyError, this class takes the abandon arm on the FIRST attempt and this
+    // count would be 1, not 3 -- the behaviour regression human ruling 133 exists to prevent.
+    expect(attemptsTaken).toBe(3);
+
+    expect(
+      (await readEventTypesOrNone(runDir)).filter((type) => type === "reconciliation_write_abandoned"),
+    ).toHaveLength(1);
+    await expect(readFile(join(runDir, "reconciliation-record.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    // Left on disk: ruling 83's single deletion condition (a parsed pid:<n> holder that is no
+    // longer alive) never matches an unprobeable holder.
+    expect(await readFile(lockPath, "utf8")).toContain("pid:0");
+  });
+
   it("calls onReconciliationWriteAbandoned exactly once with the read failure and still resolves", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
 

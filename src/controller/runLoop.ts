@@ -4,6 +4,7 @@ import {
   appendEvent,
   initializeRunFiles,
   OwnerTransferLockBusyError,
+  OwnerTransferLockLivenessUndeterminedError,
   OwnerTransferLockUnattributableError,
   OwnerTransferPreconditionError,
   readOwnerRecord,
@@ -758,7 +759,18 @@ async function persistOwnerTransfer(
       // on the first attempt rather than retried to the bound. Retrying a lock nothing will ever
       // release buys nothing but delay. It is caught and contained at the persistOwnerTransfer call
       // site, not left to escape.
-      if (!(error instanceof OwnerTransferLockBusyError) || isLastAttempt) {
+      // *** ERRATUM (ls lock visibility, HUMAN RULING 133) -- the paragraph above is kept verbatim
+      // and still describes OwnerTransferLockUnattributableError exactly: that class still takes
+      // the first-attempt arm, because a lock nobody can attribute really will never be released.
+      // It no longer describes every non-Busy lock error. A holder whose liveness cannot be
+      // determined is usually another user's LIVE process, and its lock clears when that process
+      // exits -- so this gate admits that class alongside Busy. The retry behaviour those three
+      // cells get today is therefore unchanged; it is the gate that had to move to keep it. ***
+      if (
+        !(error instanceof OwnerTransferLockBusyError
+          || error instanceof OwnerTransferLockLivenessUndeterminedError)
+        || isLastAttempt
+      ) {
         throw error;
       }
     }

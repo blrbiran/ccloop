@@ -480,7 +480,17 @@ async function acquireOwnerTransferLockForReconciliation(
       // same abandonment. The sibling doctrine's warning runs the other way (a SUBCLASS silently
       // KEEPING a match); this is a match deliberately LOST, recorded here so it is not later
       // mistaken for an oversight.
-      if (!(error instanceof OwnerTransferLockBusyError)) {
+      // *** ERRATUM (ls lock visibility, HUMAN RULING 133) -- the paragraph above is kept verbatim
+      // and still describes OwnerTransferLockUnattributableError exactly: that class still takes
+      // the first-attempt arm, because a lock nobody can attribute really will never be released.
+      // It no longer describes every non-Busy lock error. A holder whose liveness cannot be
+      // determined is usually another user's LIVE process, and its lock clears when that process
+      // exits -- so this gate admits that class alongside Busy. The retry behaviour those three
+      // cells get today is therefore unchanged; it is the gate that had to move to keep it. ***
+      if (
+        !(error instanceof OwnerTransferLockBusyError
+          || error instanceof OwnerTransferLockLivenessUndeterminedError)
+      ) {
         return { kind: "abandon", error };
       }
 
