@@ -7,7 +7,8 @@ import { toScanResult, renderScanTable, scanRootFailureDetail } from "../../src/
 import { scanRuns, MAX_SCAN_DEPTH } from "../../src/registry/scanRuns.js";
 import type { DirEntry, DirReader, ScanDeps, ScanIssue, ScanRow } from "../../src/registry/scanRuns.js";
 import type { RunFileReaders } from "../../src/registry/readObservedFile.js";
-import type { ReportedRunRow, ReportedScanRow } from "../../src/unlock/lockRows.js";
+import { attachLockInspections } from "../../src/unlock/lockRows.js";
+import type { ReportedRunRow } from "../../src/unlock/lockRows.js";
 
 // Task 9 (human ruling 131) widened toScanResult/renderScanTable's row type from ScanRow to
 // ReportedScanRow, so every RUN fixture below now needs a `lock` field to satisfy the type AND
@@ -98,6 +99,27 @@ describe("toScanResult", () => {
   // correct implementation. `kind` (the structural discriminant on rows and field
   // observations) does not match any forbidden pattern and is not exempted specially — it
   // simply never trips the assertion below.
+  //
+  // ⚠️ MEASURED, NOT ASSUMED (ls-lock-visibility round, Tasks 8-10 fix round 1, Important
+  // finding): this guard's ban list is `/resumable|fresh|stale|expired/i` plus a narrow
+  // exemption for `eligible`. It does NOT ban `lock` or `state`, and Task 9's owner-transfer
+  // lock block adds exactly those two keys to the serialized output. Ran the real
+  // `toScanResult` over a row carrying a lock block and checked the guard's own pattern
+  // against every key it produced (`lock`, `state`, `holder`, `pid`, `digest`, `identity`):
+  // NONE of them match `/resumable|fresh|stale|expired/i`, so this test stays green with the
+  // lock block present exactly as it did without it — command `npx tsx .probe-guard-lock.ts`
+  // (a throwaway probe against the real `toScanResult`, not reproduced here), output
+  // `does the guard pattern match ANY key? false`.
+  //
+  // This test's own comment two paragraphs below already says its "real target is a future
+  // well-meaning derived column" that would slip past this ban list unnoticed. THIS ROUND IS
+  // THAT COLUMN: `lock.state` is a derived judgment (dead/alive/liveness-unknown/...) riding
+  // inside the serialized output, and this guard cannot see it. It is deliberately NOT
+  // extended to ban `lock`/`state` here — human ruling 131 already named this exact
+  // derived-judgment tradeoff as accepted for `ls` (design spec §3.7) — but a reviewer reading
+  // "this test is green" must not read that as "this test checked the lock block." It didn't.
+  // Recorded durably in `.superpowers/sdd/2026-09-23-ls-lock-visibility/progress.md` as well,
+  // since the SDD ledger this was first noted in is deleted when the plan completes.
   it("contains no derived fields in the serialized JSON (spec §12.5)", () => {
     const result = toScanResult([fullyObservedRun, allAbsentRun, directoryUnreadableRow, depthTruncatedRow]);
     const serialized = JSON.parse(JSON.stringify(result)) as unknown;
@@ -235,11 +257,16 @@ describe("toScanResult", () => {
     expect(rows.some((r) => r.kind === "directory_unreadable" && r.path === lockedDir)).toBe(true);
     expect(rows.some((r) => r.kind === "depth_truncated" && r.path === truncatedPath)).toBe(true);
 
-    // This test's whole point is the RAW registry pipeline (scanRuns/observeRun), deliberately
-    // never passed through Task 8's attachLockInspections -- so these rows genuinely have no
-    // `lock` field at runtime, and toScanResult's type (widened for Task 9) does not describe
-    // them. The cast is honest about that gap rather than papering over it with a synthetic lock.
-    const result = toScanResult(rows as unknown as ReportedScanRow[]);
+    // This test's whole point is the RAW registry pipeline (scanRuns/observeRun) -- so `rows`
+    // itself is deliberately built without going anywhere near Task 8's attachLockInspections,
+    // same as before. What changed (fix round 1, Minor): rather than casting `rows` past the
+    // type system with `as unknown as ReportedScanRow[]`, this attaches a real (stubbed) lock to
+    // each row the same way `fullyObservedRun`/`allAbsentRun` above do, so `result` is a genuine
+    // ReportedScanRow[] value with no unchecked cast anywhere in this file.
+    const reportedRows = await attachLockInspections(rows, {
+      inspect: async () => ({ state: "absent" }),
+    });
+    const result = toScanResult(reportedRows);
     const serialized = JSON.parse(JSON.stringify(result)) as unknown;
 
     const keys = new Set<string>();

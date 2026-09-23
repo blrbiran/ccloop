@@ -190,3 +190,61 @@ what failed was the probe. An operator told the wrong reason looks for the wrong
   *** **完全复现了历轮那条「第一轮改 12 漏 6，第二轮补 6 又漏 2，半改比不改坏」。** ***
   ⇒ **机械扫描必须跑到收敛，不是跑一次。**
 - 终检：**9 张表全部完整、0 控制字节、0 占位符、扫描器自测 2/2**。
+
+---
+
+## 10. Task 8–10（`ccloop ls` 锁可见层）：实施 ＋ 修复轮 1
+
+**实施**：`d093eee..2e918a7`，4 笔提交。`attachLockInspections`（Task 8）＋ `renderRuns.ts` 七态渲染
+（Task 9）＋ `cli.ts` 接线／端到端／退出码／零写证明（Task 10）。实测 813/814，唯一红是既有的
+`stopProof.test.ts` 稳定红。变异电池全跑：Task 8 四条、Task 9 七态各一条 ＋ M9-8、Task 10 四条
+（M10-2 如实登记「预期无红」）。
+
+⭐ **本轮顺带发现的既有缺陷（不是本轮引入的）**：共用的 `snapshotTree`（`tests/registry/
+zeroWrite.test.ts`）从未记录过目录自身的 mtime，只记文件／符号链接。这意味着**在本轮之前**，
+`run-registry spec §15 #2`「零写可证」对「探测代码 touch 了一个目录但没写任何文件」这一类回归
+一直是瞎的——M10-4（在 `attachLockInspections` 里对每个 run 目录 `utimes`）第一次跑**全绿
+（44/44）**，不是变异无效，是判据看不见。已扩展 `snapshotTree` 记录目录 mtime（严格更敏感、
+不会让任何已过判据变红），重跑后 M10-4 正确单条变红。**列入 handoff**：任何以后依赖
+`snapshotTree` 的零写判据，从这次起才真正覆盖「目录被 touch」这一类。
+
+**评审席**：Needs fixes，0 Critical／1 Important／2 Minor。七态、类型环、四个禁改文件全核过，
+无破损。
+
+### Important（修复轮 1 已处置）
+
+**发现**：`tests/registry/renderRuns.test.ts` 里「no derived fields」守卫判据
+（禁 `/resumable|fresh|stale|expired/i`，`eligible` 只放行 `eligibleForContinuation`）对本轮新增的
+`lock`／`state` 键**照绿**，因为它的禁词表比这轮早，压根没提过这两个词。design spec §3.7 与
+task-9-brief Step 4 都要求把这件事**测量并记录**，而不是留着不管——**三处都没记**：
+不在台账、不在实施报告、不在判据旁边。评审席自己是重新踩了一遍这个坑才发现它，这正是这条要求
+存在的理由。
+
+**处置**：
+1. **测量**：跑 `npx tsx .probe-guard-lock.ts`（会话内一次性探针，未提交，脚本已删除）——
+   用真实的 `toScanResult` 生成一行带锁块的 `ReportedRunRow`，序列化后收集全部键
+   （`lock`、`state`、`holder`、`pid`、`digest`、`identity`、…），逐个对守卫的正则
+   `/resumable|fresh|stale|expired/i` 测试。**输出**：`does the guard pattern match ANY key? false`——
+   六个新键全部不中，判据照绿是真的，不是巧合。
+2. **记两处耐久处**：
+   - `tests/registry/renderRuns.test.ts` 守卫判据正上方追加了一段注释，写明这条判据看不见
+     `lock`／`state`，它自己原有的注释「real target is a future well-meaning derived column」——
+     **本轮就是那个 column**——并点出这是「测量过，不是假设过」。
+   - 本节（`progress.md`）——因为 SDD 过程台账（`sdd-ledger.md`）在计划收口时会被删除，
+     只记在那里等于没记。`progress.md` 是仓库自己的轮次记录，会留下来。
+3. **Minor（顺手做了，成本很低）**：`tests/registry/renderRuns.test.ts` 里最后一条
+   `toScanResult(rows as unknown as ReportedScanRow[])` 的双重断言已消掉——改用
+   `attachLockInspections(rows, { inspect: async () => ({ state: "absent" }) })` 产出真正的
+   `ReportedScanRow[]` 值，不再需要绕过类型系统的 cast。
+4. 另一条 Minor（`chmod 000` 那条判据以 root 身份跑时不会真的触发不可读路径）——
+   评审席判定是既有惯例，不改。
+
+**复核命令**（`export ECC_GATEGUARD=off DISABLE_OMC=1`，全量重定向到文件再读回，未过滤）：
+```
+npx tsc --noEmit                                                    # RC 0
+./node_modules/.bin/vitest run tests/registry/renderRuns.test.ts tests/unlock/lockRows.test.ts
+# Test Files  2 passed (2)  /  Tests  21 passed (21)
+```
+
+**提交**：`fix(test): record the no-derived-fields guard's blind spot on lock/state, drop the last unchecked cast`
+（修复轮 1，紧跟在 `2e918a7` 之后）。

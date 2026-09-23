@@ -265,3 +265,58 @@ tests/validation/codexSoftBudget.test.ts tests/validation/codexWatchdog.test.ts`
 ## Task 8–10（合并派发，Ruling Q）
 
 - BASE `d093eee`。合并理由：8 产出的类型 9 要消费、10 要接线，拆开跑每一步的判据都得等下一步才能验。
+- 实施席回 **DONE_WITH_CONCERNS**，4 笔提交 `d093eee..2e918a7`。实测 813/814，唯一的红是 `stopProof`。
+- **三条披露，逐条处置：**
+  1. **M8-3 的红预言不准** —— 计划预言红在「probes each run row at its own path, in scan order」，
+     但那条判据只钉**调用顺序**、不钉**结果顺序**，所以它绿。变异被相邻的另一条接住了 ⇒ 无缺口，
+     但精度问题被点名。**这是本轮第三次「红预言写错」**（M1-3、M3-2／M3-3、M8-3）。
+  2. ⭐ *** **M10-4 第一次跑全绿 —— 真缺口：共用的 `snapshotTree` 从来没记录过目录的 mtime。** ***
+     也就是说**既有的零写证明对「目录被 touch」一直是瞎的**。实施席扩展了 helper（严格更敏感，
+     并现证既有依赖它的判据仍全绿），重跑 M10-4 得到正确的单条红。
+     ⇒ **这不是本轮引入的缺陷，是本轮【发现】的既有缺陷。值得进 handoff。**
+  3. **Ruling R：改共用夹具不是人裁 88 事件。** 控制器现测核实：
+     `git diff d093eee..2e918a7 -- tests/registry/renderRuns.test.ts` 的**删除行共 7 条，
+     含 `expect(` 的 0 条**；`schemaVersion` 相关的行一增一删都没有。
+     依据：① 夹具是**输入**，人裁 88 保护的是**断言**不被实施者放宽；② 零断言改动；
+     ③ 该改动是被人裁过的设计决定（每个 run 行都带 `lock`）逼出来的；④ 加了 `lock` 的夹具更像真实行。
+     **若错的代价**：若某条断言其实依赖「行里没有 lock」，它会静默变成测别的东西 —— 已交评审席专判。
+  - ⚠️ 遗留给评审席的一条：`tests/registry/renderRuns.test.ts:242` 的
+    `toScanResult(rows as unknown as ReportedScanRow[])` —— **最强的双重断言，绕过全部类型检查**。
+
+### ⭐ 控制器独立的端到端验证（**spec §8 判据 5／6，在真实构建的 CLI 上**）
+
+命令：`npm run build`（RC 0）→ `node dist/cli.js ls <root>`，夹具建在会话 scratchpad 下。
+**七态全部报出来了，EXIT 均为 0：**
+
+| 夹具 | 报出的锁块 |
+|---|---|
+| `pid:0` | `state: liveness-unknown` ＋ `reason: pid 0 does not name a process that can be probed` ＋ 全 64 位 digest ＋ next |
+| `pid:999999`（已死） | `state: dead` ＋ holder ＋ pid ＋ digest ＋ next |
+| `["pid","1"]`（数组 holder） | `state: unrecognized-holder` ＋ `holder: ["pid","1"]` ＋ digest ＋ next |
+| 无锁 | `state: absent`，**无 `next:` 行** |
+| 活 pid | `state: alive` ＋ holder ＋ pid ＋ digest ＋ next |
+| `not-json` | `state: unparseable` ＋ 解析器原话 ＋ digest ＋ next |
+| `chmod 000` | `state: file-unreadable` ＋ EACCES 原话 ＋ **无 `digest:` 行** ＋ next |
+
+⚠️ 两条最容易写错的边界都对：
+① **`file-unreadable` 不印 digest** —— 它是唯一拿不到凭证的态，印一个就是在宣传一个不存在的逃生口；
+② **它仍然 EXIT 0** —— 一行里的坏消息是**报告内容**，不是命令失败。
+⚠️ `identity`（dev/ino）未渲染，digest 未截断。**都符合 spec §3.5。**
+
+⇒ *** **人裁 85 的诉求「`ls` 也报锁」在真实 CLI 上成立，不是靠判据推断出来的。** ***
+- 评审席判 **Needs fixes**：0 Critical / **1 Important** / 2 Minor。七态逐态核过：渲染器、各自的判据、
+  各自的红，全齐。两条具名风险也核了：`renderRuns.ts` 对 `src/unlock/` 的两个 import **都是 `import type`**
+  （而 `sweepRuns.ts:14` 确实从 `renderRuns` **值导入** ⇒ 这条边界是承重的），
+  四个必须不动的文件在 diff 的文件清单里**一个都没出现**。
+- **Important（成立，进修复轮 1）**：spec §3.7 要求**测量并记录**「那条 no-derived-fields 守卫判据
+  对新的 `lock`／`state` 键照绿」这件事 —— **三处都没记**。
+  ⚠️ **评审席自己重新发现了一遍，那正是这条要求存在的理由。**
+- ⚠️ *** **控制器补了一层评审席没说的**：SDD ledger（本文件）在计划收口时会被【删掉】，
+  只记在这里等于没记。 *** ⇒ 要求记进**两个耐久处**：
+  ① `tests/registry/renderRuns.test.ts` 里守卫判据**旁边的注释**（它自己的注释本来就写着
+     「The test's real target is a future well-meaning derived column」—— **本轮就是那个 column**）；
+  ② 仓库 committed 的轮次台账 `progress.md`（`.superpowers/sdd/` 被 gitignore ⇒ 要**单独** `git add -f`）。
+- deferred minor：`renderRuns.test.ts` 里最后一处 `as unknown as ReportedScanRow[]` 双重断言
+  （评审席判定它**没有掩盖运行时问题** —— 那条路径从不解引用 `row.lock`；但可用
+  `attachLockInspections(rows, { inspect: async () => ({ state: "absent" }) })` 消掉）。已作为可选项给实施席。
+- deferred minor：EACCES 那条判据用 `chmod 000`，**以 root 跑时不会真的触发不可读路径**。既有惯例，不改。
