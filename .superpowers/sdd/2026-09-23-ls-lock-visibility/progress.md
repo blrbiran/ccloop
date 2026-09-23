@@ -538,3 +538,45 @@ npm run build     > /tmp/final-build.txt 2>&1; echo "RC=$?" >> /tmp/final-build.
    gitignored，需单独 `git add -f`，不与第 1 笔混在一次 `git add` 里。
 
 具体 SHA 见任务收尾报告 `task-11-12-report.md`。
+
+---
+
+## 12. 整支复审修复轮（Final Whole-Branch Review Fix Wave，2026-09-23）
+
+> **归属**：控制器会话 `1de723ea`（Orca 仓的 run，在 ccloop 侧执行），2026-09-23，紧接 §11 之后、
+> HEAD `63f0a4a` 之上的一批 review 修复。观测锚点即本节写入时 ccloop 的 HEAD。
+> 详细证据（每条判据的 RED/GREEN、每个变异的完整 sha256 前后、命令原文、实际红名）见同目录
+> `final-fix-report.md`（英文，Rule 1 语言分工：代码/报告细节用英文）。本节只留中文摘要与
+> CARRY 项的正式登记。
+
+### 12.1 已处置（Critical/Important/Minor，逐条落点）
+
+| 编号 | 落点 | 处置 |
+|---|---|---|
+| C1 | `fileStore.ts`，`StaleOwnerTransferLockOutcome` 上方注释块（人裁 108 的 ERRATUM） | 追加具名人裁 132／133 的新 ERRATUM，指出三处不再成立的断言；disposition 点另一处同源假话也补了一段 |
+| I1 | 人裁 138：message 必须点名 pid | `liveness-undetermined` 变体加回 `pid: number`（`holder-alive` 不加，人裁 108 对它仍成立）；message 改字面量；新判据用 EPERM 格钉住 pid；spec §11.6 记录定案；变异（去掉 pid）现场翻红 |
+| I2 | `renderRuns.ts` 的"避免闭合循环"论证是假的 | 就地改正（本轮自己的文本）；新增 `tests/registry/noUnlockValueImport.structure.test.ts`，镜像 persistence 侧同名判据的 stripComments/importStatements 手法，必抓/必不抓两个方向都过 |
+| M1 | `check-known-reds.mjs` 的双向 suffix 匹配留了一个洞 | 追加具名 ERRATUM（本条脚本注释是本轮早前提交发布过的文本，就地不改，只追加）；匹配收紧为只认祖先边界（`known === name \|\| known.endsWith("> " + name)`）；三个方向（已知全绿、含未知红、洞的复现样本）都实测 |
+| M2 | `fileStore.ts` 一段本轮自己的 ERRATUM 漏列了两个 import | 就地改正（本轮自己的文本） |
+
+### 12.2 CARRY — 不修，正式登记
+
+**M3**：一把锁**同时**满足「活性判不了」与「有事务标记」时，`owner_transfer_contended` 会被记两次
+（一次在 disposition 点，一次在 escape 重抛之后）。现有判据全部只断言"恰好一次"，没有一条覆盖这个
+组合。**这不是回归**——`unattributable` 的同胞格早就有这个形状——但新类把它从一个偏门场景变成了
+一个远更普通的诱因也能踩到的坑。登记为已知的、未覆盖的组合，不在本修复轮里处置（会改变一处既有
+判据背后的事件计数逻辑，触发人裁 88 的指名程序，超出本轮授权范围）。
+
+**M4**：`tests/registry/zeroWrite.test.ts` 的 `snapshotTree` 只记目录条目，不记扫描根自身。
+一个只碰了根目录自身 mtime（而不碰任何条目）的探测，对零写证明结构性不可见。此前 Task 10 已在
+`M10-4` 项下发现并修过"目录条目 mtime 看得见"这一半（见 §11.4 表格），**根目录自身**这一半仍是
+盲区，本轮如实登记，不处置。
+
+### 12.3 变异副本处置
+
+沿用 §11.6 同一套规矩：所有变异（I1 的去 pid、I2 的插入 value import）都在会话 scratchpad 目录下
+新开的 `git clone --local` 副本（`mutclone`）里进行，主工作树全程未被写入 —— 每条变异跑完立即
+`git checkout -- <file>` 复原并用 `shasum -a 256` 核对复原结果，主树 `git status --porcelain`
+在整段变异电池期间为空（今测：仅有本轮自己尚待提交的修复本身，无变异残留）。M1 的两个既有方向
+与洞的复现样本无需 build/clone（纯 Node 脚本 + 构造好的 JSON 报告），直接在主树用
+`git show HEAD:scripts/check-known-reds.mjs` 取出修复前的版本对照复现，未触碰主树任何文件。
