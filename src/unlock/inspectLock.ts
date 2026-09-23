@@ -69,7 +69,13 @@
 import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
-import { OWNER_TRANSFER_LOCK_FILE, type OwnerTransferLockRecord, parsePid } from "../persistence/fileStore.js";
+import {
+  OWNER_TRANSFER_LOCK_FILE,
+  type OwnerTransferLockRecord,
+  classifyProcessLiveness,
+  type LivenessVerdict,
+  parsePid,
+} from "../persistence/fileStore.js";
 
 // WHICH FILE, not which path. Every state that can authorize a deletion carries the (dev, ino) of
 // the file this inspection actually read, so the deletion can re-check that the name still holds
@@ -90,33 +96,21 @@ export type LockIdentity = { dev: number; ino: number };
 // This is the SAME syscall fileStore uses, called the same way. What is not reused is the collapse
 // — which is what judgement 5 of pointC-design.md §4.2 forbids reimplementing, and this does not:
 // the liveness question is still `process.kill(pid, 0)` and the identity form is still parsePid's.
-export type LivenessVerdict =
-  | { verdict: "alive" }
-  | { verdict: "dead" }
-  | { verdict: "unknown"; reason: string };
+//
+// *** ERRATUM (ls lock visibility, HUMAN RULING 132) -- the paragraphs above are kept verbatim and
+// their reasoning is unchanged: the three-state question still belongs to this module's callers,
+// and the two-state collapse is still the right one where a deletion is authorized. What changed
+// is location only. The classifier now lives in fileStore so that the redline function can ask the
+// same question from the same single implementation; importing it back from here would close the
+// cycle fileStore already refuses to close for its retry constants. Sentences above that read as
+// "fileStore has two states and this module has three" now describe two EXPORTS of one module, not
+// two implementations. The ledger for this round records the rest. ***
+export type { LivenessVerdict };
 
-export function classifyHolderLiveness(pid: number): LivenessVerdict {
-  // Guarded before the syscall, because kill(0, ...) is not a query about a process at all: POSIX
-  // gives pid 0 the meaning "every process in the caller's process group". It cannot throw ESRCH,
-  // so it can never answer "dead", and taking its silence for "alive" strands the lock forever.
-  if (pid < 1) {
-    return { verdict: "unknown", reason: `pid ${pid} does not name a process that can be probed` };
-  }
-
-  try {
-    process.kill(pid, 0);
-    return { verdict: "alive" };
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ESRCH") {
-      return { verdict: "dead" };
-    }
-
-    // EPERM (someone else's process), ERR_INVALID_ARG_TYPE / ERR_OUT_OF_RANGE (a number too large
-    // to be a pid), and anything else: the probe failed, which is not the same as it succeeding.
-    return { verdict: "unknown", reason: code ?? (error instanceof Error ? error.message : String(error)) };
-  }
-}
+// The implementation moved down into fileStore (human ruling 132). The name stays here because
+// this module is where the three-state question is ASKED; what moved is only where it lives, so
+// that the redline function can ask it too without importing back across the layer boundary.
+export const classifyHolderLiveness = classifyProcessLiveness;
 
 export type LockInspection =
   | { state: "absent" }

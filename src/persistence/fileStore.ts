@@ -1001,6 +1001,43 @@ export function parsePid(processInstanceId: unknown): number | null {
   return match === null ? null : Number.parseInt(match[1], 10);
 }
 
+// Three outcomes, not two. isProcessActive below collapses every non-ESRCH result into "alive",
+// which is the correct collapse for a function whose answer authorizes a deletion: the redline
+// recovery must never steal a lock it is unsure about. It is the wrong collapse for REPORTING,
+// where "I could not tell" and "it is running" send an operator to different places.
+//
+// This lives here, in the persistence layer, and not beside the command that first needed it:
+// inspectLock.ts value-imports parsePid from this module, so importing a classifier back from
+// there would close a cycle -- the same cycle the RECONCILIATION_LOCK_RETRY_* constants above are
+// duplicated to avoid. Human ruling 132.
+export type LivenessVerdict =
+  | { verdict: "alive" }
+  | { verdict: "dead" }
+  | { verdict: "unknown"; reason: string };
+
+export function classifyProcessLiveness(pid: number): LivenessVerdict {
+  // Guarded before the syscall, because kill(0, ...) is not a query about a process at all: POSIX
+  // gives pid 0 the meaning "every process in the caller's process group". It cannot throw ESRCH,
+  // so it can never answer "dead", and taking its silence for "alive" strands the lock forever.
+  if (pid < 1) {
+    return { verdict: "unknown", reason: `pid ${pid} does not name a process that can be probed` };
+  }
+
+  try {
+    process.kill(pid, 0);
+    return { verdict: "alive" };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") {
+      return { verdict: "dead" };
+    }
+
+    // EPERM (someone else's process), ERR_INVALID_ARG_TYPE / ERR_OUT_OF_RANGE (a number too large
+    // to be a pid), and anything else: the probe failed, which is not the same as it succeeding.
+    return { verdict: "unknown", reason: code ?? (error instanceof Error ? error.message : String(error)) };
+  }
+}
+
 export function isProcessActive(pid: number): boolean {
   try {
     process.kill(pid, 0);
