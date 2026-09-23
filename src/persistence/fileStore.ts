@@ -890,6 +890,23 @@ export class OwnerTransferLockUnattributableError extends Error {
   }
 }
 
+// A fourth meaning, and a THIRD sibling: deliberately not a subclass of either neighbour, for the
+// doctrine stated above. It is not Busy, because "busy" claims a transfer is running and this
+// class exists precisely because nobody can tell. It is not Unattributable, because the record
+// parsed fine and named a holder in the `pid:<n>` form -- what failed was the probe, and an
+// operator told the wrong reason looks for the wrong fix.
+//
+// Unlike Unattributable, a lock in THIS state may still clear on its own: an EPERM refusal usually
+// means the holder is another user's live process, which releases the lock when it exits. That is
+// why the three retry gates admit this class alongside Busy (human ruling 133) -- dropping it out
+// of the retry bound would abandon transfers that were about to succeed.
+export class OwnerTransferLockLivenessUndeterminedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OwnerTransferLockLivenessUndeterminedError";
+  }
+}
+
 // Sibling of OwnerTransferPreconditionError, deliberately NOT a subclass: a corrupt marker is a
 // third, unrelated failure from a CAS mismatch or lock contention. It surfaces through the same
 // call chain as those two errors — acquireOwnerTransferLock's locked callers, and readOwnerRecord's
@@ -1076,7 +1093,8 @@ export function isProcessActive(pid: number): boolean {
 // further. Recorded, not fixed. ***
 type StaleOwnerTransferLockOutcome =
   | { kind: "cleared" }
-  | { kind: "not-determined-dead" }
+  | { kind: "holder-alive" }
+  | { kind: "liveness-undetermined"; reason: string }
   | { kind: "unattributable"; why: "unparseable" | "no-pid-holder" };
 
 async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<StaleOwnerTransferLockOutcome> {
@@ -1162,8 +1180,24 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<StaleOw
   // "every other errno => true" is also why this exit is called not-determined-dead rather than
   // holder-alive (human ruling 108): a live holder, `pid:0`, an out-of-range pid and an EPERM
   // refusal all land here, and only the first of them clears on its own.
-  if (isProcessActive(pid)) {
-    return { kind: "not-determined-dead" };
+  //
+  // *** ERRATUM (ls lock visibility, HUMAN RULING 132) -- the paragraphs above are kept verbatim.
+  // Two of their statements no longer describe this code. "isProcessActive now sits OUTSIDE the
+  // try" named a call this exit no longer makes: the question is now asked once through
+  // classifyProcessLiveness, which is total for the same reason and answers three ways instead of
+  // two. And "this exit is called not-determined-dead rather than holder-alive" is superseded:
+  // holder-alive is back as its own exit, carrying no pid (ruling 108's reason for dropping that
+  // field is unchanged), while pid:0, an out-of-range pid and an EPERM refusal now take a separate
+  // liveness-undetermined exit. The sentence "only the first of them clears on its own" was itself
+  // too strong about EPERM, whose holder is usually alive; the new exit's message says so. What is
+  // unchanged: none of these cells deletes anything, and ruling 83's single deletion condition is
+  // byte-for-byte the one it always was. ***
+  const liveness = classifyProcessLiveness(pid);
+  if (liveness.verdict === "alive") {
+    return { kind: "holder-alive" };
+  }
+  if (liveness.verdict === "unknown") {
+    return { kind: "liveness-undetermined", reason: liveness.reason };
   }
 
   await safeUnlink(lockPath);
@@ -1340,7 +1374,13 @@ async function recordSkippedLockRelease(
 // in the last sentence did, and that status is tracked in the ledger, not here. This site was
 // MISSED when the same sentence was corrected earlier in this file: one claim in three places,
 // two of them left standing. That is the half-fix the correcting commit itself condemned. ***
-async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () => Promise<void> }> {
+//
+// Exported for tests only (human ruling 132): the fixture that pins the liveness-undetermined /
+// holder-alive / cleared split calls this function directly, the same way parsePid and
+// isProcessActive are already exported for their own test and `ccloop unlock` consumers. No
+// production caller reaches it through the module boundary; every one of them already sits in
+// this same file.
+export async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () => Promise<void> }> {
   const { lockPath } = getOwnerTransferPaths(runDir);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -1430,7 +1470,14 @@ async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () =
       // cells THIS erratum is about -- pid:0, an out-of-range pid, an EPERM refusal -- are
       // untouched by that and are still recorded rather than fixed, so the disposition it
       // describes for ITSELF is unchanged; only the precedent it leans on is gone. ***
-      if (outcome.kind === "not-determined-dead") {
+      if (outcome.kind === "liveness-undetermined") {
+        throw new OwnerTransferLockLivenessUndeterminedError(
+          `liveness of the owner-transfer lock holder cannot be determined (${outcome.reason}); ` +
+            `this lock may or may not clear on its own -- inspect it with: ccloop unlock ${runDir}`,
+        );
+      }
+
+      if (outcome.kind === "holder-alive") {
         throw new OwnerTransferLockBusyError("owner transfer already in progress");
       }
     }

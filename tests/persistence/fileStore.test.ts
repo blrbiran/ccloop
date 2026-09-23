@@ -4,12 +4,15 @@ import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import {
+  acquireOwnerTransferLock,
   appendEvent,
   buildAtomicTempPath,
   claimOwnerRecordWithPrecondition,
   initializeRunFiles,
   isProcessActive,
+  OWNER_TRANSFER_LOCK_FILE,
   OwnerTransferLockBusyError,
+  OwnerTransferLockLivenessUndeterminedError,
   OwnerTransferLockUnattributableError,
   OwnerTransferMarkerFinalizeOrderInvalidError,
   OwnerTransferMarkerUnreadableError,
@@ -5363,3 +5366,78 @@ async function observeCrashMatrix(stage: (gap: number) => Promise<string>): Prom
 
   return lines;
 }
+
+// Human ruling 132 (task 2 of the ls-lock-visibility round). Task 1's re-measurement found that
+// `makeRunDir`, `OWNER_TRANSFER_LOCK_FILE` and `acquireOwnerTransferLock` were not already in use
+// in this file the way the task brief assumed (CLAUDE.md ruling C: a brief's anchors are not
+// facts) -- `acquireOwnerTransferLock` was not even exported. This helper and the three imports
+// above are new; `acquireOwnerTransferLock` gained an `export` keyword in fileStore.ts (comment
+// there explains why), which is the only production-file visibility change this task made.
+async function makeRunDir(): Promise<string> {
+  return mkdtemp(join(tmpdir(), "ccloop-run-"));
+}
+
+describe("owner-transfer lock with an unprobeable holder (human ruling 132)", () => {
+  it("refuses with a named liveness error, says the lock may still clear, and leaves it on disk", async () => {
+    const runDir = await makeRunDir();
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+    await writeFile(
+      lockPath,
+      JSON.stringify({ holderProcessInstanceId: "pid:0", acquiredAt: "2026-09-23T00:00:00.000Z" }),
+    );
+
+    const error = await acquireOwnerTransferLock(runDir).then(
+      () => {
+        throw new Error("expected the acquire to be refused");
+      },
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(OwnerTransferLockLivenessUndeterminedError);
+    // The reason, not just the verdict: a criterion that only pins "it threw" cannot see a whole
+    // branch of mutations (the package has measured 104 such criteria staying green).
+    expect(String(error)).toContain("pid 0 does not name a process that can be probed");
+    expect(String(error)).toContain("may or may not clear on its own");
+    // The published wording for a lock nothing will ever release must NOT be reused here: an EPERM
+    // holder is most likely alive and will clear when it exits.
+    expect(String(error)).not.toContain("will not clear on its own");
+    // Ruling 83's deletion condition is untouched: this exit never removes anything.
+    await expect(stat(lockPath)).resolves.toBeDefined();
+  });
+
+  it("still calls a genuinely live holder busy, in the published words, and leaves the lock alone", async () => {
+    const runDir = await makeRunDir();
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+    await writeFile(
+      lockPath,
+      JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-09-23T00:00:00.000Z" }),
+    );
+
+    const error = await acquireOwnerTransferLock(runDir).then(
+      () => {
+        throw new Error("expected the acquire to be refused");
+      },
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(OwnerTransferLockBusyError);
+    expect(error).not.toBeInstanceOf(OwnerTransferLockLivenessUndeterminedError);
+    expect(String(error)).toContain("owner transfer already in progress");
+    await expect(stat(lockPath)).resolves.toBeDefined();
+  });
+
+  it("still removes a dead holder's lock, so ruling 83's one deletion condition is unchanged", async () => {
+    const runDir = await makeRunDir();
+    const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
+    expect(() => process.kill(999999, 0)).toThrow();
+    await writeFile(
+      lockPath,
+      JSON.stringify({ holderProcessInstanceId: "pid:999999", acquiredAt: "2026-09-23T00:00:00.000Z" }),
+    );
+
+    const lock = await acquireOwnerTransferLock(runDir);
+    await lock.release();
+
+    expect(lock).toBeDefined();
+  });
+});
