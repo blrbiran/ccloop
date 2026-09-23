@@ -6,8 +6,9 @@ the wire contract`）、Orca `eaf9112`（`docs(sdd): rebuild the control gate ba
 写本文时三仓 `ls-remote` 与本地一致。
 
 **权属**：人裁 G1（2026-09-22）——**ccloop↔Orca 的线上契约归 ccloop**。本文是 Orca 侧
-调度方整理的设计，**ccloop 对其中每一格有最终裁量权**；标着 🔴 的两格**尚未由 ccloop 现测确认**，
-见 §7。
+调度方整理的设计，**ccloop 对其中每一格有最终裁量权**。
+⚠️ **`handoffControl` 与 `handoffExecution` 两格已由本文作者现测确认，过程与依据在 §7**
+—— 其中 `handoffExecution` 一格**推翻了本文初版按名字推出的值**，那段经过逐字保留。
 
 ---
 
@@ -124,7 +125,7 @@ Orca `src/control/service.ts` 的 `profiledCapabilities` 要求 `handoffControl 
   "budgetEnforcement": "soft",
   "contextObservation": "unavailable",
   "handoffControl": "durable",
-  "handoffExecution": "model-assisted-v1",
+  "handoffExecution": "mechanical-in-run-v1",
   "contextWindowTokens": null,
   "requestBoundProof": null
 }
@@ -138,8 +139,8 @@ Orca `src/control/service.ts` 的 `profiledCapabilities` 要求 `handoffControl 
 | `usageObservation` | `"phase-end"` | 现状；Codex 只支持它（不得在任何地方宣称 realtime） |
 | `budgetEnforcement` | `"soft"` | 现状；**第三值统一为 `unavailable`**，`unsupported` 废弃 |
 | `contextObservation` | `"unavailable"` | **诚实**：ccloop 侧无实时观测 emit。守卫不查它 |
-| `handoffControl` | 🔴 `"durable"` | **关键路径。需 ccloop 现测确认，不许照名字猜**（§7） |
-| `handoffExecution` | 🔴 `"model-assisted-v1"` | **关键路径。需 ccloop 现测确认**（§7） |
+| `handoffControl` | `"durable"` | **关键路径。已现测确认**（§7.1） |
+| `handoffExecution` | `"mechanical-in-run-v1"` | **关键路径。已现测确认**（§7.2） |
 | `contextWindowTokens` | `null` | 人裁第一步：暂留常量。**它今天是个诚实的「不知道」，不是测得的值** |
 | `requestBoundProof` | `null` | Codex 只 soft ⇒ strict 不可达 ⇒ 该 descriptor 无消费场景 |
 
@@ -176,17 +177,57 @@ strict 模式的判据要读它的 `workDimensions`。
 2. **`contextObservation` 的实时 emit**（缺口二）。
 3. **`intersectCapabilities` 的信息增益**：两侧都是常量期间，该函数在这条路上不产生约束。
 
-## 7. 🔴 待 ccloop 现测确认的两格（**契约归它拍，本文不替它宣布**）
+## 7. 那两格的现测结论（**2026-09-24，本文作者现测；ccloop 仍有最终裁量权**）
 
-1. **`handoffControl` 是否真的是 `"durable"`**。三值语义为 `durable | phase-end | unavailable`。
-   需要 ccloop 侧给出：handoff 的控制在崩溃后是否可从文件重建。
-   **答 `phase-end` 会使 Web 派活继续被拒**——所以这一格答错，终点判据就达不成，
-   而**答错的代价是把不成立的前提写进契约**。
-2. **`handoffExecution` 是 `"model-assisted-v1"` 还是 `"mechanical-in-run-v1"`**。
-   按 §3 的粒度前提，它答的是「这份 adapter config 描述的 profile，做 handoff 时要不要模型参与」。
-   Codex adapter 能跑模型 ⇒ 倾向 `model-assisted-v1`，但**归 ccloop 拍**。
-   ⚠️ 选 `model-assisted-v1` 会额外触发 Orca `webService.ts` 的一条要求：
-   handoff grant 的各维度必须 ≥ 1。
+本节原文是「🔴 待 ccloop 现测确认的两格」，其中 `handoffExecution` 一格由本文作者写作时
+**按名字推成了 `model-assisted-v1`**。随后的现测把它推翻了。*** **保留这段经过，因为它是
+「标 🔴 」这个做法本身的证据：同一份 spec 里写着「不许照名字猜」，作者仍然猜了一格。** ***
+
+### 7.1 `handoffControl` = `"durable"`（**成立**）
+
+依据（`src/control/handoff.ts` 的 `requestHandoff` 一路，现测）：
+
+- 应答是 `latched` / `complete` / `unknown` 三态——**请求可在运行中被闩住，稍后完成**，
+  而不是只能在阶段边界提出。
+- 该路径用 `atomicReplacePrivateFile` / `ensurePrivateDirectory` / `readPrivateFile` 落盘，
+  并带 `testCrashPoint` ⇒ **崩溃后可从文件重读**。
+
+语义对齐的依据：`phase-end` 在 `usageObservation`／`contextObservation` 两组里的含义是
+「只在阶段边界可用」，同名值在 `handoffControl` 组里应取一致语义。ccloop 的 handoff 不受
+阶段边界约束且持久 ⇒ `durable`。
+
+### 7.2 `handoffExecution` = `"mechanical-in-run-v1"`（*** **推翻了本文初版的 `model-assisted-v1`** ***）
+
+决定性依据在 `src/control/handoff.ts` 构造 `HandoffPacketV1` 的那一段（现测）：
+`completed`／`unfinished`／`awaitingHuman` **全部是从 `runState` 机械派生的三元表达式**
+（如 `runState.status === "succeeded" ? [] : [...successCondition]`），
+**全文件零模型调用**——唯一出现的 `codex` 字样是 `retainCodexLogs`，那是保留日志，不是调模型。
+
+⇒ *** **ccloop 的 handoff 是机械的。** *** 初版写 `model-assisted-v1` 的理由是
+「Codex adapter 能跑模型，所以它的 handoff 是模型辅助的」——**那是从 adapter 的能力推 handoff 的实现，
+两件事无关**。
+
+### 7.3 由 7.2 推出的一条**新约束**（初版没有，必须进实施计划）
+
+Orca `src/control/profiles.ts` 的 `intersectCapabilities` 对这个字段的规则是
+**相等才保留，否则取 `null`**：
+
+```
+handoffExecution: observed.handoffExecution === declared.handoffExecution ? declared.handoffExecution : null
+```
+
+而 `src/control/service.ts` 的守卫要求 `handoffExecution !== null`。
+
+⇒ *** **execution profile 里 declared 的 `handoffExecution` 也必须是 `mechanical-in-run-v1`。** ***
+若 profile 声明成 `model-assisted-v1`，交集会变成 `null`，守卫随即拒绝——
+**而拒绝理由会是 `control-capability-unsupported`，看起来像「对端没答」，实际是「两边答得不一样」。**
+这是一个会误导排障的失败模式，**实施时必须有一条判据分别钉住这两种成因**。
+
+### 7.4 两个顺带确认的好消息
+
+- `mechanical-in-run-v1` **能过** `service.ts` 的守卫（它只要求非 `null`）⇒ 终点判据不受影响。
+- `src/control/webService.ts` 那条「handoff grant 各维度 ≥ 1」的要求**只对 `model-assisted-v1` 生效**
+  ⇒ 本设计不触发它。
 
 ## 8. 判据
 
