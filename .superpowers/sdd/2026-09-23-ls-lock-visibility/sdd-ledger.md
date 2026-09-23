@@ -123,3 +123,95 @@ Spec: `docs/superpowers/specs/2026-09-23-ls-lock-visibility-design.md`（已读�
   **控制器裁定不追**：两条都经手工追踪确认**对 `fileStore.ts` 今天的内容不产生假阴性**，
   而这个 helper 只读这一个文件。⇒ 要求在代码注释里各记一句已知限制，不改实现。
   **若错的代价**：将来有人把这个 helper 挪去读别的文件时要先看那两句注释。
+- Task 1: fix round 3/5 复审 —— **All findings addressed: YES**，无新破损。
+- 控制器独立现测全量：**58 files / 787 tests，1 failed = stopProof**（允许 7 条里的第 1 条），typecheck RC 0，build RC 0。
+- **Ruling K：对 vitest，读输出尾部是充分的，但理由写死** —— Rule 14 禁过滤是为了「失败被藏起来」；
+  vitest 尾部自带**完整失败清单**（`[1/1]` 的 k/N 标记证明未截断）＋ 计数行，且 `TEST_RC` 是另行捕获的
+  （**没走管道，退出码没被吞**）。三者互证 ⇒ 没有失败能藏。
+  **这条只对「尾部含完整 k/N 失败块」的工具成立，不是对 `tail` 的一般豁免。**
+- **Task 1: complete (commits 91bd1ed..7d6049b, review clean)**
+  代价：**6 席**（实施 ＋ 评审 ＋ 3 修复轮 ＋ 3 复审）。
+  ⚠️ **根因在【计划】一侧** —— 那条结构判据的代码是计划逐字给的，三次缺陷依次是
+  ①单行解析（多行 import 绕过）②注释里的分号截断语句 ③必不抓样本是空判据。
+  ⇒ **教训已折进后续 brief**：扫描器类代码在计划里就要带「必抓＋必不抓」两组样本，
+  且**每个必不抓样本都要先问「把被它守的机制删掉，它会红吗」**。
+- **Ruling L：T4＋T5＋T7 合并成一次派发**（三处形状相同的处置点），省 4 席。
+  **若错的代价**：评审面变大一点，三处的问题会在同一次评审里一起出现。
+
+## Task 2
+
+- BASE `7d6049b`。
+- 实施席回 **NEEDS_CONTEXT**，提交 `f864cc4`。撞上**人裁 88 的指名面**（控制器已现测核实）：
+  `tests/persistence/fileStore.test.ts:1272`
+  `fileStore > refuses a lock as busy when the holder's liveness cannot be determined, never letting the errno escape`
+  —— 它 mock `process.kill` 抛 EPERM，然后断言 `toBeInstanceOf(OwnerTransferLockBusyError)`（`:1326`）
+  与 `expect(String(error)).not.toContain("EPERM")`（`:1328`）。**这正是人裁 132 要推翻的行为。**
+  ⚠️ **本轮的 spec 与全部 brief 都没提到它 —— 侦察漏了。**
+- *** **人裁 135（2026-09-23）：授权整条改写那一条判据。** *** 形状由人当场看过：
+  保留它真正的意图（errno 不得裸露、必须是一条拒绝）；期望类 Busy → LivenessUndetermined；
+  并把 `.not.toContain("EPERM")` **翻成** `.toContain("EPERM")` ＋ 加一条 `toContain("may or may not clear on its own")`。
+  ⚠️ **这是加强不是放宽** —— 新断言钉住了理由字面量，旧断言只钉住「别露 errno」。
+  改后注释里要写明编码的是**人裁 132／133**（人裁 88 三条件的第 (c) 条）。
+- *** **人裁 136（2026-09-23）：授权删掉残留副本** *** `/Users/biran/code/skills/loop/ccloop-mutclone-t2`。
+  删前证明：不在 `git worktree list` 里；HEAD = `7d6049b`（主仓库已有）；只有变异残留与一条软链。
+  删法：**先 `/bin/rm -f` 那条指向主树的 `node_modules` 软链，再 `/bin/rm -rf` 目录**。
+  删后核对：主树 `node_modules` 仍在、42 条、mtime 未变。
+
+### ⚠️ Ruling M：已知红名单从 7 条涨到 **12 条**
+
+Task 2 之后全量跑出 8 条红，其中 **5 条不在原名单里**。单跑判别：
+`vitest run tests/validation/evidence.test.ts tests/validation/codexAdapter.test.ts
+tests/validation/codexSoftBudget.test.ts tests/validation/codexWatchdog.test.ts`
+⇒ **4 files / 49 tests 全绿，RC 0，19.37s**。
+
+三条判据证明它们是**负载 flake 而非回归**：
+① **零因果面** —— Task 2 只动 owner-transfer 红线路径与一个错误类，而这些判据跑真子进程，
+   红在 `ENOTEMPTY` / `ENOENT` / `outer timeout` / 超时，不在锁行为上；
+② 单跑 49/49 绿；
+③ 全量那次耗时 **32.40s**，高于文档记的红轮画像 25–29s。
+
+**新增的 5 条（全名）：**
+8. `run-scenario CLI > runs when invoked through a canonical-path alias`
+9. `run-scenario CLI > creates a fresh nested evidence directory when its parent does not exist`
+10. `isolated Codex acceptance harness > succeeds only with real controller, three phases and published answer`
+11. `accepts the controller's zero-clamped soft budget and records the overrun`
+12. `codexWatchdog`（两条：`matches historical double-space start identities on single-digit days`、
+    `still reaps registered groups when the observation file becomes unwritable`）＋ 2 条
+    `Unhandled Rejection: outer timeout`（来自 `scripts/validate-codex-adapter.mjs:139`）
+
+⇒ **这条要进 spec §9、计划 Global Constraints §8、以及三份 handoff。**
+⇒ *** **「名单」本身就是会过期的现测。判别式对，但名单不全时判别式会误报回归。** ***
+- 实施席回 DONE。提交 `f864cc4` ＋ `8b8bddb`。
+  - 人裁 135 落地：判据整条改写并改名（`... naming the EPERM reason instead of letting it escape raw`），
+    原解释段逐字保留 ＋ 追加具名 ERRATUM（写明编码的是人裁 132／133）。
+  - **`export` 已撤回** —— 实施席按控制器给的决策规则，发现三条新判据都能走已公开的
+    `writeOwnerTransferArtifacts`（该文件其它锁争用判据用的同一个入口）⇒ 生产模块的公开面没有为测试而变宽。
+    ⚠️ **副产品：那条「死持有者的锁仍被删」的判据反而变强了** —— 从 `expect(lock).toBeDefined()`
+    变成「核 owner-record 反映了完成的转移 ＋ 陈旧的锁确实没了」。
+  - `fileStore.test.ts` 94/94；全量 788/790，红集合 = {stopProof, subprocessClaudeAdapter close-pending} ⊆ 已知 12 条。
+  - 改写判据的变异：把 EPERM 那支改回抛 Busy ⇒ **红被看见**，且正是预言的那一条。
+- ⚠️ 又留下一个一次性副本 `/Users/biran/code/skills/loop/ccloop-mutclone-t2b`（沙箱拦了它自己的 rm）。
+  **人裁 136 指名的是 t2 那一个，不自动延续到 t2b** —— 控制器不替人扩大授权，挂起等人。
+  ⇒ **改进：后续 brief 一律要求把变异副本建在会话 scratchpad 目录下**，那里本来就不需要每次授权，
+  从源头上不再产生「仓库旁边的残留 ＋ 每次都要问」这个循环。
+- 评审席判 **Approved**，0 Critical / 0 Important / 2 Minor（都是既有惯例带来的样板重复与
+  `stat().resolves.toBeDefined()` 略松，非本 diff 引入 ⇒ 记为 deferred minor，不进修复轮）。
+  最承重那条已被逐出口追踪：**全函数只有一处 `safeUnlink`，只有 `dead` 的 fallthrough 能到**；
+  `classifyProcessLiveness` 全文件只被调用一次，`isProcessActive` 生产调用点归零。
+- 评审席的 ⚠️（`fileStore.ts:881` 的「applied to a third meaning」要不要追 ERRATUM）**控制器自裁：不追**。
+  那句说的是 Unattributable 类**自己**是第三种含义，加第四个兄弟不会让它变假；
+  而新类自己的注释已写明「A fourth meaning, and a THIRD sibling」，自带说明。
+  ⇒ **spec §7 那一项写得不准，Task 11 里改掉。**
+- *** **人裁 137（2026-09-23）：变异副本清理，两件都做。** ***
+  ① 站立授权：凡同时满足三条的副本控制器可直接删，每次把三条证据记台账 ——
+     不在 `git worktree list` 里／HEAD 是主仓库已有的提交／除变异残留与 node_modules 软链外无未跟踪内容；
+     删法固定：**先摘软链再删目录，删后核主树 `node_modules` 完好**。
+  ② 后续 brief 一律要求把变异副本建在**会话 scratchpad 目录**下，从源头不再在仓库旁边产生残留。
+- 执行：`ccloop-mutclone-t2b` 已删（HEAD `f864cc4` 在主仓库；主树 node_modules 仍 42 条）。
+  现测仓库旁边**已无 mutclone 残留**。
+- **Task 2: complete (commits 7d6049b..8b8bddb, review clean, 2 deferred minors)**
+
+## Task 3–7（合并派发，Ruling O）
+
+- BASE `8b8bddb`。合并理由：十一处路由点里的十处形状相同、共用同一个错误类、改的是同三个文件，
+  分开派会让彼此行号互相移动。
