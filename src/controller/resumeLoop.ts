@@ -234,9 +234,16 @@ export async function resumeLoop(
     // ever release. The old detail sent the operator to look at files that were never the problem.
     // Same fail-closed exit, both halves of the detail kept in one variable so the event and the
     // thrown error cannot drift apart.
+    // *** ERRATUM (ls lock visibility, HUMAN RULING 133) -- the paragraph above is kept verbatim
+    // and still applies word for word to this sibling class: every artifact here is readable, and
+    // what failed is the recovery this read performs on the way -- blocked by a lock whose
+    // liveness could not even be determined, let alone attributed. "cannot read run artifacts"
+    // would be just as false of this case as of the unattributable one. ***
     const detail = error instanceof OwnerTransferLockUnattributableError
       ? `owner-transfer lock unattributable: ${String(error)}`
-      : `cannot read run artifacts: ${String(error)}`;
+      : error instanceof OwnerTransferLockLivenessUndeterminedError
+        ? `owner-transfer lock liveness undetermined: ${String(error)}`
+        : `cannot read run artifacts: ${String(error)}`;
     await appendEvent(runDir, { type: "resume_denied", at: new Date().toISOString(), detail });
     throw new ResumeNotEligibleError(detail);
   }
@@ -265,11 +272,18 @@ export async function resumeLoop(
     // was evaluated either. Measured before this branch existed, from the criterion below in
     // tests/controller/resumeLoop.integration.test.ts: the detail read
     // `claim CAS failed: OwnerTransferLockUnattributableError: ...`.
+    // *** ERRATUM (ls lock visibility, HUMAN RULING 133) -- the paragraph above is kept verbatim
+    // and still applies word for word: the two lock errors this function already named are
+    // siblings of a third, and neither `instanceof` implies it either. Without its own branch an
+    // undetermined-liveness lock fell through to "claim CAS failed" -- the same lie, for the same
+    // reason: no CAS was evaluated for this class either. ***
     const detail = error instanceof OwnerTransferLockUnattributableError
       ? `owner-transfer lock unattributable: ${String(error)}`
       : error instanceof OwnerTransferLockBusyError
         ? `owner-transfer lock busy: ${String(error)}`
-        : `claim CAS failed: ${String(error)}`;
+        : error instanceof OwnerTransferLockLivenessUndeterminedError
+          ? `owner-transfer lock liveness undetermined: ${String(error)}`
+          : `claim CAS failed: ${String(error)}`;
     await appendEvent(runDir, { type: "resume_denied", at: new Date().toISOString(), detail });
     throw new ResumeNotEligibleError(detail);
   }

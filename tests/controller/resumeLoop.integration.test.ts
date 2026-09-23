@@ -389,6 +389,143 @@ describe("resumeLoop", () => {
     await expect(readFile(join(runDir, ".owner-transfer.lock"), "utf8")).resolves.toBe("not-json\n");
   });
 
+  // ls lock visibility, Task 5 (human ruling 133). Same fixture as the busy-lock criterion above
+  // ("stays fail-closed when the claim hits a busy owner-transfer lock ..."): no transaction
+  // marker, so recovery on the entry read returns before it ever reaches for the lock, and it is
+  // the CLAIM (claimOwnerRecordWithBoundedLockRetry) that meets it. The one difference is that
+  // process.kill is made to refuse this process's own pid with EPERM, so the lock IS attributable
+  // (it parses and names a real holder) and only the liveness probe fails, raising
+  // OwnerTransferLockLivenessUndeterminedError rather than OwnerTransferLockBusyError.
+  //
+  // ⚠️ The task brief's own sample fixture writes a `pid:0` lock and asserts
+  // `toContain("cannot be determined (EPERM)")` in the same breath -- those do not agree. `pid:0`
+  // never reaches process.kill: classifyProcessLiveness's `pid < 1` guard returns "pid 0 does not
+  // name a process that can be probed" before calling it, so it can never produce an EPERM
+  // reason. This criterion seeds the scenario that actually produces the literal the brief asks
+  // to pin, mirroring the EPERM-refusal precedent already established for Task 4.
+  it("says the liveness could not be determined, rather than claiming a CAS it never evaluated", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    const heldPid = process.pid;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+      if (pid === heldPid) {
+        const errno = new Error("operation not permitted") as NodeJS.ErrnoException;
+        errno.code = "EPERM";
+        throw errno;
+      }
+      return true;
+    });
+
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: `pid:${heldPid}`, acquiredAt: new Date().toISOString() }),
+    );
+
+    const ownerBefore = await readFile(join(runDir, "owner-record.json"), "utf8");
+
+    let refusal: Error;
+    try {
+      refusal = await resumeLoop(runDir, new ScriptedAdapter([successFrame()])).then(
+        () => {
+          throw new Error("expected the resume to be refused");
+        },
+        (caught: Error) => caught,
+      );
+    } finally {
+      // process.kill is global: leaking this spy would poison every later criterion in this file.
+      killSpy.mockRestore();
+    }
+
+    expect(refusal).toBeInstanceOf(ResumeNotEligibleError);
+    expect(refusal.message).toContain("owner-transfer lock liveness undetermined");
+    expect(refusal.message).toContain("cannot be determined (EPERM)");
+    // The two lies this criterion exists to keep out: the CAS that was never evaluated, and the
+    // transfer that does not exist (this is a claim refusal, not a transfer).
+    expect(refusal.message).not.toContain("claim CAS failed");
+    expect(refusal.message).not.toContain("already in progress");
+
+    expect(await readFile(join(runDir, "owner-record.json"), "utf8")).toBe(ownerBefore); // untouched
+    const denied = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; detail: string })
+      .filter((event) => event.type === "resume_denied");
+    // Both halves of the detail are kept in one variable (resumeLoop.ts's own comment) so the
+    // event and the thrown error cannot drift apart. Asserting only one of them would miss that.
+    expect(denied).toHaveLength(1);
+    expect(denied[0].detail).toBe(refusal.message);
+  });
+
+  // ls lock visibility, Task 5 (human ruling 133). Same fixture as the unattributable sibling
+  // above ("names an unattributable transfer lock on the entry read ..."): a transaction marker
+  // present, so the entry read's readOwnerRecord walks into recovery and reaches for the lock
+  // itself, landing in the OTHER catch (the entry-read one, not the claim one). Same EPERM-refused,
+  // attributable lock as the claim-path criterion above, for the same reason.
+  it("names an undetermined-liveness transfer lock on the entry read, instead of calling the artifacts unreadable", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+
+    const heldPid = process.pid;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+      if (pid === heldPid) {
+        const errno = new Error("operation not permitted") as NodeJS.ErrnoException;
+        errno.code = "EPERM";
+        throw errno;
+      }
+      return true;
+    });
+
+    // Both files are load-bearing, same as the unattributable sibling: the marker is what makes
+    // recoverInterruptedOwnerTransfer go for the lock at all, and the EPERM refusal is what makes
+    // that acquisition's liveness undetermined rather than clean.
+    await writeFile(
+      join(runDir, ".owner-transfer.transaction.json"),
+      JSON.stringify({ version: 1, stagedAt: "2026-07-23T00:00:00.000Z", finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
+    );
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: `pid:${heldPid}`, acquiredAt: new Date().toISOString() }),
+    );
+
+    const ownerBefore = await readFile(join(runDir, "owner-record.json"), "utf8");
+
+    let refusal: Error;
+    try {
+      refusal = await resumeLoop(runDir, new ScriptedAdapter([successFrame()])).then(
+        () => {
+          throw new Error("expected the resume to be refused");
+        },
+        (caught: Error) => caught,
+      );
+    } finally {
+      killSpy.mockRestore();
+    }
+
+    expect(refusal).toBeInstanceOf(ResumeNotEligibleError);
+    expect(refusal.message).toContain("owner-transfer lock liveness undetermined");
+    expect(refusal.message).toContain("cannot be determined (EPERM)");
+    // The lie this criterion exists to keep out: the artifacts were never the problem.
+    expect(refusal.message).not.toContain("cannot read run artifacts");
+
+    expect(await readFile(join(runDir, "owner-record.json"), "utf8")).toBe(ownerBefore); // untouched
+    const denied = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; detail: string })
+      .filter((event) => event.type === "resume_denied");
+    expect(denied).toHaveLength(1);
+    expect(denied[0].detail).toBe(refusal.message);
+    // Nothing was reclaimed on the way out: an EPERM-refused, attributable lock is never a
+    // deletion candidate either (ruling 83's single deletion condition needs a DEAD holder).
+    expect(JSON.parse(await readFile(join(runDir, ".owner-transfer.lock"), "utf8")).holderProcessInstanceId)
+      .toBe(`pid:${heldPid}`);
+  });
+
   // Package 2 / §13 4th entry, review round 2 (I-1). D2 put the loser's reconciliation
   // read → decide → write inside .owner-transfer.lock, which is the same lock this claim takes, so
   // a resume can now collide with an ordinary boundary write rather than only with a transfer. The
