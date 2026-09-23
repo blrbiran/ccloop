@@ -1374,13 +1374,7 @@ async function recordSkippedLockRelease(
 // in the last sentence did, and that status is tracked in the ledger, not here. This site was
 // MISSED when the same sentence was corrected earlier in this file: one claim in three places,
 // two of them left standing. That is the half-fix the correcting commit itself condemned. ***
-//
-// Exported for tests only (human ruling 132): the fixture that pins the liveness-undetermined /
-// holder-alive / cleared split calls this function directly, the same way parsePid and
-// isProcessActive are already exported for their own test and `ccloop unlock` consumers. No
-// production caller reaches it through the module boundary; every one of them already sits in
-// this same file.
-export async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () => Promise<void> }> {
+async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () => Promise<void> }> {
   const { lockPath } = getOwnerTransferPaths(runDir);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {

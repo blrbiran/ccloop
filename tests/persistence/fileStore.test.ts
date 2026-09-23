@@ -4,7 +4,6 @@ import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import {
-  acquireOwnerTransferLock,
   appendEvent,
   buildAtomicTempPath,
   claimOwnerRecordWithPrecondition,
@@ -1269,7 +1268,7 @@ describe("fileStore", () => {
     expect(error).not.toBeInstanceOf(OwnerTransferLockUnattributableError);
   });
 
-  it("refuses a lock as busy when the holder's liveness cannot be determined, never letting the errno escape", async () => {
+  it("refuses a lock as liveness-undetermined when the holder's liveness cannot be determined, naming the EPERM reason instead of letting it escape raw", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const initialOwnerRecord = {
       runId: "task-1",
@@ -1299,6 +1298,18 @@ describe("fileStore", () => {
     // I-3(b) moved the CALL to it outside the try that wraps the parse: an errno escaping
     // isProcessActive would leave the redline function as a raw EPERM instead of a refusal, and
     // the operator would get an unexplained errno where a lock refusal belongs.
+    //
+    // *** ERRATUM (ls lock visibility, HUMAN RULINGS 132 AND 133) -- the paragraph above is kept
+    // verbatim, and its intent is unchanged: an errno must never escape raw, the caller must
+    // always get a refusal. What changed is which refusal is correct, and this criterion was
+    // rewritten (human ruling 135, under ruling 88) to pin the new one. "Busy" now means a holder
+    // PROVEN alive; an EPERM refusal cannot prove that, so it throws
+    // OwnerTransferLockLivenessUndeterminedError instead, alongside pid:0 and an out-of-range
+    // pid. Ruling 133 requires that error to NAME its reason rather than hide it, so this
+    // criterion now pins the literal "EPERM" in the message where the old version asserted its
+    // absence -- the old assertion pinned only "don't leak an errno"; this one pins the reason
+    // itself, which is strictly more. It also pins the required wording that the lock may still
+    // clear: an EPERM holder is usually another user's live process. ***
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
       const errno = new Error("operation not permitted") as NodeJS.ErrnoException;
       errno.code = "EPERM";
@@ -1323,9 +1334,10 @@ describe("fileStore", () => {
       killSpy.mockRestore();
     }
 
-    expect(error).toBeInstanceOf(OwnerTransferLockBusyError);
+    expect(error).toBeInstanceOf(OwnerTransferLockLivenessUndeterminedError);
     expect(error).not.toBeInstanceOf(OwnerTransferLockUnattributableError);
-    expect(String(error)).not.toContain("EPERM");
+    expect(String(error)).toContain("EPERM");
+    expect(String(error)).toContain("may or may not clear on its own");
   });
 
   it("cleans up staged owner transfer files when the lock-holder sees leftover pending files without a marker", async () => {
@@ -5368,11 +5380,17 @@ async function observeCrashMatrix(stage: (gap: number) => Promise<string>): Prom
 }
 
 // Human ruling 132 (task 2 of the ls-lock-visibility round). Task 1's re-measurement found that
-// `makeRunDir`, `OWNER_TRANSFER_LOCK_FILE` and `acquireOwnerTransferLock` were not already in use
-// in this file the way the task brief assumed (CLAUDE.md ruling C: a brief's anchors are not
-// facts) -- `acquireOwnerTransferLock` was not even exported. This helper and the three imports
-// above are new; `acquireOwnerTransferLock` gained an `export` keyword in fileStore.ts (comment
-// there explains why), which is the only production-file visibility change this task made.
+// `makeRunDir` and `OWNER_TRANSFER_LOCK_FILE` were not already in use in this file the way the
+// task brief assumed (CLAUDE.md ruling C: a brief's anchors are not facts). This helper and the
+// two imports above are new.
+//
+// *** Human ruling 135 note: the first version of these criteria called `acquireOwnerTransferLock`
+// directly, which required adding `export` to that production function -- a widened public surface
+// this package's reviewers treat as a defect unless nothing else reaches the cell. Reconsidered:
+// all three cells below are observable through the already-public `writeOwnerTransferArtifacts`,
+// the same entry point this file's other lock-contention criteria already use (the busy/CAS-mismatch
+// pair earlier in this file, and the rewritten EPERM criterion above). The `export` was reverted;
+// nothing here needed it. ***
 async function makeRunDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "ccloop-run-"));
 }
@@ -5380,17 +5398,40 @@ async function makeRunDir(): Promise<string> {
 describe("owner-transfer lock with an unprobeable holder (human ruling 132)", () => {
   it("refuses with a named liveness error, says the lock may still clear, and leaves it on disk", async () => {
     const runDir = await makeRunDir();
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
     const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
     await writeFile(
       lockPath,
       JSON.stringify({ holderProcessInstanceId: "pid:0", acquiredAt: "2026-09-23T00:00:00.000Z" }),
     );
 
-    const error = await acquireOwnerTransferLock(runDir).then(
+    const error = await writeOwnerTransferArtifacts(
+      runDir,
+      initialOwnerRecord,
+      transfer.nextOwnerRecord,
+      transfer.transferRecord,
+    ).then(
       () => {
-        throw new Error("expected the acquire to be refused");
+        throw new Error("expected writeOwnerTransferArtifacts to reject, but it resolved");
       },
-      (caught: unknown) => caught,
+      (rejection: unknown) => rejection,
     );
 
     expect(error).toBeInstanceOf(OwnerTransferLockLivenessUndeterminedError);
@@ -5407,17 +5448,40 @@ describe("owner-transfer lock with an unprobeable holder (human ruling 132)", ()
 
   it("still calls a genuinely live holder busy, in the published words, and leaves the lock alone", async () => {
     const runDir = await makeRunDir();
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
     const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
     await writeFile(
       lockPath,
       JSON.stringify({ holderProcessInstanceId: `pid:${process.pid}`, acquiredAt: "2026-09-23T00:00:00.000Z" }),
     );
 
-    const error = await acquireOwnerTransferLock(runDir).then(
+    const error = await writeOwnerTransferArtifacts(
+      runDir,
+      initialOwnerRecord,
+      transfer.nextOwnerRecord,
+      transfer.transferRecord,
+    ).then(
       () => {
-        throw new Error("expected the acquire to be refused");
+        throw new Error("expected writeOwnerTransferArtifacts to reject, but it resolved");
       },
-      (caught: unknown) => caught,
+      (rejection: unknown) => rejection,
     );
 
     expect(error).toBeInstanceOf(OwnerTransferLockBusyError);
@@ -5428,6 +5492,24 @@ describe("owner-transfer lock with an unprobeable holder (human ruling 132)", ()
 
   it("still removes a dead holder's lock, so ruling 83's one deletion condition is unchanged", async () => {
     const runDir = await makeRunDir();
+    const initialOwnerRecord = {
+      runId: "task-1",
+      logicalSessionId: "task-1/session-1",
+      currentOwnerEpoch: 1,
+      currentProcessInstanceId: "pid:12345",
+      lastAffirmedAt: "2026-07-22T10:00:00.000Z",
+      ownerStatus: "current" as const,
+      supersededByEpoch: null,
+      leaseAffirmedAt: null,
+    };
+    const transfer = applyOwnerEpochTransfer(
+      initialOwnerRecord,
+      "pid:67890",
+      "2026-07-22T10:05:00.000Z",
+      "owner lost after reconciliation",
+    );
+
+    await writeOwnerRecord(runDir, initialOwnerRecord);
     const lockPath = join(runDir, OWNER_TRANSFER_LOCK_FILE);
     expect(() => process.kill(999999, 0)).toThrow();
     await writeFile(
@@ -5435,9 +5517,19 @@ describe("owner-transfer lock with an unprobeable holder (human ruling 132)", ()
       JSON.stringify({ holderProcessInstanceId: "pid:999999", acquiredAt: "2026-09-23T00:00:00.000Z" }),
     );
 
-    const lock = await acquireOwnerTransferLock(runDir);
-    await lock.release();
+    // No rejection expected: a dead holder's stale lock must be reclaimed so the transfer can
+    // proceed. If ruling 83's deletion condition regressed, this call would reject with either
+    // OwnerTransferLockBusyError or OwnerTransferLockLivenessUndeterminedError instead of resolving.
+    await writeOwnerTransferArtifacts(runDir, initialOwnerRecord, transfer.nextOwnerRecord, transfer.transferRecord);
 
-    expect(lock).toBeDefined();
+    const owner = JSON.parse(await readFile(join(runDir, "owner-record.json"), "utf8")) as {
+      currentOwnerEpoch: number;
+      currentProcessInstanceId: string;
+    };
+    expect(owner.currentOwnerEpoch).toBe(2);
+    expect(owner.currentProcessInstanceId).toBe("pid:67890");
+    // The stale dead-holder lock was reclaimed, a fresh lock was taken for this attempt, and that
+    // lock was released once the transfer finished -- so nothing is left on disk afterward.
+    await expect(stat(lockPath)).rejects.toThrow();
   });
 });
