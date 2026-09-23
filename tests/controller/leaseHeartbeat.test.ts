@@ -421,6 +421,142 @@ describe("startLeaseHeartbeat", () => {
     expect(recorded[0].detail).toContain("lease release blocked");
   });
 
+  // ls lock visibility, Task 6 (human ruling 133). Same fixture shape as the unattributable
+  // sibling above ("records an unattributable owner-transfer lock once, and keeps ticking"), with
+  // an EPERM-refused, attributable lock (a real pid, process.kill mocked to refuse it) instead of
+  // an unparseable one, raising OwnerTransferLockLivenessUndeterminedError instead of
+  // OwnerTransferLockUnattributableError. Its own event type, its own flag.
+  it("records an undetermined-liveness owner-transfer lock once, and keeps ticking", async () => {
+    const runDir = await seed(record());
+    const lost: unknown[] = [];
+    const heartbeat = startLeaseHeartbeat({
+      runDir,
+      ownerRecord: record(),
+      onLeaseLost: (error) => lost.push(error),
+    });
+
+    const heldPid = process.pid;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+      if (pid === heldPid) {
+        const errno = new Error("operation not permitted") as NodeJS.ErrnoException;
+        errno.code = "EPERM";
+        throw errno;
+      }
+      return true;
+    });
+
+    // Attributable (parses and names this process's own pid) but unprobeable: EPERM refuses the
+    // liveness check, so tryRecoverStaleOwnerTransferLock reports liveness-undetermined rather
+    // than unattributable.
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: `pid:${heldPid}`, acquiredAt: new Date().toISOString() }),
+    );
+
+    try {
+      await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS);
+      await heartbeat.affirmNow();
+    } finally {
+      // process.kill is global: leaking this spy would poison every later criterion in this file.
+      killSpy.mockRestore();
+    }
+
+    const types = await readEventTypes(runDir);
+    expect(types.filter((type) => type === "owner_transfer_lock_liveness_undetermined")).toHaveLength(1);
+    expect(types).not.toContain("lease_lost");
+    expect(lost).toHaveLength(0);
+
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; detail: string });
+    const recorded = events.filter((event) => event.type === "owner_transfer_lock_liveness_undetermined");
+    expect(recorded[0].detail).toContain("lease affirm blocked:");
+    expect(recorded[0].detail).toContain("cannot be determined (EPERM)");
+
+    // Still ticking. Without this the criterion would pass against a heartbeat that recorded the
+    // event and then quietly stopped affirming.
+    await rm(join(runDir, ".owner-transfer.lock"));
+    await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS);
+    await heartbeat.affirmNow();
+
+    expect((await readOwner(runDir)).leaseAffirmedAt).not.toBeNull();
+    await heartbeat.stop();
+  });
+
+  // ls lock visibility, Task 6 (human ruling 133). Same fixture shape as the unattributable
+  // sibling above ("records the unattributable lock when stop() is the first to meet it ..."),
+  // with the same EPERM-refused, attributable lock as the affirm-path criterion above.
+  it("records an undetermined-liveness lock when stop() is the first to meet it, with no tick before", async () => {
+    const runDir = await seed(record());
+    const heartbeat = startLeaseHeartbeat({
+      runDir,
+      ownerRecord: record(),
+      onLeaseLost: () => {},
+    });
+
+    const heldPid = process.pid;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+      if (pid === heldPid) {
+        const errno = new Error("operation not permitted") as NodeJS.ErrnoException;
+        errno.code = "EPERM";
+        throw errno;
+      }
+      return true;
+    });
+
+    // No timer is advanced and no affirm is forced: the lock appears before the first tick is due,
+    // so stop() -> releaseOwnerLease is the first thing in this run to reach for it.
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: `pid:${heldPid}`, acquiredAt: new Date().toISOString() }),
+    );
+
+    try {
+      await heartbeat.stop();
+    } finally {
+      killSpy.mockRestore();
+    }
+
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; detail?: string });
+    const recorded = events.filter((event) => event.type === "owner_transfer_lock_liveness_undetermined");
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].detail).toContain("lease release blocked");
+    expect(recorded[0].detail).toContain("cannot be determined (EPERM)");
+    // The false name this criterion exists to keep out: this holder IS attributable.
+    expect(events.filter((event) => event.type === "owner_transfer_lock_unattributable")).toHaveLength(0);
+  });
+
+  // ls lock visibility, Task 6 (human ruling 133), spec requirement: the two flags are
+  // independent. One run meets BOTH lock errors, one tick each: the first unparseable
+  // (unattributable), the second a pid:0 holder (liveness undetermined, since pid:0 can never be
+  // probed at all). If the two facts shared one flag, the second would be swallowed by the first
+  // having already fired -- precisely the silence this round exists to remove.
+  it("records both lock errors in one run, because one flag cannot speak for the other", async () => {
+    const runDir = await seed(record());
+    const heartbeat = startLeaseHeartbeat({ runDir, ownerRecord: record(), onLeaseLost: () => {} });
+
+    await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
+    await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS);
+    await heartbeat.affirmNow();
+
+    await writeFile(
+      join(runDir, ".owner-transfer.lock"),
+      JSON.stringify({ holderProcessInstanceId: "pid:0", acquiredAt: "2026-09-23T00:00:00.000Z" }),
+    );
+    await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS);
+    await heartbeat.affirmNow();
+
+    const types = await readEventTypes(runDir);
+    expect(types.filter((type) => type === "owner_transfer_lock_unattributable")).toHaveLength(1);
+    expect(types.filter((type) => type === "owner_transfer_lock_liveness_undetermined")).toHaveLength(1);
+
+    await heartbeat.stop();
+  });
+
   // Task 3 / spec requirement 10 — the poisoned-chain killer. Requirement 10 asks for two
   // things: the rejection reaches the runExclusive caller, and the queue is still usable for a
   // subsequent affirm afterward (not deadlocked, not silently swallowed). A second runExclusive

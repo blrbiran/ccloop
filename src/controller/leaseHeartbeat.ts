@@ -11,6 +11,7 @@ import {
 import {
   affirmOwnerLease,
   appendEvent,
+  OwnerTransferLockLivenessUndeterminedError,
   OwnerTransferLockUnattributableError,
   OwnerTransferPreconditionError,
   readOwnerRecordWithoutRecovery,
@@ -43,6 +44,11 @@ export function startLeaseHeartbeat(options: {
   // stop() walks into it again through releaseOwnerLease; without this the event stream would
   // carry one line per tick for what is a single standing fact.
   let unattributableLockRecorded = false;
+  // ls lock visibility, Task 6 (human ruling 133). Its own flag, deliberately not shared with
+  // unattributableLockRecorded above: sharing one would let the second of two facts be swallowed
+  // in a run that hits both (see the criterion that hits one tick each of both classes and expects
+  // both event types exactly once).
+  let livenessUndeterminedLockRecorded = false;
   // Both writers of §6 funnel through here, so serialize them: the throttle alone does not
   // stop two calls in the same tick from racing the owner-transfer lock.
   let queue: Promise<void> = Promise.resolve();
@@ -174,6 +180,23 @@ export function startLeaseHeartbeat(options: {
         return;
       }
 
+      // *** ERRATUM (ls lock visibility, HUMAN RULING 133) -- ruling 119's finding directly above
+      // is kept verbatim and is unchanged: consumers really do count these types, which is why
+      // reusing one for a different fact broke two criteria. This branch applies the same finding
+      // rather than the same type. `owner_transfer_lock_unattributable` would be a FALSE NAME here:
+      // the record parsed and named a holder in the `pid:<n>` form, so the lock IS attributable and
+      // only the probe failed. The flag is its own too -- sharing one would let the second of the
+      // two facts be swallowed in a run that hits both, which is the silence this round exists to
+      // remove. ***
+      if (error instanceof OwnerTransferLockLivenessUndeterminedError) {
+        if (!livenessUndeterminedLockRecorded) {
+          livenessUndeterminedLockRecorded = true;
+          await appendLeaseEvent("owner_transfer_lock_liveness_undetermined", `lease affirm blocked: ${String(error)}`);
+        }
+
+        return;
+      }
+
       // §6: a failure that is not a precondition failure — lock contention, transient I/O —
       // is swallowed and retried on the next tick. It must never throw into the control loop.
       if (!(error instanceof OwnerTransferPreconditionError)) {
@@ -287,6 +310,17 @@ export function startLeaseHeartbeat(options: {
       if (error instanceof OwnerTransferLockUnattributableError && !unattributableLockRecorded) {
         unattributableLockRecorded = true;
         await appendLeaseEvent("owner_transfer_lock_unattributable", `lease release blocked: ${String(error)}`);
+      }
+
+      // *** ERRATUM (ls lock visibility, HUMAN RULING 133) -- the paragraph above is kept verbatim
+      // and ruling 113's finding is unchanged. This is a separate condition, not an else: the two
+      // classes are siblings and neither `instanceof` implies the other. `owner_transfer_lock_
+      // unattributable` would be a FALSE NAME for a lock that parsed and named a holder in the
+      // `pid:<n>` form -- only the probe failed, so this uses its own event type and its own flag,
+      // shared with runAffirm's copy above rather than with unattributableLockRecorded. ***
+      if (error instanceof OwnerTransferLockLivenessUndeterminedError && !livenessUndeterminedLockRecorded) {
+        livenessUndeterminedLockRecorded = true;
+        await appendLeaseEvent("owner_transfer_lock_liveness_undetermined", `lease release blocked: ${String(error)}`);
       }
     }
   };
