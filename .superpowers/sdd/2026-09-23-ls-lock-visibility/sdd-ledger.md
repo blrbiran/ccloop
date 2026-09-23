@@ -320,3 +320,12 @@ tests/validation/codexSoftBudget.test.ts tests/validation/codexWatchdog.test.ts`
   （评审席判定它**没有掩盖运行时问题** —— 那条路径从不解引用 `row.lock`；但可用
   `attachLockInspections(rows, { inspect: async () => ({ state: "absent" }) })` 消掉）。已作为可选项给实施席。
 - deferred minor：EACCES 那条判据用 `chmod 000`，**以 root 跑时不会真的触发不可读路径**。既有惯例，不改。
+- Task 8–10: fix round 1/5 复审 —— **All findings addressed: YES**，无新破损，生产代码本轮未动。
+  守卫旁边的注释现在明说「MEASURED, NOT ASSUMED」「THIS ROUND IS THAT COLUMN」，
+  并把「绿 ≠ 查过」写死；`progress.md` §10 记了盲点本身＋测量命令＋探针输出；
+  最后那处双重断言也真的换成了 `attachLockInspections(...)`，断言含义不变。
+- **Task 8–10: complete (commits d093eee..bdaa92c, review clean, 2 deferred minors)**
+
+## Task 11–12（合并派发，Ruling S）
+
+- BASE `bdaa92c`。合并理由：两者都是「把已经做完的事记准」，共用同一次全树扫描。

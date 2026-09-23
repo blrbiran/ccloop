@@ -19,6 +19,16 @@
 // It lives in its own module, next to the sweep rather than inside sweepRuns.ts, for the same
 // reason `defaultScan` / `defaultScanDeps` live in registry/scanRuns.ts: sweepRuns is a pure
 // function over injected dependencies (§3 #1) and imports no filesystem module of its own.
+//
+// *** ERRATUM (ls lock visibility, HUMAN RULING 131) -- the "judging liveness in a reporting path
+// would put a decision where an observation belongs" sentence above is kept verbatim, and it
+// still governs THIS module and `sweep` itself: sweep's presence probe is untouched by this
+// round, stays PRESENCE ONLY, and still defers liveness judgment to a human-approved command.
+// Ruling 131 overturns that principle for `ccloop ls` alone -- `ls` now reports
+// classifyHolderLiveness's dead/alive/liveness-unknown verdict alongside the scan (see
+// src/unlock/lockRows.ts, src/registry/renderRuns.ts). It does NOT reopen sweep's own
+// restriction: sweepRuns.ts still consumes only defaultLockPresence's boolean, never a liveness
+// verdict, and this module still does not read, parse or judge the lock file. ***
 
 import { access } from "node:fs/promises";
 import { join } from "node:path";

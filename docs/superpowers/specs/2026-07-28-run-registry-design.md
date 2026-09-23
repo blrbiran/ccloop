@@ -575,3 +575,24 @@ paragraph's "bequeathed to L5" framing. "L5 继承清单现在只剩 1 笔（债
 4. No L1 or L1b code is modified, and none of **L1 §12**'s nineteen constraints is
    weakened.
 5. Full suite, typecheck, and build clean, with no real (paid) Claude calls.
+
+## ERRATUM (ls lock visibility, HUMAN RULING 131)
+
+§6 "There is no "can this be resumed" column, and no derived field of any kind" and §15 #3 "The
+output contains no derived judgment about eligibility, resumability, or lease freshness — enforced
+by a test, not by convention" are kept verbatim above, but they no longer describe `ccloop ls`'s
+output: human ruling 131 has `ls` report the owner-transfer lock's seven-state liveness check, and
+`alive`/`dead`/`liveness-unknown` is exactly a derived judgment.
+
+Only the OUTPUT SHAPE claim is overturned. The registry's OBSERVATION type (`FieldObservation` in
+`types.ts`) still carries no derived meaning — the lock block does not go into `FieldObservation`;
+it is attached to each row by `src/unlock/lockRows.ts` (`attachLockInspections`), a separate layer
+that `renderRuns.ts` renders alongside the plain observation.
+
+⚠️ §15 #3 calls itself "enforced by a test". Measured this round: that criterion
+(`tests/registry/renderRuns.test.ts`'s no-derived-fields guard) does **not** catch the new lock
+block — its ban list only matches `/resumable|fresh|stale|expired/i` and the literal `eligible`,
+and neither `lock` nor `state` trips either pattern. **It stayed green against the new column,
+measured, not assumed.** Full measurement (probe script, command, and output) is recorded in
+`.superpowers/sdd/2026-09-23-ls-lock-visibility/progress.md` §10 — record it here so a later round
+does not read "the guard stayed green" as "there was nothing to catch".

@@ -65,6 +65,16 @@
 // clause is about -- a null pid short-circuits before any liveness probe runs -- is still how this
 // module's control flow behaves; only the literal expression it quotes is gone. Where that control
 // flow lives now is recorded in the ledger, not here. ***
+//
+// *** ERRATUM (ls lock visibility, HUMAN RULING 132) -- the closing sentence of the human-ruling-83
+// erratum above ("the redline function's isProcessActive has two [states] and reads all three as
+// alive") is kept verbatim and was true when written. It no longer describes the redline function:
+// `tryRecoverStaleOwnerTransferLock` now asks the SAME three-state question this module asks
+// (`classifyProcessLiveness`, the function `classifyHolderLiveness` below re-exports), and pid:0,
+// an overflowing pid and an EPERM refusal are no longer folded into "alive" there -- they take
+// their own `liveness-undetermined` exit, refused but not deleted and not called busy either. The
+// two modules' predicates are no longer "two different predicates" that happen to agree; they are
+// the same predicate. Full detail is recorded at the "Three outcomes, not two" erratum below. ***
 
 import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";

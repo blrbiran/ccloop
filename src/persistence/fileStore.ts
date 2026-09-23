@@ -1011,6 +1011,19 @@ function sameOwnerRecord(left: OwnerRecord, right: OwnerRecord): boolean {
 // array holder used to produce a pid. The signature now says `unknown`, which is what it always
 // was. ⚠️ The signature is NOT the defence -- a tidy-up that casts the argument back to `string`
 // typechecks clean and reopens the hole. The criteria are the defence; the ledger names them. ***
+//
+// *** ERRATUM (ls lock visibility, HUMAN RULING 133) -- the opening sentence ("parsePid and
+// isProcessActive are exported for `ccloop unlock`") is kept verbatim, and it was already stale
+// before this round: `ccloop unlock` classifies liveness through classifyHolderLiveness
+// (src/unlock/inspectLock.ts), not through isProcessActive -- src/unlock/inspectLock.ts imports
+// only `parsePid` and `LivenessVerdict`/`classifyProcessLiveness` as of Task 1 of this round, never
+// `isProcessActive`. After this round, `isProcessActive` has ZERO production call sites anywhere in
+// `src/`; the only remaining references are `tests/persistence/fileStore.test.ts:1086` and
+// `tests/unlock/inspectLock.test.ts:317`, both test-only imports. `parsePid` is still genuinely
+// exported for `ccloop unlock` and the paragraph's argument about it is unaffected. Whether
+// `isProcessActive` itself should be deleted, kept as a documented redline-only helper, or kept
+// purely for the two test imports above is NOT decided here -- that is the human's call, recorded
+// so the next reader does not read "exported for `ccloop unlock`" as still true of this function. ***
 export function parsePid(processInstanceId: unknown): number | null {
   // The parameter is `unknown` rather than `string` because that is what it actually is: both
   // callers hand over a value that came out of JSON.parse, and JSON is free to put an array
@@ -1169,6 +1182,16 @@ async function tryRecoverStaleOwnerTransferLock(runDir: string): Promise<StaleOw
   // that never will. NO exit gained or lost the right to delete: the single deleting exit is
   // unchanged, and ruling 83's wording above governs it verbatim. Which criterion pins which exit
   // is recorded in the ledger, not here. ***
+  //
+  // *** ERRATUM (ls lock visibility, HUMAN RULING 132) -- "'No longer alive' means TODAY's
+  // two-state isProcessActive (human ruling 86), not E1's three-state classifyHolderLiveness"
+  // above is kept verbatim and was true when written. It no longer describes this function: the
+  // liveness question below is now asked once through `classifyProcessLiveness` (the same
+  // three-state function this paragraph calls "E1's"), not through `isProcessActive`. The
+  // DELETION CONDITION itself is unchanged -- `cleared` still fires only on verdict "dead", which
+  // is still exactly the ESRCH case `isProcessActive` used to single out -- only the mechanism
+  // computing that answer moved. Full detail on the exit this affects is at the "isProcessActive
+  // now sits OUTSIDE the try" erratum below. ***
   let pid: number | null;
 
   try {
@@ -1384,6 +1407,16 @@ async function recordSkippedLockRelease(
 // in the last sentence did, and that status is tracked in the ledger, not here. This site was
 // MISSED when the same sentence was corrected earlier in this file: one claim in three places,
 // two of them left standing. That is the half-fix the correcting commit itself condemned. ***
+//
+// *** ERRATUM (ls lock visibility, HUMAN RULING 132) -- "not alive under isProcessActive
+// (two-state, human ruling 86)" above is kept verbatim and was true when written. The only exit
+// that may still delete a lock is unchanged in effect (a parsed `pid:<n>` holder found dead), but
+// the liveness question is no longer asked through `isProcessActive`: `tryRecoverStaleOwnerTransferLock`
+// now asks it once through the three-state `classifyProcessLiveness`, and treats only its "dead"
+// verdict as license to delete -- the same ESRCH-only case `isProcessActive`'s two-state answer
+// used to single out. This is a THIRD site carrying the same claim about this exit (see the I-1
+// erratum immediately above this one, about a different claim MISSED in the same way); recorded
+// here so this one is not the next miss. ***
 async function acquireOwnerTransferLock(runDir: string): Promise<{ release: () => Promise<void> }> {
   const { lockPath } = getOwnerTransferPaths(runDir);
 
