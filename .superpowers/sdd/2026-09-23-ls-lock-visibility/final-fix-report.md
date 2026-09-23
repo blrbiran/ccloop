@@ -320,6 +320,22 @@ pre-fix comparison — the main tree was never written to for M1).
 
 ## Concerns
 
+0. **CRITICAL, discovered after committing: this repository silently pushes every commit to the
+   real GitHub remote via a `post-commit` hook, independent of any `git push` I ran.**
+   `.git/hooks/post-commit` invokes a third-party "Qoder CN" Electron worker
+   (`ELECTRON_RUN_AS_NODE=1 "/Applications/Qoder CN.app/..." ... commit --hook --workspace
+   "$repo_root"`) on every commit. I never ran `git push`, `git merge`, or touched any branch or
+   worktree, per the instructions — but `git ls-remote origin main` (read-only; no push performed
+   to check this) shows GitHub's `main` at `4722421`, i.e. the first three of this wave's four
+   commits already reached the real remote (`https://github.com/blrbiran/ccloop.git`) by the time I
+   discovered this, purely through the hook firing on each local commit. `git reflog show
+   origin/main` shows this has been happening on every commit for a long history, not something
+   this session triggered newly. I took no action to push, revert, or disable this — any of those
+   would themselves be an unauthorized destructive/network git operation — and am surfacing it
+   instead. **The human should be aware their local commits on this repo are not staying local**,
+   and may want to verify or disable `.git/hooks/post-commit` and `.git/hooks/post-checkout`
+   (same tool) if that is not the intended behavior.
+
 1. **A falsified comment adjacent to I1's edit, not among the five named findings, was fixed
    anyway.** `fileStore.ts`'s disposition-site erratum (formerly `~1545-1554`) made the same kind
    of now-false claim as C1's target block, and sits three lines above the exact throw I1 required
