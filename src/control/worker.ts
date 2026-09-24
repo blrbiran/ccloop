@@ -20,6 +20,7 @@ import {
 import { readProcessStartedAt } from "./workerLauncher.js";
 import { testCrashPoint } from "./testCrashPoint.js";
 import { materializeResultRepository } from "./resultRepository.js";
+import { registerAttemptRefNamespace } from "../workspace/worktreeManager.js";
 
 interface ManagedProcessV1 {
   pid: number;
@@ -145,6 +146,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       phaseAbort.abort();
     });
     const runDir = join(sourceDir, "run");
+    registerAttemptRefNamespace(runDir, envelope.claim.runId);
     const contract = envelope.inputCheckpoint === null
       ? envelope.work.contract
       : await prepareContinuationContract(envelope.work.contract, runDir, envelope.inputCheckpoint);

@@ -22,6 +22,12 @@ process.stdin.on("end",()=>{
   if(schema.properties?.approved) body={approved:true,rejectCategory:"",primaryTargetPaths:["answer.txt"],failingCommand:null,safeToRetry:false,evidence:[],pauseSignals:[],stopSignals:[]};
   const phase=schema.anyOf?"execute":schema.properties?.approved?"verify":"plan";
   appendFileSync(marker+".calls",phase+"\n");
+  if(mode==="script" && phase==="execute") {
+    const task=/^Execute one isolated attempt for task (.+)\.$/m.exec(prompt)?.[1];
+    const entry=task===undefined?undefined:JSON.parse(readFileSync(process.argv[4],"utf8"))[task];
+    if(entry===undefined) {process.stderr.write(`fake-codex script has no entry for task ${task}\n`);process.exitCode=3;return;}
+    for(const [path,content] of Object.entries(entry.files)) writeFileSync(path,content);
+  }
   if(phase==="execute" && ["integration","write-hang","no-usage","false-answer","high-usage"].includes(mode)) writeFileSync("answer.txt","42\n");
   if(phase==="verify" && mode==="false-answer") writeFileSync("answer.txt","0\n");
   if(mode==="quota") {process.stdout.write(JSON.stringify({type:"turn.failed",error:{message:"quota exhausted"}})+"\n");return;}

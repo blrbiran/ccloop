@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { access, mkdir } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -61,6 +61,28 @@ export function attemptRefName(worktreePath: string): string {
 }
 
 /**
+ * Orca execution driver (2026-09-25), change C2. Every control run's run directory is
+ * `<sourceDir>/run`, so attemptRefName above names every control run's attempt
+ * `refs/ccloop/run/attempts/<n>`, and a later run in the same target repository overwrites an
+ * earlier one's. The control worker registers its claim's run id for its run directory here, and
+ * publishAttemptCommit then ALSO pins the attempt under that name. The shared, path-derived ref is
+ * still published unchanged for every existing reader.
+ */
+const attemptRefNamespaces = new Map<string, string>();
+
+export function registerAttemptRefNamespace(runDir: string, namespace: string): void {
+  attemptRefNamespaces.set(resolve(runDir), namespace);
+}
+
+export function namespacedAttemptRefName(worktreePath: string, namespace: string): string {
+  const match = /^attempt-(.+)$/.exec(basename(worktreePath));
+  if (match === null) {
+    throw new Error(`not an attempt worktree path: ${worktreePath}`);
+  }
+  return `refs/ccloop/${namespace}/attempts/${match[1]}`;
+}
+
+/**
  * Commits whatever the attempt left in its worktree and pins it with a ref.
  *
  * The worktree shares an object database with repoPath, so the commit object
@@ -89,6 +111,11 @@ export async function publishAttemptCommit(worktreePath: string): Promise<Attemp
   const sha = shaOut.trim();
 
   await execFileAsync("git", ["update-ref", ref, sha], { cwd: worktreePath });
+
+  const namespace = attemptRefNamespaces.get(resolve(dirname(dirname(worktreePath))));
+  if (namespace !== undefined) {
+    await execFileAsync("git", ["update-ref", namespacedAttemptRefName(worktreePath, namespace), sha], { cwd: worktreePath });
+  }
 
   return { sha, base, ref };
 }

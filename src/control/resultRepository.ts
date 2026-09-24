@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { access, cp, copyFile, lstat, mkdir, readdir, realpath, rm } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { attemptRefName } from "../workspace/worktreeManager.js";
+import { namespacedAttemptRefName } from "../workspace/worktreeManager.js";
 import type { StartEnvelopeV1 } from "./protocol.js";
 
 const exec = promisify(execFile);
@@ -21,7 +21,7 @@ async function git(repo: string, ...args: string[]): Promise<string> {
 }
 
 async function cloneAt(source: string, destination: string, revision: string): Promise<void> {
-  await exec("git", ["clone", "--no-hardlinks", "--no-checkout", source, destination], {
+  await exec("git", ["clone", "--no-checkout", source, destination], {
     maxBuffer: 8 * 1024 * 1024,
   });
   await git(destination, "checkout", "--detach", revision);
@@ -72,7 +72,7 @@ export async function materializeResultRepository(
       await copyLiveWorkspace(attempt, destination);
       return destination;
     }
-    const ref = attemptRefName(attempt);
+    const ref = namespacedAttemptRefName(attempt, envelope.claim.runId);
     const sha = await git(envelope.work.contract.context.repoPath, "rev-parse", ref);
     await cloneAt(envelope.work.contract.context.repoPath, destination, sha);
     return destination;
