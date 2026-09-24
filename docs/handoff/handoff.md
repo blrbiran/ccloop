@@ -1,4 +1,4 @@
-# ccloop Handoff — *** **G1 缝 A（capability 词汇表）已做完（2026-09-24）** ***；**下一件事归人：先推 ccloop、再推 Orca，然后裁缝 B**
+# ccloop Handoff — *** **G1 缝 A（capability 词汇表）已做完（2026-09-24）** ***；**G1 缝 B 也已在 Orca 侧做完（2026-09-25，本仓库零改动）；本仓库没有在飞的工作**
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -205,8 +205,8 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 **Orca 侧的五个 Task 也都做完了**（细节在 Orca 仓 handoff §四 与台账
 `.superpowers/sdd/2026-09-24-g1-capability-vocabulary/progress.md`，那个台账是这一轮的唯一进度源）。
 
-⚠️ *** **G1 是两条独立的缝（结论未变）：缝 A 做完了，缝 B（`targetVersion` 类型分叉）被人裁排除、没做。** ***
-Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **仍然红，且应该红**。
+⚠️ *** **G1 是两条独立的缝（结论未变）：缝 A 做完了；缝 B（`targetVersion` 类型分叉）后来由人开启，2026-09-25 在 Orca 侧做完、本仓库零改动。** ***
+Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **已回绿**（见文末「Orca 那条线」第 3 条）。
 ⚠️ **ccloop 侧改动落在 `main`，不在 `codex/codex-adapter-0919`**（那个分支落后 10142 行，结论未变）。
 ⚠️ `handoffControl = "durable"` 的依据（handoff 两态 `latched`/`complete`、经 `atomicReplacePrivateFile` 落盘、带 `testCrashPoint`）见 spec §5。
 ⚠️ `handoffExecution = "mechanical-in-run-v1"` 那一格**推翻过一次**（`src/control/handoff.ts` 构造 packet 那段全是 `runState` 的三元表达式、零模型调用），经过在 spec §10，别再按「adapter 能跑模型」去推。
@@ -217,7 +217,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
    🔴 *** **推送顺序：先推 ccloop（上面那一笔），再推 Orca。** *** 2026-09-24 现测：Orca 远端已被推到
    要求 `protocol: 2` 的那一笔（本会话**没有任何一席跑过 `git push`**），而本仓库远端仍答 `protocol: 1`
    ⇒ **已发布的两个 main 此刻对不上线**，任何一次 `capabilities` 调用都会得 `control-response-invalid`。
-2. ✅ **缝 B 已由人开启（2026-09-24），`targetVersion` 定为正安全整数、本仓库零改动** —— 见文末「Orca 那条线」第 3 条。原文：缝 B 要不要做、`targetVersion` 拍成什么 —— 下游是 Orca 的 `planFile.ts`（人写的 plan 文件格式），人裁排除过，需要人重新开口。
+2. ✅ **缝 B 已由人开启（2026-09-24）并于 2026-09-25 在 Orca 侧做完，`targetVersion` 定为正安全整数、本仓库零改动** —— 见文末「Orca 那条线」第 3 条。原文：缝 B 要不要做、`targetVersion` 拍成什么 —— 下游是 Orca 的 `planFile.ts`（人写的 plan 文件格式），人裁排除过，需要人重新开口。
 3. `capabilities` **计算化**（人裁「分两步」的第二步）—— 到那时 `requestBoundProof` 才会非 `null`，见下表第一行挂账。
 
 ### 2. 仍然挂着的
@@ -407,7 +407,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-09-24 第三版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-09-25 第四版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ **本节不写任何哈希、不记发布状态** —— 提交本文这个动作就会移动 HEAD，人也会自己推远端。
 指代某一笔引**提交主题行**；判发布只跑 `/usr/bin/git ls-remote origin refs/heads/main` 与本地比。
@@ -419,11 +419,13 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 2. ✅ **推送顺序已由人兑现**：v2 那一笔（`feat(control): answer the v2 eight-field capability vocabulary`）已在远端，
    两边已发布的 main 对上线（2026-09-24 Orca 会话 `ae4061a5` 用 `ls-remote` 现测；**以后照例现跑，别信本句**）。
 3. **G1 是两条独立的缝**（结论未变）：修好 A 不会让 Orca 那两条 `targetVersion` 判据回绿，那是缝 B。
-   🟢 **缝 B 已由人开启，方向已定：Orca 全链路统一为正安全整数。*** 本仓库零改动、control protocol 不升版本 *** ——
-   本仓库 `protocol.ts`／`handoff.ts`／`command.ts` 的 `safeInteger` 就是它要对齐的那一端。
-   spec／计划在 **Orca 仓** `docs/superpowers/{specs,plans}/2026-09-24-g1-seam-b-target-version*`（**不在本仓库**）。
-   ⚠️ *** **缝 B 做完也到不了本仓库的 `accept`**：Orca 生产代码里 `toStartEnvelope`／`beginProviderAttempt` **零调用方**
-   （执行驱动缺口，Orca spec §1.0）。在它补上之前，**Orca 不会在生产里调用本仓库的 `control accept`**。 ***
+   ✅ **缝 B 已做完（2026-09-25，Orca 会话 `905e41ce`）：Orca 全链路统一为正安全整数。*** 本仓库零改动、control protocol 不升版本 *** ——
+   本仓库 `protocol.ts`／`handoff.ts`／`command.ts` 的 `safeInteger` 就是它对齐的那一端。
+   spec／计划／变异台账都在 **Orca 仓**（`docs/superpowers/{specs,plans}/2026-09-24-g1-seam-b-target-version*`、
+   `.superpowers/sdd/2026-09-24-g1-seam-b/`），**不在本仓库**。Orca 的 `webCcloopSmoke` 两条已回绿、全套 1636/1636。
+   ⚠️ *** **但仍然到不了本仓库的 `accept`**：Orca 生产代码里 `toStartEnvelope`／`beginProviderAttempt` **零调用方**
+   （执行驱动缺口，Orca spec §1.0）。在它补上之前，**Orca 不会在生产里调用本仓库的 `control accept`** ——
+   冒烟测试绿是因为测试手调 `toStartEnvelope`，**不许读成「Web 派活可用」**。 ***
 4. ⚠️ **G1 的边界仍然写死**：只有 ccloop↔Orca 的线上契约归 ccloop —— control 方法集、capability 词汇表、
    start envelope、usage／evidence 的形状与版本。*** **Orca 的 `work item`／`group`／`orca-raw-command-v1`／`expectedRevision` 一律不搬过来。** ***
 
@@ -453,7 +455,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 - ✅ ~~推送顺序：先本仓库，再 Orca~~ —— 已兑现（见上文第 2 条）。**控制器仍不许 push。**
   ⚠️ 上一轮登记的仍然有效：**这台机器上有东西在把提交推到真实 GitHub 远端**（三个仓同一个 `post-commit` 钩子，调混淆过的二进制）——
   本轮 Orca 就在会话中途被推了一次，**本会话没有任何一席执行过 push**。**要人自己查并决定。**
-- ~~缝 B 是否开~~ —— **已开、已定整数**（上文第 3 条）；本仓库无待办。Orca 的**执行驱动缺口**何时开由人定。
+- ~~缝 B~~ —— **已做完**（上文第 3 条）；本仓库无待办。Orca 的**执行驱动缺口**何时开由人定 —— 那一步做完，本仓库的 `control accept` 才会第一次被生产调用。
 - **`stopProof` 那条稳定红的根因** —— 未查，要人先开口。
 - **Linux 覆盖** —— 仍挂着，要人自己起 OrbStack daemon。
 - **M3／M4**（见上文 §2）—— 要改既有判据，需人按人裁 88 指名。
