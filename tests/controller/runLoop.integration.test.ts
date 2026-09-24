@@ -386,6 +386,48 @@ describe("runLoop", () => {
     expect(persistedVerify.evidence[0]).toContain("required check passed: true");
   });
 
+  it("records a measured zero token usage for a verify phase that makes no provider call", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = {
+      ...baseContract,
+      verification: {
+        ...baseContract.verification,
+        verifierType: "command",
+        evidenceRequired: ["command output"],
+      },
+    };
+
+    const adapter: RuntimeAdapter = {
+      async plan() {
+        return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+      },
+      async execute() {
+        return {
+          changedFiles: ["src/index.ts"],
+          diffPatch: "diff --git a/src/index.ts b/src/index.ts",
+          commandOutputs: ["edited"],
+          stdoutStderrLog: "ok",
+        };
+      },
+      async verify() {
+        throw new Error("verify should not run");
+      },
+    };
+
+    const finalState = await runLoop(contract, runDir, adapter);
+    const persistedVerify = JSON.parse(await readFile(join(runDir, "attempts", "1", "verify.json"), "utf8")) as {
+      approved: boolean;
+      tokenUsage?: number | null;
+    };
+
+    // A command-verifier verify phase never calls a provider, so its token usage must be a
+    // measured zero, not the absent-usage `null`/undefined Orca reads as "unknown".
+    expect(finalState.status).toBe("succeeded");
+    expect(persistedVerify.tokenUsage).toBe(0);
+  });
+
   it("does not succeed when verifierType is command and a required check fails", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));

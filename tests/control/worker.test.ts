@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -10,6 +10,7 @@ import { runCodexPhase } from "../../src/runtime/codex/runCodexPhase.js";
 import { parseCodexConfig } from "../../src/runtime/codex/protocol.js";
 import type { AttemptContext, RuntimeAdapter, UsageEvidence } from "../../src/runtime/types.js";
 import { codexFixture } from "../runtime/codex/fixture.js";
+import { appendUsageObservation, readUsageEvents } from "../../src/control/usage.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -83,6 +84,39 @@ describe("run control hooks", () => {
       },
     });
     expect(observed).toEqual([null, null, null]);
+  });
+
+  it("keeps the work bucket's cumulative usage defined after a command-verifier verify phase", async () => {
+    const f = await runFixture();
+    f.contract.verification = { ...f.contract.verification, verifierType: "command" };
+    const sourceDir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-control-usage-")));
+    let cumulativeTokens = 0;
+
+    // Mirrors src/control/worker.ts's onPhaseSettled handler for the "work" bucket: a null
+    // tokenUsage means unknown usage and must stay null; any measured number, including the
+    // controller's explicit zero for a provider-free phase, must land as a real cumulative total.
+    const result = await runLoop(f.contract, f.runDir, adapter([15, 35, 60]), {
+      onPhaseSettled: async (observation) => {
+        if (observation.tokenUsage !== null) cumulativeTokens += observation.tokenUsage;
+        await appendUsageObservation(sourceDir, {
+          runId: "run-1",
+          generation: 1,
+          bucket: "work",
+          observationId: `attempt-${observation.attempt}-${observation.phase}`,
+          threadTotalTokens: observation.tokenUsage === null ? null : cumulativeTokens,
+          elapsedMs: observation.elapsedMs,
+          attempts: observation.attempt,
+          sessions: 1,
+          evidence: observation,
+        });
+      },
+    });
+
+    expect(result.status).toBe("succeeded");
+    const events = await readUsageEvents(sourceDir);
+    // plan, execute, verify settle in that order, so the last "work" event is the verify phase.
+    expect(events).toHaveLength(3);
+    expect(events.at(-1)?.cumulative).not.toBeNull();
   });
 
   it("observes a timed-out entered phase exactly once", async () => {

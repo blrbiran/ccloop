@@ -204,6 +204,9 @@ async function runRequiredChecks(
           ],
           pauseSignals: [],
           stopSignals: [],
+          // A required-check failure makes no provider call, so usage is a measured zero, not
+          // the absent-usage `null` Orca reads as "unknown and can't settle the run".
+          tokenUsage: 0,
         },
       };
     }
@@ -279,6 +282,9 @@ async function runVerification(
       evidence: requiredChecks.evidence,
       pauseSignals: [],
       stopSignals: [],
+      // A command verifier makes no provider call, so usage is a measured zero, not the
+      // absent-usage `null` Orca reads as "unknown and can't settle the run".
+      tokenUsage: 0,
     });
   }
 
