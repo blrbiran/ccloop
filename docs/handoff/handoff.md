@@ -1,4 +1,4 @@
-# ccloop Handoff — *** **人裁 85（`ls` 也报锁）＋ I-3 已做完（2026-09-23，人裁 129–138）** ***；**下一件事是 G1（control v1 线上契约）**
+# ccloop Handoff — *** **G1 缝 A（capability 词汇表）已做完（2026-09-24）** ***；**下一件事归人：先推 ccloop、再推 Orca，然后裁缝 B**
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -186,39 +186,38 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 **18 条被实测推翻的初版结论**）、计划 `docs/superpowers/plans/2026-09-23-ls-lock-visibility.md`、
 台账 `.superpowers/sdd/2026-09-23-ls-lock-visibility/progress.md`（含 43 行变异总表，全 64 位 sha256）。
 
-### 1. ⛔ **下一件事：执行 G1 缝 A 的实施计划（spec 与计划都已在本仓库写好）**
+### 1. ✅ *** **G1 缝 A 已做完（2026-09-24，Orca 控制器会话 `9c9f7f5f`）—— 不要重做** ***
 
-- spec：`docs/superpowers/specs/2026-09-24-g1-control-wire-contract-design.md`
-- 计划：`docs/superpowers/plans/2026-09-24-g1-capability-vocabulary.md`（6 Task / 42 Step）
-- 执行：`superpowers:subagent-driven-development`。**约 18–30 席，做不进一个会话。**
+**本仓库只有一笔**：`feat(control): answer the v2 eight-field capability vocabulary`（落在 `main`）。
+`control capabilities` 现在答 `protocol: 2` 的八字段：`usageObservation:"phase-end"`／`budgetEnforcement:"soft"`／
+`contextObservation:"unavailable"`／`handoffControl:"durable"`／`handoffExecution:"mechanical-in-run-v1"`／
+`contextWindowTokens:null`／`requestBoundProof:null`。`durableAccept`／`ownershipIsolation`／`evidenceRetention`
+**删掉了，没有东西替代它们**（三个恒 `true` 的字面量，Orca 侧对应的三道闸门也一并删了）。
+`budgetEnforcement` 的第三值 `unsupported` → `unavailable`。
+- 既有判据 `tests/control/command.test.ts` > `routes the real CLI through control … emits one JSON value`
+  **由人 2026-09-24 授权整条改写**（人裁 88 形状），`toEqual` 钉死八字段。
+- 变异：M1（`protocol` 2→1）、M2（多答一个字段）都红，但**红在 `result.code`**（本仓库自己的 strict 响应 schema 先拒）；
+  控制器补跑 M2b（放开 `.strict()` ＋ 多答字段）才看到 **`toEqual` 本身红**（第 115 行）。
+  ⇒ *** **「红在哪条断言」又一次不是 `toEqual` 本身 —— 要单独打它的变异。** ***
+- 2026-09-24 现测（该笔之上，`ECC_GATEGUARD=off DISABLE_OMC=1`，json reporter）：`check-known-reds.mjs` **RC 0**
+  （名单 13 / failed 1 / unexpected 0，唯一的红仍是 `stopProof`）；typecheck RC 0；build RC 0。
 
-🔴 *** **本轮最值钱的一条：G1 是【两条独立的缝】，不是一条链。** *** 三份 handoff 此前都写成
-「定契约 → Orca 跟随 → 两条红判据回绿 → Web 派活开出 run」，**现测表明这条因果链不存在**：
+**Orca 侧的五个 Task 也都做完了**（细节在 Orca 仓 handoff §四 与台账
+`.superpowers/sdd/2026-09-24-g1-capability-vocabulary/progress.md`，那个台账是这一轮的唯一进度源）。
 
-| | 缝 A（**本轮做**） | 缝 B（**排除**） |
-|---|---|---|
-| 症状 | 真 ccloop 答不满 ⇒ Web 派活被拒 | Orca `webCcloopSmoke` 两条判据红 |
-| 根因 | 本仓库 `capabilities` 不答五个字段 | Orca plan 文件的 `targetVersion` 是字符串 |
+⚠️ *** **G1 是两条独立的缝（结论未变）：缝 A 做完了，缝 B（`targetVersion` 类型分叉）被人裁排除、没做。** ***
+Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **仍然红，且应该红**。
+⚠️ **ccloop 侧改动落在 `main`，不在 `codex/codex-adapter-0919`**（那个分支落后 10142 行，结论未变）。
+⚠️ `handoffControl = "durable"` 的依据（handoff 两态 `latched`/`complete`、经 `atomicReplacePrivateFile` 落盘、带 `testCrashPoint`）见 spec §5。
+⚠️ `handoffExecution = "mechanical-in-run-v1"` 那一格**推翻过一次**（`src/control/handoff.ts` 构造 packet 那段全是 `runState` 的三元表达式、零模型调用），经过在 spec §10，别再按「adapter 能跑模型」去推。
 
-⇒ **修好 A，那两条判据仍然红。** 缝 B 的下游是 Orca 的 `planFile.ts`（人写的输入格式），
-人裁已排除 ⇒ *** **那两条判据在 G1 内结构上不可能回绿，别拿它们当验收。** ***
+### 1.1 ⛔ 下一件事（**都归人**）
 
-**本仓库要改的只有一处**：`src/control/command.ts` 的 capabilities 应答 —— 升 `protocol: 2`，
-删 `durableAccept`／`ownershipIsolation`／`evidenceRetention`（**三个字面 `true`，不携带信息**），
-补 `contextObservation`／`handoffControl`／`handoffExecution`／`contextWindowTokens`，
-`requestBoundEvidence`（string）升级为 `requestBoundProof`（descriptor）。
-**`budgetEnforcement` 的第三值 `unsupported` → `unavailable`**（与另外三个字段对齐）。
-
-两格关键值**已现测定掉**：`handoffControl = "durable"`（handoff 两态 `latched`/`complete`、
-经 `atomicReplacePrivateFile` 落盘、带 `testCrashPoint`）；
-`handoffExecution = "mechanical-in-run-v1"` —— ⚠️ **这一格推翻过一次**：初版按
-「Codex adapter 能跑模型」推成 `model-assisted-v1`，实测 `src/control/handoff.ts` 构造 packet 的那段
-**全是 `runState` 的三元表达式、零模型调用**。经过逐字记在 spec §10。
-
-⚠️ **改动落在 `main`，不在 `codex/codex-adapter-0919`** —— 现测
-`git diff --stat main codex/codex-adapter-0919` ＝ 46 files / 160 insertions / **10142 deletions**，
-那个分支**停在 09-19、比 main 落后**；main 自带 `src/runtime/codex/`，
-其 build 答的 capabilities 与该分支**逐字相同**。且 `scripts/check-known-reds.mjs` **只在 main 上有**。
+1. 🔴 *** **推送顺序：先推 ccloop（上面那一笔），再推 Orca。** *** 2026-09-24 现测：Orca 远端已被推到
+   要求 `protocol: 2` 的那一笔（本会话**没有任何一席跑过 `git push`**），而本仓库远端仍答 `protocol: 1`
+   ⇒ **已发布的两个 main 此刻对不上线**，任何一次 `capabilities` 调用都会得 `control-response-invalid`。
+2. **缝 B 要不要做、`targetVersion` 拍成什么** —— 下游是 Orca 的 `planFile.ts`（人写的 plan 文件格式），人裁排除过，需要人重新开口。
+3. `capabilities` **计算化**（人裁「分两步」的第二步）—— 到那时 `requestBoundProof` 才会非 `null`，见下表第一行挂账。
 
 ### 2. 仍然挂着的
 
@@ -228,6 +227,7 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 | **Linux** | 整套在 Linux 上本来就红 5 条（先于点 B 的包级缺口）；本机 OrbStack daemon 实测未起。**要人自己开** |
 | **M3（本轮登记，未修）** | 一把锁若**同时**是 liveness-undetermined 且带 transaction marker，会记**两条** `owner_transfer_contended`，而所有判据都断言一条。**形状是既有的**（unattributable 那支一模一样），但新错误类让它从一个**平常得多**的起因就能到达 |
 | **M4（本轮登记，未修）** | `tests/registry/zeroWrite.test.ts` 的 `snapshotTree` **不记录扫描根自身的 mtime** ⇒ 探测若 touch 了根目录仍然隐形 |
+| **descriptor 维度偏松（G1 挂账）** | `src/control/command.ts` 的 `requestBoundProof.workDimensions／handoffDimensions` 是 `z.array(z.string())`，Orca 侧是「排序、去重、四值枚举」。今天恒 `null` 不触发；**将来一旦非 null 且维度写错，Orca 会整条拒收（fail closed，但连 soft 组也会被挡）**。计算化那一步要一起收紧 |
 
 ⚠️ M3／M4 都**要改既有判据**，需人按**人裁 88** 指名，故本轮只登记不修。
 
@@ -406,46 +406,47 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-09-24**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-09-24 第二版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ **本节不写任何哈希、不记发布状态** —— 提交本文这个动作就会移动 HEAD，人也会自己推远端。
 指代某一笔引**提交主题行**；判发布只跑 `/usr/bin/git ls-remote origin refs/heads/main` 与本地比。
 
-## 本仓库该知道的三件
+## 本仓库该知道的四件
 
-1. *** **G1 的 spec 与实施计划都写在【本仓库】**（契约归 ccloop，所以设计也归这里）**，已提交、未 push。** ***
-   路径见上文「下一件事」。**本仓库的生产改动只有 `src/control/command.ts` 一处**，其余全在 Orca。
-2. 🔴 *** **G1 是两条独立的缝，上一版本节把它写成一条链，那是错的。** *** 见上文表格。
-3. ⚠️ **G1 的边界仍然写死**（上一版结论，逐条保留）：**只有 ccloop↔Orca 的线上契约归 ccloop** ——
-   control 方法集、capability 词汇表、start envelope、usage／evidence 的形状与版本。
-   *** **Orca 的 `work item`／`group`／`orca-raw-command-v1`／`expectedRevision` 一律不搬过来。** ***
+1. *** **G1 缝 A 做完了**：本仓库一笔（见上文「下一件事 §1」），Orca 五笔跟随 ＋ 修复。 ***
+   spec／计划仍在本仓库 `docs/superpowers/{specs,plans}/2026-09-24-g1-*`，**未改**；执行中的全部裁定记在 Orca 台账。
+2. 🔴 *** **推送必须先 ccloop 后 Orca**（上文 §1.1），否则已发布的两边线上契约不一致。 ***
+3. **G1 是两条独立的缝**（结论未变）：修好 A 不会让 Orca 那两条 `targetVersion` 判据回绿，那是缝 B。
+4. ⚠️ **G1 的边界仍然写死**：只有 ccloop↔Orca 的线上契约归 ccloop —— control 方法集、capability 词汇表、
+   start envelope、usage／evidence 的形状与版本。*** **Orca 的 `work item`／`group`／`orca-raw-command-v1`／`expectedRevision` 一律不搬过来。** ***
 
-## 本轮给本仓库留下的环境事实（**直接用，别再反推**）
+## 给本仓库留下的环境事实（**直接用，别再反推**）
 
-- *** **已知红是 13 个名字，用 `node scripts/check-known-reds.mjs` 机械判，别用肉眼。** ***
-  2026-09-24 现测：全量 `VITEST_RC=1`，该脚本 **RC 0**（名单 13、failed 1、unexpected 0），
-  唯一的红是老相识 `stopProof`。
-- 🔴 *** **`/tmp` 会被 macOS 周期清理吃掉整棵树。** *** 2026-09-24 现测：
-  `/private/tmp/ccloop-codex-0919` 只剩 115 个目录 ＋ 1 个文件，`package.json` 与 `.git` 都没了
-  （所以 `git worktree list` 报它 `prunable`）。**该 worktree 注册项没人动过，删它是 Tier 0。**
-  ⇒ **要副本就 `git clone --local` 到会话 scratchpad**（人裁 137），**并且必须 `npm run build`**
+- *** **已知红是 13 个名字，用 `node scripts/check-known-reds.mjs` 机械判。** *** 2026-09-24 G1 那一笔之上现测 RC 0。
+- 🔴 *** **`/tmp` 会被 macOS 周期清理吃掉整棵树** *** ⇒ 副本一律 `git clone --local` 到会话 scratchpad（人裁 137），**必须 `npm run build`**
   （`dist/` 被 gitignore，不 build 会让 `tests/control/endToEnd.test.ts` 以 `ENOENT` 假红）。
-- ⚠️ Orca 的 `ORCA_CCLOOP_ADAPTER_CONFIG` 路径**必须 `realpath` 等于自身**
-  （本仓库 `src/control/command.ts` 的检查），macOS 上 `/tmp` 是软链 ⇒ **必须写 `/private/tmp/…`**。
+  `/private/tmp/ccloop-codex-0919` 那个 `prunable` 的 worktree 注册项**没人动过，删它是 Tier 0**。
+  ⚠️ *** **在副本的 `main` 上 `git pull` 会被 Orca 的 Tier 0 闸门拦下**（算「合并进 main」）⇒ 要新版本就**重新 clone 一份到新目录**。
+- ⚠️ Orca 的 `ORCA_CCLOOP_ADAPTER_CONFIG` 路径必须 `realpath` 等于自身 ⇒ macOS 上写 `/private/tmp/…`。
+  🔴 *** **它必须指向本仓库的 `tests/fixtures/fake-codex.mjs integration <marker>`，不能指向真 `codex`** *** ——
+  Orca 的 `ccloopProtocol.integration.test.ts` 会真的驱动 adapter 跑一次 run（本轮先用真 codex 配置跑出一条额外红才发现）。
 
-## 本轮实测出来、本仓库也用得上的两条
+## 本轮实测出来、本仓库也用得上的四条
 
-- 🔴 *** **`grep` 会静默漏行且不打截断提示。** *** 同一个 `src/control/handoff.ts`：
-  grep 报 1 行含 `codex`，python 逐行直读是 **5 行**。⇒ **清点消费者一律 python 直读。**
-- 🔴 *** **「守卫恒假」不等于「没判据覆盖」。** *** Orca 侧断言「删掉那三格守卫不会红」，
-  实测**立刻两处红** —— 判据用的是**合成对象**，不是生产对端的应答。**中间隔着夹具。**
+- 🔴 *** **「守卫恒假」不等于「没判据覆盖」** *** —— 中间隔着夹具（判据用的是合成对象，不是对端应答）。结论未变。
+
+- 🔴 *** **`grep` 会静默漏行且不打截断提示** *** ⇒ 清点消费者一律 python 直读（结论未变）。
+- 🔴 *** **「红在哪条断言」不可靠 —— 本轮在两个仓各栽一次**：本仓库 M1／M2 红在 `result.code` 而非 `toEqual`；
+  Orca 的终点判据被同一个守卫在更早一步拦下。 *** ⇒ **要证哪条断言承重，就单独造一个只有它能接住的变异。**
+- 🔴 *** **子代理会在注释里替人签名。** *** Orca 侧一席把控制器裁定加的判据注释成「Human authorization」——
+  **归属行要么派发里说死，要么收货时逐条核。**
 
 ## awaitingHuman
 
-- **push／合并／删分支或 worktree**：四件各自需人单独授权，**控制器不许 push**。
-  ⚠️ 上一轮登记的仍然有效：**这台机器上有东西在把提交推到真实 GitHub 远端，而控制器一次没 push 过**
-  （三个仓都装着同一个 `post-commit` 钩子，调一个混淆过的二进制）。**要人自己查并决定。**
-- 🔴 **G1 计划的 Task 3／Task 5 要改既有判据**，按**人裁 88** 需人逐一指名；计划里已点名到具体测试。
+- 🔴 **推送顺序：先本仓库，再 Orca。** 控制器不许 push。
+  ⚠️ 上一轮登记的仍然有效：**这台机器上有东西在把提交推到真实 GitHub 远端**（三个仓同一个 `post-commit` 钩子，调混淆过的二进制）——
+  本轮 Orca 就在会话中途被推了一次，**本会话没有任何一席执行过 push**。**要人自己查并决定。**
+- **缝 B 是否开、`targetVersion` 拍成什么** —— 仍未裁。
 - **`stopProof` 那条稳定红的根因** —— 未查，要人先开口。
 - **Linux 覆盖** —— 仍挂着，要人自己起 OrbStack daemon。
-- **M3／M4**（见上文 §2）—— 要改既有判据，同样需人按人裁 88 指名。
+- **M3／M4**（见上文 §2）—— 要改既有判据，需人按人裁 88 指名。
