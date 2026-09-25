@@ -57,7 +57,6 @@ export const AGENT_ERROR_CODES = [
   "agent-config-invalid",
   "agent-selection-file-invalid",
   "agents-command-invalid",
-  "agent-adapter-unavailable",
 ] as const;
 export type AgentErrorCode = (typeof AGENT_ERROR_CODES)[number];
 

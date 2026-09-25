@@ -1,7 +1,7 @@
 import { join } from "node:path";
+import { ClaudeAgentAdapter } from "../runtime/claude/claudeAgentAdapter.js";
 import type { AgentDescriptor } from "./registry.js";
 import {
-  AgentError,
   assertContextOption,
   assertModel,
   commonSearchDirs,
@@ -45,8 +45,7 @@ export const claudeDescriptor: AgentDescriptor = {
       requestBoundProof: null,
     };
   },
-  createAdapter() {
-    // Agent selection plan T1: ClaudeAgentAdapter lands in T3, which replaces this line.
-    throw new AgentError("agent-adapter-unavailable", "claude");
+  createAdapter(config) {
+    return new ClaudeAgentAdapter(config);
   },
 };

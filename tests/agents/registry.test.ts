@@ -3,6 +3,7 @@ import { claudeDescriptor, claudeModelArgument } from "../../src/agents/claude.j
 import { codexDescriptor, toCodexConfig } from "../../src/agents/codex.js";
 import { getDescriptor, listDescriptors } from "../../src/agents/registry.js";
 import { AGENT_ERROR_CODES, AgentError, type AgentSelectionV1, type MaterializedAgentConfigV1 } from "../../src/agents/types.js";
+import { ClaudeAgentAdapter } from "../../src/runtime/claude/claudeAgentAdapter.js";
 import { CodexAdapter } from "../../src/runtime/codex/codexAdapter.js";
 
 function config(kind: "claude" | "codex", selection: Partial<AgentSelectionV1> = {}): MaterializedAgentConfigV1 {
@@ -97,8 +98,10 @@ describe("agent descriptors", () => {
     expect(codexDescriptor.createAdapter(materialized)).toBeInstanceOf(CodexAdapter);
   });
 
-  // Agent selection plan T1 -> T3: T3 rewrites this criterion when ClaudeAgentAdapter exists.
-  it("does not yet build a claude adapter", () => {
-    expect(() => claudeDescriptor.createAdapter(config("claude"))).toThrow(expect.objectContaining({ code: "agent-adapter-unavailable" }));
+  // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): T1 left claude's
+  // createAdapter throwing a T3-placeholder error code (now removed from AGENT_ERROR_CODES); T3 lands
+  // ClaudeAgentAdapter, so this now encodes that claude's descriptor builds a real adapter instance.
+  it("builds a ClaudeAgentAdapter from the claude descriptor", () => {
+    expect(claudeDescriptor.createAdapter(config("claude"))).toBeInstanceOf(ClaudeAgentAdapter);
   });
 });
