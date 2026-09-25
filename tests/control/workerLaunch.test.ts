@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { inspectStart } from "../../src/control/accept.js";
-import { canonicalHash, type StartEnvelopeV1 } from "../../src/control/protocol.js";
+import { canonicalHash, type StartEnvelopeV2 } from "../../src/control/protocol.js";
+import { FIXTURE_SELECTION } from "./agentsFixture.js";
 import { readProcessStartedAt } from "../../src/control/workerLauncher.js";
 import { writeAccepted } from "../../src/control/store.js";
 
-async function fixture(): Promise<{ root: string; envelope: StartEnvelopeV1 }> {
+async function fixture(): Promise<{ root: string; envelope: StartEnvelopeV2 }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ccloop-control-worker-")));
   await mkdir(join(root, "input"));
   const amount = { tokens: 0, activeMs: 0, attempts: 0, sessions: 0 };
@@ -20,9 +21,11 @@ async function fixture(): Promise<{ root: string; envelope: StartEnvelopeV1 }> {
     verification: { verifierType: "command" as const, requiredChecks: ["npm test"], rejectOn: ["failure"], evidenceRequired: [] },
     escalationAndExit: { escalationTargets: [], pauseOn: [], stopOn: [], terminalStates: ["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"] },
   };
-  const envelope: StartEnvelopeV1 = {
-    protocol: 1,
-    claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: "a".repeat(64), grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
+  // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): the fixture is a
+  // protocol-2 envelope whose claim carries a selection; the identity assertion is unchanged.
+  const envelope: StartEnvelopeV2 = {
+    protocol: 2,
+    claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: "a".repeat(64), agent: FIXTURE_SELECTION, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
     contractHash: "b".repeat(64),
     inputCheckpoint: null,
     work: { contract: loop, targetRepo: root, base: "main", sourceDir: root },

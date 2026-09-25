@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { collectExecution } from "../../src/control/collect.js";
 import { atomicReplacePrivateFile, ensurePrivateDirectory } from "../../src/control/paths.js";
-import { canonicalHash, canonicalJson, type StartEnvelopeV1 } from "../../src/control/protocol.js";
+import { canonicalHash, canonicalJson, type StartEnvelopeV2 } from "../../src/control/protocol.js";
+import { parseCodexConfig } from "../../src/runtime/codex/protocol.js";
+import { sealCodex } from "./agentsFixture.js";
 import { proveStopped, recordCompletedPhase, type StopProofRecord } from "../../src/control/stopProof.js";
 import { writeAccepted } from "../../src/control/store.js";
 import { runControlWorker } from "../../src/control/worker.js";
@@ -145,20 +147,25 @@ describe("stop proof against zero registrations (spec §4.7b, §9 criterion 5b)"
 });
 
 describe("the control worker counts completed phases", () => {
+  // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"; controller ruling W1-19): the
+  // worker reads the sealed materialized agent config for the same integration-mode fake codex and a protocol-2
+  // envelope carrying its hash and selection; it still counts exactly the three phases completed with a result, the
+  // codex adapter still registers three groups, and the run still proves isolation.
   it("writes one count per phase a registering adapter completed, and the run still proves isolation", async () => {
     const runtime = await codexFixture("integration");
     await mkdir(join(runtime.dir, "input"));
+    const sealed = await sealCodex(parseCodexConfig(runtime.config));
     const amount = { tokens: 100, activeMs: 10_000, attempts: 1, sessions: 1 };
-    const envelope: StartEnvelopeV1 = {
-      protocol: 1,
-      claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: canonicalHash(runtime.config), grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
+    const envelope: StartEnvelopeV2 = {
+      protocol: 2,
+      claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: sealed.configHash, agent: sealed.selection, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
       contractHash: "c".repeat(64),
       inputCheckpoint: null,
       work: { contract: runtime.contract, targetRepo: runtime.repo, base: "main", sourceDir: runtime.dir },
     };
     const controlDir = join(runtime.dir, "control");
     await ensurePrivateDirectory(runtime.dir, controlDir);
-    await atomicReplacePrivateFile(runtime.dir, join(controlDir, "config.json"), Buffer.from(canonicalJson(runtime.config)));
+    await atomicReplacePrivateFile(runtime.dir, join(controlDir, "config.json"), Buffer.from(canonicalJson(sealed.config)));
     await atomicReplacePrivateFile(runtime.dir, join(controlDir, "envelope.json"), Buffer.from(canonicalJson(envelope)));
     await writeAccepted(runtime.dir, {
       protocol: 1, envelopeHash: canonicalHash(envelope), executionId: "execution-1", configHash: envelope.claim.configHash,

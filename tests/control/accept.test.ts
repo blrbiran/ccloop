@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { LoopContract } from "../../src/contract/schema.js";
+import { resolveAgent } from "../../src/agents/materialize.js";
 import { acceptStart, inspectStart } from "../../src/control/accept.js";
-import { canonicalHash, ControlProtocolError, type StartEnvelopeV1 } from "../../src/control/protocol.js";
+import { canonicalHash, canonicalJson, ControlProtocolError, type StartEnvelopeV2 } from "../../src/control/protocol.js";
 import { readAccepted, writeAccepted } from "../../src/control/store.js";
+import { codexInstallation, writeAgentsTable } from "./agentsFixture.js";
 
 const amount = { tokens: 10, activeMs: 20, attempts: 1, sessions: 1 };
 const worker = resolve("node_modules/.bin/tsx");
@@ -57,21 +59,23 @@ function contract(root: string): LoopContract {
   };
 }
 
+// Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): every criterion below
+// accepts through an agents table (one codex installation for the same fake-codex command the v1 fixture named) and a
+// protocol-2 envelope whose claim carries the resolved selection and the materialized config's canonical hash.
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ccloop-control-accept-")));
   await mkdir(join(root, "input"));
-  const configPath = join(root, "adapter.json");
-  const config = {
+  const installation = await codexInstallation({
     command: [process.execPath, resolve("tests/fixtures/fake-codex.mjs"), "success", join(root, "marker")],
-    model: "fixture",
-    budgetMode: "soft" as const,
-    sandbox: "workspace-write" as const,
+    budgetMode: "soft",
+    sandbox: "workspace-write",
     timeoutMs: 1_000,
     killGraceMs: 100,
-  };
-  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  const envelope: StartEnvelopeV1 = {
-    protocol: 1,
+  });
+  const { path: tablePath, table } = await writeAgentsTable({ codex: installation }, root);
+  const { config, resolution } = await resolveAgent(table, { agent: "codex", model: "fixture" });
+  const envelope: StartEnvelopeV2 = {
+    protocol: 2,
     claim: {
       groupId: "group-1",
       workItemId: "work-1",
@@ -81,7 +85,8 @@ async function fixture() {
       graphVersion: 1,
       targetVersion: 1,
       commandId: "command-1",
-      configHash: canonicalHash(config),
+      configHash: resolution.configHash,
+      agent: resolution.selection,
       grant: { work: amount, handoff: amount },
       ownerToken: "owner-1",
     },
@@ -89,13 +94,12 @@ async function fixture() {
     inputCheckpoint: null,
     work: { contract: contract(root), targetRepo: root, base: "main", sourceDir: root },
   };
-  return { root, configPath, config, envelope, launchFile: join(root, "agent-launches") };
+  return { root, tablePath, config, envelope, launchFile: join(root, "agent-launches") };
 }
 
-function binding(configPath: string, launchFile: string) {
+function binding(tablePath: string, launchFile: string) {
   return {
-    adapter: "codex" as const,
-    adapterConfigPath: configPath,
+    agentsTablePath: tablePath,
     workerCommand: [worker, workerFixture],
     workerEnv: { CCLOOP_CONTROL_LAUNCH_FILE: launchFile },
     receiptTimeoutMs: 2_000,
@@ -114,8 +118,8 @@ async function launchRows(path: string): Promise<string[]> {
 describe("durable control acceptance", () => {
   it("persists accepted before one exclusive worker claim and replays idempotently", async () => {
     const f = await fixture();
-    const first = await acceptStart(f.envelope, binding(f.configPath, f.launchFile));
-    const second = await acceptStart(f.envelope, binding(f.configPath, f.launchFile));
+    const first = await acceptStart(f.envelope, binding(f.tablePath, f.launchFile));
+    const second = await acceptStart(f.envelope, binding(f.tablePath, f.launchFile));
     expect(first.kind).toBe("accepted");
     expect(second).toEqual(first);
     await expect.poll(() => launchRows(f.launchFile)).toEqual(["launch"]);
@@ -125,8 +129,8 @@ describe("durable control acceptance", () => {
   it("serializes concurrent identical accepts into one durable launch", async () => {
     const f = await fixture();
     const [left, right] = await Promise.all([
-      acceptStart(f.envelope, binding(f.configPath, f.launchFile)),
-      acceptStart(f.envelope, binding(f.configPath, f.launchFile)),
+      acceptStart(f.envelope, binding(f.tablePath, f.launchFile)),
+      acceptStart(f.envelope, binding(f.tablePath, f.launchFile)),
     ]);
     expect([left.kind, right.kind]).toContain("accepted");
     expect([left.kind, right.kind].every((kind) => kind === "accepted" || kind === "unknown")).toBe(true);
@@ -135,16 +139,16 @@ describe("durable control acceptance", () => {
 
   it("refuses the same identity with a different envelope", async () => {
     const f = await fixture();
-    await acceptStart(f.envelope, binding(f.configPath, f.launchFile));
+    await acceptStart(f.envelope, binding(f.tablePath, f.launchFile));
     const changed = { ...f.envelope, contractHash: "c".repeat(64) };
-    await expect(acceptStart(changed, binding(f.configPath, f.launchFile))).rejects.toMatchObject({
+    await expect(acceptStart(changed, binding(f.tablePath, f.launchFile))).rejects.toMatchObject({
       code: "control-envelope-conflict",
     });
   });
 
   it("recovers a dropped accept response through inspect without another worker", async () => {
     const f = await fixture();
-    await acceptStart(f.envelope, binding(f.configPath, f.launchFile));
+    await acceptStart(f.envelope, binding(f.tablePath, f.launchFile));
     const recovered = await inspectStart(f.envelope);
     expect(recovered.kind).toBe("accepted");
     await expect.poll(() => launchRows(f.launchFile)).toHaveLength(1);
@@ -163,23 +167,27 @@ describe("durable control acceptance", () => {
       worker: null,
     });
     expect(await inspectStart(f.envelope)).toEqual({ kind: "unknown" });
-    expect(await acceptStart(f.envelope, binding(f.configPath, f.launchFile))).toEqual({ kind: "unknown" });
+    expect(await acceptStart(f.envelope, binding(f.tablePath, f.launchFile))).toEqual({ kind: "unknown" });
     await expect(readFile(f.launchFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("seals the canonical config so later external drift has no effect", async () => {
+  // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): what accept seals is the
+  // materialized agent config (installation plus filled selection), byte-for-byte its canonical JSON; rewriting the
+  // table afterwards changes neither a replayed accept nor the sealed bytes (the replay never reads the table).
+  it("seals the materialized agent config so later table drift has no effect", async () => {
     const f = await fixture();
-    await acceptStart(f.envelope, binding(f.configPath, f.launchFile));
+    await acceptStart(f.envelope, binding(f.tablePath, f.launchFile));
     const sealed = await readFile(join(f.root, "control", "config.json"), "utf8");
-    await writeFile(f.configPath, "{}\n");
-    expect(await acceptStart(f.envelope, binding(f.configPath, f.launchFile))).toMatchObject({ kind: "accepted" });
+    expect(sealed).toBe(`${canonicalJson(f.config)}\n`);
+    await writeFile(f.tablePath, "{}\n");
+    expect(await acceptStart(f.envelope, binding(f.tablePath, f.launchFile))).toMatchObject({ kind: "accepted" });
     expect(await readFile(join(f.root, "control", "config.json"), "utf8")).toBe(sealed);
   });
 
   it("rejects a claim config hash mismatch before creating a worker", async () => {
     const f = await fixture();
     const bad = { ...f.envelope, claim: { ...f.envelope.claim, configHash: "d".repeat(64) } };
-    await expect(acceptStart(bad, binding(f.configPath, f.launchFile))).rejects.toBeInstanceOf(
+    await expect(acceptStart(bad, binding(f.tablePath, f.launchFile))).rejects.toBeInstanceOf(
       ControlProtocolError,
     );
     await expect(readFile(f.launchFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });

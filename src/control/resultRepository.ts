@@ -3,7 +3,7 @@ import { access, cp, copyFile, lstat, mkdir, readdir, realpath, rm } from "node:
 import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { namespacedAttemptRefName } from "../workspace/worktreeManager.js";
-import type { StartEnvelopeV1 } from "./protocol.js";
+import type { StartEnvelopeV2 } from "./protocol.js";
 
 const exec = promisify(execFile);
 
@@ -50,7 +50,7 @@ async function copyLiveWorkspace(source: string, destination: string): Promise<v
 }
 
 export async function materializeResultRepository(
-  envelope: StartEnvelopeV1,
+  envelope: StartEnvelopeV2,
   runDir: string,
   currentAttempt: number,
 ): Promise<string> {

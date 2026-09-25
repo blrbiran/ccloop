@@ -1,15 +1,14 @@
-import { constants } from "node:fs";
-import { open } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { parseCodexConfig } from "../runtime/codex/protocol.js";
+import { resolveAgent } from "../agents/materialize.js";
+import { readAgentsTable } from "../agents/table.js";
 import { atomicReplacePrivateFile, ensurePrivateDirectory } from "./paths.js";
 import {
   canonicalHash,
   canonicalJson,
   ControlProtocolError,
-  type StartEnvelopeV1,
+  type StartEnvelopeV2,
 } from "./protocol.js";
 import { launchWorker, workerIdentityMatches, type WorkerLaunchDeps } from "./workerLauncher.js";
 import {
@@ -36,27 +35,11 @@ export type ExecutionStatusV1 =
       };
     };
 
-export interface AdapterBindingV1 {
-  adapter: "codex";
-  adapterConfigPath: string;
+export interface AgentBindingV1 {
+  agentsTablePath: string;
   workerCommand?: string[];
   workerEnv?: Record<string, string>;
   receiptTimeoutMs?: number;
-}
-
-async function readConfig(path: string): Promise<unknown> {
-  let handle;
-  try {
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const metadata = await handle.stat();
-    if (!metadata.isFile()) throw new Error("control-adapter-config-invalid");
-    return JSON.parse((await handle.readFile()).toString("utf8")) as unknown;
-  } catch (error) {
-    if (error instanceof SyntaxError) throw new Error("control-adapter-config-invalid");
-    throw error;
-  } finally {
-    await handle?.close();
-  }
 }
 
 async function status(record: AcceptedRecordV1): Promise<ExecutionStatusV1> {
@@ -65,13 +48,13 @@ async function status(record: AcceptedRecordV1): Promise<ExecutionStatusV1> {
   return { kind: "accepted", executionId: record.executionId, configHash: record.configHash };
 }
 
-function assertEnvelope(record: AcceptedRecordV1, input: StartEnvelopeV1): void {
+function assertEnvelope(record: AcceptedRecordV1, input: StartEnvelopeV2): void {
   if (record.envelopeHash !== canonicalHash(input)) {
     throw new ControlProtocolError("control-envelope-conflict");
   }
 }
 
-export async function inspectStart(input: StartEnvelopeV1): Promise<ExecutionStatusV1> {
+export async function inspectStart(input: StartEnvelopeV2): Promise<ExecutionStatusV1> {
   const record = await readAcceptedOptional(input.work.sourceDir);
   if (record === null) return { kind: "absent" };
   assertEnvelope(record, input);
@@ -79,8 +62,8 @@ export async function inspectStart(input: StartEnvelopeV1): Promise<ExecutionSta
 }
 
 export async function acceptStart(
-  input: StartEnvelopeV1,
-  adapterBinding: AdapterBindingV1,
+  input: StartEnvelopeV2,
+  binding: AgentBindingV1,
 ): Promise<ExecutionStatusV1> {
   const existing = await readAcceptedOptional(input.work.sourceDir);
   if (existing !== null) {
@@ -88,8 +71,12 @@ export async function acceptStart(
     return await status(existing);
   }
 
-  const config = parseCodexConfig(await readConfig(adapterBinding.adapterConfigPath));
-  const configHash = canonicalHash(config);
+  // Agent selection (2026-09-26), spec §4.6: materialize the claimed selection against the table (which also runs
+  // `<command> --version` against the recorded version: agent-version-drift); the claim's configHash must be the
+  // materialized config's canonical hash. A replayed accept above never reads the table (spec §4.2, I4).
+  const table = await readAgentsTable(binding.agentsTablePath);
+  const { config, resolution } = await resolveAgent(table, input.claim.agent);
+  const configHash = resolution.configHash;
   if (configHash !== input.claim.configHash) {
     throw new ControlProtocolError("control-config-hash-mismatch");
   }
@@ -132,9 +119,9 @@ export async function acceptStart(
   const defaultWorker = [process.execPath, fileURLToPath(new URL("./worker.js", import.meta.url))];
   const launchDeps: WorkerLaunchDeps = {
     sourceDir: input.work.sourceDir,
-    workerCommand: adapterBinding.workerCommand ?? defaultWorker,
-    workerEnv: adapterBinding.workerEnv,
-    receiptTimeoutMs: adapterBinding.receiptTimeoutMs,
+    workerCommand: binding.workerCommand ?? defaultWorker,
+    workerEnv: binding.workerEnv,
+    receiptTimeoutMs: binding.receiptTimeoutMs,
   };
   try {
     await launchWorker(record, launchDeps);

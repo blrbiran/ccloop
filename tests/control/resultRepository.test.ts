@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { materializeResultRepository } from "../../src/control/resultRepository.js";
-import type { StartEnvelopeV1 } from "../../src/control/protocol.js";
+import type { StartEnvelopeV2 } from "../../src/control/protocol.js";
 
 // Orca execution driver (2026-09-25), ccloop changes C1 and C2. Additive criteria only (Rule 15):
 // the existing `refs/ccloop/run/attempts/1` assertion in tests/control/endToEnd.test.ts is untouched.
@@ -39,10 +39,12 @@ async function fixture() {
   const sourceDir = join(root, "source");
   await mkdir(sourceDir, { mode: 0o700 });
   // Only the fields materializeResultRepository reads on the attempt>0, worktree-gone path.
+  // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): the cast names the
+  // protocol-2 envelope type; the fields read and both assertions are unchanged.
   const envelope = {
-    protocol: 1, claim: { runId: "run-mine" }, contractHash: "0".repeat(64), inputCheckpoint: null,
+    protocol: 2, claim: { runId: "run-mine" }, contractHash: "0".repeat(64), inputCheckpoint: null,
     work: { contract: { context: { repoPath: repo } }, targetRepo: repo, base, sourceDir },
-  } as unknown as StartEnvelopeV1;
+  } as unknown as StartEnvelopeV2;
   return { repo, mine, theirs, sourceDir, envelope, runDir: join(sourceDir, "run") };
 }
 

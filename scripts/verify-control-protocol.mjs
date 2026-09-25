@@ -7,9 +7,30 @@ import { join } from "node:path";
 
 const root = realpathSync(fileURLToPath(new URL("../", import.meta.url)));
 const binary = process.env.ORCA_CCLOOP_BIN;
-const configPath = process.env.ORCA_CCLOOP_ADAPTER_CONFIG;
-if (!binary || !configPath) {
-  throw new Error("verify:control requires ORCA_CCLOOP_BIN and ORCA_CCLOOP_ADAPTER_CONFIG");
+const tablePath = process.env.ORCA_AGENTS_TABLE;
+if (!binary || !tablePath) {
+  throw new Error("verify:control requires ORCA_CCLOOP_BIN and ORCA_AGENTS_TABLE");
+}
+
+// Agent selection (2026-09-26): the formal gate runs over an agents table, and refuses one in which ANY
+// installation names something other than a test fixture CLI (fake codex or the CLI-level fake claude).
+const canonicalTablePath = realpathSync(tablePath);
+const tableBytes = readFileSync(canonicalTablePath);
+const table = JSON.parse(tableBytes.toString());
+const installations =
+  table !== null && typeof table === "object" && table.installations !== null && typeof table.installations === "object"
+    ? Object.values(table.installations)
+    : [];
+if (
+  table?.schema !== "ccloop-agents-table-v1" ||
+  installations.length === 0 ||
+  !installations.every(
+    (installation) =>
+      Array.isArray(installation?.command) &&
+      installation.command.some((value) => /fake-(codex|claude-cli)\.mjs$/.test(String(value))),
+  )
+) {
+  throw new Error("formal control verification refuses a non-fixture agents table");
 }
 
 const run = (command, args) => {
@@ -25,20 +46,10 @@ if (actual !== expected) throw new Error(`ORCA_CCLOOP_BIN must name this build: 
 accessSync(actual, constants.X_OK);
 if (!statSync(actual).isFile()) throw new Error("ORCA_CCLOOP_BIN is not a regular file");
 
-const canonicalConfigPath = realpathSync(configPath);
-const configBytes = readFileSync(canonicalConfigPath);
-const config = JSON.parse(configBytes.toString());
-if (
-  config.model !== "fixture" ||
-  !Array.isArray(config.command) ||
-  !config.command.some((value) => String(value).endsWith("fake-codex.mjs"))
-) {
-  throw new Error("formal control verification refuses a non-fixture Codex config");
-}
 process.stdout.write(`${JSON.stringify({
   binary: actual,
-  adapterConfig: canonicalConfigPath,
-  adapterConfigSha256: createHash("sha256").update(configBytes).digest("hex"),
+  agentsTable: canonicalTablePath,
+  agentsTableSha256: createHash("sha256").update(tableBytes).digest("hex"),
 })}\n`);
 
 const vitest = fileURLToPath(new URL("../node_modules/vitest/vitest.mjs", import.meta.url));

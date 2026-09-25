@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { open, readdir, unlink } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { listDescriptors } from "../agents/registry.js";
 import { isTerminalRunStatus } from "../state/stateMachine.js";
 import type { RunState } from "../state/types.js";
 import { atomicReplacePrivateFile, ensurePrivateDirectory, readPrivateFile } from "./paths.js";
@@ -11,7 +12,7 @@ import {
   handoffRequestSchema,
   type ArtifactRefV1,
   type HandoffRequestV1,
-  type StartEnvelopeV1,
+  type StartEnvelopeV2,
 } from "./protocol.js";
 import { testCrashPoint } from "./testCrashPoint.js";
 import { writeEvidence } from "./evidence.js";
@@ -135,7 +136,7 @@ export async function readHandoffCandidate(sourceDir: string): Promise<Candidate
 }
 
 export async function requestHandoff(
-  envelope: StartEnvelopeV1,
+  envelope: StartEnvelopeV2,
   request: HandoffRequestV1,
 ): Promise<HandoffAckV1> {
   if (request.runId !== envelope.claim.runId || request.generation !== envelope.claim.generation) {
@@ -168,7 +169,7 @@ export async function requestHandoff(
   return ack;
 }
 
-function identity(envelope: StartEnvelopeV1): HandoffIdentityV1 {
+function identity(envelope: StartEnvelopeV2): HandoffIdentityV1 {
   const claim = envelope.claim;
   return {
     groupId: claim.groupId,
@@ -201,7 +202,10 @@ async function retainFile(
   }
 }
 
-const RAW_CODEX_FILES = new Set([
+// Agent selection (2026-09-26), wave-1 review I-2: every adapter keeps its per-call evidence under run/<kind>/
+// (codex: events.jsonl, final.json, ...; claude: stdout.json, ...), so the packet retains the union of both sets.
+// request.json holds the prompt and is left out, as codex's evidence holds no prompt either.
+const RAW_AGENT_FILES = new Set([
   "events.jsonl",
   "stderr.log",
   "outcome.json",
@@ -209,9 +213,10 @@ const RAW_CODEX_FILES = new Set([
   "process.json",
   "usage.json",
   "decode-error.txt",
+  "stdout.json",
 ]);
 
-async function retainCodexLogs(
+async function retainAgentLogs(
   sourceDir: string,
   runDir: string,
   directory: string,
@@ -232,8 +237,8 @@ async function retainCodexLogs(
     if (entry.isSymbolicLink()) continue;
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
-      await retainCodexLogs(sourceDir, runDir, path, artifacts, rawLogs, depth + 1);
-    } else if (entry.isFile() && RAW_CODEX_FILES.has(entry.name)) {
+      await retainAgentLogs(sourceDir, runDir, path, artifacts, rawLogs, depth + 1);
+    } else if (entry.isFile() && RAW_AGENT_FILES.has(entry.name)) {
       const ref = await retainFile(sourceDir, path, relative(runDir, path), artifacts, []);
       if (ref !== null) rawLogs.push(ref);
     }
@@ -279,7 +284,7 @@ async function enteredPhaseFiles(sourceDir: string, runDir: string, attempt: num
 }
 
 export async function buildHandoffPacket(
-  envelope: StartEnvelopeV1,
+  envelope: StartEnvelopeV2,
   request: HandoffRequestV1 | null,
   runState: RunState,
   usageHighWater: number,
@@ -293,7 +298,9 @@ export async function buildHandoffPacket(
   const missing: string[] = [];
   const eventRef = await retainFile(envelope.work.sourceDir, join(runDir, "events.jsonl"), "events.jsonl", artifacts, missing);
   const rawLogs = eventRef === null ? [] : [eventRef];
-  await retainCodexLogs(envelope.work.sourceDir, runDir, join(runDir, "codex"), artifacts, rawLogs);
+  for (const kind of listDescriptors().map((descriptor) => descriptor.kind).sort()) {
+    await retainAgentLogs(envelope.work.sourceDir, runDir, join(runDir, kind), artifacts, rawLogs);
+  }
   await retainFile(envelope.work.sourceDir, join(runDir, "loop-state.json"), "loop-state.json", artifacts, missing);
   await retainFile(envelope.work.sourceDir, join(runDir, "loop-contract.json"), "loop-contract.json", artifacts, missing);
   if (runState.currentAttempt > 0) {
@@ -335,7 +342,7 @@ export async function buildHandoffPacket(
 }
 
 export async function persistHandoffCandidate(
-  envelope: StartEnvelopeV1,
+  envelope: StartEnvelopeV2,
   request: HandoffRequestV1 | null,
   runState: RunState,
   built: BuiltHandoffPacketV1,
@@ -364,7 +371,7 @@ export async function persistHandoffCandidate(
 }
 
 export async function finalizeHandoffCandidate(
-  envelope: StartEnvelopeV1,
+  envelope: StartEnvelopeV2,
   request: HandoffRequestV1 | null,
   runState: RunState,
   options: { result: CandidateV1["result"]; usageHighWater: number },

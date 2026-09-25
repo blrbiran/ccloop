@@ -1,12 +1,12 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { CodexAdapter } from "../runtime/codex/codexAdapter.js";
-import { parseCodexConfig } from "../runtime/codex/protocol.js";
+import { parseMaterializedAgentConfig } from "../agents/materialize.js";
+import { getDescriptor } from "../agents/registry.js";
 import { createStopRequestSignal, runLoop } from "../controller/runLoop.js";
 import { isTerminalRunStatus } from "../state/stateMachine.js";
 import { atomicReplacePrivateFile, readPrivateFile } from "./paths.js";
 import { appendUsageObservation, readUsageEvents } from "./usage.js";
-import { canonicalJson, parseControlRequest, type StartEnvelopeV1 } from "./protocol.js";
+import { canonicalJson, parseControlRequest, type StartEnvelopeV2 } from "./protocol.js";
 import { prepareContinuationContract } from "./materialize.js";
 import {
   buildHandoffPacket,
@@ -104,8 +104,10 @@ export async function runControlWorker(argv: string[]): Promise<void> {
 
   let sealed = false;
   try {
-    const envelope = parseControlRequest("accept", await readJson(sourceDir, "envelope.json")) as StartEnvelopeV1;
-    const config = parseCodexConfig(await readJson(sourceDir, "config.json"));
+    const envelope = parseControlRequest("accept", await readJson(sourceDir, "envelope.json")) as StartEnvelopeV2;
+    // Agent selection (2026-09-26), spec §4.6: accept sealed the materialized agent config; re-check it with the
+    // rules that admitted it (agent-config-invalid, controller ruling W1-19) before any phase runs.
+    const config = parseMaterializedAgentConfig(await readJson(sourceDir, "config.json"));
     await initializeProcessRegistry(sourceDir);
     let cumulativeTokens = 0;
     const stopRequested = createStopRequestSignal();
@@ -151,7 +153,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
     const contract = envelope.inputCheckpoint === null
       ? envelope.work.contract
       : await prepareContinuationContract(envelope.work.contract, runDir, envelope.inputCheckpoint);
-    await runLoop(contract, runDir, () => new CodexAdapter(config), {
+    await runLoop(contract, runDir, () => getDescriptor(config.kind).createAdapter(config), {
       firstWorkspaceInput: envelope.inputCheckpoint ?? undefined,
       stopRequested,
       phaseSignal: phaseAbort.signal,

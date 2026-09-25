@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import type { AgentSelectionV1, PartialSelectionV1 } from "../agents/types.js";
 import { loopContractSchema, type LoopContract } from "../contract/schema.js";
 
 export type ControlMethodV1 =
@@ -24,7 +25,7 @@ export interface GrantV1 {
   handoff: AmountV1;
 }
 
-export interface ClaimV1 {
+export interface ClaimV2 {
   groupId: string;
   workItemId: string;
   taskId: string | null;
@@ -33,7 +34,10 @@ export interface ClaimV1 {
   graphVersion: number;
   targetVersion: number;
   commandId: string;
+  /** Agent selection (2026-09-26), spec §4.6: the canonical hash of the config `agent` materializes to. */
   configHash: string;
+  /** The full selection, descriptor defaults already filled; accept re-materializes it and checks configHash. */
+  agent: AgentSelectionV1;
   grant: GrantV1;
   ownerToken: string;
 }
@@ -50,9 +54,9 @@ export interface InputCheckpointV1 {
   bundlePath: string;
 }
 
-export interface StartEnvelopeV1 {
-  protocol: 1;
-  claim: ClaimV1;
+export interface StartEnvelopeV2 {
+  protocol: 2;
+  claim: ClaimV2;
   contractHash: string;
   inputCheckpoint: InputCheckpointV1 | null;
   work: {
@@ -72,20 +76,25 @@ export interface HandoffRequestV1 {
   deadlineAt: string;
 }
 
+/** Agent selection (2026-09-26), spec §4.6: null asks for the table view, a partial selection for one resolution. */
+export interface CapabilitiesRequestV3 {
+  agent: PartialSelectionV1 | null;
+}
+
 export type ControlRequestV1 =
-  | { method: "capabilities" }
-  | { method: "accept"; input: StartEnvelopeV1 }
-  | { method: "inspect"; input: StartEnvelopeV1 }
-  | { method: "handoff"; input: StartEnvelopeV1; request: HandoffRequestV1 }
-  | { method: "collect"; input: StartEnvelopeV1; afterSeq: number }
-  | { method: "read-evidence"; input: StartEnvelopeV1; ref: ArtifactRefV1 };
+  | { method: "capabilities"; agent: PartialSelectionV1 | null }
+  | { method: "accept"; input: StartEnvelopeV2 }
+  | { method: "inspect"; input: StartEnvelopeV2 }
+  | { method: "handoff"; input: StartEnvelopeV2; request: HandoffRequestV1 }
+  | { method: "collect"; input: StartEnvelopeV2; afterSeq: number }
+  | { method: "read-evidence"; input: StartEnvelopeV2; ref: ArtifactRefV1 };
 
 export type ControlPayloadV1 =
-  | Record<string, never>
-  | StartEnvelopeV1
-  | { input: StartEnvelopeV1; request: HandoffRequestV1 }
-  | { input: StartEnvelopeV1; afterSeq: number }
-  | { input: StartEnvelopeV1; ref: ArtifactRefV1 };
+  | CapabilitiesRequestV3
+  | StartEnvelopeV2
+  | { input: StartEnvelopeV2; request: HandoffRequestV1 }
+  | { input: StartEnvelopeV2; afterSeq: number }
+  | { input: StartEnvelopeV2; ref: ArtifactRefV1 };
 
 export class ControlProtocolError extends Error {
   constructor(readonly code: string) {
@@ -107,6 +116,19 @@ const amountSchema = z
   })
   .strict();
 const grantSchema = z.object({ work: amountSchema, handoff: amountSchema }).strict();
+// Agent selection (2026-09-26): wire shapes only. What a model string may be is the kind's validateSelection's
+// call (agent-selection-invalid, spec §7), so `model` is any string here. Defined here, not in src/agents/types.ts
+// (which re-exports them): types.ts imports idSchema from this module, so importing these back would be a cycle.
+export const contextWindowSchema = z.union([
+  z.literal("agent-default"),
+  z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+]);
+export const agentSelectionSchema = z
+  .object({ agent: idSchema, model: z.string(), contextWindow: contextWindowSchema })
+  .strict();
+export const partialSelectionSchema = z
+  .object({ agent: idSchema.optional(), model: z.string().optional(), contextWindow: contextWindowSchema.optional() })
+  .strict();
 const claimSchema = z
   .object({
     groupId: idSchema,
@@ -118,6 +140,7 @@ const claimSchema = z
     targetVersion: safeInteger,
     commandId: idSchema,
     configHash: hashSchema,
+    agent: agentSelectionSchema,
     grant: grantSchema,
     ownerToken: idSchema,
   })
@@ -142,7 +165,7 @@ const workSchema = z
   .strict();
 const startEnvelopeSchema = z
   .object({
-    protocol: z.literal(1),
+    protocol: z.literal(2),
     claim: claimSchema,
     contractHash: hashSchema,
     inputCheckpoint: inputCheckpointSchema.nullable(),
@@ -161,7 +184,7 @@ export const handoffRequestSchema = z
   .strict();
 
 const payloadSchemas = {
-  capabilities: z.object({}).strict(),
+  capabilities: z.object({ agent: partialSelectionSchema.nullable() }).strict(),
   accept: startEnvelopeSchema,
   inspect: startEnvelopeSchema,
   handoff: z.object({ input: startEnvelopeSchema, request: handoffRequestSchema }).strict(),
@@ -210,7 +233,7 @@ function validateCanonicalDirectory(path: string): string {
   }
 }
 
-function validateEnvelopePaths(envelope: StartEnvelopeV1): void {
+function validateEnvelopePaths(envelope: StartEnvelopeV2): void {
   const sourceDir = validateCanonicalDirectory(envelope.work.sourceDir);
   if (!isAbsolute(envelope.work.targetRepo)) throw new ControlProtocolError("control-request-invalid");
   if (envelope.inputCheckpoint === null) return;
@@ -229,28 +252,30 @@ function protocolVersion(raw: unknown): unknown {
   return input !== null && typeof input === "object" ? (input as Record<string, unknown>).protocol : undefined;
 }
 
-export function parseControlRequest(method: "capabilities", raw: unknown): Record<string, never>;
-export function parseControlRequest(method: "accept" | "inspect", raw: unknown): StartEnvelopeV1;
+export function parseControlRequest(method: "capabilities", raw: unknown): CapabilitiesRequestV3;
+export function parseControlRequest(method: "accept" | "inspect", raw: unknown): StartEnvelopeV2;
 export function parseControlRequest(
   method: "handoff",
   raw: unknown,
-): { input: StartEnvelopeV1; request: HandoffRequestV1 };
-export function parseControlRequest(method: "collect", raw: unknown): { input: StartEnvelopeV1; afterSeq: number };
+): { input: StartEnvelopeV2; request: HandoffRequestV1 };
+export function parseControlRequest(method: "collect", raw: unknown): { input: StartEnvelopeV2; afterSeq: number };
 export function parseControlRequest(
   method: "read-evidence",
   raw: unknown,
-): { input: StartEnvelopeV1; ref: ArtifactRefV1 };
+): { input: StartEnvelopeV2; ref: ArtifactRefV1 };
 export function parseControlRequest(method: ControlMethodV1, raw: unknown): ControlPayloadV1;
 export function parseControlRequest(method: ControlMethodV1, raw: unknown): ControlPayloadV1 {
   const version = protocolVersion(raw);
-  if (version !== undefined && version !== 1) {
+  // Agent selection (2026-09-26), spec §5: the start envelope is protocol 2; a v1 envelope is refused by name.
+  // Handoff requests stay protocol 1 and are nested, so this reads the envelope's number (spec §5 M4).
+  if (version !== undefined && version !== 2) {
     throw new ControlProtocolError("control-protocol-unsupported");
   }
   try {
     const payload = payloadSchemas[method].parse(raw) as ControlPayloadV1;
-    if (method === "accept" || method === "inspect") validateEnvelopePaths(payload as StartEnvelopeV1);
+    if (method === "accept" || method === "inspect") validateEnvelopePaths(payload as StartEnvelopeV2);
     if (method === "handoff" || method === "collect" || method === "read-evidence") {
-      validateEnvelopePaths((payload as { input: StartEnvelopeV1 }).input);
+      validateEnvelopePaths((payload as { input: StartEnvelopeV2 }).input);
     }
     return payload;
   } catch (error) {
@@ -260,7 +285,7 @@ export function parseControlRequest(method: ControlMethodV1, raw: unknown): Cont
 }
 
 export function attachControlMethod(method: ControlMethodV1, payload: ControlPayloadV1): ControlRequestV1 {
-  if (method === "capabilities") return { method };
-  if (method === "accept" || method === "inspect") return { method, input: payload as StartEnvelopeV1 };
+  if (method === "capabilities") return { method, agent: (payload as CapabilitiesRequestV3).agent };
+  if (method === "accept" || method === "inspect") return { method, input: payload as StartEnvelopeV2 };
   return { method, ...(payload as Record<string, unknown>) } as ControlRequestV1;
 }

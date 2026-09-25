@@ -1,6 +1,4 @@
 import { join } from "node:path";
-import { z } from "zod";
-import { idSchema } from "../control/protocol.js";
 
 /** Agent selection (spec 2026-09-26 §3): a context window is "agent-default" or a positive safe integer, never null. */
 export type ContextWindow = "agent-default" | number;
@@ -16,7 +14,7 @@ export interface InstallationV1 {
   [extra: string]: unknown;
 }
 export interface AgentsTableV1 { schema: "ccloop-agents-table-v1"; installations: Record<string, InstallationV1> }
-/** The eight capability fields of the control wire, without `protocol`. */
+/** The seven capability fields of the control wire (capabilities v3 `capabilities`), without `protocol`. */
 export interface CapabilityViewV1 {
   usageObservation: "realtime" | "phase-end" | "unavailable";
   budgetEnforcement: "bounded" | "soft" | "unavailable";
@@ -73,16 +71,10 @@ export class AgentError extends Error {
   }
 }
 
-export const contextWindowSchema = z.union([
-  z.literal("agent-default"),
-  z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-]);
-export const agentSelectionSchema = z
-  .object({ agent: idSchema, model: z.string(), contextWindow: contextWindowSchema })
-  .strict();
-export const partialSelectionSchema = z
-  .object({ agent: idSchema.optional(), model: z.string().optional(), contextWindow: contextWindowSchema.optional() })
-  .strict();
+// Agent selection (2026-09-26), plan T5 D-W3-4 / R4: the wire selection schemas live in src/control/protocol.ts (the
+// start envelope and the capabilities request are built from them at module load); re-exported here under the same
+// names, so the dependency stays one-way (agents -> control/protocol) and there is a single definition.
+export { contextWindowSchema, agentSelectionSchema, partialSelectionSchema } from "../control/protocol.js";
 
 const MODEL_MAX_LENGTH = 200;
 /**

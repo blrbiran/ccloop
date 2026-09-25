@@ -6,12 +6,13 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { collectExecution } from "../../src/control/collect.js";
 import { evidencePath, readEvidence, writeEvidence } from "../../src/control/evidence.js";
-import { canonicalHash, type StartEnvelopeV1 } from "../../src/control/protocol.js";
+import { canonicalHash, type StartEnvelopeV2 } from "../../src/control/protocol.js";
+import { FIXTURE_SELECTION } from "./agentsFixture.js";
 import { appendUsageObservation } from "../../src/control/usage.js";
 
 const execFileAsync = promisify(execFile);
 
-async function fixture(): Promise<{ root: string; envelope: StartEnvelopeV1 }> {
+async function fixture(): Promise<{ root: string; envelope: StartEnvelopeV2 }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ccloop-control-collect-")));
   await mkdir(join(root, "input"));
   const amount = { tokens: 1, activeMs: 1, attempts: 1, sessions: 1 };
@@ -26,9 +27,11 @@ async function fixture(): Promise<{ root: string; envelope: StartEnvelopeV1 }> {
   const config = { command: [process.execPath], model: "fixture", budgetMode: "soft", sandbox: "workspace-write", timeoutMs: 1_000, killGraceMs: 10 };
   return {
     root,
+    // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): the fixture is a
+    // protocol-2 envelope whose claim carries a selection; collection and evidence assertions are unchanged.
     envelope: {
-      protocol: 1,
-      claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: canonicalHash(config), grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
+      protocol: 2,
+      claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: canonicalHash(config), agent: FIXTURE_SELECTION, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
       contractHash: "b".repeat(64),
       inputCheckpoint: null,
       work: { contract: loop, targetRepo: root, base: "main", sourceDir: root },

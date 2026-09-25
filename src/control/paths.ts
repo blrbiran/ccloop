@@ -9,7 +9,7 @@ import {
 } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { StartEnvelopeV1 } from "./protocol.js";
+import type { StartEnvelopeV2 } from "./protocol.js";
 
 function invalid(): Error {
   return new Error("control-path-invalid");
@@ -55,7 +55,7 @@ async function assertExistingAncestors(root: string, target: string, includeLeaf
   }
 }
 
-export function controlRoot(envelope: StartEnvelopeV1): string {
+export function controlRoot(envelope: StartEnvelopeV2): string {
   return join(envelope.work.sourceDir, "control");
 }
 

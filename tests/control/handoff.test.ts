@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,8 +16,10 @@ import {
   canonicalJson,
   canonicalHash,
   type HandoffRequestV1,
-  type StartEnvelopeV1,
+  type StartEnvelopeV2,
 } from "../../src/control/protocol.js";
+import { parseCodexConfig } from "../../src/runtime/codex/protocol.js";
+import { FIXTURE_SELECTION, sealCodex } from "./agentsFixture.js";
 import { atomicReplacePrivateFile, ensurePrivateDirectory } from "../../src/control/paths.js";
 import { readEvidence } from "../../src/control/evidence.js";
 import { collectExecution } from "../../src/control/collect.js";
@@ -35,7 +38,7 @@ const execFileAsync = promisify(execFile);
 async function fixture(): Promise<{
   root: string;
   runDir: string;
-  envelope: StartEnvelopeV1;
+  envelope: StartEnvelopeV2;
   request: HandoffRequestV1;
 }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ccloop-control-handoff-")));
@@ -61,9 +64,12 @@ async function fixture(): Promise<{
   };
   const amount = { tokens: 10, activeMs: 20, attempts: 2, sessions: 1 };
   const config = { command: [process.execPath], model: "fixture", budgetMode: "soft", sandbox: "workspace-write", timeoutMs: 1_000, killGraceMs: 10 };
-  const envelope: StartEnvelopeV1 = {
-    protocol: 1,
-    claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 2, graphVersion: 3, targetVersion: 4, commandId: "command-1", configHash: canonicalHash(config), grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
+  // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): every criterion reading
+  // this fixture gets a protocol-2 envelope whose claim carries a selection; no provider runs here, so nothing
+  // resolves it and its assertions are unchanged.
+  const envelope: StartEnvelopeV2 = {
+    protocol: 2,
+    claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 2, graphVersion: 3, targetVersion: 4, commandId: "command-1", configHash: canonicalHash(config), agent: FIXTURE_SELECTION, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
     contractHash: "b".repeat(64),
     inputCheckpoint: null,
     work: { contract, targetRepo: repo, base: "main", sourceDir },
@@ -177,20 +183,25 @@ describe("named handoff request", () => {
     expect(await readFile(join(f.runDir, "events.jsonl"), "utf8")).toContain("handoff_interrupted");
   });
 
+  // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): the worker now reads the
+  // sealed materialized agent config (codex installation + selection) and a protocol-2 envelope whose configHash is
+  // that config's hash, and builds its adapter through the codex descriptor; the deadline, packet, zero handoff usage,
+  // seal and released-lease assertions are unchanged.
   it("watches a latched deadline through packet, zero handoff usage, seal, and released lease", async () => {
     const runtime = await codexFixture("hang");
     await mkdir(join(runtime.dir, "input"));
+    const sealed = await sealCodex(parseCodexConfig(runtime.config));
     const amount = { tokens: 100, activeMs: 10_000, attempts: 1, sessions: 1 };
-    const envelope: StartEnvelopeV1 = {
-      protocol: 1,
-      claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: canonicalHash(runtime.config), grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
+    const envelope: StartEnvelopeV2 = {
+      protocol: 2,
+      claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: sealed.configHash, agent: sealed.selection, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
       contractHash: "c".repeat(64),
       inputCheckpoint: null,
       work: { contract: runtime.contract, targetRepo: runtime.repo, base: "main", sourceDir: runtime.dir },
     };
     const controlDir = join(runtime.dir, "control");
     await ensurePrivateDirectory(runtime.dir, controlDir);
-    await atomicReplacePrivateFile(runtime.dir, join(controlDir, "config.json"), Buffer.from(canonicalJson(runtime.config)));
+    await atomicReplacePrivateFile(runtime.dir, join(controlDir, "config.json"), Buffer.from(canonicalJson(sealed.config)));
     await atomicReplacePrivateFile(runtime.dir, join(controlDir, "envelope.json"), Buffer.from(canonicalJson(envelope)));
     await writeAccepted(runtime.dir, {
       protocol: 1,
@@ -240,6 +251,36 @@ describe("mechanical handoff packet", () => {
     expect(built.packet.rawLogs.length).toBeGreaterThan(0);
     expect(built.packet.usageHighWater).toBe(7);
     expect(built.missing).toContain("attempts/1/execution.json");
+  });
+
+  // Agent selection (2026-09-26), wave-1 review I-2: the adapter's per-call evidence reaches the packet's raw logs for
+  // every agent kind, not only codex's: a claude run's run/claude/<attempt>/<phase>/call-*/ files are retained the way
+  // run/codex/'s are. request.json carries the prompt and stays out, as codex's evidence carries no prompt either.
+  it("retains the claude adapter's per-call evidence in the raw logs, as it retains codex's", async () => {
+    const f = await fixture();
+    const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+    const claudeCall = join(f.runDir, "claude", "1", "plan", "call-abc");
+    const codexCall = join(f.runDir, "codex", "1", "plan");
+    await mkdir(claudeCall, { recursive: true });
+    await mkdir(codexCall, { recursive: true });
+    await writeFile(join(f.runDir, "events.jsonl"), "");
+    const claudeFiles: Record<string, string> = {
+      "process.json": '{"pid":11,"pgid":11,"phase":"plan","kind":"claude"}',
+      "outcome.json": '{"reason":"completed","kind":"claude"}',
+      "stdout.json": '{"structured_output":{"summary":"claude"}}',
+      "stderr.log": "claude stderr\n",
+      "usage.json": '{"input_tokens":12,"output_tokens":3}',
+      "decode-error.txt": "claude decode error",
+    };
+    for (const [name, text] of Object.entries(claudeFiles)) await writeFile(join(claudeCall, name), text);
+    await writeFile(join(claudeCall, "request.json"), '{"prompt":"the claude prompt"}');
+    await writeFile(join(codexCall, "process.json"), '{"pid":22,"pgid":22,"phase":"plan","kind":"codex"}');
+
+    const built = await buildHandoffPacket(f.envelope, f.request, state("blocked_waiting_human", "review"), 1);
+    const hashes = built.packet.rawLogs.map((ref) => ref.hash);
+    for (const text of Object.values(claudeFiles)) expect(hashes).toContain(sha(text));
+    expect(hashes).toContain(sha('{"pid":22,"pgid":22,"phase":"plan","kind":"codex"}'));
+    expect(hashes).not.toContain(sha('{"prompt":"the claude prompt"}'));
   });
 
   // ccloop ruling 88: rewrite authorized 2026-09-25 by the human through the Orca controller session e5f56bfe (Orca handoff delivery spec §12(1), §13.1, §13.2 I-9); whole-criterion rewrite, not weaker: a candidate answers the request it was built for, so neither the candidate nor its packet lists that request as unresolved, for every result.

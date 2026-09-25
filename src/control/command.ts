@@ -1,8 +1,12 @@
-import { lstat, realpath } from "node:fs/promises";
-import { isAbsolute } from "node:path";
 import { z } from "zod";
+import { resolveAgent } from "../agents/materialize.js";
+import { getDescriptor } from "../agents/registry.js";
+import { assertAgentsTablePath, readAgentsTable } from "../agents/table.js";
+import { AgentError, type CapabilityViewV1 } from "../agents/types.js";
 import {
+  agentSelectionSchema,
   artifactRefSchema,
+  contextWindowSchema,
   attachControlMethod,
   ControlProtocolError,
   parseControlRequest,
@@ -20,13 +24,16 @@ export interface ControlCommandResult {
   stderr: string;
 }
 
-export interface ControlCommandDeps {
-  handle?: (request: ControlRequestV1, context: { adapter: "codex"; adapterConfigPath: string }) => Promise<unknown>;
+export interface ControlContextV1 {
+  agentsTablePath: string;
 }
 
-const capabilitiesSchema = z
+export interface ControlCommandDeps {
+  handle?: (request: ControlRequestV1, context: ControlContextV1) => Promise<unknown>;
+}
+
+const capabilityViewSchema = z
   .object({
-    protocol: z.literal(2),
     usageObservation: z.enum(["realtime", "phase-end", "unavailable"]),
     budgetEnforcement: z.enum(["bounded", "soft", "unavailable"]),
     contextObservation: z.enum(["realtime", "phase-end", "unavailable"]),
@@ -44,7 +51,38 @@ const capabilitiesSchema = z
       .strict()
       .nullable(),
   })
-  .strict();
+  // Wave-1 review M-6: the seven keys must stay the descriptors' CapabilityViewV1; this fails to compile if they drift.
+  .strict() satisfies z.ZodType<CapabilityViewV1>;
+// Agent selection (2026-09-26), spec §4.6: capabilities answers protocol 3, either the table view (request
+// `{agent:null}`) or one resolution of a partial selection (the capability view carries no `protocol` of its own).
+const capabilitiesSchema = z.union([
+  z
+    .object({
+      protocol: z.literal(3),
+      installations: z.array(
+        z
+          .object({
+            id: z.string().min(1),
+            kind: z.string().min(1),
+            defaults: z.object({ model: z.string().min(1), contextWindow: contextWindowSchema }).strict(),
+            contextOptions: z.array(contextWindowSchema).min(1),
+            version: z.string().min(1),
+          })
+          .strict(),
+      ),
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal(3),
+      selection: agentSelectionSchema,
+      configHash: z.string().regex(/^[a-f0-9]{64}$/),
+      timeoutMs: z.number().int().positive().max(2_147_483_647),
+      killGraceMs: z.number().int().nonnegative().max(60_000),
+      capabilities: capabilityViewSchema,
+    })
+    .strict(),
+]);
 const executionStatusSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("absent") }).strict(),
   z.object({ kind: z.literal("accepted"), executionId: z.string().min(1), configHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
@@ -110,50 +148,44 @@ const METHODS = new Set<ControlMethodV1>([
   "read-evidence",
 ]);
 
-async function parseCommand(argv: string[]): Promise<{
-  method: ControlMethodV1;
-  adapter: "codex";
-  adapterConfigPath: string;
-}> {
+async function parseCommand(argv: string[]): Promise<{ method: ControlMethodV1; agentsTablePath: string }> {
   const method = argv[0] as ControlMethodV1 | undefined;
   if (method === undefined || !METHODS.has(method)) throw new Error("control-command-invalid");
-  if (argv.length !== 5 || argv[1] !== "--adapter" || argv[3] !== "--adapter-config") {
-    throw new Error("control-command-invalid");
-  }
-  if (argv[2] !== "codex") throw new Error("control-adapter-unsupported");
-  const adapterConfigPath = argv[4]!;
-  if (!isAbsolute(adapterConfigPath)) throw new Error("control-adapter-config-invalid");
-  try {
-    const canonical = await realpath(adapterConfigPath);
-    const metadata = await lstat(adapterConfigPath);
-    if (canonical !== adapterConfigPath || !metadata.isFile() || metadata.isSymbolicLink()) {
-      throw new Error("control-adapter-config-invalid");
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message === "control-adapter-config-invalid") throw error;
-    throw new Error("control-adapter-config-invalid");
-  }
-  return { method, adapter: "codex", adapterConfigPath };
+  // Agent selection (2026-09-26), spec §4.5: `--agents <table>` is the only form; `--adapter`/`--adapter-config`
+  // are no longer accepted. Every method checks the path's shape; only capabilities and accept read the table
+  // (spec §4.2, I4: a broken table must not block collecting a run already in flight).
+  if (argv.length !== 3 || argv[1] !== "--agents") throw new Error("control-command-invalid");
+  const agentsTablePath = argv[2]!;
+  await assertAgentsTablePath(agentsTablePath);
+  return { method, agentsTablePath };
 }
 
-async function defaultHandler(
-  request: ControlRequestV1,
-  context: { adapter: "codex"; adapterConfigPath: string },
-): Promise<unknown> {
+async function tableView(agentsTablePath: string): Promise<unknown> {
+  const table = await readAgentsTable(agentsTablePath);
+  return {
+    protocol: 3,
+    installations: Object.keys(table.installations).sort().map((id) => {
+      const installation = table.installations[id]!;
+      const descriptor = getDescriptor(installation.kind);
+      return {
+        id,
+        kind: installation.kind,
+        defaults: descriptor.defaults,
+        contextOptions: descriptor.contextOptions,
+        version: installation.version,
+      };
+    }),
+  };
+}
+
+async function defaultHandler(request: ControlRequestV1, context: ControlContextV1): Promise<unknown> {
   if (request.method === "capabilities") {
-    return {
-      protocol: 2,
-      usageObservation: "phase-end",
-      budgetEnforcement: "soft",
-      contextObservation: "unavailable",
-      handoffControl: "durable",
-      handoffExecution: "mechanical-in-run-v1",
-      contextWindowTokens: null,
-      requestBoundProof: null,
-    };
+    if (request.agent === null) return await tableView(context.agentsTablePath);
+    const { resolution } = await resolveAgent(await readAgentsTable(context.agentsTablePath), request.agent);
+    return { protocol: 3, ...resolution };
   }
   if (request.method === "accept") {
-    return await acceptStart(request.input, context);
+    return await acceptStart(request.input, { agentsTablePath: context.agentsTablePath });
   }
   if (request.method === "inspect") {
     return await inspectExecution(request.input);
@@ -199,10 +231,7 @@ export async function runControlCommand(
     }
     const payload = parseControlRequest(command.method, raw);
     const request = attachControlMethod(command.method, payload);
-    const value = await (deps.handle ?? defaultHandler)(request, {
-      adapter: command.adapter,
-      adapterConfigPath: command.adapterConfigPath,
-    });
+    const value = await (deps.handle ?? defaultHandler)(request, { agentsTablePath: command.agentsTablePath });
     const validated = validateResponse(command.method, value);
     const stdout = `${JSON.stringify(validated)}\n`;
     if (Buffer.byteLength(stdout) > MAX_CONTROL_BYTES) {
@@ -212,7 +241,9 @@ export async function runControlCommand(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      code: error instanceof ControlProtocolError ? 2 : 1,
+      // Agent selection (2026-09-26), D-W3-2: an agent error is a named rejection like a protocol one (exit 2). Its
+      // message starts with its code, so Orca reads the code back from `control-peer-exit` as `2:<code>[: <detail>]`.
+      code: error instanceof ControlProtocolError || error instanceof AgentError ? 2 : 1,
       stdout: "",
       stderr: `${message}\n`,
     };
