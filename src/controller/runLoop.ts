@@ -42,7 +42,7 @@ import type {
   UsageEvidence,
   VerificationResult,
 } from "../runtime/types.js";
-import { isPartialExecutionResult } from "../runtime/types.js";
+import { isPartialExecutionResult, observedTokensOf } from "../runtime/types.js";
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { FailureFingerprint, LastTrustedBoundary, RunState, StopDecision } from "../state/types.js";
 import { cleanupAttemptWorkspace, createAttemptWorkspace, publishAttemptCommit } from "../workspace/worktreeManager.js";
@@ -101,11 +101,14 @@ export const OWNER_TRANSFER_LOCK_RETRY_DELAY_MS = 50;
 
 class PhaseExecutionError extends Error {
   readonly elapsedMs: number;
+  // Orca handoff delivery C-3: tokens the failed phase was observed spending, or null (never 0).
+  readonly tokenUsage: number | null;
 
   constructor(elapsedMs: number, error: unknown) {
     super(String(error));
     this.name = "PhaseExecutionError";
     this.elapsedMs = elapsedMs;
+    this.tokenUsage = observedTokensOf(error);
   }
 }
 
@@ -1827,7 +1830,9 @@ export async function runLoopFromState(
 
       if (error instanceof PhaseExecutionError) {
         const failedPhase = activePhase;
-        if (activePhase !== null) await settlePhase(activePhase, attempt, error.elapsedMs);
+        if (activePhase !== null) {
+          await settlePhase(activePhase, attempt, error.elapsedMs, error.tokenUsage === null ? undefined : { tokenUsage: error.tokenUsage });
+        }
 
         if (handoffAborted() || handoffRequested()) {
           await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));

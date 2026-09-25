@@ -130,6 +130,17 @@ export function isPartialExecutionResult(result: ExecutionResult): result is Par
   return "completionStatus" in result && result.completionStatus === "partial";
 }
 
+/**
+ * Orca handoff delivery (2026-09-25), spec §13.1 C-3: a phase that ended without a result (a handoff
+ * deadline aborted it) may still have been OBSERVED spending tokens before it was stopped. A runtime
+ * adapter reports that observation as `observedTokens` on the error it throws; anything else is "not
+ * observed" (null) — never 0, never an estimate.
+ */
+export function observedTokensOf(error: unknown): number | null {
+  const value = error !== null && typeof error === "object" ? (error as { observedTokens?: unknown }).observedTokens : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
 export type VerificationResult = {
   approved: boolean;
   rejectCategory: string;

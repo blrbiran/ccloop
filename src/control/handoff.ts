@@ -240,11 +240,19 @@ async function retainCodexLogs(
   }
 }
 
+const PHASE_FILE: Record<string, string> = { plan: "plan.json", execute: "execution.json", verify: "verify.json" };
+
 /**
  * Orca handoff delivery spec §13.1 C-2 (human ruling 2026-09-25): a handoff candidate of a run that is
  * not terminal lists as missing only the phase files of the current attempt that the attempt entered.
  * Entered: plan once the attempt exists; execute on its `execute_started`; verify on its
  * `execution_finished` (runLoop.ts emits both with detail `attempt <n>`).
+ *
+ * Orca handoff delivery spec §13.4 D-C7' (α), human ruling 2026-09-25: the phase this attempt's
+ * `handoff_interrupted` event names (detail `handoff deadline interrupted <phase> in attempt <n>`) is
+ * removed here even though entered -- a handoff deadline stopped it by design, before it could ever
+ * write a result file, and the worktree snapshot is the evidence for it. Excluding its file from
+ * `entered` keeps it out of `missing` too, since the caller only checks files still in the set.
  */
 async function enteredPhaseFiles(sourceDir: string, runDir: string, attempt: number): Promise<Set<string>> {
   const entered = new Set(["plan.json"]);
@@ -258,6 +266,11 @@ async function enteredPhaseFiles(sourceDir: string, runDir: string, attempt: num
     if (line.trim() === "") continue;
     let event: { type?: unknown; detail?: unknown };
     try { event = JSON.parse(line) as { type?: unknown; detail?: unknown }; } catch { continue; }
+    if (event.type === "handoff_interrupted") {
+      for (const [phase, file] of Object.entries(PHASE_FILE)) {
+        if (event.detail === `handoff deadline interrupted ${phase} in attempt ${attempt}`) entered.delete(file);
+      }
+    }
     if (event.detail !== `attempt ${attempt}`) continue;
     if (event.type === "execute_started") entered.add("execution.json");
     if (event.type === "execution_finished") entered.add("verify.json");

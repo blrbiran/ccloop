@@ -6,12 +6,21 @@ import type { AttemptContext, RuntimeAdapter } from "../types.js";
 import { decodeCodexResult, parseCodexConfig, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
 import { runCodexPhase } from "./runCodexPhase.js";
 
+/** Orca handoff delivery C-3: an aborted phase, carrying the usage its stdout showed before the kill (or null). */
+export class CodexPhaseAborted extends Error {
+  constructor(readonly evidenceDir: string, readonly observedTokens: number | null) {
+    super(`codex-aborted: ${evidenceDir}`);
+    this.name = "CodexPhaseAborted";
+  }
+}
+
 export class CodexAdapter implements RuntimeAdapter {
   private readonly config: CodexConfig;
   constructor(rawConfig: unknown) { this.config = parseCodexConfig(rawConfig); }
 
   private async phase<P extends CodexPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
     const outcome = await runCodexPhase(this.config, { phase, prompt, context });
+    if (outcome.reason === "aborted") throw new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens);
     if (outcome.reason !== "completed" || outcome.final === null) {
       throw new Error(`codex-${outcome.reason}: ${outcome.evidenceDir}`);
     }
@@ -28,7 +37,12 @@ export class CodexAdapter implements RuntimeAdapter {
   plan(context: AttemptContext) { return this.phase("plan", buildPlannerPrompt(context.contract), context); }
   async execute(context: AttemptContext) {
     try { return await this.phase("execute", buildExecutorPrompt(context) + "\nWrap the complete or partial result in a single object with the sole key result, as required by the output schema.", context); }
-    catch (error) { if (context.abortSignal?.aborted) return null; throw error; }
+    catch (error) {
+      // An aborted execute that was observed spending tokens throws, so runLoop can settle that usage;
+      // one that was not keeps answering null exactly as before.
+      if (context.abortSignal?.aborted && !(error instanceof CodexPhaseAborted && error.observedTokens !== null)) return null;
+      throw error;
+    }
   }
   verify(context: AttemptContext) { return this.phase("verify", buildVerifierPrompt(context), context); }
 }

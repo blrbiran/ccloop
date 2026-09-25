@@ -61,5 +61,10 @@ process.stdin.on("end",()=>{
   if(mode==="nonzero") process.exitCode=7;
   };
   const delay=entry?.delayMs?.[phase];
-  if(delay===undefined) respond(); else setTimeout(respond,delay);
+  if(delay===undefined) respond(); else {
+    // Orca handoff delivery C-3: `usageBeforeDelay: true` reports this call's usage before sleeping, so a
+    // phase stopped during the delay has an observation to report.
+    if(entry.usageBeforeDelay===true) process.stdout.write(JSON.stringify({type:"turn.completed",usage:{input_tokens:12,output_tokens:3}})+"\n");
+    setTimeout(respond,delay);
+  }
 });

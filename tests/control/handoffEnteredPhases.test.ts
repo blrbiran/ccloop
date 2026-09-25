@@ -61,9 +61,13 @@ function state(status: RunState["status"], currentAttempt = 1): RunState {
   };
 }
 
-/** The run directory as runLoop leaves it: events with runLoop's own types and `attempt <n>` details, plus the named phase files. */
-async function runDirWith(runDir: string, events: Array<[type: string, attempt: number]>, runState: RunState, files: Record<number, string[]>): Promise<void> {
-  await writeFile(join(runDir, "events.jsonl"), events.map(([type, attempt]) => `${JSON.stringify({ type, at: new Date().toISOString(), detail: `attempt ${attempt}` })}\n`).join(""));
+/**
+ * The run directory as runLoop leaves it: events with runLoop's own types and `attempt <n>` details, plus
+ * the named phase files. A fourth tuple element overrides the detail (e.g. a `handoff_interrupted` event's
+ * `handoff deadline interrupted <phase> in attempt <n>`); existing two-element calls are unaffected.
+ */
+async function runDirWith(runDir: string, events: Array<[type: string, attempt: number, detail?: string]>, runState: RunState, files: Record<number, string[]>): Promise<void> {
+  await writeFile(join(runDir, "events.jsonl"), events.map(([type, attempt, detail]) => `${JSON.stringify({ type, at: new Date().toISOString(), detail: detail ?? `attempt ${attempt}` })}\n`).join(""));
   await writeFile(join(runDir, "loop-state.json"), JSON.stringify(runState));
   await writeFile(join(runDir, "loop-contract.json"), "{}");
   for (const [attempt, names] of Object.entries(files)) {
@@ -106,6 +110,20 @@ describe("handoff packet of a run stopped between phases (ccloop C7)", () => {
     const runState = state("planning", 2);
     // Attempt 1 entered execute and verify; attempt 2 was stopped after its plan.
     await runDirWith(f.runDir, [["attempt_started", 1], ["execute_started", 1], ["execution_finished", 1]], runState, { 1: ["plan.json", "execution.json", "verify.json"], 2: ["plan.json"] });
+    expect((await buildHandoffPacket(f.envelope, f.request, runState, 3)).missing).toEqual([]);
+  });
+
+  it("does not list an entered phase's file as missing when a handoff deadline interrupted it (D-C7' (α))", async () => {
+    // Orca handoff delivery spec §13.4 D-C7' (α), human ruling 2026-09-25: the deadline stopped execute
+    // by design before it could ever write execution.json; the worktree snapshot is its evidence.
+    const f = await fixture();
+    const runState = state("executing");
+    await runDirWith(
+      f.runDir,
+      [["attempt_started", 1], ["execute_started", 1], ["handoff_interrupted", 1, "handoff deadline interrupted execute in attempt 1"]],
+      runState,
+      { 1: ["plan.json"] },
+    );
     expect((await buildHandoffPacket(f.envelope, f.request, runState, 3)).missing).toEqual([]);
   });
 

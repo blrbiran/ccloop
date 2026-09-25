@@ -38,6 +38,25 @@ export function phaseJsonSchema(phase: CodexPhase): Record<string, unknown> {
 const record = (x: unknown): x is Record<string,unknown> => x !== null && typeof x === "object" && !Array.isArray(x);
 const integer = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 export type PhaseResults = {plan:AttemptPlan; execute:ExecutionResult; verify:VerificationResult};
+/**
+ * Orca handoff delivery (2026-09-25), spec §13.1 C-3: the total of the last well-formed
+ * `turn.completed` usage in the stdout a phase wrote before it stopped, or null when there is none.
+ * Unlike decodeCodexResult this tolerates a torn last line and other rows: a stopped phase's stdout
+ * ends wherever the kill landed.
+ */
+export function observedTurnUsage(events: string): number | null {
+  let observed: number | null = null;
+  for (const line of events.split("\n")) {
+    let row: unknown;
+    try { row = JSON.parse(line); } catch { continue; }
+    if (!record(row) || row.type !== "turn.completed" || !record(row.usage)) continue;
+    const input = row.usage.input_tokens, output = row.usage.output_tokens;
+    if (!integer(input) || !integer(output) || !Number.isSafeInteger(input + output) || input + output === 0) continue;
+    observed = input + output;
+  }
+  return observed;
+}
+
 export function decodeCodexResult<P extends CodexPhase>(phase:P, events:string, final:string): PhaseResults[P] {
   let completed: Record<string, unknown> | undefined;
   for (const line of events.split("\n")) {

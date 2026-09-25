@@ -5,12 +5,14 @@ import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
 import type { AttemptContext } from "../types.js";
-import { phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
+import { observedTurnUsage, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
 
 export type PhaseRequest = {phase:CodexPhase;prompt:string;context:AttemptContext};
 export type PhaseOutcome = {
   reason:"completed"|"aborted"|"timeout"|"spawn-error"|"exit-error"|"output-limit"|"io-error";
   code:number|null;signal:NodeJS.Signals|null;events:string;final:string|null;evidenceDir:string;
+  // Orca handoff delivery C-3: usage observed in the stdout of a phase that did not complete; null otherwise.
+  observedTokens:number|null;
 };
 const LIMIT=16*1024*1024;
 const execFileAsync=promisify(execFile);
@@ -19,7 +21,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest):Pr
   const root=join(context.runDir,"codex",String(context.attempt),phase);
   await mkdir(root,{recursive:true,mode:0o700});
   const evidenceDir=await mkdtemp(join(root,"call-"));
-  const result:PhaseOutcome={reason:"completed",code:null,signal:null,events:"",final:null,evidenceDir};
+  const result:PhaseOutcome={reason:"completed",code:null,signal:null,events:"",final:null,evidenceDir,observedTokens:null};
   const save=async(name:string,data:string)=>writeFile(join(evidenceDir,name),data,{mode:0o600});
   const schemaPath=join(evidenceDir,"schema.json"),finalPath=join(evidenceDir,"final.json");
   const args=[...config.command.slice(1),"exec","--json","--ephemeral","--color","never","--model",config.model,
@@ -113,5 +115,6 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest):Pr
       }finally{await file.close();}
     }catch{result.reason="io-error";}
   }
+  if(result.reason!=="completed")result.observedTokens=observedTurnUsage(result.events);
   return persist();
 }
