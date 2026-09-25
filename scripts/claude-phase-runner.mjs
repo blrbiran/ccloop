@@ -376,16 +376,41 @@ process.on("SIGINT", () => {
   void handleInterrupt("SIGINT");
 });
 
-async function runClaude(request) {
+// Orca agent selection (2026-09-26), spec §4.7 and §12 I14: ClaudeAgentAdapter names the claude binary and
+// the extra arguments (`--model <model>[1m]`) as JSON arrays in these two variables, never as a
+// whitespace-split string. Unset, the runner behaves exactly as before: `claude` from PATH, no extra argument.
+function readArgvEnv(name, fallback, requireCommand) {
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return fallback;
+  }
+
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error(`claude-runner-env-invalid: ${name} is not JSON`);
+  }
+
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string") || (requireCommand && (value.length === 0 || value[0] === ""))) {
+    throw new Error(`claude-runner-env-invalid: ${name} must be a JSON array of strings${requireCommand ? " naming a command" : ""}`);
+  }
+
+  return value;
+}
+
+async function runClaude(request, claudeCommand, extraArgs) {
   const schema = getSchemaForPhase(request.phase);
   const child = execFile(
-    "claude",
+    claudeCommand[0],
     [
+      ...claudeCommand.slice(1),
       "-p",
       "--output-format",
       "json",
       "--json-schema",
       JSON.stringify(schema),
+      ...extraArgs,
       request.prompt,
     ],
     {
@@ -429,11 +454,22 @@ async function runClaude(request) {
 }
 
 async function main() {
+  let claudeCommand;
+  let extraArgs;
+  try {
+    claudeCommand = readArgvEnv("CCLOOP_CLAUDE_COMMAND", ["claude"], true);
+    extraArgs = readArgvEnv("CCLOOP_CLAUDE_EXTRA_ARGS", [], false);
+  } catch (error) {
+    process.stderr.write(error instanceof Error ? error.message : String(error));
+    process.exitCode = 2;
+    return;
+  }
+
   const request = await readStdin();
   currentRequest = request;
 
   try {
-    const result = await runClaude(request);
+    const result = await runClaude(request, claudeCommand, extraArgs);
     const envelope = JSON.parse(result.stdout);
     const structured = envelope.structured_output;
 
