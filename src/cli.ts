@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { runAgentsCommand } from "./agents/command.js";
 import { runControlCommand } from "./control/command.js";
 import { loadContract } from "./contract/loadContract.js";
 import { resumeLoop } from "./controller/resumeLoop.js";
@@ -269,6 +270,14 @@ export async function main(argv: string[]): Promise<number> {
       let stdin = "";
       for await (const chunk of process.stdin) stdin += String(chunk);
       const result = await runControlCommand(argv.slice(1), stdin);
+      if (result.stdout !== "") process.stdout.write(result.stdout);
+      if (result.stderr !== "") process.stderr.write(result.stderr);
+      return result.code;
+    }
+
+    // Agent selection (2026-09-26) §4.3/§4.4: `agents` prints to stdout only and writes nothing anywhere.
+    if (argv[0] === "agents") {
+      const result = await runAgentsCommand(argv.slice(1));
       if (result.stdout !== "") process.stdout.write(result.stdout);
       if (result.stderr !== "") process.stderr.write(result.stderr);
       return result.code;
