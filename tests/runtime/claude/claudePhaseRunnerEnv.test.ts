@@ -70,6 +70,28 @@ describe("claude phase runner command and extra arguments (Orca agent selection)
     expect(existsSync(`${w.pathMarker}.argv`)).toBe(false);
   });
 
+  // Agent selection (2026-09-26), wave-1 review I-1: the two variables are the runner's own input. The claude CLI and
+  // everything it starts must not inherit them, or a runner nested under it (a test the agent runs, a nested ccloop
+  // run) would take the outer installation's command instead of its own `claude` from PATH. Every other variable
+  // still passes through.
+  it("does not hand CCLOOP_CLAUDE_COMMAND or CCLOOP_CLAUDE_EXTRA_ARGS on to the claude it runs", async () => {
+    const w = await world();
+    const probe = join(w.dir, "env-probe.mjs"), seen = join(w.dir, "env-seen.json");
+    await writeFile(probe, [
+      'import { writeFileSync } from "node:fs";',
+      `writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ command: process.env.CCLOOP_CLAUDE_COMMAND ?? null, extraArgs: process.env.CCLOOP_CLAUDE_EXTRA_ARGS ?? null, other: process.env.CCLOOP_ENV_PROBE_OTHER ?? null }));`,
+      'process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, structured_output: { summary: "probe", primaryTargetPaths: ["x"] }, usage: { input_tokens: 1, output_tokens: 1 } }));',
+    ].join("\n"));
+    const result = await runRunner(w.dir, {
+      ...process.env,
+      CCLOOP_ENV_PROBE_OTHER: "passed",
+      CCLOOP_CLAUDE_COMMAND: JSON.stringify([process.execPath, probe]),
+      CCLOOP_CLAUDE_EXTRA_ARGS: JSON.stringify(["--model", "m"]),
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(await readFile(seen, "utf8"))).toEqual({ command: null, extraArgs: null, other: "passed" });
+  });
+
   it.each([
     ["CCLOOP_CLAUDE_COMMAND", "claude --flag"],
     ["CCLOOP_CLAUDE_COMMAND", "[]"],

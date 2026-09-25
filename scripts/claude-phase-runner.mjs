@@ -399,6 +399,14 @@ function readArgvEnv(name, fallback, requireCommand) {
   return value;
 }
 
+// Agent selection (2026-09-26), wave-1 review I-1: CCLOOP_CLAUDE_COMMAND/_EXTRA_ARGS are this runner's own input. The claude
+// CLI, and everything it starts, gets the rest of the environment unchanged but never these two, so a runner nested
+// under it resolves its own `claude` instead of inheriting the outer installation.
+function claudeEnv() {
+  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, ...env } = process.env;
+  return env;
+}
+
 async function runClaude(request, claudeCommand, extraArgs) {
   const schema = getSchemaForPhase(request.phase);
   const child = execFile(
@@ -416,7 +424,7 @@ async function runClaude(request, claudeCommand, extraArgs) {
     {
       cwd: request.worktreePath,
       maxBuffer: 10 * 1024 * 1024,
-      env: process.env,
+      env: claudeEnv(),
     },
   );
 
