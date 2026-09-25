@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 const mode=process.argv[2], marker=process.argv[3];
+const CONTINUATION="Treat continuation input fields unfinished, pendingDecisions, and awaitingHuman as required planning inputs.";
 const args=process.argv.slice(process.argv.indexOf("exec")+1);
 const value=flag=>args[args.indexOf(flag)+1];
 let prompt="";
@@ -22,12 +23,23 @@ process.stdin.on("end",()=>{
   if(schema.properties?.approved) body={approved:true,rejectCategory:"",primaryTargetPaths:["answer.txt"],failingCommand:null,safeToRetry:false,evidence:[],pauseSignals:[],stopSignals:[]};
   const phase=schema.anyOf?"execute":schema.properties?.approved?"verify":"plan";
   appendFileSync(marker+".calls",phase+"\n");
-  if(mode==="script" && phase==="execute") {
-    const task=/^Execute one isolated attempt for task (.+)\.$/m.exec(prompt)?.[1];
-    const entry=task===undefined?undefined:JSON.parse(readFileSync(process.argv[4],"utf8"))[task];
-    if(entry===undefined) {process.stderr.write(`fake-codex script has no entry for task ${task}\n`);process.exitCode=3;return;}
-    for(const [path,content] of Object.entries(entry.files)) writeFileSync(path,content);
+  // Orca handoff delivery (2026-09-25), C5 and I-7: a script entry is looked up for the task named in
+  // this phase's prompt, `<task>#continuation` first when the prompt carries ccloop's continuation
+  // constraint, and may carry `delayMs: {plan?, execute?, verify?}`: that phase then sleeps before it
+  // writes anything (script files, the final answer, stdout events). Only a missing execute entry is an
+  // error, as before. Each script-mode call also appends `<phase> <entry key or ->` to `<marker>.tasks`
+  // (`<marker>.calls` keeps its format).
+  let entry;
+  if(mode==="script") {
+    const task={plan:/^Plan one isolated L2 attempt for task (.+)\.$/m,execute:/^Execute one isolated attempt for task (.+)\.$/m,verify:/^Verify task (.+)\.$/m}[phase].exec(prompt)?.[1];
+    const script=task===undefined?{}:JSON.parse(readFileSync(process.argv[4],"utf8"));
+    const key=prompt.includes(CONTINUATION)&&script[`${task}#continuation`]!==undefined?`${task}#continuation`:script[task]!==undefined?task:undefined;
+    entry=key===undefined?undefined:script[key];
+    appendFileSync(marker+".tasks",`${phase} ${key??"-"}\n`);
+    if(phase==="execute" && entry===undefined) {process.stderr.write(`fake-codex script has no entry for task ${task}\n`);process.exitCode=3;return;}
   }
+  const respond=()=>{
+  if(mode==="script" && phase==="execute") for(const [path,content] of Object.entries(entry.files)) writeFileSync(path,content);
   if(phase==="execute" && ["integration","write-hang","no-usage","false-answer","high-usage"].includes(mode)) writeFileSync("answer.txt","42\n");
   if(phase==="verify" && mode==="false-answer") writeFileSync("answer.txt","0\n");
   if(mode==="quota") {process.stdout.write(JSON.stringify({type:"turn.failed",error:{message:"quota exhausted"}})+"\n");return;}
@@ -47,4 +59,7 @@ process.stdin.on("end",()=>{
   }
   process.stdout.write(mode==="bad-json" ? "not JSON\n" : events);
   if(mode==="nonzero") process.exitCode=7;
+  };
+  const delay=entry?.delayMs?.[phase];
+  if(delay===undefined) respond(); else setTimeout(respond,delay);
 });

@@ -242,6 +242,7 @@ describe("mechanical handoff packet", () => {
     expect(built.missing).toContain("attempts/1/execution.json");
   });
 
+  // ccloop ruling 88: rewrite authorized 2026-09-25 by the human through the Orca controller session e5f56bfe (Orca handoff delivery spec §12(1), §13.1, §13.2 I-9); whole-criterion rewrite, not weaker: a candidate answers the request it was built for, so neither the candidate nor its packet lists that request as unresolved, for every result.
   it("allows request:null only for natural terminal runs and retains handoff refs for every result", async () => {
     const f = await fixture();
     await mkdir(f.runDir, { recursive: true });
@@ -259,9 +260,11 @@ describe("mechanical handoff packet", () => {
       expect(candidate.handoff).toMatchObject({ artifactId: expect.stringMatching(/^evidence-/) });
       expect(candidate.artifacts).toContainEqual(candidate.handoff);
       expect(candidate.stopProof).toBeNull();
-      expect(candidate.unresolvedRequestIds).toEqual(result === "complete" ? [] : ["request-1"]);
+      expect(candidate.unresolvedRequestIds).toEqual([]);
       const packet = JSON.parse((await readEvidence(f.envelope.work.sourceDir, candidate.handoff)).toString("utf8"));
-      expect(packet.unresolvedRequestIds).toEqual(result === "complete" ? [] : ["request-1"]);
+      expect(packet.unresolvedRequestIds).toEqual([]);
+      // The request is answered, not dropped: the packet still names it.
+      expect(packet.request).toEqual(f.request);
     }
   });
 });

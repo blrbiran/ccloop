@@ -240,6 +240,31 @@ async function retainCodexLogs(
   }
 }
 
+/**
+ * Orca handoff delivery spec §13.1 C-2 (human ruling 2026-09-25): a handoff candidate of a run that is
+ * not terminal lists as missing only the phase files of the current attempt that the attempt entered.
+ * Entered: plan once the attempt exists; execute on its `execute_started`; verify on its
+ * `execution_finished` (runLoop.ts emits both with detail `attempt <n>`).
+ */
+async function enteredPhaseFiles(sourceDir: string, runDir: string, attempt: number): Promise<Set<string>> {
+  const entered = new Set(["plan.json"]);
+  let text = "";
+  try {
+    text = (await readPrivateFile(sourceDir, join(runDir, "events.jsonl"))).toString("utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    let event: { type?: unknown; detail?: unknown };
+    try { event = JSON.parse(line) as { type?: unknown; detail?: unknown }; } catch { continue; }
+    if (event.detail !== `attempt ${attempt}`) continue;
+    if (event.type === "execute_started") entered.add("execution.json");
+    if (event.type === "execution_finished") entered.add("verify.json");
+  }
+  return entered;
+}
+
 export async function buildHandoffPacket(
   envelope: StartEnvelopeV1,
   request: HandoffRequestV1 | null,
@@ -259,7 +284,11 @@ export async function buildHandoffPacket(
   await retainFile(envelope.work.sourceDir, join(runDir, "loop-state.json"), "loop-state.json", artifacts, missing);
   await retainFile(envelope.work.sourceDir, join(runDir, "loop-contract.json"), "loop-contract.json", artifacts, missing);
   if (runState.currentAttempt > 0) {
+    const entered = request !== null && !isTerminalRunStatus(runState.status)
+      ? await enteredPhaseFiles(envelope.work.sourceDir, runDir, runState.currentAttempt)
+      : null;
     for (const name of ["plan.json", "execution.json", "verify.json"]) {
+      if (entered !== null && !entered.has(name)) continue;
       await retainFile(
         envelope.work.sourceDir,
         join(runDir, "attempts", String(runState.currentAttempt), name),
@@ -285,7 +314,7 @@ export async function buildHandoffPacket(
     validationCommands: [...envelope.work.contract.verification.requiredChecks],
     rawLogs,
     usageHighWater,
-    unresolvedRequestIds: request === null || result === "complete" ? [] : [request.requestId],
+    unresolvedRequestIds: [],
     artifacts: [...artifacts],
   };
   const handoff = await writeEvidence(envelope.work.sourceDir, Buffer.from(canonicalJson(packet)));
@@ -307,7 +336,7 @@ export async function persistHandoffCandidate(
     artifacts: [...built.artifacts, built.handoff],
     snapshot: null,
     missing: [...built.missing],
-    unresolvedRequestIds: request === null || options.result === "complete" ? [] : [request.requestId],
+    unresolvedRequestIds: [],
     stopProof: null,
     terminalOutcome: runState.status,
     handoff: built.handoff,
