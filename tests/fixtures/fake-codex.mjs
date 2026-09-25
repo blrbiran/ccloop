@@ -1,6 +1,11 @@
 import { appendFileSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 const mode=process.argv[2], marker=process.argv[3];
+// Orca agent selection (2026-09-26), spec §4.8: `--version` with no `exec` answers a fixed version and
+// writes nothing; every other call appends what the real codex would receive (from `exec` on) as one
+// JSON array line to `<marker>.argv`. Every mode below is otherwise unchanged.
+if(process.argv.at(-1)==="--version"&&!process.argv.includes("exec")) {await new Promise(resolve=>process.stdout.write("9.9.9-fake\n",resolve));process.exit(0);}
+appendFileSync(marker+".argv",JSON.stringify(process.argv.slice(process.argv.indexOf("exec")))+"\n");
 const CONTINUATION="Treat continuation input fields unfinished, pendingDecisions, and awaitingHuman as required planning inputs.";
 const args=process.argv.slice(process.argv.indexOf("exec")+1);
 const value=flag=>args[args.indexOf(flag)+1];
