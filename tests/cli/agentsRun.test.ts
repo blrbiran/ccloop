@@ -120,4 +120,16 @@ describe("ccloop run --agents --agent-selection (Orca agent selection, spec §4.
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("agent-selection-file-invalid");
   }, 30_000);
+
+  // Fix round 1 (Important finding): the JSON.parse try/catch in runWithAgents (src/cli.ts, the
+  // selection-file read) had no criterion — every other test in this file writes syntactically
+  // valid JSON, so a JSON.parse failure never actually executed. This writes genuinely malformed
+  // JSON (truncated, not even parseable) and pins the same agent-selection-file-invalid refusal.
+  it("refuses a selection file that isn't valid JSON", async () => {
+    const w = await world();
+    await writeFile(w.selectionPath, '{"selection":', { mode: 0o600 });
+    const result = await runCli(w);
+    expect(result.code).toBe(1);
+    expect(result.stderr.startsWith("agent-selection-file-invalid")).toBe(true);
+  }, 30_000);
 });
