@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { z } from "zod";
 import { runAgentsCommand } from "./agents/command.js";
+import { resolveAgent } from "./agents/materialize.js";
+import { getDescriptor } from "./agents/registry.js";
+import { readAgentsTable } from "./agents/table.js";
+import { AgentError, agentSelectionSchema } from "./agents/types.js";
 import { runControlCommand } from "./control/command.js";
 import { loadContract } from "./contract/loadContract.js";
 import { resumeLoop } from "./controller/resumeLoop.js";
@@ -24,6 +29,14 @@ export type ParsedArgs =
       runDir: string;
       adapter: "scripted" | "claude" | "codex";
       adapterConfigPath: string;
+    }
+  // Orca agent selection (2026-09-26), spec §4.9: the agents-table form of `run`, used by Orca's reconcile run.
+  | {
+      command: "run";
+      contractPath: string;
+      runDir: string;
+      agentsTablePath: string;
+      agentSelectionPath: string;
     }
   | {
       command: "resume";
@@ -141,6 +154,28 @@ export function parseArgs(argv: string[]): ParsedArgs {
     values.set(argv[index]!, argv[index + 1]!);
   }
 
+  // Orca agent selection (2026-09-26), spec §4.9: `--agents <table> --agent-selection <file>` replaces
+  // --adapter/--adapter-config instead of combining with them, and only `run` takes it — a run started this
+  // way cannot be resumed or swept (spec §11). Placed before `sweep`'s own early return (below) rather than
+  // after it (plan-review P23 m6): `sweep` must refuse `--agents` too, and its branch returns before the
+  // run/resume flag parsing this task was originally anchored to.
+  const agentsTablePath = values.get("--agents");
+  const agentSelectionPath = values.get("--agent-selection");
+  if (agentsTablePath !== undefined || agentSelectionPath !== undefined) {
+    if (values.has("--adapter") || values.has("--adapter-config")) {
+      throw new Error("--agents and --adapter are mutually exclusive");
+    }
+    if (command !== "run") {
+      throw new Error("--agents is only supported by run");
+    }
+    const agentsRunDir = values.get("--run-dir");
+    const agentsContractPath = values.get("--contract");
+    if (!agentsRunDir || !agentsContractPath || !agentsTablePath || !agentSelectionPath) {
+      throw new Error("missing required flags");
+    }
+    return { command, contractPath: agentsContractPath, runDir: agentsRunDir, agentsTablePath, agentSelectionPath };
+  }
+
   // `sweep` takes its root as `--root`, not as a positional (L3 §6): the pairing loop above is
   // pure flag/value, so `sweep <root> --adapter x` would pair `<root>` with `--adapter` and then
   // report missing flags on a command line that reads as legal. Handled before the `--run-dir`
@@ -229,8 +264,40 @@ function buildAdapter(adapter: "scripted" | "claude" | "codex", config: unknown)
 // `adapterConfigPath` and so is structurally accepted by `Exclude<ParsedArgs, { command: "ls" }>`,
 // which would let a future edit place the sweep branch after this call — legal to the compiler,
 // and a violation of both the config-read ordering above and C3's banner ordering.
-async function loadAdapter(parsed: Extract<ParsedArgs, { command: "run" | "resume" }>): Promise<RuntimeAdapter> {
+async function loadAdapter(parsed: Extract<ParsedArgs, { command: "run" | "resume"; adapterConfigPath: string }>): Promise<RuntimeAdapter> {
   return buildAdapter(parsed.adapter, JSON.parse(await readFile(parsed.adapterConfigPath, "utf8")) as unknown);
+}
+
+// Selection-file shape (P18: the selection itself is validated with agents/types.js's own
+// `agentSelectionSchema` — the single source of that schema — not a second, hand-rolled copy of it).
+const selectionFileSchema = z
+  .object({ selection: agentSelectionSchema, configHash: z.string().regex(/^[0-9a-f]{64}$/) })
+  .strict();
+
+// Orca agent selection (2026-09-26), spec §4.9 and §12 C5: the selection Orca froze for this run is
+// materialized here against the table as it is NOW. resolveAgent probes `<command> --version` and refuses a
+// drifted installation (agent-version-drift); a table entry edited since Orca froze the selection changes the
+// hash (control-config-hash-mismatch). Either refusal happens before the contract is read or anything runs.
+async function runWithAgents(parsed: Extract<ParsedArgs, { agentsTablePath: string }>): Promise<number> {
+  const table = await readAgentsTable(parsed.agentsTablePath);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(parsed.agentSelectionPath, "utf8"));
+  } catch (error) {
+    throw new AgentError("agent-selection-file-invalid", error instanceof Error ? error.message : String(error));
+  }
+  const file = selectionFileSchema.safeParse(raw);
+  if (!file.success) throw new AgentError("agent-selection-file-invalid", file.error.message);
+  const { config, resolution } = await resolveAgent(table, file.data.selection);
+  if (resolution.configHash !== file.data.configHash) {
+    throw new AgentError("control-config-hash-mismatch", `selection file ${file.data.configHash}, materialized ${resolution.configHash}`);
+  }
+  const adapter = getDescriptor(config.kind).createAdapter(config);
+  // The same notice `run --adapter codex` prints below.
+  if (config.kind === "codex") console.error("Codex budgetMode=soft: token usage is accounted after each phase; no strict token cap is guaranteed.");
+  const contract = await loadContract(parsed.contractPath);
+  const finalState = await runLoop(contract, parsed.runDir, adapter);
+  return finalState.status === "succeeded" ? 0 : 2;
 }
 
 // L3 §5.4's escape hatch. ONE counter across both signals: the first fills the stop slot the loop
@@ -324,6 +391,9 @@ export async function main(argv: string[]): Promise<number> {
             },
       );
     }
+
+    // The agents-table form of `run` (spec §4.9) builds its adapter from the table, not from --adapter.
+    if ("agentsTablePath" in parsed) return await runWithAgents(parsed);
 
     // `sweep` returns HERE — before loadAdapter, not merely before the two `? 0 : 2` mappings
     // below. Its exit codes are sweepRuns' own (1 iff the scan failed at its root, else 0), and

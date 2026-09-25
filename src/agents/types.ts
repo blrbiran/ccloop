@@ -57,6 +57,11 @@ export const AGENT_ERROR_CODES = [
   "agent-config-invalid",
   "agent-selection-file-invalid",
   "agents-command-invalid",
+  // Orca agent selection (2026-09-26), plan-rulings P23 m5: `ccloop run --agents` throws AgentError (not a
+  // plain Error) for this code too, so every agent-selection failure the CLI can raise shares one class. The
+  // code itself already exists (src/control/accept.ts throws it via ControlProtocolError on the control-wire
+  // path); this only widens AgentError's own code union to also carry it.
+  "control-config-hash-mismatch",
 ] as const;
 export type AgentErrorCode = (typeof AGENT_ERROR_CODES)[number];
 
