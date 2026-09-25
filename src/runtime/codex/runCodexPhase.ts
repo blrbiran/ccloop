@@ -16,7 +16,7 @@ export type PhaseOutcome = {
 };
 const LIMIT=16*1024*1024;
 const execFileAsync=promisify(execFile);
-export async function runCodexPhase(config:CodexConfig, request:PhaseRequest):Promise<PhaseOutcome> {
+export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, extraEnv?:Record<string,string>):Promise<PhaseOutcome> {
   const {context,phase}=request;
   const root=join(context.runDir,"codex",String(context.attempt),phase);
   await mkdir(root,{recursive:true,mode:0o700});
@@ -44,7 +44,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest):Pr
   // Pre-create files with private permissions before handing paths to the CLI.
   await save("final.json","");await save("events.jsonl","");await save("stderr.log","");logsCreated=true;
   await new Promise<void>(resolve=>{
-    const child=spawn(config.command[0],args,{cwd:context.worktreePath,detached:true,stdio:["pipe","pipe","pipe"],env:process.env});
+    const child=spawn(config.command[0],args,{cwd:context.worktreePath,detached:true,stdio:["pipe","pipe","pipe"],env:{...process.env,...extraEnv}});
     const out=new StringDecoder("utf8"),err=new StringDecoder("utf8");
     let outBytes=0,errBytes=0,done=false,exited=false;
     let killTimer:NodeJS.Timeout|undefined,drainTimer:NodeJS.Timeout|undefined;

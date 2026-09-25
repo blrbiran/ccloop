@@ -96,7 +96,7 @@ export class ControlProtocolError extends Error {
 
 const safeInteger = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const positiveSafeInteger = safeInteger.refine((value) => value > 0);
-const idSchema = z.string().min(1).max(200).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/);
+export const idSchema = z.string().min(1).max(200).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/);
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const amountSchema = z
   .object({

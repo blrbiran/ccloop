@@ -16,10 +16,11 @@ export class CodexPhaseAborted extends Error {
 
 export class CodexAdapter implements RuntimeAdapter {
   private readonly config: CodexConfig;
-  constructor(rawConfig: unknown) { this.config = parseCodexConfig(rawConfig); }
+  // Agent selection (2026-09-26): extraEnv carries the installation's config directory (CODEX_HOME) to the CLI.
+  constructor(rawConfig: unknown, private readonly extraEnv?: Record<string, string>) { this.config = parseCodexConfig(rawConfig); }
 
   private async phase<P extends CodexPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
-    const outcome = await runCodexPhase(this.config, { phase, prompt, context });
+    const outcome = await runCodexPhase(this.config, { phase, prompt, context }, this.extraEnv);
     if (outcome.reason === "aborted") throw new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens);
     if (outcome.reason !== "completed" || outcome.final === null) {
       throw new Error(`codex-${outcome.reason}: ${outcome.evidenceDir}`);
