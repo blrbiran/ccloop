@@ -95,9 +95,19 @@ export async function readAgentsTable(path: string, deps: { euid?: number } = {}
   return parseAgentsTable(raw);
 }
 
-/** Spec §12 I4: methods other than capabilities/accept check only the path's shape, never the content. */
+/**
+ * Spec §12 I4: methods other than capabilities/accept check only the path's shape, never the content. A path with
+ * nothing at it passes too (Task 5 review fix I-1): a deleted table must not block recovering a run already in flight,
+ * any more than a broken one does. A dangling symlink is not "nothing" (lstat sees the link) and stays refused below.
+ */
 export async function assertAgentsTablePath(path: string): Promise<void> {
   if (!isAbsolute(path)) throw invalid("table path is not absolute");
+  try {
+    await lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw invalid(error instanceof Error ? error.message : String(error));
+  }
   try {
     const canonical = await realpath(path);
     const metadata = await lstat(path);

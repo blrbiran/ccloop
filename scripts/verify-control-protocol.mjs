@@ -13,7 +13,9 @@ if (!binary || !tablePath) {
 }
 
 // Agent selection (2026-09-26): the formal gate runs over an agents table, and refuses one in which ANY
-// installation names something other than a test fixture CLI (fake codex or the CLI-level fake claude).
+// installation names something other than a test fixture CLI (fake codex or the CLI-level fake claude). Task 5 review
+// fix M-c: the fixture must be what actually runs, i.e. this node running the fixture script, not a real CLI that
+// merely carries a fixture-looking argument somewhere later in its argv.
 const canonicalTablePath = realpathSync(tablePath);
 const tableBytes = readFileSync(canonicalTablePath);
 const table = JSON.parse(tableBytes.toString());
@@ -27,7 +29,8 @@ if (
   !installations.every(
     (installation) =>
       Array.isArray(installation?.command) &&
-      installation.command.some((value) => /fake-(codex|claude-cli)\.mjs$/.test(String(value))),
+      installation.command[0] === process.execPath &&
+      /(^|\/)fake-(codex|claude-cli)\.mjs$/.test(String(installation.command[1])),
   )
 ) {
   throw new Error("formal control verification refuses a non-fixture agents table");

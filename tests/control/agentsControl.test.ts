@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -155,6 +155,23 @@ describe("control over the installation table (agent selection)", { timeout: 30_
     expect(collected.code, collected.stderr).toBe(0);
     expect(JSON.parse(collected.stdout)).toEqual({ events: [], candidate: null, terminal: null });
   });
+
+  // Task 5 review fix I-1 (spec §4.2, §12 I4): a table DELETED after accept blocks recovery no more than a broken one
+  // does: inspect, collect, handoff and read-evidence only check the path's shape, and a missing path has none to
+  // violate. The methods that read the table still refuse it by name.
+  it("keeps inspect and collect working after the table is deleted, while capabilities still refuses it", async () => {
+    const f = await acceptFixture();
+    expect((await acceptStart(f.envelope, binding(f.path, f.launchFile))).kind).toBe("accepted");
+    await expect.poll(() => launches(f.launchFile)).toEqual(["launch"]);
+    await unlink(f.path);
+    expectNamed(await runControlCommand(["capabilities", "--agents", f.path], JSON.stringify({ agent: null })), "agents-table-invalid");
+    const inspected = await runControlCommand(["inspect", "--agents", f.path], JSON.stringify(f.envelope));
+    expect(inspected.code, inspected.stderr).toBe(0);
+    expect(JSON.parse(inspected.stdout)).toMatchObject({ kind: "accepted" });
+    const collected = await runControlCommand(["collect", "--agents", f.path], JSON.stringify({ input: f.envelope, afterSeq: 0 }));
+    expect(collected.code, collected.stderr).toBe(0);
+    expect(JSON.parse(collected.stdout)).toEqual({ events: [], candidate: null, terminal: null });
+  });
 });
 
 describe("accept under the installation table (agent selection)", { timeout: 30_000 }, () => {
@@ -191,10 +208,12 @@ describe("accept under the installation table (agent selection)", { timeout: 30_
 });
 
 describe("worker adapter from the sealed config (agent selection)", { timeout: 30_000 }, () => {
-  it("refuses a sealed config whose schema or kind does not hold, before any phase", async () => {
+  // Task 5 review fix M-a: bytes that are not JSON at all are the same named failure as a config that fails its schema.
+  it("refuses a sealed config whose schema or kind does not hold, or that is not JSON, before any phase", async () => {
     for (const corrupt of [
-      (config: Record<string, unknown>) => ({ ...config, schema: "ccloop-agent-config-v0" }),
-      (config: Record<string, unknown>) => ({ ...config, kind: "claude" }),
+      (config: Record<string, unknown>) => canonicalJson({ ...config, schema: "ccloop-agent-config-v0" }),
+      (config: Record<string, unknown>) => canonicalJson({ ...config, kind: "claude" }),
+      () => "not json",
     ]) {
       const dir = await sourceRoot("ccloop-agents-worker-");
       const sealed = await sealCodex({
@@ -208,7 +227,7 @@ describe("worker adapter from the sealed config (agent selection)", { timeout: 3
       const envelope = startEnvelope({ sourceDir: dir, targetRepo: dir, contract: controlContract(dir), agent: sealed.selection, configHash: sealed.configHash });
       const controlDir = join(dir, "control");
       await ensurePrivateDirectory(dir, controlDir);
-      await atomicReplacePrivateFile(dir, join(controlDir, "config.json"), Buffer.from(canonicalJson(corrupt(sealed.config as unknown as Record<string, unknown>))));
+      await atomicReplacePrivateFile(dir, join(controlDir, "config.json"), Buffer.from(corrupt(sealed.config as unknown as Record<string, unknown>)));
       await atomicReplacePrivateFile(dir, join(controlDir, "envelope.json"), Buffer.from(canonicalJson(envelope)));
       await writeAccepted(dir, {
         protocol: 1, envelopeHash: canonicalHash(envelope), executionId: "execution-1", configHash: sealed.configHash,

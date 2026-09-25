@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseMaterializedAgentConfig } from "../agents/materialize.js";
 import { getDescriptor } from "../agents/registry.js";
+import { AgentError } from "../agents/types.js";
 import { createStopRequestSignal, runLoop } from "../controller/runLoop.js";
 import { isTerminalRunStatus } from "../state/stateMachine.js";
 import { atomicReplacePrivateFile, readPrivateFile } from "./paths.js";
@@ -107,7 +108,13 @@ export async function runControlWorker(argv: string[]): Promise<void> {
     const envelope = parseControlRequest("accept", await readJson(sourceDir, "envelope.json")) as StartEnvelopeV2;
     // Agent selection (2026-09-26), spec §4.6: accept sealed the materialized agent config; re-check it with the
     // rules that admitted it (agent-config-invalid, controller ruling W1-19) before any phase runs.
-    const config = parseMaterializedAgentConfig(await readJson(sourceDir, "config.json"));
+    // Task 5 review fix M-a: bytes that are not JSON are the same named failure as a config that fails its schema.
+    const config = parseMaterializedAgentConfig(await readJson(sourceDir, "config.json").catch((error: unknown) => {
+      if (error instanceof Error && error.message === "control-config-invalid") {
+        throw new AgentError("agent-config-invalid", "config.json is not JSON");
+      }
+      throw error;
+    }));
     await initializeProcessRegistry(sourceDir);
     let cumulativeTokens = 0;
     const stopRequested = createStopRequestSignal();

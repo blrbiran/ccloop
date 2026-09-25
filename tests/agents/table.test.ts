@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -129,6 +129,18 @@ describe("checking only the table path's shape", () => {
     await expect(assertAgentsTablePath(join(dir, "link.json"))).rejects.toThrow(invalid);
     await expect(assertAgentsTablePath(dir)).rejects.toThrow(invalid);
     await expect(assertAgentsTablePath("agents.json")).rejects.toThrow(invalid);
+  });
+
+  // Task 5 review fix I-1: a deleted table must not block recovery either; a symlink whose target is gone is still a
+  // symlink, not a missing table, and stays refused. Reading a missing table is still refused.
+  it("accepts a path with nothing at it, but still refuses a dangling symlink", async () => {
+    const dir = await privateDir();
+    const path = await writeTable(dir);
+    await unlink(path);
+    await expect(assertAgentsTablePath(path)).resolves.toBeUndefined();
+    await symlink(join(dir, "gone.json"), join(dir, "dangling.json"));
+    await expect(assertAgentsTablePath(join(dir, "dangling.json"))).rejects.toThrow(invalid);
+    await expect(readAgentsTable(path)).rejects.toThrow(invalid);
   });
 
   it("refuses a path that reaches the table through a symlinked directory", async () => {
