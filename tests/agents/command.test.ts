@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -74,6 +74,44 @@ describe("ccloop agents detect", () => {
       expect(await runAgentsCommand(argv)).toEqual({ code: 1, stdout: "", stderr: "agents-command-invalid\n" });
     },
   );
+});
+
+// Plan §0.2 P23 m7: `agents detect`/`agents validate` must never write under HOME or any of the four XDG roots,
+// even when those are redirected to the sandbox's temp directories (as the real gate does).
+describe("agents detect/validate write nothing under a redirected HOME or the XDG roots", () => {
+  it("leaves HOME, XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_STATE_HOME and XDG_CACHE_HOME untouched", async () => {
+    const r = await root();
+    const home = join(r, "home");
+    const xdg = {
+      XDG_CONFIG_HOME: join(r, "xdg-config"),
+      XDG_DATA_HOME: join(r, "xdg-data"),
+      XDG_STATE_HOME: join(r, "xdg-state"),
+      XDG_CACHE_HOME: join(r, "xdg-cache"),
+    };
+    await mkdir(home, { recursive: true, mode: 0o700 });
+    for (const dir of Object.values(xdg)) await mkdir(dir, { recursive: true, mode: 0o700 });
+    const path = await cli(join(r, "bin"), "2.1.282");
+    const table = await tableWith(r, { claude: record(path, "2.1.282") });
+
+    const saved: Record<string, string | undefined> = { HOME: process.env.HOME, ...Object.fromEntries(Object.keys(xdg).map((key) => [key, process.env[key]])) };
+    process.env.HOME = home;
+    Object.assign(process.env, xdg);
+    try {
+      const probe = async (command: string[]) => (command[0] === path ? "2.1.282" : null);
+      const detected = await runAgentsCommand(["detect", "--path", join(r, "bin")], { probe });
+      expect(detected.code).toBe(0);
+      const validated = await runAgentsCommand(["validate", table], { probe });
+      expect(validated.code).toBe(0);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+    for (const dir of [home, ...Object.values(xdg)]) {
+      expect(await readdir(dir, { recursive: true })).toEqual([]);
+    }
+  });
 });
 
 describe("the ccloop CLI entry", () => {
