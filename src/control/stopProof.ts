@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { canonicalJson, type ArtifactRefV1 } from "./protocol.js";
 import type { AcceptedRecordV1 } from "./store.js";
-import { readPrivateFile } from "./paths.js";
+import { atomicReplacePrivateFile, readPrivateFile } from "./paths.js";
 import { writeEvidence } from "./evidence.js";
 
 const execFileAsync = promisify(execFile);
@@ -62,6 +62,32 @@ async function readProcesses(sourceDir: string): Promise<RegisteredProcessV1[] |
   }
 }
 
+const completedSchema = z.object({ count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict();
+
+function completedPath(sourceDir: string): string {
+  return join(sourceDir, "control", "phases-completed.json");
+}
+
+/** Absent means no phase completed with a result (0); unreadable or malformed means unknown (null). */
+async function readCompletedPhases(sourceDir: string): Promise<number | null> {
+  try {
+    const parsed = completedSchema.safeParse(await readJson(sourceDir, completedPath(sourceDir)));
+    return parsed.success ? parsed.data.count : null;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? 0 : null;
+  }
+}
+
+/**
+ * Agent selection (2026-09-26) §4.7b / §12 C7: the worker counts every phase that completed with a result.
+ * Such a phase ran a provider process, so a run that counted one but registered none cannot prove isolation.
+ */
+export async function recordCompletedPhase(sourceDir: string): Promise<void> {
+  const current = await readCompletedPhases(sourceDir);
+  if (current === null) throw new Error("control-phases-completed-invalid");
+  await atomicReplacePrivateFile(sourceDir, completedPath(sourceDir), Buffer.from(`${canonicalJson({ count: current + 1 })}\n`));
+}
+
 async function ownerReleased(sourceDir: string): Promise<boolean> {
   try {
     const parsed = ownerSchema.safeParse(await readJson(sourceDir, join(sourceDir, "run", "owner-record.json")));
@@ -117,6 +143,9 @@ export async function proveStopped(record: StopProofRecord, deps: StopProofDeps 
   if (!(await ownerReleased(record.sourceDir))) return null;
   const second = await readProcesses(record.sourceDir);
   if (second === null || !(await probeAll(second, probe))) return null;
+  // §4.7b: zero registrations prove isolation only when no phase completed with a result.
+  const completed = await readCompletedPhases(record.sourceDir);
+  if (completed === null || (completed > 0 && second.length === 0)) return null;
 
   const evidence = {
     executionId: record.accepted.executionId,

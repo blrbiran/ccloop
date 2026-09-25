@@ -1183,6 +1183,9 @@ export interface RunControlHooks {
     elapsedMs: number;
     tokenUsage: number | null;
     usageEvidence: UsageEvidence | undefined;
+    // Agent selection (2026-09-26) §4.7b: true only when the phase returned its result; a phase settled
+    // with no result, or only with usage observed before an abort, is false.
+    completedWithResult: boolean;
   }) => Promise<void>;
   onProcessRegistered?: (process: {
     pid: number;
@@ -1218,6 +1221,7 @@ export async function runLoopFromState(
     attempt: number,
     elapsedMs: number,
     result?: { tokenUsage?: number; usageEvidence?: UsageEvidence } | null,
+    usageOnly = false,
   ): Promise<void> => {
     const key = `${attempt}:${phase}`;
     if (settledPhases.has(key)) return;
@@ -1230,6 +1234,7 @@ export async function runLoopFromState(
       elapsedMs,
       tokenUsage: result?.tokenUsage ?? null,
       usageEvidence: result?.usageEvidence,
+      completedWithResult: !usageOnly && result !== undefined && result !== null,
     });
   };
   const persistHandoffBoundary = async (type: "handoff_boundary" | "handoff_interrupted", detail: string): Promise<RunState> => {
@@ -1831,7 +1836,7 @@ export async function runLoopFromState(
       if (error instanceof PhaseExecutionError) {
         const failedPhase = activePhase;
         if (activePhase !== null) {
-          await settlePhase(activePhase, attempt, error.elapsedMs, error.tokenUsage === null ? undefined : { tokenUsage: error.tokenUsage });
+          await settlePhase(activePhase, attempt, error.elapsedMs, error.tokenUsage === null ? undefined : { tokenUsage: error.tokenUsage }, true);
         }
 
         if (handoffAborted() || handoffRequested()) {

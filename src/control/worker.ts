@@ -18,6 +18,7 @@ import {
   sealAcceptedWorker,
 } from "./store.js";
 import { readProcessStartedAt } from "./workerLauncher.js";
+import { recordCompletedPhase } from "./stopProof.js";
 import { testCrashPoint } from "./testCrashPoint.js";
 import { materializeResultRepository } from "./resultRepository.js";
 import { registerAttemptRefNamespace } from "../workspace/worktreeManager.js";
@@ -163,6 +164,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
         }
       },
       onPhaseSettled: async (observation) => {
+        if (observation.completedWithResult) await recordCompletedPhase(sourceDir);
         if (observation.tokenUsage !== null) {
           const next = cumulativeTokens + observation.tokenUsage;
           if (!Number.isSafeInteger(next)) throw new Error("control-usage-overflow");
