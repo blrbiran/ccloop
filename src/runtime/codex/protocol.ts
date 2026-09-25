@@ -43,6 +43,9 @@ export type PhaseResults = {plan:AttemptPlan; execute:ExecutionResult; verify:Ve
  * `turn.completed` usage in the stdout a phase wrote before it stopped, or null when there is none.
  * Unlike decodeCodexResult this tolerates a torn last line and other rows: a stopped phase's stdout
  * ends wherever the kill landed.
+ * Honest registration: real codex reports usage only at phase end, so a handoff deadline that aborts
+ * mid-turn usually leaves no `turn.completed` line to read here — this function then answers null (not
+ * an estimate) and that run's usage stays unknown, keeping it unrecoverable.
  */
 export function observedTurnUsage(events: string): number | null {
   let observed: number | null = null;
