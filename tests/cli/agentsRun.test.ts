@@ -113,6 +113,29 @@ describe("ccloop run --agents --agent-selection (Orca agent selection, spec §4.
     expect(existsSync(join(w.runDir, "loop-state.json"))).toBe(false);
   }, 30_000);
 
+  // Orca wave-2 review I-3 ruling (2026-09-26): a CLI whose version cannot be observed is not a refusal. `run --agents`
+  // still exits 1 before anything runs, but stderr must not start with a code: Orca reads a leading hyphenated code on
+  // exit 1 as a named refusal (reconcile-refused, blocks for good) and anything else as reconcile-spawn (retryable).
+  it("fails an unobservable --version with a non-code message, before anything runs", async () => {
+    const w = await world();
+    const silent = join(w.dir, "silent.mjs");
+    await writeFile(silent, 'console.log("no version here");\n', { mode: 0o600 });
+    for (const command of [["/usr/bin/false"], [process.execPath, silent]] as [string, ...string[]][]) {
+      const table: AgentsTableV1 = { schema: "ccloop-agents-table-v1", installations: { "claude-fake": { ...w.table.installations["claude-fake"]!, command } } };
+      await writeFile(w.tablePath, JSON.stringify(table), { mode: 0o600 });
+      // The hash Orca would have frozen: computed with the table's own version answered.
+      const { resolution } = await resolveAgent(table, w.selection, { probeVersion: async () => "9.9.9-fake" });
+      await writeFile(w.selectionPath, JSON.stringify({ selection: w.selection, configHash: resolution.configHash }), { mode: 0o600 });
+      const result = await runCli(w);
+      expect(result.code).toBe(1);
+      expect(result.stderr).not.toMatch(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+/);
+      expect(result.stderr).not.toContain("agent-version-drift");
+      expect(result.stderr).toContain("Could not observe the version");
+      expect(existsSync(`${w.marker}.argv`)).toBe(false);
+      expect(existsSync(join(w.runDir, "loop-state.json"))).toBe(false);
+    }
+  }, 30_000);
+
   it("refuses a malformed selection file by name", async () => {
     const w = await world();
     await writeFile(w.selectionPath, JSON.stringify({ selection: { ...w.selection, extra: true }, configHash: "0".repeat(64) }), { mode: 0o600 });

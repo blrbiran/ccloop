@@ -72,8 +72,15 @@ export async function resolveAgent(
   descriptor.validateSelection(selection);
   const config: MaterializedAgentConfigV1 = { schema: "ccloop-agent-config-v1", kind: installation.kind, installation, selection };
   const observed = await (deps.probeVersion ?? probeVersion)(installation.command);
+  // Orca wave-2 review I-3 (2026-09-26): a probe that observed no version at all (spawn failure, non-zero exit, no
+  // x.y.z, oversized output, timeout) may be transient, so it is NOT the named refusal agent-version-drift. It is a
+  // plain Error: `control` exits 1 (Orca treats it as unknown and retries) and `run --agents` exits 1 with a message
+  // that is not a code (Orca: reconcile-spawn). Only an observed version that differs from the table is a drift.
+  if (observed === null) {
+    throw new Error(`Could not observe the version of installation ${JSON.stringify(partial.agent)}: \`--version\` answered no x.y.z (table ${installation.version})`);
+  }
   if (observed !== installation.version) {
-    throw new AgentError("agent-version-drift", `${partial.agent}: table ${installation.version}, observed ${observed ?? "none"}`);
+    throw new AgentError("agent-version-drift", `${partial.agent}: table ${installation.version}, observed ${observed}`);
   }
   return {
     config,

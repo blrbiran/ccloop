@@ -130,6 +130,24 @@ describe("control over the installation table (agent selection)", { timeout: 30_
     expectNamed(await runControlCommand(["capabilities", "--agents", path], JSON.stringify({ agent: null })), "agents-table-invalid");
   });
 
+  // Orca wave-2 review I-3 ruling (2026-09-26): a CLI whose version cannot be observed (here: `--version` exits 1, or
+  // exits 0 printing no x.y.z) is not the named refusal agent-version-drift. Control answers it as an unnamed failure,
+  // exit 1, so Orca retries it as unknown instead of blocking the run for good.
+  it("answers an unobservable CLI version with exit 1, not a named refusal", async () => {
+    const dir = await sourceRoot("ccloop-agents-unobservable-");
+    const { table } = await twoAgentTable(dir);
+    const silent = join(dir, "silent.mjs");
+    await writeFile(silent, 'console.log("no version here");\n', { mode: 0o600 });
+    for (const command of [["/usr/bin/false"], [process.execPath, silent]] as [string, ...string[]][]) {
+      const unobservable = await writeAgentsTable({ claude: { ...table.installations.claude!, command } });
+      const result = await runControlCommand(["capabilities", "--agents", unobservable.path], JSON.stringify({ agent: { agent: "claude" } }));
+      expect(result.code, result.stderr).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).not.toContain("agent-version-drift");
+      expect(result.stderr).toContain("Could not observe the version");
+    }
+  });
+
   it("refuses the retired --adapter forms for every control method", async () => {
     const dir = await sourceRoot("ccloop-agents-retired-");
     const { path } = await twoAgentTable(dir);
@@ -202,6 +220,23 @@ describe("accept under the installation table (agent selection)", { timeout: 30_
     expect(f.table.installations.codex!.version).not.toBe("0.0.0-stale");
     const drifted = await writeAgentsTable({ ...f.table.installations, codex: { ...f.table.installations.codex!, version: "0.0.0-stale" } });
     await expect(acceptStart(f.envelope, binding(drifted.path, f.launchFile))).rejects.toMatchObject({ code: "agent-version-drift" });
+    expect(await readAcceptedOptional(f.dir)).toBeNull();
+    expect(await launches(f.launchFile)).toEqual([]);
+  });
+});
+
+describe("accept over an unobservable CLI version (Orca wave-2 review I-3)", { timeout: 30_000 }, () => {
+  // An accept whose version probe observed nothing fails unnamed (control exits 1: Orca inspects and re-accepts)
+  // and, like every refusal before the record, persists nothing and launches nothing.
+  it("fails without a code and without persisting anything", async () => {
+    const f = await acceptFixture();
+    const unobservable = await writeAgentsTable({ ...f.table.installations, codex: { ...f.table.installations.codex!, command: ["/usr/bin/false"] } });
+    const failure = await acceptStart(f.envelope, binding(unobservable.path, f.launchFile)).then(
+      () => { throw new Error("accepted"); },
+      (error: unknown) => error as Error,
+    );
+    expect(failure).not.toHaveProperty("code");
+    expect(failure.message).toContain("Could not observe the version");
     expect(await readAcceptedOptional(f.dir)).toBeNull();
     expect(await launches(f.launchFile)).toEqual([]);
   });

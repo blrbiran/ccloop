@@ -72,9 +72,30 @@ describe("resolving a selection against the table", () => {
   });
 
   // Spec §12 C6: an in-place upgrade changes neither the table nor the hash; only the probe can see it.
+  // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): only an OBSERVED version
+  // that differs from the table is the named refusal agent-version-drift (Orca wave-2 review I-3 ruling); a probe
+  // that observed nothing is the next criterion's non-named failure, no longer a drift.
   it("refuses an installation whose CLI no longer reports the table's version", async () => {
-    await expect(resolveAgent(table, { agent: "claude" }, { probeVersion: async () => "2.1.283" })).rejects.toMatchObject({ code: "agent-version-drift" });
-    await expect(resolveAgent(table, { agent: "claude" }, { probeVersion: async () => null })).rejects.toMatchObject({ code: "agent-version-drift" });
+    await expect(resolveAgent(table, { agent: "claude" }, { probeVersion: async () => "2.1.283" })).rejects.toMatchObject({
+      code: "agent-version-drift",
+      message: "agent-version-drift: claude: table 2.1.282, observed 2.1.283",
+    });
+  });
+
+  // Orca wave-2 review I-3 ruling (2026-09-26): an unobservable version (the CLI failed to run, exited non-zero,
+  // printed no x.y.z, printed too much, or timed out) may be transient (load, EAGAIN/EMFILE). A named refusal would
+  // block the run in Orca for good; a plain Error makes `control` exit 1 (retryable unknown) and makes `run --agents`
+  // print a message that is not a code (reconcile-spawn). Its message must therefore not start with a hyphenated code.
+  it("fails an installation whose version it cannot observe without naming a refusal", async () => {
+    const failure = await resolveAgent(table, { agent: "claude" }, { probeVersion: async () => null }).then(
+      () => { throw new Error("resolved"); },
+      (error: unknown) => error as Error,
+    );
+    expect(failure).not.toHaveProperty("code");
+    expect(failure.name).toBe("Error");
+    expect(failure.message).not.toMatch(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+/);
+    expect(failure.message).not.toContain("agent-version-drift");
+    expect(failure.message).toContain('"claude"');
   });
 
   it("probes the real CLI when no probe is injected", async () => {
