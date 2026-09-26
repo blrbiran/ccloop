@@ -53,9 +53,22 @@ export function probeVersion(command: string[], options: { timeoutMs?: number } 
  * checked against `--version` at every resolution (agent-version-drift), so an in-place upgrade still stops new
  * work until the table records the new version -- but once it does, a group frozen under the old version resolves
  * to the same hash and can go on instead of being refused forever as control-config-hash-mismatch.
+ *
+ * *** ERRATUM (Orca ruling review R1, HUMAN RULING 2026-09-27: "command 等安装字段 => 同意移除hash") ***
+ * "without the installation's `version`" is no longer the whole list: `command`, `timeoutMs` and `killGraceMs` are
+ * left out as well. `command` is where the CLI is installed, not which agent runs (a path under
+ * ~/.nvm/versions/node/<v>/ moves with the node version); the two limits bound a run without changing the agent.
+ * Hashing them would strand a started group the same way hashing the version did. Still hashed: kind, `configDir`
+ * (account and settings), the kind's own fields, and the selection. The sealed config.json still records every field.
  */
 export function agentConfigHash(config: MaterializedAgentConfigV1): string {
-  const { version: _checkedByDriftNotHash, ...installation } = config.installation;
+  const {
+    version: _checkedByDriftNotHash,
+    command: _whereInstalledNotWhich,
+    timeoutMs: _runLimitNotIdentity,
+    killGraceMs: _stopLimitNotIdentity,
+    ...installation
+  } = config.installation;
   return canonicalHash({ ...config, installation });
 }
 

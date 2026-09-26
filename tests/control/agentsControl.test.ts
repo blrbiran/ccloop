@@ -94,7 +94,9 @@ describe("control over the installation table (agent selection)", { timeout: 30_
 
     // Rewritten for Orca final review I-2 (human ruling 2026-09-26, named by the human): configHash leaves out
     // installation.version, which the --version drift check owns; every other field of the config is still hashed.
-    const hashed = ({ version: _driftChecked, ...installation }: InstallationV1) => installation;
+    // ERRATUM (Orca ruling review R1, human ruling 2026-09-27, rewrite covered by that ruling): "every other field of
+    // the config is still hashed" no longer holds -- command, timeoutMs and killGraceMs are left out with the version.
+    const hashed = ({ version: _driftChecked, command: _where, timeoutMs: _limit, killGraceMs: _grace, ...installation }: InstallationV1) => installation;
     const claude = await runControlCommand(["capabilities", "--agents", path], JSON.stringify({ agent: { agent: "claude", model: "opus" } }));
     expect(claude.code, claude.stderr).toBe(0);
     const claudeAnswer = JSON.parse(claude.stdout);
@@ -210,7 +212,9 @@ describe("accept under the installation table (agent selection)", { timeout: 30_
     });
     // Rewritten for Orca final review I-2 (human ruling 2026-09-26, named by the human): configHash leaves out
     // installation.version, which the --version drift check owns; every other field of the config is still hashed.
-    const { installation: { version: _driftChecked, ...hashedInstallation }, ...sealedRest } = JSON.parse(sealed);
+    // ERRATUM (Orca ruling review R1, human ruling 2026-09-27, rewrite covered by that ruling): command, timeoutMs and
+    // killGraceMs are left out of the hash as well; the sealed config above still records every field.
+    const { installation: { version: _driftChecked, command: _where, timeoutMs: _limit, killGraceMs: _grace, ...hashedInstallation }, ...sealedRest } = JSON.parse(sealed);
     expect(canonicalHash({ ...sealedRest, installation: hashedInstallation })).toBe(f.envelope.claim.configHash);
   });
 
@@ -235,6 +239,19 @@ describe("accept under the installation table (agent selection)", { timeout: 30_
     expect((await acceptStart(envelope, binding(f.path, f.launchFile))).kind).toBe("accepted");
     const sealed = JSON.parse(await readFile(join(f.dir, "control", "config.json"), "utf8"));
     expect(sealed.installation.version).toBe(current);
+  });
+
+  // Orca ruling review R1 (human ruling 2026-09-27): a claim frozen while the table named another install path and
+  // other run limits is accepted under the table as it is now, and the sealed config records the current fields.
+  it("accepts a claim frozen before the CLI moved or its run limits changed, under the table as it is now", async () => {
+    const f = await acceptFixture();
+    const current = f.table.installations.codex!;
+    const beforeMove: AgentsTableV1 = { ...f.table, installations: { ...f.table.installations, codex: { ...current, command: ["/old/place/codex"], timeoutMs: current.timeoutMs + 1, killGraceMs: current.killGraceMs + 1 } } };
+    const frozen = await resolveAgent(beforeMove, { agent: "codex", model: "fixture" }, { probeVersion: async () => current.version });
+    const envelope = { ...f.envelope, claim: { ...f.envelope.claim, agent: frozen.resolution.selection, configHash: frozen.resolution.configHash } };
+    expect((await acceptStart(envelope, binding(f.path, f.launchFile))).kind).toBe("accepted");
+    const sealed = JSON.parse(await readFile(join(f.dir, "control", "config.json"), "utf8"));
+    expect(sealed.installation).toEqual(current);
   });
 
   it("refuses a CLI whose --version drifted from the table, before anything is persisted", async () => {

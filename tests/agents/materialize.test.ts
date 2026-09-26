@@ -50,7 +50,9 @@ describe("resolving a selection against the table", () => {
     expect(config).toEqual({ schema: "ccloop-agent-config-v1", kind: "claude", installation: table.installations.claude, selection: resolution.selection });
     // Rewritten for Orca final review I-2 (human ruling 2026-09-26, named by the human): configHash leaves out
     // installation.version, which the --version drift check owns; every other field of the config is still hashed.
-    const { version: _driftChecked, ...hashedInstallation } = config.installation;
+    // ERRATUM (Orca ruling review R1, human ruling 2026-09-27, rewrite covered by that ruling): "every other field of
+    // the config is still hashed" no longer holds -- command, timeoutMs and killGraceMs are left out with the version.
+    const { version: _driftChecked, command: _where, timeoutMs: _limit, killGraceMs: _grace, ...hashedInstallation } = config.installation;
     expect(resolution.configHash).toBe(canonicalHash({ ...config, installation: hashedInstallation }));
     expect((await resolveAgent(table, { agent: "codex" }, { probeVersion: probe })).resolution).toMatchObject({
       selection: { agent: "codex", model: "gpt-6-sol", contextWindow: "agent-default" },
@@ -111,6 +113,8 @@ describe("resolving a selection against the table", () => {
 });
 
 // Spec §9 criterion 2 (§12 I13): the hash covers exactly one installation record plus the selection.
+// ERRATUM (Orca ruling review R1, human ruling 2026-09-27): not the whole record -- version, command, timeoutMs and
+// killGraceMs are left out (src/agents/materialize.ts agentConfigHash).
 describe("materialized config hash", () => {
   const hashOf = async (source: AgentsTableV1, partial: PartialSelectionV1 = { agent: "claude" }) =>
     (await resolveAgent(source, partial, { probeVersion: async (command) => (command[0] === "/opt/claude2" ? "2.1.282" : probe(command)) })).resolution.configHash;
@@ -119,19 +123,34 @@ describe("materialized config hash", () => {
     expect(await hashOf(table)).toBe(await hashOf(structuredClone(table)));
   });
 
-  it("changes with every field of the selected record and of the selection", async () => {
+  // Rewritten for Orca ruling review R1 (human ruling 2026-09-27, "command 等安装字段 => 同意移除hash"): command,
+  // timeoutMs and killGraceMs moved to the next criterion; this one now encodes that every field that decides the
+  // agent's behaviour -- configDir, the kind's own fields (codex sandbox), model, context -- still
+  // changes the hash, so leaving out too much is caught.
+  it("changes with every hashed field of the selected record and of the selection", async () => {
+    const base = await hashOf(table);
+    const claude = table.installations.claude!;
+    expect(await hashOf({ ...table, installations: { ...table.installations, claude: { ...claude, configDir: "/Users/me/.claude-work" } } })).not.toBe(base);
+    expect(await hashOf(table, { agent: "claude", model: "opus" })).not.toBe(base);
+    expect(await hashOf(table, { agent: "claude", contextWindow: 1_000_000 })).not.toBe(base);
+    const codexBase = await hashOf(table, { agent: "codex" });
+    const codex = table.installations.codex!;
+    expect(await hashOf({ ...table, installations: { ...table.installations, codex: { ...codex, sandbox: "read-only" } } }, { agent: "codex" })).not.toBe(codexBase);
+  });
+
+  // Orca ruling review R1 (human ruling 2026-09-27): where the CLI is installed and the run-time limits are not the
+  // agent's identity. A group frozen before node or the package manager moved the binary can go on once the table
+  // records the new path.
+  it("does not change when the table moves the CLI or changes its run limits", async () => {
     const base = await hashOf(table);
     const claude = table.installations.claude!;
     for (const changed of [
       { ...claude, command: ["/opt/claude2"] as [string, ...string[]] },
-      { ...claude, configDir: "/Users/me/.claude-work" },
       { ...claude, timeoutMs: 1_800_001 },
       { ...claude, killGraceMs: 5_001 },
     ]) {
-      expect(await hashOf({ ...table, installations: { ...table.installations, claude: changed } })).not.toBe(base);
+      expect(await hashOf({ ...table, installations: { ...table.installations, claude: changed } })).toBe(base);
     }
-    expect(await hashOf(table, { agent: "claude", model: "opus" })).not.toBe(base);
-    expect(await hashOf(table, { agent: "claude", contextWindow: 1_000_000 })).not.toBe(base);
   });
 
   it("does not change when another installation record changes", async () => {
@@ -151,7 +170,9 @@ describe("materialized config hash", () => {
     expect(after).toBe(before);
   });
 
-  it("is the canonical hash of the materialized config", async () => {
+  // Renamed for Orca ruling review R30 (human ruling 2026-09-27, "R30 授权改判据"): the old title "is the canonical
+  // hash of the materialized config" stopped being true when fields left the hash; the assertion is unchanged.
+  it("answers the hash agentConfigHash takes of the materialized config", async () => {
     const { config, resolution } = await resolveAgent(table, { agent: "codex" }, { probeVersion: probe });
     expect(agentConfigHash(config)).toBe(resolution.configHash);
   });

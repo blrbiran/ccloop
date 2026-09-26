@@ -113,6 +113,19 @@ describe("ccloop run --agents --agent-selection (Orca agent selection, spec §4.
     expect(JSON.parse(await readFile(join(w.runDir, "loop-state.json"), "utf8")).status).toBe("succeeded");
   }, 30_000);
 
+  // Orca ruling review R1 (human ruling 2026-09-27): a reconcile selection frozen while the table named another
+  // install path and other run limits runs under the table as it is now.
+  it("runs a selection frozen before the CLI moved or its run limits changed", async () => {
+    const w = await world();
+    const current = w.table.installations["claude-fake"]!;
+    const beforeMove: AgentsTableV1 = { ...w.table, installations: { "claude-fake": { ...current, command: ["/old/place/claude"], timeoutMs: current.timeoutMs + 1, killGraceMs: current.killGraceMs + 1 } } };
+    const { resolution } = await resolveAgent(beforeMove, w.selection, { probeVersion: async () => current.version });
+    await writeFile(w.selectionPath, JSON.stringify({ selection: w.selection, configHash: resolution.configHash }), { mode: 0o600 });
+    const result = await runCli(w);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(await readFile(join(w.runDir, "loop-state.json"), "utf8")).status).toBe("succeeded");
+  }, 30_000);
+
   it("refuses an installation whose --version no longer matches the table, before anything runs", async () => {
     const w = await world("0.0.1");
     // The hash Orca would have frozen for this table: computed with the table's own version answered.

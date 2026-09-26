@@ -33,6 +33,11 @@
 // reported name -- so a suffix can only match at a "> " separator, never at an arbitrary character
 // inside a title. See the round's final-fix-report.md for the reproduction: a synthetic report
 // naming a bare-suffix failure, run through this script before and after this change. ***
+//
+// *** ERRATUM (Orca ruling review R29, HUMAN RULING 2026-09-27: "D组，同意你的建议") -- the roster size stated in
+// the second paragraph above is no longer current: the load timeout "run-scenario CLI > records claudeChildExited as
+// NOT_OBSERVABLE when no adapter descendant was tracked" joined it (see the entry's own comment below and the Orca
+// ledger .superpowers/sdd/2026-09-26-agent-selection/progress.md sections 11 and 13). ***
 import { readFileSync } from "node:fs";
 
 const KNOWN_REDS = new Set([
@@ -52,6 +57,9 @@ const KNOWN_REDS = new Set([
   "accepts the controller's zero-clamped soft budget and records the overrun",
   "matches historical double-space start identities on single-digit days",
   "still reaps registered groups when the observation file becomes unwritable",
+  // Orca ruling review R29 (human ruling 2026-09-27): a 5000 ms load timeout seen once in a full run at load 39
+  // (tests/validation/evidence.test.ts), green 3/3 when rerun alone.
+  "run-scenario CLI > records claudeChildExited as NOT_OBSERVABLE when no adapter descendant was tracked",
 ]);
 
 const reportPath = process.argv[2];
