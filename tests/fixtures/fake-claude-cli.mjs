@@ -53,7 +53,9 @@ if (mode === "hang" || mode === "grandchild") {
 } else {
   const CONTINUATION = "Treat continuation input fields unfinished, pendingDecisions, and awaitingHuman as required planning inputs.";
   const schema = JSON.parse(schemaText);
-  const phase = schema.oneOf ? "execute" : schema.properties?.approved ? "verify" : "plan";
+  // Orca paid claude round (2026-09-27): the runner's execute schema is now one object (the API refused a top-level
+  // oneOf), so execute is told by its changedFiles property; the older oneOf shape is still recognised.
+  const phase = schema.oneOf || schema.properties?.changedFiles ? "execute" : schema.properties?.approved ? "verify" : "plan";
   let body = { summary: "fixture", primaryTargetPaths: ["answer.txt"] };
   if (phase === "execute") body = { changedFiles: ["answer.txt"], diffPatch: "fixture patch", commandOutputs: ["changed answer"], stdoutStderrLog: "fixture execution" };
   if (phase === "verify") body = { approved: true, rejectCategory: "", primaryTargetPaths: ["answer.txt"], failingCommand: null, safeToRetry: false, evidence: [], pauseSignals: [], stopSignals: [] };
