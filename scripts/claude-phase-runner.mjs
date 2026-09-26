@@ -16,43 +16,35 @@ const PLAN_SCHEMA = {
   additionalProperties: false,
 };
 
+// Orca paid claude round (2026-09-27): the Anthropic API takes this schema as a tool's input_schema, which must
+// have `type: "object"` at the top. The earlier top-level `oneOf` of the complete and the partial shapes was refused
+// as "400 tools.N.custom.input_schema.type: Field required" on every execute call (claude 2.1.283, claude-opus-5-5).
+// One object carries both shapes; the partial shape's rule -- completionStatus comes with failureType and
+// failureMessage -- is checked in code on the answer (partialExecutionRuleBroken below).
 const EXECUTION_SCHEMA = {
-  oneOf: [
-    {
-      type: "object",
-      properties: {
-        changedFiles: { type: "array", items: { type: "string" } },
-        diffPatch: { type: "string" },
-        commandOutputs: { type: "array", items: { type: "string" } },
-        stdoutStderrLog: { type: "string" },
-      },
-      required: ["changedFiles", "diffPatch", "commandOutputs", "stdoutStderrLog"],
-      additionalProperties: false,
-    },
-    {
-      type: "object",
-      properties: {
-        completionStatus: { const: "partial" },
-        failureType: { enum: ["timeout", "error"] },
-        failureMessage: { type: "string" },
-        changedFiles: { type: "array", items: { type: "string" } },
-        diffPatch: { type: "string" },
-        commandOutputs: { type: "array", items: { type: "string" } },
-        stdoutStderrLog: { type: "string" },
-      },
-      required: [
-        "completionStatus",
-        "failureType",
-        "failureMessage",
-        "changedFiles",
-        "diffPatch",
-        "commandOutputs",
-        "stdoutStderrLog",
-      ],
-      additionalProperties: false,
-    },
-  ],
+  type: "object",
+  properties: {
+    changedFiles: { type: "array", items: { type: "string" } },
+    diffPatch: { type: "string" },
+    commandOutputs: { type: "array", items: { type: "string" } },
+    stdoutStderrLog: { type: "string" },
+    completionStatus: { type: "string", enum: ["partial"] },
+    failureType: { type: "string", enum: ["timeout", "error"] },
+    failureMessage: { type: "string" },
+  },
+  required: ["changedFiles", "diffPatch", "commandOutputs", "stdoutStderrLog"],
+  additionalProperties: false,
 };
+
+/** Null when an execute answer is a complete one or a well-formed partial one; otherwise what is wrong with it. */
+function partialExecutionRuleBroken(structured) {
+  const partialFields = ["completionStatus", "failureType", "failureMessage"].filter((field) => Object.prototype.hasOwnProperty.call(structured, field));
+  if (partialFields.length === 0) return null;
+  if (structured.completionStatus !== "partial") return "completionStatus must be \"partial\" when any partial field is given";
+  if (structured.failureType !== "timeout" && structured.failureType !== "error") return "a partial answer needs failureType timeout or error";
+  if (typeof structured.failureMessage !== "string") return "a partial answer needs a failureMessage";
+  return null;
+}
 
 const VERIFY_SCHEMA = {
   type: "object",
@@ -428,6 +420,9 @@ async function runClaude(request, claudeCommand, extraArgs) {
     },
   );
 
+  // Orca paid claude round (2026-09-27): the prompt is an argument, so claude reads nothing from stdin; left open, the
+  // pipe made every call wait 3 s ("no stdin data received in 3s, proceeding without it").
+  child.stdin?.end();
   trackClaudeProcessClose(child);
   currentClaudeProcess = child;
 
@@ -483,6 +478,10 @@ async function main() {
 
     if (!structured || typeof structured !== "object") {
       throw new Error("Claude CLI did not return structured_output");
+    }
+    const broken = request.phase === "execute" ? partialExecutionRuleBroken(structured) : null;
+    if (broken !== null) {
+      throw new Error(`claude-execute-partial-incomplete: ${broken}`);
     }
 
     const usageEvidence = buildUsageEvidence(envelope);
