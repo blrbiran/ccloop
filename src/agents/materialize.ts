@@ -47,8 +47,16 @@ export function probeVersion(command: string[], options: { timeoutMs?: number } 
   });
 }
 
+/**
+ * The canonical hash of the materialized config without the installation's `version` (Orca final review I-2, human
+ * ruling 2026-09-26: keep agent CLIs free to upgrade). The version stays in the sealed config.json and is still
+ * checked against `--version` at every resolution (agent-version-drift), so an in-place upgrade still stops new
+ * work until the table records the new version -- but once it does, a group frozen under the old version resolves
+ * to the same hash and can go on instead of being refused forever as control-config-hash-mismatch.
+ */
 export function agentConfigHash(config: MaterializedAgentConfigV1): string {
-  return canonicalHash(config);
+  const { version: _checkedByDriftNotHash, ...installation } = config.installation;
+  return canonicalHash({ ...config, installation });
 }
 
 /**

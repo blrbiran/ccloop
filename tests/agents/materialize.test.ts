@@ -48,7 +48,10 @@ describe("resolving a selection against the table", () => {
     const { resolution, config } = await resolveAgent(table, { agent: "claude", model: "opus" }, { probeVersion: probe });
     expect(resolution.selection).toEqual({ agent: "claude", model: "opus", contextWindow: "agent-default" });
     expect(config).toEqual({ schema: "ccloop-agent-config-v1", kind: "claude", installation: table.installations.claude, selection: resolution.selection });
-    expect(resolution.configHash).toBe(canonicalHash(config));
+    // Rewritten for Orca final review I-2 (human ruling 2026-09-26, named by the human): configHash leaves out
+    // installation.version, which the --version drift check owns; every other field of the config is still hashed.
+    const { version: _driftChecked, ...hashedInstallation } = config.installation;
+    expect(resolution.configHash).toBe(canonicalHash({ ...config, installation: hashedInstallation }));
     expect((await resolveAgent(table, { agent: "codex" }, { probeVersion: probe })).resolution).toMatchObject({
       selection: { agent: "codex", model: "gpt-6-sol", contextWindow: "agent-default" },
       timeoutMs: 900_000,
@@ -137,6 +140,15 @@ describe("materialized config hash", () => {
     expect(await hashOf({ ...table, installations: { ...table.installations, codex } })).toBe(base);
     const { claude } = table.installations;
     expect(await hashOf({ ...table, installations: { claude: claude! } })).toBe(base);
+  });
+
+  // Orca final review I-2 (human ruling 2026-09-26: agent CLIs stay free to upgrade in place). A group frozen before
+  // an upgrade can only go on if the table recording the new version resolves to the hash it froze.
+  it("does not change when the table records an upgraded CLI's new version", async () => {
+    const upgraded: AgentsTableV1 = { ...table, installations: { ...table.installations, claude: { ...table.installations.claude!, version: "2.1.283" } } };
+    const before = (await resolveAgent(table, { agent: "claude" }, { probeVersion: async () => "2.1.282" })).resolution.configHash;
+    const after = (await resolveAgent(upgraded, { agent: "claude" }, { probeVersion: async () => "2.1.283" })).resolution.configHash;
+    expect(after).toBe(before);
   });
 
   it("is the canonical hash of the materialized config", async () => {

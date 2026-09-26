@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { resolveAgent } from "../../src/agents/materialize.js";
+import type { AgentsTableV1, InstallationV1 } from "../../src/agents/types.js";
 import { acceptStart } from "../../src/control/accept.js";
 import { collectExecution } from "../../src/control/collect.js";
 import { runControlCommand } from "../../src/control/command.js";
@@ -91,6 +92,9 @@ describe("control over the installation table (agent selection)", { timeout: 30_
     const dir = await sourceRoot("ccloop-agents-capabilities-");
     const { path, table } = await twoAgentTable(dir);
 
+    // Rewritten for Orca final review I-2 (human ruling 2026-09-26, named by the human): configHash leaves out
+    // installation.version, which the --version drift check owns; every other field of the config is still hashed.
+    const hashed = ({ version: _driftChecked, ...installation }: InstallationV1) => installation;
     const claude = await runControlCommand(["capabilities", "--agents", path], JSON.stringify({ agent: { agent: "claude", model: "opus" } }));
     expect(claude.code, claude.stderr).toBe(0);
     const claudeAnswer = JSON.parse(claude.stdout);
@@ -98,7 +102,7 @@ describe("control over the installation table (agent selection)", { timeout: 30_
     expect(claudeAnswer.selection).toEqual(claudeSelection);
     expect(claudeAnswer).toMatchObject({
       protocol: 3,
-      configHash: canonicalHash({ schema: "ccloop-agent-config-v1", kind: "claude", installation: table.installations.claude, selection: claudeSelection }),
+      configHash: canonicalHash({ schema: "ccloop-agent-config-v1", kind: "claude", installation: hashed(table.installations.claude!), selection: claudeSelection }),
       timeoutMs: table.installations.claude!.timeoutMs,
       killGraceMs: table.installations.claude!.killGraceMs,
       capabilities: { contextWindowTokens: null },
@@ -111,7 +115,7 @@ describe("control over the installation table (agent selection)", { timeout: 30_
     expect(codexAnswer.selection).toEqual(codexSelection);
     expect(codexAnswer).toMatchObject({
       protocol: 3,
-      configHash: canonicalHash({ schema: "ccloop-agent-config-v1", kind: "codex", installation: table.installations.codex, selection: codexSelection }),
+      configHash: canonicalHash({ schema: "ccloop-agent-config-v1", kind: "codex", installation: hashed(table.installations.codex!), selection: codexSelection }),
       timeoutMs: 1_000,
       killGraceMs: 100,
     });
@@ -204,7 +208,10 @@ describe("accept under the installation table (agent selection)", { timeout: 30_
       installation: f.table.installations.codex,
       selection: f.envelope.claim.agent,
     });
-    expect(canonicalHash(JSON.parse(sealed))).toBe(f.envelope.claim.configHash);
+    // Rewritten for Orca final review I-2 (human ruling 2026-09-26, named by the human): configHash leaves out
+    // installation.version, which the --version drift check owns; every other field of the config is still hashed.
+    const { installation: { version: _driftChecked, ...hashedInstallation }, ...sealedRest } = JSON.parse(sealed);
+    expect(canonicalHash({ ...sealedRest, installation: hashedInstallation })).toBe(f.envelope.claim.configHash);
   });
 
   it("refuses a claim whose selection changed after its configHash was taken, before any worker", async () => {
@@ -213,6 +220,21 @@ describe("accept under the installation table (agent selection)", { timeout: 30_
     await expect(acceptStart(changed, binding(f.path, f.launchFile))).rejects.toMatchObject({ code: "control-config-hash-mismatch" });
     expect(await readAcceptedOptional(f.dir)).toBeNull();
     expect(await launches(f.launchFile)).toEqual([]);
+  });
+
+  // Orca final review I-2 (human ruling 2026-09-26: agent CLIs stay free to upgrade in place). A claim frozen while
+  // the CLI answered an older version is accepted once the table records the version the CLI answers now, and the
+  // sealed config keeps that new version as the record of what ran.
+  it("accepts a claim frozen before the CLI was upgraded, once the table records the new version", async () => {
+    const f = await acceptFixture();
+    const current = f.table.installations.codex!.version;
+    expect(current).not.toBe("0.0.0-before-upgrade");
+    const beforeUpgrade: AgentsTableV1 = { ...f.table, installations: { ...f.table.installations, codex: { ...f.table.installations.codex!, version: "0.0.0-before-upgrade" } } };
+    const frozen = await resolveAgent(beforeUpgrade, { agent: "codex", model: "fixture" }, { probeVersion: async () => "0.0.0-before-upgrade" });
+    const envelope = { ...f.envelope, claim: { ...f.envelope.claim, agent: frozen.resolution.selection, configHash: frozen.resolution.configHash } };
+    expect((await acceptStart(envelope, binding(f.path, f.launchFile))).kind).toBe("accepted");
+    const sealed = JSON.parse(await readFile(join(f.dir, "control", "config.json"), "utf8"));
+    expect(sealed.installation.version).toBe(current);
   });
 
   it("refuses a CLI whose --version drifted from the table, before anything is persisted", async () => {

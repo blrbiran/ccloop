@@ -101,6 +101,18 @@ describe("ccloop run --agents --agent-selection (Orca agent selection, spec §4.
     expect(existsSync(join(w.runDir, "loop-state.json"))).toBe(false);
   }, 30_000);
 
+  // Orca final review I-2 (human ruling 2026-09-26: agent CLIs stay free to upgrade in place). A reconcile selection
+  // frozen while the CLI answered an older version runs once the table records the version the CLI answers now.
+  it("runs a selection frozen before the CLI was upgraded, once the table records the new version", async () => {
+    const w = await world();
+    const beforeUpgrade: AgentsTableV1 = { ...w.table, installations: { "claude-fake": { ...w.table.installations["claude-fake"]!, version: "9.9.8-fake" } } };
+    const { resolution } = await resolveAgent(beforeUpgrade, w.selection, { probeVersion: async () => "9.9.8-fake" });
+    await writeFile(w.selectionPath, JSON.stringify({ selection: w.selection, configHash: resolution.configHash }), { mode: 0o600 });
+    const result = await runCli(w);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(await readFile(join(w.runDir, "loop-state.json"), "utf8")).status).toBe("succeeded");
+  }, 30_000);
+
   it("refuses an installation whose --version no longer matches the table, before anything runs", async () => {
     const w = await world("0.0.1");
     // The hash Orca would have frozen for this table: computed with the table's own version answered.
