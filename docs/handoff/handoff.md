@@ -1,4 +1,4 @@
-# ccloop Handoff — *** **G1 缝 A（capability 词汇表）已做完（2026-09-24）** ***；**G1 两缝已做完；Orca 执行驱动轮在本仓库加了四笔（C1–C4）；Orca 的 ④ 又在本仓库加了三笔（C5–C7＋C-3＋D-C7′，2026-09-25）；本仓库没有在飞的工作**
+# ccloop Handoff — *** **Orca 的 agent 选择一轮在本仓库落了 T1–T6（2026-09-26：`src/agents/`、`ccloop agents`、`ClaudeAgentAdapter`、control 走安装表、`run --agents`）；本仓库没有在飞的工作** ***；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -407,43 +407,41 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-09-25 第七版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-09-26 第八版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ **本节不写任何哈希、不记发布状态** —— 提交本文这个动作就会移动 HEAD，人也会自己推远端。
 指代某一笔引**提交主题行**；判发布只跑 `/usr/bin/git ls-remote origin refs/heads/main` 与本地比。
 
 ## 本仓库该知道的
 
-1. *** **Orca 的执行驱动会调本仓库的 `control accept`／`collect`／`read-evidence`／`handoff`／`inspect`，冲突时另起 `ccloop run --adapter codex` 解冲突。** ***
-   依赖本仓库的七笔（按主题行找）：`feat(control): pin control attempts per run, share objects, script fake codex`（C1–C3）、`fix(control): report zero usage for a verify phase that calls no provider`（C4）、
-   `feat(control): answer the handoff request, list only entered phases, delay fake codex`（C5–C7）、`feat(codex): report usage observed before a phase was aborted`（C-3＋D-C7′）、`docs(codex): add the C-3 honest-registration line at the extraction point`。
-   **红线函数与人裁 83 删锁条件一个字没动。**
-2. **C5–C7＋C-3＋D-C7′ 做了什么**（Orca spec `docs/superpowers/specs/2026-09-25-handoff-delivery-design.md` §12／§13）：
-   - C5：`tests/fixtures/fake-codex.mjs` 脚本条目可带 `delayMs`、按 `<task>#continuation` 取、写 `.tasks` 日志（`.calls` 格式不变）、`usageBeforeDelay`。
-   - C6：candidate **和** packet 的 `unresolvedRequestIds` 恒为 `[]`（candidate 已写出 ＝ 请求已被回答；「被打断」由 `result:"partial"` 表达）。
-   - C7：有请求且 run 非终态时，当前 attempt **没进入过**的阶段文件不列 `missing`（进入过的判据：plan＝`currentAttempt>0`，execute＝`execute_started`，verify＝`execution_finished`）；
-     D-C7′：`events.jsonl` 里 `handoff_interrupted` 点名的那个阶段也不列。
-   - C-3（方案 (i)）：阶段被 deadline 中止时，从该阶段已写出的 `events.jsonl` 取最后一条合法的 `turn.completed` usage，取不到仍为 `null`（不当 0、不估）。
-     🔴 *** **真 codex 的 usage 只在阶段末才有 ⇒ 真 codex 下 deadline 中止多半仍是 `null`**（注释里写成了事实，实为推测；已发布，只能追加 ERRATUM）。 ***
-   - **人按人裁 88 指名改写的既有判据只有一条**：`tests/control/handoff.test.ts` > "mechanical handoff packet" > "allows request:null only for natural terminal runs and retains handoff refs for every result"（同文件 "derives blocked facts…" 也被授权，但实测不红、没动）。
-3. *** **真 codex 经本仓库 control 模式只跑通过一次**（2026-09-25，Orca 会话 `af3dc0d3`，单任务、无冲突、无 handoff）。**④ 的 handoff 在真 codex 下从没跑过。** ***
-4. 🟡 **下一件与本仓库有关的**：Orca 的「claude 走 control 模式」一片（人裁，排在 ④ 之后，尚未开始）—— 本仓库 control 今天只接 codex（`src/control/accept.ts`、`src/control/worker.ts` 写死 `parseCodexConfig`／`CodexAdapter`，行号引用前现测），要本仓库一笔改动＋fake claude（`tests/fixtures/fake-claude.mjs` 已有）。**改既有判据仍须人按人裁 88 指名。**
-5. ⚠️ G1 边界不变：只有 ccloop↔Orca 的线上契约归 ccloop；Orca 的 `work item`／`group`／`orca-raw-command-v1`／`expectedRevision` 一律不搬过来。
+1. *** **Orca 的执行驱动调本仓库的 `control accept`／`collect`／`read-evidence`／`handoff`／`inspect`／`capabilities`，冲突时另起 `ccloop run --agents … --agent-selection …` 解冲突。** ***
+   **红线函数与人裁 83 删锁条件一个字没动。** ④ 依赖的七笔（C1–C7＋C-3＋D-C7′）结论不变，细节在 Orca spec `docs/superpowers/specs/2026-09-25-handoff-delivery-design.md` §12／§13。
+2. *** **agent 选择一轮（Orca 会话 `75ec878e`，2026-09-26）在本仓库做了 T1–T6，全部落在 `main`**（按主题行找：从 `feat(agents): add agent descriptors for claude and codex with selection validation` 到 `fix(agents): keep an unobservable CLI version out of the named drift refusal`）： ***
+   - `src/agents/`：描述（claude／codex）、安装表 `ccloop-agents-table-v1`（读表核 O_NOFOLLOW、realpath、属主、`mode & 0o022`）、物化 `ccloop-agent-config-v1` 与 `configHash`、`--version` 探测（观测到且不等 ⇒ `agent-version-drift`；**探不到 ⇒ 非具名失败 exit 1**，波 2 修复）、`detect`／`validate`。
+   - `ccloop agents detect|validate`；`ccloop run --agents <table> --agent-selection <file>`（与 `--adapter` 互斥；`resume`／`sweep` 不支持 `--agents` 起的 run）。
+   - **control 的线上协议变了**：`ccloop control <method> --agents <table>`（`--adapter*` 在 control 下被拒）；start envelope `protocol: 2`、claim 带 `agent`；`capabilities` 请求 `{agent: partial|null}`、应答 `protocol: 3`；只有 capabilities／accept 读表，**删了表也不挡回收**。具名拒绝退 2、stderr `<code>[: detail]`；`run --agents` 的拒绝退 1（两套退出码约定不同，Orca 两边分别解释）。
+   - `ClaudeAgentAdapter`：独立进程组、**先注册再写 prompt**、SIGTERM→`killGraceMs`→SIGKILL；runner 从 `CCLOOP_CLAUDE_COMMAND`／`CCLOOP_CLAUDE_EXTRA_ARGS`（JSON 数组）取 argv，且**不把这两个变量泄漏给 claude 子进程**。1M ＝ `--model <model>[1m]`（本机 claude 二进制内核实过）。旧 `SubprocessClaudeAdapter` 与 `tests/fixtures/fake-claude.mjs` 原样保留。
+   - **停机证明通用闸**：`phases-completed.json` 计数 > 0 而 `processes.json` 为空 ⇒ 不给证明（修掉「零注册空洞成立」，对所有 kind 生效）。
+   - fixtures：新 `tests/fixtures/fake-claude-cli.mjs`（CLI 层）；fake codex 加 `.argv` 与 `--version`（`.calls`／`.tasks` 格式不变）。
+   - **既有判据**：人 2026-09-26「同意修改几个仓库的现有test」（概括授权，**不许放宽**，人裁 88 (b)(c) 照旧）⇒ 本仓库改写约 47 条（T5 45、T3 1、波 2 修复 1），逐条列在 Orca 仓 `.superpowers/sdd/2026-09-26-agent-selection/task-{3,5}-report.md`、`wave2-fix-report.md`。
+3. *** **只在 fake 下验过、只跑了聚焦文件；本仓库全量 `check-known-reds` 本轮没跑**（归 Orca T17）。真 claude 一次没跑。 *** 疑似新 flake：`tests/runtime/codex/runCodexPhase.test.ts > … > kills a TERM-ignoring process before returning abort`（一次全量里红一次，单跑绿）—— T17 判定前**不要**加进已知红名单。
+4. 🟡 **下一件与本仓库有关的**：Orca T16（E2E，会用本仓库副本 build 的 fake claude／fake codex）与 T17（两仓全套门）；之后才是付费真 claude（另问人）、stream-json 逐条 usage（让 claude 下 deadline 中止可续）、opencode／pi／litellm（注册表接口已留）。
+5. ⚠️ G1 边界不变：只有 ccloop↔Orca 的线上契约归 ccloop；Orca 的 `work item`／`group`／分层偏好一律不搬过来。
 
 ## 给本仓库留下的环境事实（**直接用，别再反推**）
 
-- *** **已知红是 13 个名字，用 `node scripts/check-known-reds.mjs` 机械判。** *** ④ 收口时现测：唯一红仍是 `stopProof`，RC 0。
-- 🔴 *** **`/tmp` 会被 macOS 周期清理** *** ⇒ 副本 `git clone --local` 到会话 scratchpad（人裁 137）、软链 `node_modules`、**必须 `npm run build`**；要新版本就重新 clone 到新目录（Tier 0 闸门连副本里的 `git merge` 也拦）。
-- Orca 的 `ORCA_CCLOOP_ADAPTER_CONFIG` 必须 `realpath` 等于自身（写 `/private/tmp/…`）、0600；判据一律指向本仓库副本的 fake codex。
+- *** **已知红仍用 `node scripts/check-known-reds.mjs` 机械判**（名单 13 个名字）；唯一稳定红仍是 `stopProof` 那条，本轮没改名。 ***
+- 🔴 *** **副本**：`git clone --local` 到会话 scratchpad、软链 `node_modules`、**必须 `npm run build`**；要新版本就重新 clone（Tier 0 闸门连副本里的 `git pull --ff-only`／`merge` 也拦）。**主树不跑 `npm run build`／`verify:control`**（会换掉主树 `dist/` 的线上协议）。 ***
+- Orca 的 `ORCA_AGENTS_TABLE` 表：`/private/tmp/…`、0600、`command` 只指向副本的 fake、`version` 等于 fake 的 `--version` 回答。
 - Orca 的端到端判据把 `HOME` 与四个 XDG 根改道并断言零写入 —— **本仓库今后往 `$HOME` 下写东西会让那条判据红**。
 
 ## 本轮实测、本仓库也用得上的
 
-- 🔴 *** **跨仓词表不一致是反复出现的根因**（④ 里又两次：`missing` 把「没跑到」当「丢了」；aborted 阶段的 usage `null` 让对端卡整组）。 *** 接字段前逐个问「对端这个词是什么意思」，修在产生观测的一端。
-- 🔴 子代理会在主树做实验、会替人签名、报的行号会错 ⇒ 派发写死禁令（**包括「临时撤回文件取 RED」**）、收货逐条现测。
+- 🔴 *** **跨仓词表不一致第五、六次**：「isolated」（零注册时空洞成立，已由通用闸修掉）、「fake claude」（runner 层 vs CLI 层，已分成两个文件）；**同一错误码在 `control` 与 `run` 下退出码语义不同**。 *** 接字段前逐个问对端这个词、这个退出码是什么意思。
+- 🔴 子代理会在主树做实验、会替人签名、报的行号会错、声称跑过的变异可能没留证据 ⇒ 派发写死禁令、收货核原始日志。
 
 ## awaitingHuman
 
-- **推送**归人，时机人定。控制器不许 push。⚠️ 这台机器上有东西在把提交推到真实 GitHub 远端（`post-commit` 钩子调混淆过的二进制），要人自己查。
-- `src/runtime/codex/protocol.ts`／`src/runtime/types.ts` 那段「真 codex 只在阶段末报 usage」要不要追加 ERRATUM 改成「推测」—— 归人。
+- **推送**归人。⚠️ 本会话中途 `ls-remote` 现测：本仓库远端已含本轮全部提交，而**本会话无一席执行过 `git push`** ⇒ 推送来自会话外（人或 post-commit 钩子），要人自己查。推 Orca 前先确认两仓 main 的线上协议对得上（envelope 2／capabilities 3）。
+- 本轮改写的既有判据（约 47 条）逐条审；`src/runtime/codex/protocol.ts`／`src/runtime/types.ts`「真 codex 只在阶段末报 usage」要不要追加 ERRATUM —— 仍归人。
 - **`stopProof` 那条稳定红的根因**、**Linux 覆盖**、**M3／M4**（见上文 §2）—— 未变。
