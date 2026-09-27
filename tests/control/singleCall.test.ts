@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectExecution, inspectExecution } from "../../src/control/collect.js";
 import { readEvidence } from "../../src/control/evidence.js";
 import { requestHandoff } from "../../src/control/handoff.js";
@@ -10,6 +10,9 @@ import { atomicReplacePrivateFile, ensurePrivateDirectory } from "../../src/cont
 import { canonicalHash, canonicalJson, type HandoffRequestV1 } from "../../src/control/protocol.js";
 import { writeAccepted } from "../../src/control/store.js";
 import { runControlWorker } from "../../src/control/worker.js";
+import { SINGLE_CALL_ACTIVE_MARGIN_MS } from "../../src/control/singleCall.js";
+import { ClaudeAgentAdapter } from "../../src/runtime/claude/claudeAgentAdapter.js";
+import { SingleCallOutputInvalid, type SingleCallRequest } from "../../src/runtime/types.js";
 import { FAKE_CLAUDE_CLI, claudeInstallation, sealClaude, singleCallEnvelope } from "./agentsFixture.js";
 
 // Orca single-call estimate (2026-09-27), spec §5.2, §5.3 and §8.2 "worker 分支": single-call work runs in the control
@@ -27,14 +30,14 @@ afterEach(async () => {
   }
 });
 
-async function world(mode: "script" | "usage-then-hang" | "hang", script: unknown = {}) {
+async function world(mode: "script" | "usage-then-hang" | "hang", script: unknown = {}, limits = { timeoutMs: 60_000, killGraceMs: 300 }) {
   const sourceDir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-single-call-source-")));
   const aux = await realpath(await mkdtemp(join(tmpdir(), "ccloop-single-call-aux-")));
   dirs.push(sourceDir, aux);
   const marker = join(aux, "marker.json"), scriptPath = join(aux, "script.json");
   await writeFile(scriptPath, JSON.stringify(script));
   const command: [string, ...string[]] = mode === "script" ? [process.execPath, FAKE_CLAUDE_CLI, mode, marker, scriptPath] : [process.execPath, FAKE_CLAUDE_CLI, mode, marker];
-  const sealed = await sealClaude(await claudeInstallation(command, { timeoutMs: 60_000, killGraceMs: 300 }));
+  const sealed = await sealClaude(await claudeInstallation(command, limits));
   const envelope = singleCallEnvelope({ sourceDir, agent: sealed.selection, configHash: sealed.configHash });
   const controlDir = join(sourceDir, "control");
   await ensurePrivateDirectory(sourceDir, controlDir);
@@ -177,5 +180,70 @@ describe("single-call work through the control worker (Orca single-call estimate
     expect(bookedTokens(collected.events)).toEqual([["work", null], ["handoff", 0]]);
     expect(collected.candidate).toMatchObject({ result: "partial", terminalOutcome: "single-call-aborted" });
     expect(collected.candidate!.stopProof).not.toBeNull();
+  });
+
+  // Final review of the single-call estimate (2026-09-28), C1: a call that timed out still spent what claude streamed
+  // before the time limit; that is booked as the work cumulative, as an abort's is, so Orca never reads it as unknown.
+  it("W6: a call that times out after claude streamed a closed message books that usage and fails claude-timeout", async () => {
+    // The installation's limit is the shorter one here (3 s against the grant's 60 s less the margin).
+    const w = await world("usage-then-hang", {}, { timeoutMs: 3_000, killGraceMs: 300 });
+    await w.worker;
+    const collected = await collectExecution(w.envelope, 0);
+    expect(bookedTokens(collected.events)).toEqual([["work", 1109], ["handoff", 0]]);
+    expect(collected.candidate).toMatchObject({ result: "failed", terminalOutcome: "single-call-failed", artifacts: [] });
+    expect(JSON.parse((await readEvidence(w.sourceDir, collected.candidate!.handoff)).toString("utf8"))).toMatchObject({
+      outcome: "failed", outputRef: null, errorCode: "claude-timeout",
+    });
+  });
+
+  it("W7: a call that exits with an error before any stream books no work usage (null, never 0)", async () => {
+    const w = await world("script", {});
+    await w.worker;
+    const collected = await collectExecution(w.envelope, 0);
+    expect(bookedTokens(collected.events)).toEqual([["work", null], ["handoff", 0]]);
+    expect(JSON.parse((await readEvidence(w.sourceDir, collected.candidate!.handoff)).toString("utf8"))).toMatchObject({
+      outcome: "failed", outputRef: null, errorCode: "claude-exit-error",
+    });
+  });
+
+  // C2: a call that ran to its end with no structured object, while a handoff request aborted the worker's signal in
+  // the same moment, is still a finished call -- its measured usage and its code are kept, not read as a stop.
+  it("W8: an output-invalid call that raced a handoff request keeps its usage and single-call-output-invalid", async () => {
+    let envelopeReady!: (envelope: Awaited<ReturnType<typeof world>>["envelope"]) => void;
+    const ready = new Promise<Awaited<ReturnType<typeof world>>["envelope"]>((resolve) => { envelopeReady = resolve; });
+    const spy = vi.spyOn(ClaudeAgentAdapter.prototype, "singleCall").mockImplementation(async (call: SingleCallRequest) => {
+      expect(await requestHandoff(await ready, request())).toEqual({ kind: "latched", requestId: "request-1" });
+      await expect.poll(() => call.signal?.aborted ?? false, { timeout: 10_000 }).toBe(true);
+      throw new SingleCallOutputInvalid(join(call.runDir, "call-injected"), 15, null);
+    });
+    try {
+      const w = await world("hang");
+      envelopeReady(w.envelope);
+      await w.worker;
+      expect(spy).toHaveBeenCalledTimes(1);
+      const collected = await collectExecution(w.envelope, 0);
+      expect(bookedTokens(collected.events)).toEqual([["work", 15], ["handoff", 0]]);
+      expect(JSON.parse((await readEvidence(w.sourceDir, collected.candidate!.handoff)).toString("utf8"))).toMatchObject({
+        outcome: "failed", outputRef: null, errorCode: "single-call-output-invalid",
+      });
+    } finally { spy.mockRestore(); }
+  });
+
+  // C3: the call's time limit leaves SINGLE_CALL_ACTIVE_MARGIN_MS under the grant, so the elapsed time the worker
+  // reports cannot run past grant.work.activeMs. Read from the request the adapter was actually handed.
+  it("W9: hands the adapter a time limit of the grant's activeMs less the 10 s margin", async () => {
+    const received: number[] = [];
+    const original = ClaudeAgentAdapter.prototype.singleCall;
+    const spy = vi.spyOn(ClaudeAgentAdapter.prototype, "singleCall").mockImplementation(async function (this: ClaudeAgentAdapter, call: SingleCallRequest) {
+      received.push(call.timeoutMs);
+      return original.call(this, call);
+    });
+    try {
+      const w = await world("script", { "single-call": { output: { answer: "a" } } });
+      await w.worker;
+      expect(SINGLE_CALL_ACTIVE_MARGIN_MS).toBe(10_000);
+      expect(w.envelope.claim.grant.work.activeMs).toBe(60_000);
+      expect(received).toEqual([50_000]);
+    } finally { spy.mockRestore(); }
   });
 });

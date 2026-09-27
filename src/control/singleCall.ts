@@ -40,6 +40,12 @@ export interface SingleCallHooks {
   seal(): Promise<void>;
 }
 
+/**
+ * Final review (2026-09-28): the call's time limit sits this far under the grant's activeMs, so the elapsed time the
+ * worker reports -- the call plus its kill grace, evidence and settle -- never exceeds what the grant allowed.
+ */
+export const SINGLE_CALL_ACTIVE_MARGIN_MS = 10_000;
+
 const RESULT = { complete: "complete", aborted: "partial", failed: "failed" } as const;
 
 /** A failure's own code when it has one, else the name its message starts with (claude-timeout, claude-exit-error, ...). */
@@ -77,7 +83,7 @@ export async function runSingleCall(
       maxOutputTokens: work.maxOutputTokens,
       cwd,
       runDir,
-      timeoutMs: claim.grant.work.activeMs,
+      timeoutMs: Math.max(1, claim.grant.work.activeMs - SINGLE_CALL_ACTIVE_MARGIN_MS),
       signal: hooks.signal,
       onProcessRegistered: hooks.onProcessRegistered,
     });
@@ -87,17 +93,23 @@ export async function runSingleCall(
     usageEvidence = result.usageEvidence;
     completedWithResult = true;
   } catch (error) {
-    outcome = hooks.signal.aborted ? "aborted" : "failed";
-    if (outcome === "aborted") {
-      // Spec §5.2 item 4: what the agent was observed spending before the stop, or null -- never 0.
-      tokens = observedTokensOf(error);
-    } else if (error instanceof SingleCallOutputInvalid) {
+    // Checked before the signal (final review, 2026-09-28): a call that ran to its end and raced a handoff request keeps
+    // its measured usage and its code rather than being read as stopped.
+    if (error instanceof SingleCallOutputInvalid) {
       // Spec §5.2 item 8: the call ran to its end; its usage is booked, its answer is not an output.
+      outcome = "failed";
       tokens = error.tokenUsage;
       usageEvidence = error.usageEvidence;
       errorCode = error.code;
       completedWithResult = true;
+    } else if (hooks.signal.aborted) {
+      // Spec §5.2 item 4: what the agent was observed spending before the stop, or null -- never 0.
+      outcome = "aborted";
+      tokens = observedTokensOf(error);
     } else {
+      // A timeout or a failed call still books what the agent was observed spending before it ended, or null.
+      outcome = "failed";
+      tokens = observedTokensOf(error);
       errorCode = errorCodeOf(error);
     }
   }

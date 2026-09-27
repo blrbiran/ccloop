@@ -239,7 +239,13 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       { runDir: request.runDir, attempt: 1, cwd: request.cwd, timeLimitMs: request.timeoutMs, abortSignal: request.signal, onProcessRegistered: request.onProcessRegistered },
     );
     if (outcome.reason === "aborted") throw new ClaudePhaseAborted(outcome.evidenceDir, await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)));
-    if (outcome.reason !== "completed") throw new Error(`claude-${outcome.reason}: ${outcome.evidenceDir}`);
+    if (outcome.reason !== "completed") {
+      // Final review of the single-call estimate (2026-09-28): a call that timed out or failed still spent what claude
+      // streamed before it ended; that observation rides on the error (observedTokensOf), null when there is none.
+      throw Object.assign(new Error(`claude-${outcome.reason}: ${outcome.evidenceDir}`), {
+        observedTokens: await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)),
+      });
+    }
     let parsed: unknown;
     try { parsed = JSON.parse(outcome.stdout); } catch { parsed = undefined; }
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {

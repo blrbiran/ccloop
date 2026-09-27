@@ -115,6 +115,23 @@ describe("ClaudeAgentAdapter.singleCall (Orca single-call estimate)", () => {
     await expect(new ClaudeAgentAdapter(w.config).singleCall(w.request({ timeoutMs: 500 }))).rejects.toThrow(/^claude-timeout: /);
     expect(Date.now() - startedAt).toBeLessThan(10_000);
   }, 30_000);
+
+  // Final review of the single-call estimate (2026-09-28), C1: a call that ends any other way than completed or aborted
+  // still spent what claude streamed before it ended; the error carries that observation so the worker can book it.
+  it("S6: a call that times out after claude streamed a closed message reports that usage as its observed tokens", async () => {
+    const w = await world("usage-then-hang");
+    const error = await new ClaudeAgentAdapter(w.config).singleCall(w.request({ timeoutMs: 3_000 })).then(() => null, (e: unknown) => e);
+    expect(String((error as Error).message)).toMatch(/^claude-timeout: /);
+    expect(observedTokensOf(error)).toBe(1109);
+  }, 30_000);
+
+  it("S7: a call that exits with an error before streaming anything reports no observed tokens, not zero", async () => {
+    const w = await world("script", {});
+    const error = await new ClaudeAgentAdapter(w.config).singleCall(w.request()).then(() => null, (e: unknown) => e);
+    expect(String((error as Error).message)).toMatch(/^claude-exit-error: /);
+    expect(observedTokensOf(error)).toBeNull();
+    expect((error as { observedTokens?: unknown }).observedTokens).toBeNull();
+  }, 30_000);
 });
 
 describe("claude phase runner, single call (Orca single-call estimate)", () => {
