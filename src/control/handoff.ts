@@ -12,7 +12,8 @@ import {
   handoffRequestSchema,
   type ArtifactRefV1,
   type HandoffRequestV1,
-  type StartEnvelopeV2,
+  type LoopStartEnvelope,
+  type StartEnvelopeV3,
 } from "./protocol.js";
 import { testCrashPoint } from "./testCrashPoint.js";
 import { writeEvidence } from "./evidence.js";
@@ -136,7 +137,7 @@ export async function readHandoffCandidate(sourceDir: string): Promise<Candidate
 }
 
 export async function requestHandoff(
-  envelope: StartEnvelopeV2,
+  envelope: StartEnvelopeV3,
   request: HandoffRequestV1,
 ): Promise<HandoffAckV1> {
   if (request.runId !== envelope.claim.runId || request.generation !== envelope.claim.generation) {
@@ -169,7 +170,7 @@ export async function requestHandoff(
   return ack;
 }
 
-function identity(envelope: StartEnvelopeV2): HandoffIdentityV1 {
+function identity(envelope: StartEnvelopeV3): HandoffIdentityV1 {
   const claim = envelope.claim;
   return {
     groupId: claim.groupId,
@@ -284,7 +285,7 @@ async function enteredPhaseFiles(sourceDir: string, runDir: string, attempt: num
 }
 
 export async function buildHandoffPacket(
-  envelope: StartEnvelopeV2,
+  envelope: LoopStartEnvelope,
   request: HandoffRequestV1 | null,
   runState: RunState,
   usageHighWater: number,
@@ -342,7 +343,7 @@ export async function buildHandoffPacket(
 }
 
 export async function persistHandoffCandidate(
-  envelope: StartEnvelopeV2,
+  envelope: StartEnvelopeV3,
   request: HandoffRequestV1 | null,
   runState: RunState,
   built: BuiltHandoffPacketV1,
@@ -371,7 +372,7 @@ export async function persistHandoffCandidate(
 }
 
 export async function finalizeHandoffCandidate(
-  envelope: StartEnvelopeV2,
+  envelope: LoopStartEnvelope,
   request: HandoffRequestV1 | null,
   runState: RunState,
   options: { result: CandidateV1["result"]; usageHighWater: number },

@@ -54,17 +54,41 @@ export interface InputCheckpointV1 {
   bundlePath: string;
 }
 
-export interface StartEnvelopeV2 {
-  protocol: 2;
+/** Orca single-call estimate (2026-09-27), spec §4.1: the work a loop run does -- protocol 2's four fields, now tagged. */
+export interface LoopWork {
+  kind: "loop";
+  contract: LoopContract;
+  targetRepo: string;
+  base: string;
+  sourceDir: string;
+}
+
+/**
+ * Spec §4.1 and §4.2: one read-only structured call. The prompt and the schema are the caller's bytes, handed to the
+ * agent as they are and never rebuilt here; ccloop knows nothing of what the call is for.
+ */
+export interface SingleCallWork {
+  kind: "single-call";
+  prompt: string;
+  responseSchema: Record<string, unknown>;
+  maxOutputTokens: number;
+  sourceDir: string;
+}
+
+interface StartEnvelopeBaseV3 {
+  protocol: 3;
   claim: ClaimV2;
   contractHash: string;
-  inputCheckpoint: InputCheckpointV1 | null;
-  work: {
-    contract: LoopContract;
-    targetRepo: string;
-    base: string;
-    sourceDir: string;
-  };
+}
+
+export type LoopStartEnvelope = StartEnvelopeBaseV3 & { inputCheckpoint: InputCheckpointV1 | null; work: LoopWork };
+/** Spec §6.5: a single call is never continued, so it takes no input checkpoint. */
+export type SingleCallStartEnvelope = StartEnvelopeBaseV3 & { inputCheckpoint: null; work: SingleCallWork };
+/** Human ruling S7 (2026-09-27, "ccloop 现在没有发布，暂时不用考虑兼容性"): protocol 3 is the only start envelope. */
+export type StartEnvelopeV3 = LoopStartEnvelope | SingleCallStartEnvelope;
+
+export function isLoopEnvelope(envelope: StartEnvelopeV3): envelope is LoopStartEnvelope {
+  return envelope.work.kind === "loop";
 }
 
 export interface HandoffRequestV1 {
@@ -83,18 +107,18 @@ export interface CapabilitiesRequestV3 {
 
 export type ControlRequestV1 =
   | { method: "capabilities"; agent: PartialSelectionV1 | null }
-  | { method: "accept"; input: StartEnvelopeV2 }
-  | { method: "inspect"; input: StartEnvelopeV2 }
-  | { method: "handoff"; input: StartEnvelopeV2; request: HandoffRequestV1 }
-  | { method: "collect"; input: StartEnvelopeV2; afterSeq: number }
-  | { method: "read-evidence"; input: StartEnvelopeV2; ref: ArtifactRefV1 };
+  | { method: "accept"; input: StartEnvelopeV3 }
+  | { method: "inspect"; input: StartEnvelopeV3 }
+  | { method: "handoff"; input: StartEnvelopeV3; request: HandoffRequestV1 }
+  | { method: "collect"; input: StartEnvelopeV3; afterSeq: number }
+  | { method: "read-evidence"; input: StartEnvelopeV3; ref: ArtifactRefV1 };
 
 export type ControlPayloadV1 =
   | CapabilitiesRequestV3
-  | StartEnvelopeV2
-  | { input: StartEnvelopeV2; request: HandoffRequestV1 }
-  | { input: StartEnvelopeV2; afterSeq: number }
-  | { input: StartEnvelopeV2; ref: ArtifactRefV1 };
+  | StartEnvelopeV3
+  | { input: StartEnvelopeV3; request: HandoffRequestV1 }
+  | { input: StartEnvelopeV3; afterSeq: number }
+  | { input: StartEnvelopeV3; ref: ArtifactRefV1 };
 
 export class ControlProtocolError extends Error {
   constructor(readonly code: string) {
@@ -155,23 +179,31 @@ const inputCheckpointSchema = z
     bundlePath: z.string().min(1),
   })
   .strict();
-const workSchema = z
+const loopWorkSchema = z
   .object({
+    kind: z.literal("loop"),
     contract: loopContractSchema,
     targetRepo: z.string().min(1),
     base: z.string().min(1),
     sourceDir: z.string().min(1),
   })
   .strict();
-const startEnvelopeSchema = z
+// Orca single-call estimate (2026-09-27), spec §4.1: the claude API takes the schema as a tool's input_schema, whose top
+// level must be `type: "object"` (scripts/claude-phase-runner.mjs records the 400 it answers otherwise).
+const singleCallWorkSchema = z
   .object({
-    protocol: z.literal(2),
-    claim: claimSchema,
-    contractHash: hashSchema,
-    inputCheckpoint: inputCheckpointSchema.nullable(),
-    work: workSchema,
+    kind: z.literal("single-call"),
+    prompt: z.string().min(1),
+    responseSchema: z.record(z.unknown()).refine((schema) => schema.type === "object"),
+    maxOutputTokens: positiveSafeInteger,
+    sourceDir: z.string().min(1),
   })
   .strict();
+const envelopeBase = { protocol: z.literal(3), claim: claimSchema, contractHash: hashSchema };
+const startEnvelopeSchema = z.union([
+  z.object({ ...envelopeBase, inputCheckpoint: inputCheckpointSchema.nullable(), work: loopWorkSchema }).strict(),
+  z.object({ ...envelopeBase, inputCheckpoint: z.null(), work: singleCallWorkSchema }).strict(),
+]);
 export const handoffRequestSchema = z
   .object({
     protocol: z.literal(1),
@@ -233,8 +265,11 @@ function validateCanonicalDirectory(path: string): string {
   }
 }
 
-function validateEnvelopePaths(envelope: StartEnvelopeV2): void {
+function validateEnvelopePaths(envelope: StartEnvelopeV3): void {
   const sourceDir = validateCanonicalDirectory(envelope.work.sourceDir);
+  // Orca single-call estimate (2026-09-27), spec §5.1: a single call names no repository and takes no input
+  // checkpoint (its schema holds that to null), so its sourceDir is all there is to check.
+  if (!isLoopEnvelope(envelope)) return;
   if (!isAbsolute(envelope.work.targetRepo)) throw new ControlProtocolError("control-request-invalid");
   if (envelope.inputCheckpoint === null) return;
   const bundle = validateCanonicalDirectory(envelope.inputCheckpoint.bundlePath);
@@ -253,29 +288,30 @@ function protocolVersion(raw: unknown): unknown {
 }
 
 export function parseControlRequest(method: "capabilities", raw: unknown): CapabilitiesRequestV3;
-export function parseControlRequest(method: "accept" | "inspect", raw: unknown): StartEnvelopeV2;
+export function parseControlRequest(method: "accept" | "inspect", raw: unknown): StartEnvelopeV3;
 export function parseControlRequest(
   method: "handoff",
   raw: unknown,
-): { input: StartEnvelopeV2; request: HandoffRequestV1 };
-export function parseControlRequest(method: "collect", raw: unknown): { input: StartEnvelopeV2; afterSeq: number };
+): { input: StartEnvelopeV3; request: HandoffRequestV1 };
+export function parseControlRequest(method: "collect", raw: unknown): { input: StartEnvelopeV3; afterSeq: number };
 export function parseControlRequest(
   method: "read-evidence",
   raw: unknown,
-): { input: StartEnvelopeV2; ref: ArtifactRefV1 };
+): { input: StartEnvelopeV3; ref: ArtifactRefV1 };
 export function parseControlRequest(method: ControlMethodV1, raw: unknown): ControlPayloadV1;
 export function parseControlRequest(method: ControlMethodV1, raw: unknown): ControlPayloadV1 {
   const version = protocolVersion(raw);
   // Agent selection (2026-09-26), spec §5: the start envelope is protocol 2; a v1 envelope is refused by name.
   // Handoff requests stay protocol 1 and are nested, so this reads the envelope's number (spec §5 M4).
-  if (version !== undefined && version !== 2) {
+  // ERRATUM (Orca single-call estimate, 2026-09-27, human ruling S7): the start envelope is now protocol 3 only; 1 and 2 are refused by name.
+  if (version !== undefined && version !== 3) {
     throw new ControlProtocolError("control-protocol-unsupported");
   }
   try {
     const payload = payloadSchemas[method].parse(raw) as ControlPayloadV1;
-    if (method === "accept" || method === "inspect") validateEnvelopePaths(payload as StartEnvelopeV2);
+    if (method === "accept" || method === "inspect") validateEnvelopePaths(payload as StartEnvelopeV3);
     if (method === "handoff" || method === "collect" || method === "read-evidence") {
-      validateEnvelopePaths((payload as { input: StartEnvelopeV2 }).input);
+      validateEnvelopePaths((payload as { input: StartEnvelopeV3 }).input);
     }
     return payload;
   } catch (error) {
@@ -286,6 +322,6 @@ export function parseControlRequest(method: ControlMethodV1, raw: unknown): Cont
 
 export function attachControlMethod(method: ControlMethodV1, payload: ControlPayloadV1): ControlRequestV1 {
   if (method === "capabilities") return { method, agent: (payload as CapabilitiesRequestV3).agent };
-  if (method === "accept" || method === "inspect") return { method, input: payload as StartEnvelopeV2 };
+  if (method === "accept" || method === "inspect") return { method, input: payload as StartEnvelopeV3 };
   return { method, ...(payload as Record<string, unknown>) } as ControlRequestV1;
 }

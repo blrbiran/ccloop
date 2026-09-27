@@ -6,13 +6,13 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { collectExecution } from "../../src/control/collect.js";
 import { evidencePath, readEvidence, writeEvidence } from "../../src/control/evidence.js";
-import { canonicalHash, type StartEnvelopeV2 } from "../../src/control/protocol.js";
+import { canonicalHash, type LoopStartEnvelope } from "../../src/control/protocol.js";
 import { FIXTURE_SELECTION } from "./agentsFixture.js";
 import { appendUsageObservation } from "../../src/control/usage.js";
 
 const execFileAsync = promisify(execFile);
 
-async function fixture(): Promise<{ root: string; envelope: StartEnvelopeV2 }> {
+async function fixture(): Promise<{ root: string; envelope: LoopStartEnvelope }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ccloop-control-collect-")));
   await mkdir(join(root, "input"));
   const amount = { tokens: 1, activeMs: 1, attempts: 1, sessions: 1 };
@@ -29,12 +29,14 @@ async function fixture(): Promise<{ root: string; envelope: StartEnvelopeV2 }> {
     root,
     // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): the fixture is a
     // protocol-2 envelope whose claim carries a selection; collection and evidence assertions are unchanged.
+    // ERRATUM (human ruling S6, 2026-09-27, session f341f05f): the envelope named above is now protocol 3, work tagged kind "loop".
+    // Human ruling S6 (2026-09-27, session f341f05f): protocol 3 envelope
     envelope: {
-      protocol: 2,
+      protocol: 3,
       claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: canonicalHash(config), agent: FIXTURE_SELECTION, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
       contractHash: "b".repeat(64),
       inputCheckpoint: null,
-      work: { contract: loop, targetRepo: root, base: "main", sourceDir: root },
+      work: { kind: "loop", contract: loop, targetRepo: root, base: "main", sourceDir: root },
     },
   };
 }

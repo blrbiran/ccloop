@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { resolveAgent } from "../../src/agents/materialize.js";
-import { canonicalHash, type HandoffRequestV1, type StartEnvelopeV2 } from "../../src/control/protocol.js";
+import { canonicalHash, type HandoffRequestV1, type LoopStartEnvelope } from "../../src/control/protocol.js";
 import { codexInstallation, writeAgentsTable } from "./agentsFixture.js";
 
 const binary=resolve("dist/cli.js"),fakeCodex=resolve("tests/fixtures/fake-codex.mjs");
@@ -18,6 +18,7 @@ afterEach(async()=>{for(const root of roots.splice(0))await rm(root,{recursive:t
 // the built CLI as `control <method> --agents <table>` over a one-installation table (the same fake-codex command the
 // v1 adapter config named) with a protocol-2 envelope whose claim carries the resolved selection and configHash;
 // every identity, evidence, handoff and crash-recovery assertion is unchanged.
+// ERRATUM (human ruling S6, 2026-09-27, session f341f05f): the envelope named above is now protocol 3, work tagged kind "loop".
 async function fixture(mode="integration",runId="run-1"){
  const root=await realpath(await mkdtemp(join(tmpdir(),"ccloop-protocol-e2e-")));roots.push(root);const repo=join(root,"target"),sourceDir=join(root,"source"),marker=join(root,"codex-marker");
  await mkdir(repo,{mode:0o700});await mkdir(sourceDir,{mode:0o700});await mkdir(join(sourceDir,"input"),{mode:0o700});
@@ -26,7 +27,8 @@ async function fixture(mode="integration",runId="run-1"){
  const installation=await codexInstallation({command:[process.execPath,fakeCodex,mode,marker],budgetMode:"soft",sandbox:"workspace-write",timeoutMs:10000,killGraceMs:50});
  const {path:tablePath,table}=await writeAgentsTable({codex:installation},root);const {resolution}=await resolveAgent(table,{agent:"codex",model:"fixture"});
  const check=`${process.execPath} check.cjs`;const contract:LoopContract={objective:{taskId:"task-1",goal:"Set answer.txt to 42",successCondition:"answer is 42",nonGoals:[]},context:{repoPath:repo,targetPaths:["answer.txt"],relevantDocs:[],buildTestCommands:[check],constraints:[]},executionPolicy:{autonomyLevel:"L2",maxAttempts:1,perAttemptTimeoutMs:10000,totalRuntimeBudgetMs:30000,tokenBudget:1000,worktreeRequired:true,partialOutcomeRecoveryWindowMs:100},safetyPolicy:{allowlistPaths:["answer.txt"],denylistPaths:[],maxFilesTouched:2,humanGateConditions:[]},verification:{verifierType:"agent",requiredChecks:[check],rejectOn:["failure"],evidenceRequired:[]},escalationAndExit:{escalationTargets:[],pauseOn:[],stopOn:[],terminalStates:["succeeded","blocked_waiting_human","exhausted","cancelled","failed"]}};
- const grant={tokens:2000,activeMs:120000,attempts:6,sessions:3};const envelope:StartEnvelopeV2={protocol:2,claim:{groupId:"group-1",workItemId:"work-1",taskId:"task-1",runId,generation:1,graphVersion:2,targetVersion:1,commandId:"command-1",configHash:resolution.configHash,agent:resolution.selection,grant:{work:grant,handoff:{tokens:200,activeMs:30000,attempts:1,sessions:1}},ownerToken:"owner-1"},contractHash:canonicalHash(contract),inputCheckpoint:null,work:{contract,targetRepo:repo,base:"HEAD",sourceDir}};
+ // Human ruling S6 (2026-09-27, session f341f05f): protocol 3 envelope
+ const grant={tokens:2000,activeMs:120000,attempts:6,sessions:3};const envelope:LoopStartEnvelope={protocol:3,claim:{groupId:"group-1",workItemId:"work-1",taskId:"task-1",runId,generation:1,graphVersion:2,targetVersion:1,commandId:"command-1",configHash:resolution.configHash,agent:resolution.selection,grant:{work:grant,handoff:{tokens:200,activeMs:30000,attempts:1,sessions:1}},ownerToken:"owner-1"},contractHash:canonicalHash(contract),inputCheckpoint:null,work:{kind:"loop",contract,targetRepo:repo,base:"HEAD",sourceDir}};
  return {root,repo,sourceDir,marker,tablePath,envelope};
 }
 

@@ -5,7 +5,7 @@ import type { LoopContract } from "../../src/contract/schema.js";
 import { probeVersion, resolveAgent } from "../../src/agents/materialize.js";
 import { parseAgentsTable } from "../../src/agents/table.js";
 import type { AgentSelectionV1, AgentsTableV1, InstallationV1, MaterializedAgentConfigV1 } from "../../src/agents/types.js";
-import type { StartEnvelopeV2 } from "../../src/control/protocol.js";
+import type { LoopStartEnvelope } from "../../src/control/protocol.js";
 import type { CodexConfig } from "../../src/runtime/codex/protocol.js";
 
 /**
@@ -99,10 +99,11 @@ export function startEnvelope(input: {
   contract: LoopContract;
   agent: AgentSelectionV1;
   configHash: string;
-}): StartEnvelopeV2 {
+}): LoopStartEnvelope {
   const amount = { tokens: 10, activeMs: 20, attempts: 1, sessions: 1 };
+  // Human ruling S6 (2026-09-27, session f341f05f): protocol 3 envelope
   return {
-    protocol: 2,
+    protocol: 3,
     claim: {
       groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1,
       targetVersion: 1, commandId: "command-1", configHash: input.configHash, agent: input.agent,
@@ -110,6 +111,6 @@ export function startEnvelope(input: {
     },
     contractHash: "b".repeat(64),
     inputCheckpoint: null,
-    work: { contract: input.contract, targetRepo: input.targetRepo, base: "main", sourceDir: input.sourceDir },
+    work: { kind: "loop", contract: input.contract, targetRepo: input.targetRepo, base: "main", sourceDir: input.sourceDir },
   };
 }

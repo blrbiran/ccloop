@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { LoopContract } from "../../src/contract/schema.js";
-import { canonicalHash, type StartEnvelopeV2 } from "../../src/control/protocol.js";
+import { canonicalHash, type LoopStartEnvelope } from "../../src/control/protocol.js";
 import { FAKE_CLAUDE_CLI, claudeInstallation, writeAgentsTable } from "./agentsFixture.js";
 
 // Agent selection (2026-09-26), spec §4.6, §4.7, §4.7b: the claimed selection travels envelope -> accept -> sealed
@@ -63,8 +63,9 @@ describe("control through the built CLI with a claude installation (agent select
       escalationAndExit: { escalationTargets: [], pauseOn: [], stopOn: [], terminalStates: ["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"] },
     };
     const grant = { tokens: 2_000, activeMs: 120_000, attempts: 6, sessions: 3 };
-    const envelope: StartEnvelopeV2 = {
-      protocol: 2,
+    // Human ruling S6 (2026-09-27, session f341f05f): protocol 3 envelope
+    const envelope: LoopStartEnvelope = {
+      protocol: 3,
       claim: {
         groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 2, targetVersion: 1,
         commandId: "command-1", configHash: resolution.configHash, agent: resolution.selection,
@@ -72,7 +73,7 @@ describe("control through the built CLI with a claude installation (agent select
       },
       contractHash: canonicalHash(contract),
       inputCheckpoint: null,
-      work: { contract, targetRepo: repo, base: "HEAD", sourceDir },
+      work: { kind: "loop", contract, targetRepo: repo, base: "HEAD", sourceDir },
     };
     const accepted = await call("accept", envelope);
     expect(accepted.code, accepted.stderr).toBe(0);

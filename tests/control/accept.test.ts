@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { resolveAgent } from "../../src/agents/materialize.js";
 import { acceptStart, inspectStart } from "../../src/control/accept.js";
-import { canonicalHash, canonicalJson, ControlProtocolError, type StartEnvelopeV2 } from "../../src/control/protocol.js";
+import { canonicalHash, canonicalJson, ControlProtocolError, type LoopStartEnvelope } from "../../src/control/protocol.js";
 import { readAccepted, writeAccepted } from "../../src/control/store.js";
 import { codexInstallation, writeAgentsTable } from "./agentsFixture.js";
 
@@ -62,6 +62,7 @@ function contract(root: string): LoopContract {
 // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): every criterion below
 // accepts through an agents table (one codex installation for the same fake-codex command the v1 fixture named) and a
 // protocol-2 envelope whose claim carries the resolved selection and the materialized config's canonical hash.
+// ERRATUM (human ruling S6, 2026-09-27, session f341f05f): the envelope named above is now protocol 3, work tagged kind "loop".
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ccloop-control-accept-")));
   await mkdir(join(root, "input"));
@@ -74,8 +75,9 @@ async function fixture() {
   });
   const { path: tablePath, table } = await writeAgentsTable({ codex: installation }, root);
   const { config, resolution } = await resolveAgent(table, { agent: "codex", model: "fixture" });
-  const envelope: StartEnvelopeV2 = {
-    protocol: 2,
+  // Human ruling S6 (2026-09-27, session f341f05f): protocol 3 envelope
+  const envelope: LoopStartEnvelope = {
+    protocol: 3,
     claim: {
       groupId: "group-1",
       workItemId: "work-1",
@@ -92,7 +94,7 @@ async function fixture() {
     },
     contractHash: "b".repeat(64),
     inputCheckpoint: null,
-    work: { contract: contract(root), targetRepo: root, base: "main", sourceDir: root },
+    work: { kind: "loop", contract: contract(root), targetRepo: root, base: "main", sourceDir: root },
   };
   return { root, tablePath, config, envelope, launchFile: join(root, "agent-launches") };
 }

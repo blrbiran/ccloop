@@ -5,7 +5,7 @@ import { requestHandoff } from "../../src/control/handoff.js";
 import { collectExecution } from "../../src/control/collect.js";
 import { readEvidence } from "../../src/control/evidence.js";
 import { atomicReplacePrivateFile, ensurePrivateDirectory } from "../../src/control/paths.js";
-import { canonicalHash, canonicalJson, type HandoffRequestV1, type StartEnvelopeV2 } from "../../src/control/protocol.js";
+import { canonicalHash, canonicalJson, type HandoffRequestV1, type LoopStartEnvelope } from "../../src/control/protocol.js";
 import { FAKE_CLAUDE_CLI, claudeInstallation, sealClaude } from "./agentsFixture.js";
 import { writeAccepted } from "../../src/control/store.js";
 import { runControlWorker } from "../../src/control/worker.js";
@@ -29,15 +29,17 @@ describe("deadline-aborted claude execute with observed usage (Orca claude strea
     // Orca claude stream usage (2026-09-27), spec §5.2 N8: the worker reads the sealed materialized claude
     // config for the fake claude CLI's script mode and a protocol-2 envelope carrying its hash and selection;
     // the booked-usage, partial-candidate and packet assertions mirror the codex criterion this is copied from.
+    // ERRATUM (human ruling S6, 2026-09-27, session f341f05f): the envelope named above is now protocol 3, work tagged kind "loop".
     const installation = await claudeInstallation([process.execPath, FAKE_CLAUDE_CLI, "script", runtime.marker, scriptPath], { timeoutMs: 60_000, killGraceMs: 300 });
     const sealed = await sealClaude(installation);
     const amount = { tokens: 100, activeMs: 60_000, attempts: 1, sessions: 1 };
-    const envelope: StartEnvelopeV2 = {
-      protocol: 2,
+    // Human ruling S6 (2026-09-27, session f341f05f): protocol 3 envelope
+    const envelope: LoopStartEnvelope = {
+      protocol: 3,
       claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: sealed.configHash, agent: sealed.selection, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
       contractHash: "c".repeat(64),
       inputCheckpoint: null,
-      work: { contract: runtime.contract, targetRepo: runtime.repo, base: "main", sourceDir: runtime.dir },
+      work: { kind: "loop", contract: runtime.contract, targetRepo: runtime.repo, base: "main", sourceDir: runtime.dir },
     };
     const controlDir = join(runtime.dir, "control");
     await ensurePrivateDirectory(runtime.dir, controlDir);

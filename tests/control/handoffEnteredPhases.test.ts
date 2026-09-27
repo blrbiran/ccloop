@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { buildHandoffPacket, finalizeHandoffCandidate } from "../../src/control/handoff.js";
 import { readEvidence } from "../../src/control/evidence.js";
-import { canonicalHash, type HandoffRequestV1, type StartEnvelopeV2 } from "../../src/control/protocol.js";
+import { canonicalHash, type HandoffRequestV1, type LoopStartEnvelope } from "../../src/control/protocol.js";
 import { FIXTURE_SELECTION } from "./agentsFixture.js";
 import { writeAccepted } from "../../src/control/store.js";
 import type { RunState } from "../../src/state/types.js";
@@ -21,7 +21,7 @@ const execFileAsync = promisify(execFile);
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
-async function fixture(): Promise<{ runDir: string; envelope: StartEnvelopeV2; request: HandoffRequestV1 }> {
+async function fixture(): Promise<{ runDir: string; envelope: LoopStartEnvelope; request: HandoffRequestV1 }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ccloop-handoff-entered-")));
   roots.push(root);
   const repo = join(root, "repo"), sourceDir = join(root, "source"), runDir = join(sourceDir, "run");
@@ -41,12 +41,14 @@ async function fixture(): Promise<{ runDir: string; envelope: StartEnvelopeV2; r
   const config = { command: [process.execPath], model: "fixture", budgetMode: "soft", sandbox: "workspace-write", timeoutMs: 1_000, killGraceMs: 10 };
   // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): the fixture is a
   // protocol-2 envelope whose claim carries a selection; the entered-phase assertions are unchanged.
-  const envelope: StartEnvelopeV2 = {
-    protocol: 2,
+  // ERRATUM (human ruling S6, 2026-09-27, session f341f05f): the envelope named above is now protocol 3, work tagged kind "loop".
+  // Human ruling S6 (2026-09-27, session f341f05f): protocol 3 envelope
+  const envelope: LoopStartEnvelope = {
+    protocol: 3,
     claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 2, graphVersion: 3, targetVersion: 4, commandId: "command-1", configHash: canonicalHash(config), agent: FIXTURE_SELECTION, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
     contractHash: "b".repeat(64),
     inputCheckpoint: null,
-    work: { contract, targetRepo: repo, base: "main", sourceDir },
+    work: { kind: "loop", contract, targetRepo: repo, base: "main", sourceDir },
   };
   await writeAccepted(sourceDir, {
     protocol: 1, envelopeHash: canonicalHash(envelope), executionId: "execution-fixture", configHash: envelope.claim.configHash,

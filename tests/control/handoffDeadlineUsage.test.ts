@@ -5,7 +5,7 @@ import { requestHandoff } from "../../src/control/handoff.js";
 import { collectExecution } from "../../src/control/collect.js";
 import { readEvidence } from "../../src/control/evidence.js";
 import { atomicReplacePrivateFile, ensurePrivateDirectory } from "../../src/control/paths.js";
-import { canonicalHash, canonicalJson, type HandoffRequestV1, type StartEnvelopeV2 } from "../../src/control/protocol.js";
+import { canonicalHash, canonicalJson, type HandoffRequestV1, type LoopStartEnvelope } from "../../src/control/protocol.js";
 import { parseCodexConfig } from "../../src/runtime/codex/protocol.js";
 import { sealCodex } from "./agentsFixture.js";
 import { writeAccepted } from "../../src/control/store.js";
@@ -31,14 +31,16 @@ describe("deadline-aborted execute with observed usage (Orca handoff delivery C-
     // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): the worker reads the
     // sealed materialized agent config for the same script-mode fake codex and a protocol-2 envelope carrying its
     // hash and selection; the booked-usage, partial-candidate and packet assertions are unchanged.
+    // ERRATUM (human ruling S6, 2026-09-27, session f341f05f): the envelope named above is now protocol 3, work tagged kind "loop".
     const sealed = await sealCodex(parseCodexConfig(runtime.config));
     const amount = { tokens: 100, activeMs: 60_000, attempts: 1, sessions: 1 };
-    const envelope: StartEnvelopeV2 = {
-      protocol: 2,
+    // Human ruling S6 (2026-09-27, session f341f05f): protocol 3 envelope
+    const envelope: LoopStartEnvelope = {
+      protocol: 3,
       claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: sealed.configHash, agent: sealed.selection, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
       contractHash: "c".repeat(64),
       inputCheckpoint: null,
-      work: { contract: runtime.contract, targetRepo: runtime.repo, base: "main", sourceDir: runtime.dir },
+      work: { kind: "loop", contract: runtime.contract, targetRepo: runtime.repo, base: "main", sourceDir: runtime.dir },
     };
     const controlDir = join(runtime.dir, "control");
     await ensurePrivateDirectory(runtime.dir, controlDir);

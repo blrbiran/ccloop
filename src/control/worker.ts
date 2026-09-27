@@ -7,7 +7,7 @@ import { createStopRequestSignal, runLoop } from "../controller/runLoop.js";
 import { isTerminalRunStatus } from "../state/stateMachine.js";
 import { atomicReplacePrivateFile, readPrivateFile } from "./paths.js";
 import { appendUsageObservation, readUsageEvents } from "./usage.js";
-import { canonicalJson, parseControlRequest, type StartEnvelopeV2 } from "./protocol.js";
+import { canonicalJson, isLoopEnvelope, parseControlRequest, type StartEnvelopeV3 } from "./protocol.js";
 import { prepareContinuationContract } from "./materialize.js";
 import {
   buildHandoffPacket,
@@ -105,7 +105,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
 
   let sealed = false;
   try {
-    const envelope = parseControlRequest("accept", await readJson(sourceDir, "envelope.json")) as StartEnvelopeV2;
+    const envelope = parseControlRequest("accept", await readJson(sourceDir, "envelope.json")) as StartEnvelopeV3;
     // Agent selection (2026-09-26), spec §4.6: accept sealed the materialized agent config; re-check it with the
     // rules that admitted it (agent-config-invalid, controller ruling W1-19) before any phase runs.
     // Task 5 review fix M-a: bytes that are not JSON are the same named failure as a config that fails its schema.
@@ -155,6 +155,8 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       stopRequested.requested = true;
       phaseAbort.abort();
     });
+    // Orca single-call estimate (2026-09-27), spec §5.2: until the single-call branch exists, only loop work runs.
+    if (!isLoopEnvelope(envelope)) throw new Error("control-work-kind-unsupported");
     const runDir = join(sourceDir, "run");
     registerAttemptRefNamespace(runDir, envelope.claim.runId);
     const contract = envelope.inputCheckpoint === null

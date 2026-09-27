@@ -16,7 +16,7 @@ import {
   canonicalJson,
   canonicalHash,
   type HandoffRequestV1,
-  type StartEnvelopeV2,
+  type LoopStartEnvelope,
 } from "../../src/control/protocol.js";
 import { parseCodexConfig } from "../../src/runtime/codex/protocol.js";
 import { FIXTURE_SELECTION, sealCodex } from "./agentsFixture.js";
@@ -38,7 +38,7 @@ const execFileAsync = promisify(execFile);
 async function fixture(): Promise<{
   root: string;
   runDir: string;
-  envelope: StartEnvelopeV2;
+  envelope: LoopStartEnvelope;
   request: HandoffRequestV1;
 }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ccloop-control-handoff-")));
@@ -67,12 +67,14 @@ async function fixture(): Promise<{
   // Rewritten for agent selection (2026-09-26, human ruling: "同意修改几个仓库的现有test"): every criterion reading
   // this fixture gets a protocol-2 envelope whose claim carries a selection; no provider runs here, so nothing
   // resolves it and its assertions are unchanged.
-  const envelope: StartEnvelopeV2 = {
-    protocol: 2,
+  // ERRATUM (human ruling S6, 2026-09-27, session f341f05f): the envelope named above is now protocol 3, work tagged kind "loop".
+  // Human ruling S6 (2026-09-27, session f341f05f): protocol 3 envelope
+  const envelope: LoopStartEnvelope = {
+    protocol: 3,
     claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 2, graphVersion: 3, targetVersion: 4, commandId: "command-1", configHash: canonicalHash(config), agent: FIXTURE_SELECTION, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
     contractHash: "b".repeat(64),
     inputCheckpoint: null,
-    work: { contract, targetRepo: repo, base: "main", sourceDir },
+    work: { kind: "loop", contract, targetRepo: repo, base: "main", sourceDir },
   };
   const request: HandoffRequestV1 = {
     protocol: 1,
@@ -187,17 +189,19 @@ describe("named handoff request", () => {
   // sealed materialized agent config (codex installation + selection) and a protocol-2 envelope whose configHash is
   // that config's hash, and builds its adapter through the codex descriptor; the deadline, packet, zero handoff usage,
   // seal and released-lease assertions are unchanged.
+  // ERRATUM (human ruling S6, 2026-09-27, session f341f05f): the envelope named above is now protocol 3, work tagged kind "loop".
   it("watches a latched deadline through packet, zero handoff usage, seal, and released lease", async () => {
     const runtime = await codexFixture("hang");
     await mkdir(join(runtime.dir, "input"));
     const sealed = await sealCodex(parseCodexConfig(runtime.config));
     const amount = { tokens: 100, activeMs: 10_000, attempts: 1, sessions: 1 };
-    const envelope: StartEnvelopeV2 = {
-      protocol: 2,
+    // Human ruling S6 (2026-09-27, session f341f05f): protocol 3 envelope
+    const envelope: LoopStartEnvelope = {
+      protocol: 3,
       claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: sealed.configHash, agent: sealed.selection, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
       contractHash: "c".repeat(64),
       inputCheckpoint: null,
-      work: { contract: runtime.contract, targetRepo: runtime.repo, base: "main", sourceDir: runtime.dir },
+      work: { kind: "loop", contract: runtime.contract, targetRepo: runtime.repo, base: "main", sourceDir: runtime.dir },
     };
     const controlDir = join(runtime.dir, "control");
     await ensurePrivateDirectory(runtime.dir, controlDir);

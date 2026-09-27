@@ -8,7 +8,7 @@ import {
   canonicalHash,
   canonicalJson,
   ControlProtocolError,
-  type StartEnvelopeV2,
+  type StartEnvelopeV3,
 } from "./protocol.js";
 import { launchWorker, workerIdentityMatches, type WorkerLaunchDeps } from "./workerLauncher.js";
 import {
@@ -48,13 +48,13 @@ async function status(record: AcceptedRecordV1): Promise<ExecutionStatusV1> {
   return { kind: "accepted", executionId: record.executionId, configHash: record.configHash };
 }
 
-function assertEnvelope(record: AcceptedRecordV1, input: StartEnvelopeV2): void {
+function assertEnvelope(record: AcceptedRecordV1, input: StartEnvelopeV3): void {
   if (record.envelopeHash !== canonicalHash(input)) {
     throw new ControlProtocolError("control-envelope-conflict");
   }
 }
 
-export async function inspectStart(input: StartEnvelopeV2): Promise<ExecutionStatusV1> {
+export async function inspectStart(input: StartEnvelopeV3): Promise<ExecutionStatusV1> {
   const record = await readAcceptedOptional(input.work.sourceDir);
   if (record === null) return { kind: "absent" };
   assertEnvelope(record, input);
@@ -62,7 +62,7 @@ export async function inspectStart(input: StartEnvelopeV2): Promise<ExecutionSta
 }
 
 export async function acceptStart(
-  input: StartEnvelopeV2,
+  input: StartEnvelopeV3,
   binding: AgentBindingV1,
 ): Promise<ExecutionStatusV1> {
   const existing = await readAcceptedOptional(input.work.sourceDir);

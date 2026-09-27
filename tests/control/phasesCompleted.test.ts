@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { collectExecution } from "../../src/control/collect.js";
 import { atomicReplacePrivateFile, ensurePrivateDirectory } from "../../src/control/paths.js";
-import { canonicalHash, canonicalJson, type StartEnvelopeV2 } from "../../src/control/protocol.js";
+import { canonicalHash, canonicalJson, type LoopStartEnvelope } from "../../src/control/protocol.js";
 import { parseCodexConfig } from "../../src/runtime/codex/protocol.js";
 import { sealCodex } from "./agentsFixture.js";
 import { proveStopped, recordCompletedPhase, type StopProofRecord } from "../../src/control/stopProof.js";
@@ -151,17 +151,19 @@ describe("the control worker counts completed phases", () => {
   // worker reads the sealed materialized agent config for the same integration-mode fake codex and a protocol-2
   // envelope carrying its hash and selection; it still counts exactly the three phases completed with a result, the
   // codex adapter still registers three groups, and the run still proves isolation.
+  // ERRATUM (human ruling S6, 2026-09-27, session f341f05f): the envelope named above is now protocol 3, work tagged kind "loop".
   it("writes one count per phase a registering adapter completed, and the run still proves isolation", async () => {
     const runtime = await codexFixture("integration");
     await mkdir(join(runtime.dir, "input"));
     const sealed = await sealCodex(parseCodexConfig(runtime.config));
     const amount = { tokens: 100, activeMs: 10_000, attempts: 1, sessions: 1 };
-    const envelope: StartEnvelopeV2 = {
-      protocol: 2,
+    // Human ruling S6 (2026-09-27, session f341f05f): protocol 3 envelope
+    const envelope: LoopStartEnvelope = {
+      protocol: 3,
       claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: sealed.configHash, agent: sealed.selection, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
       contractHash: "c".repeat(64),
       inputCheckpoint: null,
-      work: { contract: runtime.contract, targetRepo: runtime.repo, base: "main", sourceDir: runtime.dir },
+      work: { kind: "loop", contract: runtime.contract, targetRepo: runtime.repo, base: "main", sourceDir: runtime.dir },
     };
     const controlDir = join(runtime.dir, "control");
     await ensurePrivateDirectory(runtime.dir, controlDir);
