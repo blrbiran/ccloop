@@ -44,8 +44,12 @@ describe("detecting installed agents (spec §9 criterion 1)", () => {
       { path: pathB, realpath: pathB, version: "2.0.0", runnable: true, source: "path", isPathDefault: false },
     ]);
     // The draft takes what PATH would run, not the first candidate listed.
+    // Rewritten for Orca's paid claude round findings (human ruling 2026-09-27, "B3 和 B1 授权改写"): the drafted claude
+    // command carries the isolation arguments after the binary; everything else of the draft is unchanged.
     expect(result.table.installations.claude).toEqual({
-      kind: "claude", command: [volta], version: "2.1.200", configDir: null, timeoutMs: 1_800_000, killGraceMs: 5_000,
+      kind: "claude",
+      command: [volta, "--permission-mode", "acceptEdits", "--no-session-persistence", "--setting-sources", "project,local", "--strict-mcp-config", "--disable-slash-commands"],
+      version: "2.1.200", configDir: null, timeoutMs: 1_800_000, killGraceMs: 5_000,
     });
   });
 

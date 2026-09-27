@@ -95,7 +95,7 @@ export async function detectAgents(input: {
     if (chosen !== undefined) {
       installations[descriptor.kind] = {
         kind: descriptor.kind,
-        command: [chosen.path],
+        command: [chosen.path, ...(descriptor.draftCommandArgs ?? [])],
         version: chosen.version!,
         configDir: null,
         timeoutMs: DRAFT_TIMEOUT_MS,

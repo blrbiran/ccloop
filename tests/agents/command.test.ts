@@ -65,7 +65,12 @@ describe("ccloop agents detect", () => {
     expect(parsed.schema).toBe("ccloop-agents-detect-v1");
     expect(parsed.candidates.claude).toContainEqual({ path: inHome, realpath: inHome, version: "2.1.282", runnable: true, source: "search-dir", isPathDefault: false });
     expect(parsed.candidates.claude).toContainEqual({ path, realpath: path, version: "2.1.282", runnable: true, source: "path", isPathDefault: true });
-    expect(parsed.table.installations.claude).toMatchObject({ command: [path], version: "2.1.282" });
+    // Rewritten for Orca's paid claude round findings (human ruling 2026-09-27, "B3 和 B1 授权改写"): the drafted claude
+    // command carries the isolation arguments after the binary.
+    expect(parsed.table.installations.claude).toMatchObject({
+      command: [path, "--permission-mode", "acceptEdits", "--no-session-persistence", "--setting-sources", "project,local", "--strict-mcp-config", "--disable-slash-commands"],
+      version: "2.1.282",
+    });
   });
 
   it.each([[["detect", "--home"]], [["detect", "--shell", "zsh"]], [["validate"]], [["validate", "a", "b"]], [["list"]], [[]]])(

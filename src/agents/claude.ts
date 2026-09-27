@@ -29,6 +29,16 @@ export const claudeDescriptor: AgentDescriptor = {
   contextOptions: CONTEXT_OPTIONS,
   installationExtras: {},
   draftInstallationExtras: {},
+  // Orca paid claude round (2026-09-27, human ruling on its findings): a bare `claude -p` loads the person's user
+  // settings, hooks, plugins and MCP servers, and may not edit files. The draft isolates the call the way the paid round
+  // did; the table is the person's to change, and `command` is outside configHash, so changing it strands no group.
+  draftCommandArgs: [
+    "--permission-mode", "acceptEdits",
+    "--no-session-persistence",
+    "--setting-sources", "project,local",
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+  ],
   validateSelection(selection) {
     assertModel(selection.model);
     assertContextOption(CONTEXT_OPTIONS, selection);

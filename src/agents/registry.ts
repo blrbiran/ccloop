@@ -25,6 +25,8 @@ export interface AgentDescriptor {
   installationExtras: z.ZodRawShape;
   /** The values `agents detect` writes for installationExtras in a draft table. */
   draftInstallationExtras: Record<string, unknown>;
+  /** Arguments `agents detect` writes after the binary in a draft's `command`; none when absent. */
+  draftCommandArgs?: readonly string[];
   validateSelection(selection: AgentSelectionV1): void;
   capabilities(config: MaterializedAgentConfigV1): CapabilityViewV1;
   createAdapter(config: MaterializedAgentConfigV1): RuntimeAdapter;
