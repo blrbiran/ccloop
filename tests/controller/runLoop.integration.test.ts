@@ -3829,12 +3829,17 @@ describe("runLoop", () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const baseContract = createContract(repoPath);
+    // Rewritten under the human's naming (Orca session 94b09282, 2026-09-27, "c 同意修改"): perAttemptTimeoutMs was
+    // 20 ms, and it bounds verify as well as execute; under CPU load verify overran it and the run ended `exhausted`
+    // ("verify phase exceeded per-attempt timeout of 20ms", 5 of 8 runs at load average ~50). The timeout is now 1000 ms
+    // and execute returns at 1500 ms, still after its timeout (the earlier timer always fires first), so the criterion
+    // still takes the path where a timed-out execute's result is kept.
     const contract: LoopContract = {
       ...baseContract,
       executionPolicy: {
         ...baseContract.executionPolicy,
-        perAttemptTimeoutMs: 20,
-        partialOutcomeRecoveryWindowMs: 30,
+        perAttemptTimeoutMs: 1000,
+        partialOutcomeRecoveryWindowMs: 2000,
       },
     };
     const attemptDir = join(runDir, "attempts", "1");
@@ -3846,7 +3851,7 @@ describe("runLoop", () => {
         return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
       },
       async execute() {
-        await delay(40);
+        await delay(1500);
         return {
           changedFiles: ["src/index.ts"],
           diffPatch: "diff --git a/src/index.ts b/src/index.ts",
@@ -3884,7 +3889,7 @@ describe("runLoop", () => {
     expect(verifyCalled).toBe(true);
     expect(stdout).not.toContain(attemptWorktreePath);
     expect(await readEventTypes(runDir)).toEqual(["loop_planning", "attempt_started", "execute_started", "execution_finished", "loop_succeeded"]);
-  });
+  }, 30_000);
 
   it("blocks for human input on execute errors when the adapter returns a partial outcome with gated files", async () => {
     const repoPath = await createRepo();
