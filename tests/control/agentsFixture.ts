@@ -68,6 +68,20 @@ export async function sealCodex(
   return { config: sealed, configHash: resolution.configHash, selection: resolution.selection };
 }
 
+/**
+ * What accept seals for a claude installation already built by `claudeInstallation` (Orca claude stream usage,
+ * 2026-09-27, spec §5.2 N8, C-3's claude twin of `sealCodex`): unlike codex's config, a claude fixture's command
+ * varies per criterion (fake CLI mode, marker, script path), so the caller materializes the installation and
+ * this only seals it under a fixed selection.
+ */
+export async function sealClaude(
+  installation: InstallationV1,
+): Promise<{ config: MaterializedAgentConfigV1; configHash: string; selection: AgentSelectionV1 }> {
+  const table = parseAgentsTable({ schema: "ccloop-agents-table-v1", installations: { claude: installation } });
+  const { config: sealed, resolution } = await resolveAgent(table, { agent: "claude", model: "claude-opus-5-5", contextWindow: "agent-default" });
+  return { config: sealed, configHash: resolution.configHash, selection: resolution.selection };
+}
+
 export function controlContract(repoPath: string): LoopContract {
   return {
     objective: { taskId: "task-1", goal: "work", successCondition: "done", nonGoals: [] },
