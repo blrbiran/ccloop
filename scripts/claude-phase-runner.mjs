@@ -1,6 +1,7 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { promisify } from "node:util";
+import { buildUsageEvidence, createLineSplitter, createUsageObserver, writeObservation } from "./claude-stream.mjs";
 
 const execFileAsync = promisify(execFile);
 const CLAUDE_TERMINATION_GRACE_MS = 250;
@@ -81,75 +82,6 @@ function getSchemaForPhase(phase) {
   }
 
   return VERIFY_SCHEMA;
-}
-
-const USAGE_FIELDS = ["input_tokens", "inputTokens", "output_tokens", "outputTokens"];
-// Orca paid claude round (2026-09-27), human ruling on its findings ("B1–B3 按你推荐"): claude's input_tokens leaves
-// out the prompt it wrote to or read from its cache, which in that round was about 145,000 tokens against 1,329
-// counted, so the token budget barely bound real claude. Codex's input_tokens already includes its cached input. Both
-// cache counts are now whitelisted and added to the total; any other usage property is still never copied.
-const CACHE_USAGE_FIELDS = ["cache_creation_input_tokens", "cache_read_input_tokens"];
-
-function inspectUsageField(usage, field) {
-  if (!Object.prototype.hasOwnProperty.call(usage, field)) {
-    return { status: "absent" };
-  }
-
-  const value = usage[field];
-  if (typeof value !== "number") {
-    return { status: "invalid_type" };
-  }
-
-  if (!Number.isFinite(value)) {
-    return { status: "non_finite" };
-  }
-
-  return { status: "finite", value };
-}
-
-function buildUsageEvidence(envelope) {
-  const rawUsage = envelope && typeof envelope === "object" ? envelope.usage : undefined;
-  const usageStatus = rawUsage === undefined
-    ? "absent"
-    : rawUsage !== null && typeof rawUsage === "object" && !Array.isArray(rawUsage)
-      ? "present"
-      : "invalid";
-  const usage = usageStatus === "present" ? rawUsage : {};
-  const fields = Object.fromEntries(
-    USAGE_FIELDS.map((field) => [field, inspectUsageField(usage, field)]),
-  );
-  const selectedInputField = fields.input_tokens.status === "finite"
-    ? "input_tokens"
-    : fields.inputTokens.status === "finite"
-      ? "inputTokens"
-      : null;
-  const selectedOutputField = fields.output_tokens.status === "finite"
-    ? "output_tokens"
-    : fields.outputTokens.status === "finite"
-      ? "outputTokens"
-      : null;
-  const selectedValues = [selectedInputField, selectedOutputField]
-    .filter((field) => field !== null)
-    .map((field) => fields[field].value);
-  const cacheFields = Object.fromEntries(
-    CACHE_USAGE_FIELDS.map((field) => [field, inspectUsageField(usage, field)]),
-  );
-  const cacheValues = CACHE_USAGE_FIELDS
-    .filter((field) => cacheFields[field].status === "finite")
-    .map((field) => cacheFields[field].value);
-  const total = [...selectedValues, ...cacheValues].reduce((sum, value) => sum + value, 0);
-  const normalizedTotal = selectedValues.length > 0 && Number.isFinite(total) && total > 0
-    ? total
-    : null;
-
-  return {
-    usageStatus,
-    fields,
-    cacheFields,
-    selectedInputField,
-    selectedOutputField,
-    normalizedTotal,
-  };
 }
 
 async function readStdin() {
@@ -406,8 +338,9 @@ function readArgvEnv(name, fallback, requireCommand) {
 // Agent selection (2026-09-26), wave-1 review I-1: CCLOOP_CLAUDE_COMMAND/_EXTRA_ARGS are this runner's own input. The claude
 // CLI, and everything it starts, gets the rest of the environment unchanged but never these two, so a runner nested
 // under it resolves its own `claude` instead of inheriting the outer installation.
+// Orca claude stream usage (2026-09-27): so is the observation path the adapter hands this runner.
 function claudeEnv() {
-  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, ...env } = process.env;
+  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: _observedUsagePath, ...env } = process.env;
   return env;
 }
 
@@ -416,39 +349,29 @@ function claudeEnv() {
 // streams are kept, each cut to its last FAILURE_OUTPUT_TAIL characters.
 const FAILURE_OUTPUT_TAIL = 8192;
 
-function outputTail(text) {
-  return text.length > FAILURE_OUTPUT_TAIL
-    ? `[${text.length - FAILURE_OUTPUT_TAIL} earlier characters dropped]${text.slice(-FAILURE_OUTPUT_TAIL)}`
-    : text;
+function outputTail(text, length = text.length) {
+  const kept = text.slice(-FAILURE_OUTPUT_TAIL);
+  return length > FAILURE_OUTPUT_TAIL ? `[${length - FAILURE_OUTPUT_TAIL} earlier characters dropped]${kept}` : kept;
 }
 
 function failureMessage(code, stdout, stderr) {
   return [
     `claude exited with code ${code}`,
     stderr ? `stderr: ${outputTail(stderr)}` : null,
-    stdout ? `stdout: ${outputTail(stdout)}` : null,
+    stdout.length > 0 ? `stdout: ${outputTail(stdout.tail, stdout.length)}` : null,
   ].filter((line) => line !== null).join("\n");
 }
 
 async function runClaude(request, claudeCommand, extraArgs) {
   const schema = getSchemaForPhase(request.phase);
-  const child = execFile(
+  // Orca claude stream usage (2026-09-27), spec §3.1: stream-json with partial messages, so the usage claude spends is
+  // seen as it streams and survives an abort. Read line by line and never kept whole: the stream is several times the
+  // size of the json envelope and echoes tool results (spec §2.2 item 8), so the old 10 MiB buffer could fail a long
+  // execute. Kept: the result line, the observation, and the last FAILURE_OUTPUT_TAIL characters for failures (B2).
+  const child = spawn(
     claudeCommand[0],
-    [
-      ...claudeCommand.slice(1),
-      "-p",
-      "--output-format",
-      "json",
-      "--json-schema",
-      JSON.stringify(schema),
-      ...extraArgs,
-      request.prompt,
-    ],
-    {
-      cwd: request.worktreePath,
-      maxBuffer: 10 * 1024 * 1024,
-      env: claudeEnv(),
-    },
+    [...claudeCommand.slice(1), "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", JSON.stringify(schema), ...extraArgs, request.prompt],
+    { cwd: request.worktreePath, env: claudeEnv(), stdio: ["pipe", "pipe", "pipe"] },
   );
 
   // Orca paid claude round (2026-09-27): the prompt is an argument, so claude reads nothing from stdin; left open, the
@@ -456,32 +379,45 @@ async function runClaude(request, claudeCommand, extraArgs) {
   child.stdin?.end();
   trackClaudeProcessClose(child);
   currentClaudeProcess = child;
+  const observationPath = process.env.CCLOOP_CLAUDE_OBSERVED_USAGE_PATH;
+  const observer = createUsageObserver();
+  let resultEvent = null;
+  let fallbackEnvelope = null;
+  const splitter = createLineSplitter((line) => {
+    let event;
+    try { event = JSON.parse(line); } catch { return; }
+    if (event && event.type === "result") { resultEvent = event; return; }
+    // Orca claude stream usage (2026-09-27): real claude's json envelope and its stream's result event both carry
+    // type "result"; the older SubprocessClaudeAdapter criteria's stand-ins print a bare {structured_output, usage}
+    // line, still accepted so they keep testing what they test.
+    if (event && typeof event === "object" && !Array.isArray(event) && Object.prototype.hasOwnProperty.call(event, "structured_output")) {
+      fallbackEnvelope = event;
+    }
+    if (observer.observe(event) && observationPath) {
+      const snapshot = observer.snapshot();
+      if (snapshot.total !== null) {
+        try { writeObservation(observationPath, snapshot); } catch (error) { process.stderr.write(`claude-runner: observation not written: ${String(error)}\n`); }
+      }
+    }
+  });
 
   try {
-    const result = await new Promise((resolve, reject) => {
-      let stdout = "";
-      let stderr = "";
-
-      child.stdout?.on("data", (chunk) => {
-        stdout += chunk.toString();
+    return await new Promise((resolve, reject) => {
+      let stdoutTail = "", stdoutLength = 0, stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        stdoutLength += chunk.length;
+        stdoutTail = (stdoutTail + chunk).slice(-FAILURE_OUTPUT_TAIL);
+        splitter.push(chunk);
       });
-
-      child.stderr?.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-
+      child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
       child.on("error", reject);
       child.on("close", (code) => {
-        if (code !== 0) {
-          reject(new Error(failureMessage(code, stdout, stderr)));
-          return;
-        }
-
-        resolve({ stdout, stderr });
+        splitter.end();
+        if (code !== 0) { reject(new Error(failureMessage(code, { tail: stdoutTail, length: stdoutLength }, stderr))); return; }
+        resolve({ envelope: resultEvent ?? fallbackEnvelope, stderr });
       });
     });
-
-    return result;
   } finally {
     currentClaudeProcess = null;
   }
@@ -504,7 +440,8 @@ async function main() {
 
   try {
     const result = await runClaude(request, claudeCommand, extraArgs);
-    const envelope = JSON.parse(result.stdout);
+    const envelope = result.envelope;
+    if (envelope === null) throw new Error("Claude CLI did not return structured_output");
     const structured = envelope.structured_output;
 
     if (!structured || typeof structured !== "object") {

@@ -48,9 +48,11 @@ describe("claude phase runner command and extra arguments (Orca agent selection)
     const result = await runRunner(w.dir, env);
     expect(result.code).toBe(0);
     const [argv] = await argvOf(w.pathMarker);
-    expect(argv).toHaveLength(6);
-    expect(argv!.slice(0, 4)).toEqual(["-p", "--output-format", "json", "--json-schema"]);
-    expect(argv![5]).toBe("Plan one isolated L2 attempt for task t.");
+    expect(argv).toHaveLength(8);
+    // Rewritten for Orca claude stream usage (2026-09-27, spec §5.3, named by the human with the spec): the runner now
+    // asks for stream-json with --verbose and --include-partial-messages, which moves --model and the prompt two places.
+    expect(argv!.slice(0, 6)).toEqual(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema"]);
+    expect(argv![7]).toBe("Plan one isolated L2 attempt for task t.");
     expect(JSON.parse(result.stdout)).toMatchObject({ summary: "fixture", tokenUsage: 15 });
   });
 
@@ -65,8 +67,10 @@ describe("claude phase runner command and extra arguments (Orca agent selection)
     });
     expect(result.code).toBe(0);
     const [argv] = await argvOf(marker);
-    expect(argv).toHaveLength(8);
-    expect(argv!.slice(5)).toEqual(["--model", "model with spaces[1m]", "Plan one isolated L2 attempt for task t."]);
+    expect(argv).toHaveLength(10);
+    // Rewritten for Orca claude stream usage (2026-09-27, spec §5.3, named by the human with the spec): the runner now
+    // asks for stream-json with --verbose and --include-partial-messages, which moves --model and the prompt two places.
+    expect(argv!.slice(7)).toEqual(["--model", "model with spaces[1m]", "Plan one isolated L2 attempt for task t."]);
     expect(existsSync(`${w.pathMarker}.argv`)).toBe(false);
   });
 

@@ -59,17 +59,21 @@ describe("ClaudeAgentAdapter (Orca agent selection, spec §4.7)", () => {
     const plan = await new ClaudeAgentAdapter(f.config).plan(f.context);
     expect(plan).toMatchObject({ summary: "fixture", primaryTargetPaths: ["answer.txt"], tokenUsage: 15 });
     const [argv] = await argvLines(f.marker);
-    expect(argv!.slice(0, 4)).toEqual(["-p", "--output-format", "json", "--json-schema"]);
-    expect(argv!.slice(5, 7)).toEqual(["--model", "claude-opus-5-5"]);
-    expect(argv).toHaveLength(8);
-    expect(argv![7]).toContain("Plan one isolated L2 attempt for task codex-test.");
+    // Rewritten for Orca claude stream usage (2026-09-27, spec §5.3, named by the human with the spec): the runner now
+    // asks for stream-json with --verbose and --include-partial-messages, which moves --model and the prompt two places.
+    expect(argv!.slice(0, 6)).toEqual(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema"]);
+    expect(argv!.slice(7, 9)).toEqual(["--model", "claude-opus-5-5"]);
+    expect(argv).toHaveLength(10);
+    expect(argv![9]).toContain("Plan one isolated L2 attempt for task codex-test.");
   });
 
   it("selects the 1M context window by the [1m] model suffix", async () => {
     const f = await fixture("ok", { contextWindow: 1_000_000 });
     await new ClaudeAgentAdapter(f.config).plan(f.context);
     const [argv] = await argvLines(f.marker);
-    expect(argv!.slice(5, 7)).toEqual(["--model", "claude-opus-5-5[1m]"]);
+    // Rewritten for Orca claude stream usage (2026-09-27, spec §5.3, named by the human with the spec): the runner now
+    // asks for stream-json with --verbose and --include-partial-messages, which moves --model and the prompt two places.
+    expect(argv!.slice(7, 9)).toEqual(["--model", "claude-opus-5-5[1m]"]);
   });
 
   it("refuses at construction a context window the claude CLI cannot express", async () => {
