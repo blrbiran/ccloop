@@ -435,7 +435,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 ## 给本仓库留下的环境事实（**直接用，别再反推**）
 
 - *** **已知红用 `node scripts/check-known-reds.mjs` 机械判**（名单现为 14 个名字，末一条是 R29 加的）；唯一稳定红仍是 `stopProof`。 *** 2026-09-27 全量（clone，改道 HOME＋四个 XDG 根，内容＝`fix(claude): count the tokens …` 那一笔）：85 文件／1005 条，1004 过，唯一红 `stopProof`，RC 0。改道 HOME 下只会有 `~/.npm/_logs`（既有判据自己跑 npm 留下的）。
-- 🔴 **新登记的负载 flake（未进名单，名单归人）**：`runLoop > continues normally when execute returns a complete result during the recovery window`（`expected 'exhausted' to be 'succeeded'`，load 27.8 时；单文件 3/3 绿）。
+- ✅ **那条负载 flake 已从根上修**（人选 (c)，Orca 会话 `94b09282`）：`runLoop > continues normally when execute returns a complete result during the recovery window` 的真因是 verify 阶段撞上 20 ms 的 `perAttemptTimeoutMs`（负载下 8 次红 5 次，每次都是 `verify phase exceeded …`），不是 execute。改为超时 1000、execute 1500、窗口 2000 后，负载下 8／8 绿；让 execute 丢弃超时结果的变异会红。主题行 `test(runLoop): give the recovery-window criterion a per-phase timeout verify can meet under load`。⚠️ 同文件里还有 19 条 `perAttemptTimeoutMs: 20,`，其中 plan／verify 真要跑的那些在重负载下可能同样会红：先看报错是不是「… phase exceeded per-attempt timeout of 20ms」。
 - 🔴 *** **副本**：`git clone --local` 到会话 scratchpad、软链 `node_modules`、**必须 `npm run build`**；要新版本就重新 clone。**主树不跑 `npm run build`／`verify:control`／全量**（会换掉主树 `dist/` 的线上协议）。 ***
 - Orca 的 `ORCA_AGENTS_TABLE` 夹具表：scratchpad 下 0700 目录里的 0600 文件、`command` ＝ `[node, <副本>/tests/fixtures/fake-codex.mjs, "integration", <marker>]`（🔴 **模式是 `integration`**：`ok`／`script` 会让 `ccloopProtocol.integration` 红）、`version` ＝ `9.9.9-fake`。
 - Orca 的端到端判据把 `HOME` 与四个 XDG 根改道并断言零写入 —— **本仓库今后往 `$HOME` 下写东西会让那条判据红**。
@@ -452,6 +452,6 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 ## awaitingHuman
 
 - **推送**归人（顺序：先本仓库、后 Orca）。
-- 新负载 flake 进不进名单；孤儿进程要不要清。
+- 孤儿进程要不要清。
 - ✅ ~~Orca 台账 §14 列出的「按 R1 改写的 4 条既有判据」的人审~~（2026-09-27 Orca 会话 `94b09282` 人已认可）；agent 选择一轮本仓库改写的既有判据（约 47 条＋I-2 人指名的 3 条）；`src/runtime/codex/protocol.ts`／`src/runtime/types.ts`「真 codex 只在阶段末报 usage」要不要追加 ERRATUM。
 - **`stopProof` 那条稳定红的根因**、**Linux 覆盖**、**M3／M4**（见上文 §2）—— 未变。
