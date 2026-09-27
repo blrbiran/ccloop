@@ -62,12 +62,15 @@ const stream = outputFormat === "stream-json";
 const emit = (event) => new Promise((resolve) => { if (process.stdout.write(`${JSON.stringify(event)}\n`)) resolve(); else process.stdout.once("drain", resolve); });
 const emitInit = () => emit({ type: "system", subtype: "init", model: model ?? "fake" });
 const emitStart = () => emit({ type: "stream_event", event: { type: "message_start", message: { id: "msg_fake_1", usage: START_USAGE } } });
-const emitClosedMessage = async () => {
-  await emitStart();
+// Fix round 1 of Task 1 (Orca claude stream usage, 2026-09-27, spec §5.1 / §2.2's order): split out the part of a
+// closed message that comes after message_start, so "flood" can interleave its delta burst between message_start
+// and this tail instead of emitting message_start twice (once explicitly, once inside emitClosedMessage).
+const emitMessageTail = async () => {
   await emit({ type: "assistant", message: { id: "msg_fake_1", usage: START_USAGE, content: [] } });
   await emit({ type: "stream_event", event: { type: "message_delta", usage: DELTA_USAGE } });
   await emit({ type: "stream_event", event: { type: "message_stop" } });
 };
+const emitClosedMessage = async () => { await emitStart(); await emitMessageTail(); };
 
 if (mode === "usage-then-hang" || mode === "start-then-hang") {
   // Orca claude stream usage (2026-09-27, spec §5.1): these two modes only emit under stream-json, matching a
@@ -117,8 +120,10 @@ if (mode === "usage-then-hang" || mode === "start-then-hang") {
         await emitStart();
         const text = "x".repeat(1000);
         for (let i = 0; i < 11 * 1024; i += 1) await emit({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } } });
+        await emitMessageTail();
+      } else {
+        await emitClosedMessage();
       }
-      await emitClosedMessage();
     }
     await emit(envelope);
   };

@@ -161,6 +161,11 @@ describe("fake claude CLI (Orca agent selection, spec §4.8)", () => {
     expect(result.code).toBe(0);
     expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(10 * 1024 * 1024);
     expect(lines(result.stdout).at(-1)).toMatchObject({ type: "result", usage: { input_tokens: 12, output_tokens: 3 } });
+    // Fix round 1 of Task 1 (Orca claude stream usage, 2026-09-27, spec §5.1 / §2.2's order): flood must open
+    // exactly one message (message_start once), with the delta burst inside it, not a second message_start.
+    const events = lines(result.stdout);
+    const messageStarts = events.filter((e) => e.type === "stream_event" && e.event.type === "message_start");
+    expect(messageStarts).toHaveLength(1);
   });
 
   it("reports one closed message before a scripted delay when usageBeforeDelay is set", async () => {
