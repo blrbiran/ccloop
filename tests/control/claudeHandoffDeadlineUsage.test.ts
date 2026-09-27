@@ -52,12 +52,13 @@ describe("deadline-aborted claude execute with observed usage (Orca claude strea
     // Wait until execute is running and has already streamed a closed message's usage to its evidence
     // directory, then latch a request whose deadline falls inside the 30 s delay.
     const executeRoot = join(runtime.runDir, "claude", "1", "execute");
+    // Orca claude stream usage (2026-09-27), final-review ruling in the round's ledger: wait until the fake's message is closed (openMessage false), not merely until the file exists -- message_start and the tail are separate writes, so an existence wait can abort at the 1103 snapshot.
     await expect.poll(async () => {
       try {
         const [call] = await readdir(executeRoot);
         if (call === undefined) return false;
-        await readFile(join(executeRoot, call, "observed-usage.json"), "utf8");
-        return true;
+        const contents = await readFile(join(executeRoot, call, "observed-usage.json"), "utf8");
+        return JSON.parse(contents).openMessage === false;
       } catch { return false; }
     }, { timeout: 10_000 }).toBe(true);
     const request: HandoffRequestV1 = { protocol: 1, requestId: "request-1", runId: "run-1", generation: 1, reason: "human", deadlineAt: new Date(Date.now() + 150).toISOString() };

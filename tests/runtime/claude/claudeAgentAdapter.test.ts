@@ -226,13 +226,19 @@ describe("ClaudeAgentAdapter (Orca agent selection, spec §4.7)", () => {
 
 // Orca claude stream usage (2026-09-27), spec §3.2 and §5.2 N2-N5, N9: an aborted phase reports what claude streamed.
 describe("ClaudeAgentAdapter, usage observed before an abort (Orca claude stream usage)", () => {
-  const abortWhenObserved = async (f: Awaited<ReturnType<typeof fixture>>, phase: "plan" | "execute") => {
+  const abortWhenObserved = async (f: Awaited<ReturnType<typeof fixture>>, phase: "plan" | "execute", closed = true) => {
     const abort = new AbortController();
     const running = phase === "plan" ? new ClaudeAgentAdapter(f.config).plan({ ...f.context, abortSignal: abort.signal }) : new ClaudeAgentAdapter(f.config).execute({ ...f.context, abortSignal: abort.signal });
     const root = join(f.context.runDir, "claude", String(f.context.attempt), phase);
     let observed = "";
+    // Orca claude stream usage (2026-09-27), final-review ruling in the round's ledger: wait until the fake's message is closed (openMessage false), not merely until the file exists -- message_start and the tail are separate writes, so an existence wait can abort at the 1103 snapshot.
     await expect.poll(async () => {
-      try { const [call] = await readdir(root); observed = join(root, call!, "observed-usage.json"); return existsSync(observed); } catch { return false; }
+      try {
+        const [call] = await readdir(root);
+        observed = join(root, call!, "observed-usage.json");
+        if (!closed) return existsSync(observed);
+        return JSON.parse(await readFile(observed, "utf8")).openMessage === false;
+      } catch { return false; }
     }, { timeout: 10_000 }).toBe(true);
     abort.abort();
     return { outcome: await running.then((value) => ({ value }), (error: unknown) => ({ error })), observed };
@@ -248,7 +254,7 @@ describe("ClaudeAgentAdapter, usage observed before an abort (Orca claude stream
 
   it("N3: a phase aborted inside a message reports that message's opening snapshot and says a message was open", async () => {
     const f = await fixture("start-then-hang");
-    const { outcome, observed } = await abortWhenObserved(f, "plan");
+    const { outcome, observed } = await abortWhenObserved(f, "plan", false);
     expect(((outcome as { error: ClaudePhaseAborted }).error).observedTokens).toBe(1103);
     expect(JSON.parse(await readFile(observed, "utf8"))).toMatchObject({ total: 1103, openMessage: true });
   }, 20_000);

@@ -50,6 +50,26 @@ describe("claude stream observation (spec §3.1)", () => {
     expect(seen).toEqual(['{"a":1}', '{"b":2}', '{"c":3}']);
   });
 
+  // Orca claude stream usage (2026-09-27), spec §3.1: the cap's two branches, pinned separately -- the prior
+  // test only ever exercised them together, so either one could regress without turning anything red.
+  it("pins each branch of the per-line cap on its own: a whole over-cap line in one chunk, and a partial buffer that grows over cap before any newline", () => {
+    // Branch A: a complete line, over the cap, arrives with its own newline in a single chunk -- dropped whole.
+    const seenA: string[] = [];
+    const a = createLineSplitter((line: string) => seenA.push(line), 8);
+    a.push('123456789012\nok\n');
+    a.end();
+    expect(seenA).toEqual(["ok"]);
+
+    // Branch B: no newline arrives until the buffered text has already grown over the cap across chunks --
+    // it keeps dropping until the next newline, then recovers; a following normal line still comes through.
+    const seenB: string[] = [];
+    const b = createLineSplitter((line: string) => seenB.push(line), 8);
+    b.push("12345"); b.push("67890123"); b.push('45\nok\n');
+    b.push('{"d":4}\n');
+    b.end();
+    expect(seenB).toEqual(["ok", '{"d":4}']);
+  });
+
   it("writes the observation atomically with mode 0600", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claude-stream-")); dirs.push(dir);
     const o = createUsageObserver(); o.observe(start("m1"));

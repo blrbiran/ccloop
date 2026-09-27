@@ -74,7 +74,11 @@ describe("claude phase runner over stream-json (Orca claude stream usage)", () =
   it("N6: puts the observation on disk while claude is still running, and it survives a SIGKILL of the group", async () => {
     const w = await world();
     const run = start(w, "usage-then-hang");
-    await expect.poll(() => existsSync(w.observed), { timeout: 10_000 }).toBe(true);
+    // Orca claude stream usage (2026-09-27), final-review ruling in the round's ledger: wait until the fake's message is closed (openMessage false), not merely until the file exists -- message_start and the tail are separate writes, so an existence wait can abort at the 1103 snapshot. Seventh named rewrite (N6 was already published).
+    await expect.poll(async () => {
+      if (!existsSync(w.observed)) return false;
+      try { return JSON.parse(await readFile(w.observed, "utf8")).openMessage === false; } catch { return false; }
+    }, { timeout: 10_000 }).toBe(true);
     expect(run.child.exitCode).toBeNull();
     process.kill(-run.child.pid!, "SIGKILL");
     await run.done;
