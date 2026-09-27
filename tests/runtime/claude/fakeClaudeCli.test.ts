@@ -185,4 +185,67 @@ describe("fake claude CLI (Orca agent selection, spec §4.8)", () => {
     await launch(cwd, ["ok", join(cwd, "marker.json"), ...streamArgs("plan", prompts.plan("a"))]);
     expect(JSON.parse(await readFile(join(cwd, "marker.json"), "utf8")).observedUsagePathEnv).toBeNull();
   });
+
+  // Orca single-call estimate (2026-09-27), spec §5.4: the runner calls claude once with the caller's schema, every tool
+  // off (`--tools ""`) and CLAUDE_CODE_MAX_OUTPUT_TOKENS set. The fake tells such a call apart by `--tools ""` alone,
+  // answers it from its script's "single-call" entry, and records the output cap it was handed.
+  const answerSchema = { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false };
+  const singleCallArgs = (withTools = true) =>
+    ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", JSON.stringify(answerSchema), ...(withTools ? ["--tools", ""] : []), "Estimate this."];
+  const withoutCap = () => { const env = { ...process.env }; delete env.CLAUDE_CODE_MAX_OUTPUT_TOKENS; return env; };
+  function launchEnv(cwd: string, argv: string[], env: NodeJS.ProcessEnv): Promise<{ code: number | null; stdout: string }> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [fake, ...argv], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+      child.on("error", reject);
+      child.on("close", (code) => resolve({ code, stdout }));
+    });
+  }
+  async function singleCallScript(cwd: string, entry: unknown): Promise<string> {
+    const scriptPath = join(cwd, "script.json");
+    await writeFile(scriptPath, JSON.stringify({ "single-call": entry }));
+    return scriptPath;
+  }
+
+  it("F1: answers a single call from the script's single-call entry and records the output cap it was given", async () => {
+    const cwd = await workdir();
+    const scriptPath = await singleCallScript(cwd, { output: { answer: "forty-two" } });
+    const result = await launchEnv(cwd, ["script", join(cwd, "marker.json"), scriptPath, ...singleCallArgs()], { ...withoutCap(), CLAUDE_CODE_MAX_OUTPUT_TOKENS: "321" });
+    expect(result.code).toBe(0);
+    expect(lines(result.stdout).at(-1)).toEqual({ type: "result", subtype: "success", is_error: false, structured_output: { answer: "forty-two" }, usage: { input_tokens: 12, output_tokens: 3 } });
+    expect(await readFile(join(cwd, "marker.json.calls"), "utf8")).toBe("single-call\n");
+    expect(await readFile(join(cwd, "marker.json.tasks"), "utf8")).toBe("single-call single-call\n");
+    const marker = JSON.parse(await readFile(join(cwd, "marker.json"), "utf8"));
+    expect(marker.maxOutputTokensEnv).toBe("321");
+    expect(marker.args).toEqual(singleCallArgs());
+  });
+
+  it("F2: leaves structured_output out of the result when the entry's output is null", async () => {
+    const cwd = await workdir();
+    const scriptPath = await singleCallScript(cwd, { output: null });
+    const result = await launchEnv(cwd, ["script", join(cwd, "marker.json"), scriptPath, ...singleCallArgs()], withoutCap());
+    expect(result.code).toBe(0);
+    const last = lines(result.stdout).at(-1);
+    expect(last).toMatchObject({ type: "result", usage: { input_tokens: 12, output_tokens: 3 } });
+    expect(Object.keys(last)).not.toContain("structured_output");
+  });
+
+  it("F3: streams one closed message before a delayed single-call answer when usageBeforeDelay is set", async () => {
+    const cwd = await workdir();
+    const scriptPath = await singleCallScript(cwd, { output: { answer: "late" }, delayMs: { "single-call": 30_000 }, usageBeforeDelay: true });
+    const child = spawn(process.execPath, [fake, "script", join(cwd, "marker.json"), scriptPath, ...singleCallArgs()], { cwd, env: withoutCap(), stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    await expect.poll(() => stdout.includes('"message_delta"'), { timeout: 5000 }).toBe(true);
+    child.kill("SIGKILL");
+    expect(stdout).not.toContain('"result"');
+  });
+
+  it("F4: without --tools \"\" the same schema is not a single call, and no cap is recorded when none is set", async () => {
+    const cwd = await workdir();
+    await launchEnv(cwd, ["ok", join(cwd, "marker.json"), ...singleCallArgs(false)], withoutCap());
+    expect(await readFile(join(cwd, "marker.json.calls"), "utf8")).toBe("plan\n");
+    expect(JSON.parse(await readFile(join(cwd, "marker.json"), "utf8")).maxOutputTokensEnv).toBeNull();
+  });
 });

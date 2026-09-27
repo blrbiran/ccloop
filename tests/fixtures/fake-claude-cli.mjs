@@ -9,6 +9,9 @@
 // "start-then-hang" (emits init + message_start only, then hangs), "flood" (behaves like "ok" but, under
 // --output-format stream-json, emits 11 * 1024 content_block_delta lines before its result). Accepts
 // --output-format stream-json (spec §2.2's measured event order) alongside the existing json format.
+// Orca single-call estimate (2026-09-27, spec §5.4): `--tools ""` marks a single call (phase "single-call"),
+// answered from the script's "single-call" entry {output, delayMs, usageBeforeDelay}; <marker> also records
+// maxOutputTokensEnv.
 // Files next to <marker>, all appended, one line per call:
 //   <marker>.argv   the claude arguments as one JSON array (every call except `--version`)
 //   <marker>.calls  `<phase>`                     (fake codex's format; not written by hang/grandchild)
@@ -26,17 +29,18 @@ if (args.length === 1 && args[0] === "--version") {
 appendFileSync(`${marker}.argv`, `${JSON.stringify(args)}\n`);
 
 const fail = (message) => { process.stderr.write(`fake-claude-cli: ${message}\n`); process.exit(2); };
-let print = false, outputFormat, schemaText, model = null, prompt;
+let print = false, outputFormat, schemaText, model = null, prompt, tools;
 for (let index = 0; index < args.length; index += 1) {
   const arg = args[index];
   if (arg === "-p") { print = true; continue; }
   if (arg === "--verbose" || arg === "--include-partial-messages") continue;
-  if (arg === "--output-format" || arg === "--json-schema" || arg === "--model") {
+  if (arg === "--output-format" || arg === "--json-schema" || arg === "--model" || arg === "--tools") {
     const value = args[index + 1];
     if (value === undefined) fail(`missing value for ${arg}`);
     if (arg === "--output-format") outputFormat = value;
     if (arg === "--json-schema") schemaText = value;
     if (arg === "--model") model = value;
+    if (arg === "--tools") tools = value;
     index += 1;
     continue;
   }
@@ -52,6 +56,8 @@ writeFileSync(marker, JSON.stringify({
   // Orca claude stream usage (2026-09-27, spec §5.1): lets criteria see whether the runner's observation path env
   // var reached this process, without the fake acting on it.
   observedUsagePathEnv: process.env.CCLOOP_CLAUDE_OBSERVED_USAGE_PATH ?? null,
+  // Orca single-call estimate (2026-09-27), spec §5.4: lets criteria see the output cap the runner handed claude.
+  maxOutputTokensEnv: process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS ?? null,
 }));
 
 // Orca claude stream usage (2026-09-27, spec §5.1): shared by every mode that can stream, so both the
@@ -86,25 +92,34 @@ if (mode === "usage-then-hang" || mode === "start-then-hang") {
 } else {
   const CONTINUATION = "Treat continuation input fields unfinished, pendingDecisions, and awaitingHuman as required planning inputs.";
   const schema = JSON.parse(schemaText);
+  // Orca single-call estimate (2026-09-27), spec §5.4: the runner turns every tool off with `--tools ""` only for a
+  // single call, so that flag -- not the caller's schema, which can be anything -- tells a single call apart.
+  const singleCall = tools === "";
   // Orca paid claude round (2026-09-27): the runner's execute schema is now one object (the API refused a top-level
   // oneOf), so execute is told by its changedFiles property; the older oneOf shape is still recognised.
-  const phase = schema.oneOf || schema.properties?.changedFiles ? "execute" : schema.properties?.approved ? "verify" : "plan";
+  const phase = singleCall ? "single-call" : schema.oneOf || schema.properties?.changedFiles ? "execute" : schema.properties?.approved ? "verify" : "plan";
   let body = { summary: "fixture", primaryTargetPaths: ["answer.txt"] };
   if (phase === "execute") body = { changedFiles: ["answer.txt"], diffPatch: "fixture patch", commandOutputs: ["changed answer"], stdoutStderrLog: "fixture execution" };
   if (phase === "verify") body = { approved: true, rejectCategory: "", primaryTargetPaths: ["answer.txt"], failingCommand: null, safeToRetry: false, evidence: [], pauseSignals: [], stopSignals: [] };
+  if (phase === "single-call") body = { answer: "fixture" };
   appendFileSync(`${marker}.calls`, `${phase}\n`);
   let entry, refused = false;
   if (mode === "script") {
-    const task = { plan: /^Plan one isolated L2 attempt for task (.+)\.$/m, execute: /^Execute one isolated attempt for task (.+)\.$/m, verify: /^Verify task (.+)\.$/m }[phase].exec(prompt)?.[1];
+    const task = phase === "single-call"
+      ? "single-call"
+      : { plan: /^Plan one isolated L2 attempt for task (.+)\.$/m, execute: /^Execute one isolated attempt for task (.+)\.$/m, verify: /^Verify task (.+)\.$/m }[phase].exec(prompt)?.[1];
     const script = task === undefined ? {} : JSON.parse(readFileSync(process.argv[4], "utf8"));
     const key = prompt.includes(CONTINUATION) && script[`${task}#continuation`] !== undefined ? `${task}#continuation` : script[task] !== undefined ? task : undefined;
     entry = key === undefined ? undefined : script[key];
     appendFileSync(`${marker}.tasks`, `${phase} ${key ?? "-"}\n`);
-    if (phase === "execute" && entry === undefined) {
+    if ((phase === "execute" || phase === "single-call") && entry === undefined) {
       process.stderr.write(`fake-claude-cli script has no entry for task ${task}\n`);
       process.exitCode = 3;
       refused = true;
     }
+    // Orca single-call estimate (2026-09-27): a single call answers what its entry scripts; null stands for an answer
+    // with no structured object at all.
+    if (phase === "single-call" && entry !== undefined) body = entry.output;
   }
   // Orca claude stream usage (2026-09-27, spec §5.1): under stream-json, "flood" answers exactly like "ok" (same
   // phase detection, body and .calls) but interleaves a burst of content_block_delta lines before its closed
@@ -112,7 +127,7 @@ if (mode === "usage-then-hang" || mode === "start-then-hang") {
   let openedBeforeDelay = false;
   const respond = async () => {
     if (mode === "script" && phase === "execute") for (const [path, content] of Object.entries(entry.files)) writeFileSync(path, content);
-    const envelope = { type: "result", subtype: "success", is_error: false, structured_output: body, usage: { input_tokens: 12, output_tokens: 3 } };
+    const envelope = { type: "result", subtype: "success", is_error: false, ...(body === null ? {} : { structured_output: body }), usage: { input_tokens: 12, output_tokens: 3 } };
     if (!stream) { process.stdout.write(JSON.stringify(envelope)); return; }
     if (!openedBeforeDelay) {
       await emitInit();
