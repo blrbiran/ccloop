@@ -399,6 +399,25 @@ function claudeEnv() {
   return env;
 }
 
+// Orca paid claude round (2026-09-27): with `-p --output-format json` claude reports an API error in the envelope on
+// stdout, so a failure message built from stderr alone lost the cause (a 400 left only a stdin warning behind). Both
+// streams are kept, each cut to its last FAILURE_OUTPUT_TAIL characters.
+const FAILURE_OUTPUT_TAIL = 8192;
+
+function outputTail(text) {
+  return text.length > FAILURE_OUTPUT_TAIL
+    ? `[${text.length - FAILURE_OUTPUT_TAIL} earlier characters dropped]${text.slice(-FAILURE_OUTPUT_TAIL)}`
+    : text;
+}
+
+function failureMessage(code, stdout, stderr) {
+  return [
+    `claude exited with code ${code}`,
+    stderr ? `stderr: ${outputTail(stderr)}` : null,
+    stdout ? `stdout: ${outputTail(stdout)}` : null,
+  ].filter((line) => line !== null).join("\n");
+}
+
 async function runClaude(request, claudeCommand, extraArgs) {
   const schema = getSchemaForPhase(request.phase);
   const child = execFile(
@@ -442,7 +461,7 @@ async function runClaude(request, claudeCommand, extraArgs) {
       child.on("error", reject);
       child.on("close", (code) => {
         if (code !== 0) {
-          reject(new Error(stderr || `claude exited with code ${code}`));
+          reject(new Error(failureMessage(code, stdout, stderr)));
           return;
         }
 
