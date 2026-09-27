@@ -61,6 +61,11 @@ export const claudeDescriptor: AgentDescriptor = {
       requestBoundProof: null,
     };
   },
+  // Orca single-call estimate (2026-09-27), Task 0 item 1 (claude 2.1.283, static only): `--tools ""` turns every tool
+  // off (claude --help: 'Use "" to disable all tools') and CLAUDE_CODE_MAX_OUTPUT_TOKENS sets max_tokens.
+  singleCallExecution() {
+    return "v1";
+  },
   createAdapter(config) {
     return new ClaudeAgentAdapter(config);
   },

@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { resolveAgent } from "../agents/materialize.js";
+import { getDescriptor } from "../agents/registry.js";
 import { readAgentsTable } from "../agents/table.js";
 import { atomicReplacePrivateFile, ensurePrivateDirectory } from "./paths.js";
 import {
@@ -79,6 +80,11 @@ export async function acceptStart(
   const configHash = resolution.configHash;
   if (configHash !== input.claim.configHash) {
     throw new ControlProtocolError("control-config-hash-mismatch");
+  }
+  // Orca single-call estimate (2026-09-27), spec §5.1: refused here, before anything is persisted, even when Orca's
+  // preflight let it through.
+  if (input.work.kind === "single-call" && getDescriptor(config.kind).singleCallExecution(config) === null) {
+    throw new ControlProtocolError("single-call-unsupported");
   }
 
   const proposed: AcceptedRecordV1 = {

@@ -5,7 +5,7 @@ import type { LoopContract } from "../../src/contract/schema.js";
 import { probeVersion, resolveAgent } from "../../src/agents/materialize.js";
 import { parseAgentsTable } from "../../src/agents/table.js";
 import type { AgentSelectionV1, AgentsTableV1, InstallationV1, MaterializedAgentConfigV1 } from "../../src/agents/types.js";
-import type { LoopStartEnvelope } from "../../src/control/protocol.js";
+import type { LoopStartEnvelope, SingleCallStartEnvelope } from "../../src/control/protocol.js";
 import type { CodexConfig } from "../../src/runtime/codex/protocol.js";
 
 /**
@@ -112,5 +112,33 @@ export function startEnvelope(input: {
     contractHash: "b".repeat(64),
     inputCheckpoint: null,
     work: { kind: "loop", contract: input.contract, targetRepo: input.targetRepo, base: "main", sourceDir: input.sourceDir },
+  };
+}
+
+/** Orca single-call estimate (2026-09-27): the schema every single-call criterion asks for. */
+export const SINGLE_CALL_SCHEMA = { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false };
+
+/**
+ * Orca single-call estimate (2026-09-27), spec §4.1: a protocol-3 single-call envelope shaped like Orca's estimate
+ * (no task, a work grant and a zero handoff grant). Nothing in it names a repository.
+ */
+export function singleCallEnvelope(input: { sourceDir: string; agent: AgentSelectionV1; configHash: string }): SingleCallStartEnvelope {
+  const zero = { tokens: 0, activeMs: 0, attempts: 0, sessions: 0 };
+  return {
+    protocol: 3,
+    claim: {
+      groupId: "group-1", workItemId: "estimate-1", taskId: null, runId: "run-estimate-1", generation: 1, graphVersion: 1,
+      targetVersion: 1, commandId: "command-1", configHash: input.configHash, agent: input.agent,
+      grant: { work: { tokens: 250_000, activeMs: 60_000, attempts: 1, sessions: 1 }, handoff: zero }, ownerToken: "owner-1",
+    },
+    contractHash: "d".repeat(64),
+    inputCheckpoint: null,
+    work: {
+      kind: "single-call",
+      prompt: "Estimate the plan below.\n\n{\"planHash\":\"p\"}",
+      responseSchema: SINGLE_CALL_SCHEMA,
+      maxOutputTokens: 4096,
+      sourceDir: input.sourceDir,
+    },
   };
 }

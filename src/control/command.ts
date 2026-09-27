@@ -80,6 +80,7 @@ const capabilitiesSchema = z.union([
       timeoutMs: z.number().int().positive().max(2_147_483_647),
       killGraceMs: z.number().int().nonnegative().max(60_000),
       capabilities: capabilityViewSchema,
+      singleCallExecution: z.enum(["v1"]).nullable(),
     })
     .strict(),
 ]);
@@ -181,8 +182,10 @@ async function tableView(agentsTablePath: string): Promise<unknown> {
 async function defaultHandler(request: ControlRequestV1, context: ControlContextV1): Promise<unknown> {
   if (request.method === "capabilities") {
     if (request.agent === null) return await tableView(context.agentsTablePath);
-    const { resolution } = await resolveAgent(await readAgentsTable(context.agentsTablePath), request.agent);
-    return { protocol: 3, ...resolution };
+    const { config, resolution } = await resolveAgent(await readAgentsTable(context.agentsTablePath), request.agent);
+    // Orca single-call estimate (2026-09-27), spec §4.4: a sibling of `capabilities`, like timeoutMs and killGraceMs,
+    // so the seven-key view (frozen into Orca profiles and task records) stays exactly as it is.
+    return { protocol: 3, ...resolution, singleCallExecution: getDescriptor(config.kind).singleCallExecution(config) };
   }
   if (request.method === "accept") {
     return await acceptStart(request.input, { agentsTablePath: context.agentsTablePath });

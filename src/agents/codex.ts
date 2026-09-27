@@ -49,6 +49,11 @@ export const codexDescriptor: AgentDescriptor = {
       requestBoundProof: null,
     };
   },
+  // Orca single-call estimate (2026-09-27), Task 0 item 1 (codex-cli 0.155.1): no config caps the model's output, so a
+  // single call cannot be bounded the way spec §4.4 asks.
+  singleCallExecution() {
+    return null;
+  },
   createAdapter(config) {
     const { configDir } = config.installation;
     return new CodexAdapter(toCodexConfig(config), configDir === null ? undefined : { CODEX_HOME: configDir });

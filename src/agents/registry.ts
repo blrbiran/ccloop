@@ -29,6 +29,12 @@ export interface AgentDescriptor {
   draftCommandArgs?: readonly string[];
   validateSelection(selection: AgentSelectionV1): void;
   capabilities(config: MaterializedAgentConfigV1): CapabilityViewV1;
+  /**
+   * Orca single-call estimate (2026-09-27), spec §4.4: "v1" when this kind can run one read-only structured call with
+   * an output-token cap and every tool turned off; null when either cannot be done. A sibling of capabilities, not a
+   * key of it: Orca does not intersect it with a profile or freeze it into a task.
+   */
+  singleCallExecution(config: MaterializedAgentConfigV1): "v1" | null;
   createAdapter(config: MaterializedAgentConfigV1): RuntimeAdapter;
 }
 
