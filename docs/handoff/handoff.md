@@ -407,51 +407,45 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-09-27 第十二版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-09-27 第十三版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ **本节不写任何哈希、不记发布状态** —— 提交本文这个动作就会移动 HEAD，人也会自己推远端。
-指代某一笔引**提交主题行**；判发布只跑 `/usr/bin/git ls-remote origin refs/heads/main` 与本地比。
+指代某一笔引**提交主题行**（`git log --grep` 找得回）；判发布只跑 `/usr/bin/git ls-remote origin refs/heads/main` 与本地比。
+Orca 侧的唯一进度源：Orca 仓 `.superpowers/sdd/2026-09-26-agent-selection/progress.md`（本仓库的改动、人裁原话、改写判据名单都在 §13–§18）。
 
-## 本仓库该知道的
+## 本仓库现在的样子（与 Orca 有关的部分）
 
-1. *** **Orca 的执行驱动调本仓库的 `control accept`／`collect`／`read-evidence`／`handoff`／`inspect`／`capabilities`（都带 `--agents <table>`），冲突时另起 `ccloop run --agents … --agent-selection …` 解冲突。** ***
-   **红线函数与人裁 83 删锁条件一个字没动。** ④ 依赖的七笔（C1–C7＋C-3＋D-C7′）结论不变，细节在 Orca spec `docs/superpowers/specs/2026-09-25-handoff-delivery-design.md` §12／§13。
-2. *** **agent 选择一轮在本仓库是 T1–T6＋终审 I-2 一笔，其后 2026-09-27（Orca 会话 `43e3e1d8`）又三笔（按主题行找）：** ***
-   - `fix(agents): leave where the CLI is installed and its run limits out of configHash (Orca ruling review R1)` —— 🔴 **`configHash` ＝ 物化配置去掉安装记录的 `version`、`command`、`timeoutMs`、`killGraceMs` 之后的 canonical hash**；`configDir`、kind 自带字段（codex `sandbox`／`budgetMode`）与选择仍进 hash；封存的 `config.json` 照记全部字段。已发布 JSDoc 原文保留、追加具名 ERRATUM。同一笔：`check-known-reds.mjs` 名单加 `run-scenario CLI > records claudeChildExited as NOT_OBSERVABLE when no adapter descendant was tracked`（人裁 R29），`materialize.test.ts` 的 `is the canonical hash …` 改名 `answers the hash agentConfigHash takes of the materialized config`（人裁 R30）。**按 R1 改写的既有判据 4 条**（名字在 Orca 台账 §14）。
-   - `fix(claude): give execute an object schema the API accepts, and close claude's stdin` —— 🔴 **真 claude 第一次跑就撞上**：runner 的 execute `--json-schema` 顶层是裸 `oneOf`，API 拒为 `400 tools.N.custom.input_schema.type: Field required`。现为单一 object，partial 配对规则改在代码里查（`claude-execute-partial-incomplete`）；runner 立即关 claude 的 stdin（原先每次白等 3 s）。新判据 `tests/runtime/claude/claudePhaseSchemas.test.ts` 4 条。
-   - `test(claude): tell execute by its changedFiles property in the fake claude CLI` —— ⚠️ **上一笔提交时有 3 条既有判据是红的**（fake 靠顶层 `oneOf` 认 execute；当时只跑了 `tests/runtime/claude`）；这一笔修掉。**教训：改 runner／fixture 后跑本仓库全量，不只跑目录。**
-   - 未变的部分（细节见 Orca spec `docs/superpowers/specs/2026-09-26-agent-selection-design.md`，§13.9 ＞ §13.8 ＞ … ＞ 正文）：`src/agents/` 的描述、安装表 `ccloop-agents-table-v1`（O_NOFOLLOW、realpath、属主、`mode & 0o022`）、`--version` 探测（观测到且不等 ⇒ `agent-version-drift`；探不到 ⇒ 非具名失败 exit 1）；`ccloop agents detect|validate`；`ccloop run --agents <table> --agent-selection <file>`（与 `--adapter` 互斥；`resume`／`sweep` 不支持 `--agents` 起的 run）。
-   - **control 线上协议**：`--agents <table>`（`--adapter*` 在 control 下被拒）；start envelope `protocol: 2`、claim 带 `agent`；`capabilities` 请求 `{agent: partial|null}`、应答 `protocol: 3`；只有 capabilities／accept 读表，**删了表也不挡回收**。具名拒绝 `control` 退 2、stderr `<code>[: detail]`；`run --agents` 的拒绝退 1（两套退出码，「统一」已由人登记为本仓库候选改动，人裁 R9）。
-   - `ClaudeAgentAdapter`：独立进程组、先注册再写 prompt、SIGTERM→`killGraceMs`→SIGKILL；runner 从 `CCLOOP_CLAUDE_COMMAND`／`CCLOOP_CLAUDE_EXTRA_ARGS` 取 argv 且不泄漏给 claude 子进程；1M ＝ `--model <model>[1m]`。旧 `SubprocessClaudeAdapter` 与 `tests/fixtures/fake-claude.mjs` 原样保留；CLI 层替身 `tests/fixtures/fake-claude-cli.mjs`。**停机证明通用闸**：`phases-completed.json` 计数 > 0 而 `processes.json` 为空 ⇒ 不给证明（对所有 kind 生效）。
-3. *** **真 claude 下单任务主链跑通过一次**（2026-09-26T18:37Z，Orca `scripts/live-driver-acceptance.ts --claude`，claude 2.1.283，claude-opus-5-5，n＝1；claude 自报 $0.4126642，前一次失败的 $0.16246）。 *** 只能这么说；多任务、解冲突下的真 claude、`[1m]`、handoff 都没跑过。
-4. ✅ *** **付费轮四个发现已由人裁定（2026-09-27，Orca 会话 `94b09282`，「B1–B3 按你推荐，B4 先登记」「B3 和 B1 授权改写」），本仓库三笔（按主题行找）：** ***
-   - `fix(claude): keep claude's stdout when it exits non-zero, where -p puts the API error` —— runner 的失败错误带退出码、stderr、stdout，各留末 8192 字符。只加判据。
-   - `feat(agents): draft claude with the paid round's isolation arguments in agents detect` —— claude 草稿 `command` ＝ `[<path>, --permission-mode, acceptEdits, --no-session-persistence, --setting-sources, project,local, --strict-mcp-config, --disable-slash-commands]`（descriptor 可选字段 `draftCommandArgs`；codex 无；**不含 `--max-budget-usd`**）。人指名改写 2 条（`detect.test.ts` 与 `agents/command.test.ts` 的期望 command）。
-   - `fix(claude): count the tokens claude wrote to and read from its cache` —— `cache_creation_input_tokens`／`cache_read_input_tokens` 进白名单（`usageEvidence.cacheFields`），有限值计入 `tokenUsage`，与 codex（`input_tokens` 含 cached）同口径。🔴 **同一 token 上限对真 claude 约紧两个数量级**。`docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md` 追加 §10 更正。人指名改写 `subprocessClaudeAdapter.test.ts` 的 14 条 usage 表判据（名字在 Orca 台账 §16）。
-   - `feat(agents): draft claude with auto memory off and a 100 USD cap per call` —— B4 根治（人裁「根治」「放，默认填100USD」）：claude 草稿在五个隔离参数后再加 `--settings {"autoMemoryEnabled":false}`、`--max-budget-usd 100`。不带这个设置时，claude **启动时**就建 `~/.claude/projects/<cwd>/memory/`（免费探针在 API 不可达下复现）；带上就不建。付费验证一次 plan 调用 RC 0、没有新条目、claude 自报 $0.152572（Orca 台账 §17）。人指名改写 3 条 detect 判据。⚠️ 已有的安装表不会自动带上。
-5. 🟡 **下一件与本仓库有关的**：stream-json 逐条 usage（让 claude 下 deadline 中止可续）→ opencode／pi／litellm；`--max-budget-usd` 已进 detect 默认（100）。🔴 **codex 周额度已用完：人说可以之前不许跑真 codex。**
-6. ⚠️ G1 边界不变：只有 ccloop↔Orca 的线上契约归 ccloop；Orca 的 `work item`／`group`／分层偏好一律不搬过来（Orca 本轮把 plan 与面板的层拆开逐字段合并，纯 Orca 侧，本仓库零改动）。
+1. *** **Orca 的执行驱动调本仓库的 `control accept`／`collect`／`read-evidence`／`handoff`／`inspect`／`capabilities`（都带 `--agents <table>`），解冲突另起 `ccloop run --agents … --agent-selection …`。** *** 红线函数与人裁 83 的删锁条件一个字没动。④ 依赖的七笔结论不变（Orca spec `docs/superpowers/specs/2026-09-25-handoff-delivery-design.md` §12／§13）。
+2. **agent 层**（设计见 Orca spec `docs/superpowers/specs/2026-09-26-agent-selection-design.md`，优先级 §13.11 ＞ … ＞ 正文）：
+   - `src/agents/` 的描述与安装表 `ccloop-agents-table-v1`（O_NOFOLLOW、realpath、属主、`mode & 0o022`）；`ccloop agents detect|validate`。
+   - `--version` 探测：观测到版本且不等 ⇒ `agent-version-drift`；探不到 ⇒ 非具名失败，exit 1。
+   - 🔴 **`configHash` ＝ 物化配置去掉 `version`、`command`、`timeoutMs`、`killGraceMs` 之后的 canonical hash**：`configDir`、kind 字段（codex `sandbox`／`budgetMode`）与选择仍进 hash，封存的 `config.json` 照记全部字段（人裁 I-2 与 R1）。
+   - 🔴 **`agents detect` 给 claude 的草稿 `command`** ＝ `[<path>, --permission-mode, acceptEdits, --no-session-persistence, --setting-sources, project,local, --strict-mcp-config, --disable-slash-commands, --settings, {"autoMemoryEnabled":false}, --max-budget-usd, 100]`（descriptor 可选字段 `draftCommandArgs`；codex 不加）。不关 auto memory 时，claude **启动时**就建 `~/.claude/projects/<cwd>/memory/`；关了就不建（免费探针与一次付费 plan 调用都量过）。⚠️ 已有的安装表不会自动带上这些参数。
+   - control 线上协议：只收 `--agents <table>`；start envelope `protocol: 2`，claim 带 `agent`；`capabilities` 请求 `{agent: partial|null}`，应答 `protocol: 3`；只有 capabilities／accept 读表，删了表也不挡回收。具名拒绝在 `control` 下退 2，在 `run --agents` 下退 1（两套退出码，「统一」已登记为候选改动，人裁 R9）。
+3. **claude 运行时**：
+   - `ClaudeAgentAdapter`：独立进程组、先注册再写 prompt、SIGTERM→`killGraceMs`→SIGKILL；1M ＝ `--model <model>[1m]`。
+   - runner：从 `CCLOOP_CLAUDE_COMMAND`／`_EXTRA_ARGS` 取 argv，且不传给 claude 子进程；立即关 claude 的 stdin；execute 的 `--json-schema` 是单一 object（顶层裸 `oneOf` 会被真 API 拒成 400），partial 的配对规则在代码里查。
+   - 🔴 **claude 非零退出时，错误里带 stdout 与 stderr**，各留末 8192 字符。
+   - 🔴 **`tokenUsage` 计入 `cache_creation_input_tokens`／`cache_read_input_tokens`**（`usageEvidence.cacheFields`），与 codex 同口径（codex 的 `input_tokens` 本身含 cached）⇒ 同一 token 上限对真 claude 约紧了两个数量级。ccloop spec `docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md` §10 是更正。
+   - 旧 `SubprocessClaudeAdapter` 与 `tests/fixtures/fake-claude.mjs` 原样保留；CLI 层替身 `tests/fixtures/fake-claude-cli.mjs`，按 `changedFiles` 属性认 execute。
+   - 停机证明通用闸：`phases-completed.json` 计数 > 0 而 `processes.json` 为空 ⇒ 不给证明。
+4. **真 claude 能说的只有**：单任务主链跑通过一次（claude 2.1.283，claude-opus-5-5，n＝1）；`detect` 生成的草稿 command 经 runner 跑过一次 plan 阶段，RC 0。多任务、解冲突、`[1m]`、handoff 都没跑过。
+5. 相关提交的主题行（索引用，别数笔数）：`fix(agents): leave where the CLI is installed and its run limits out of configHash …`、`fix(claude): give execute an object schema the API accepts …`、`test(claude): tell execute by its changedFiles property …`、`fix(claude): keep claude's stdout when it exits non-zero …`、`feat(agents): draft claude with the paid round's isolation arguments …`、`fix(claude): count the tokens claude wrote to and read from its cache`、`feat(agents): draft claude with auto memory off and a 100 USD cap per call`、`test(runLoop): give the recovery-window criterion a per-phase timeout …`。**这些笔里被人指名改写的既有判据，名字都在 Orca 台账 §14／§16／§17／§18。**
+6. ⚠️ G1 边界不变：只有 ccloop↔Orca 的线上契约归本仓库；Orca 的 `work item`／`group`／分层偏好一律不搬过来。
 
-## 给本仓库留下的环境事实（**直接用，别再反推**）
+## 环境事实（**直接用，别再反推**）
 
-- *** **已知红用 `node scripts/check-known-reds.mjs` 机械判**（名单现为 14 个名字，末一条是 R29 加的）；唯一稳定红仍是 `stopProof`。 *** 2026-09-27 全量（clone，改道 HOME＋四个 XDG 根，内容＝`fix(claude): count the tokens …` 那一笔）：85 文件／1005 条，1004 过，唯一红 `stopProof`，RC 0。改道 HOME 下只会有 `~/.npm/_logs`（既有判据自己跑 npm 留下的）。
-- ✅ **那条负载 flake 已从根上修**（人选 (c)，Orca 会话 `94b09282`）：`runLoop > continues normally when execute returns a complete result during the recovery window` 的真因是 verify 阶段撞上 20 ms 的 `perAttemptTimeoutMs`（负载下 8 次红 5 次，每次都是 `verify phase exceeded …`），不是 execute。改为超时 1000、execute 1500、窗口 2000 后，负载下 8／8 绿；让 execute 丢弃超时结果的变异会红。主题行 `test(runLoop): give the recovery-window criterion a per-phase timeout verify can meet under load`。⚠️ 同文件里还有 19 条 `perAttemptTimeoutMs: 20,`，其中 plan／verify 真要跑的那些在重负载下可能同样会红：先看报错是不是「… phase exceeded per-attempt timeout of 20ms」。
-- 🔴 *** **副本**：`git clone --local` 到会话 scratchpad、软链 `node_modules`、**必须 `npm run build`**；要新版本就重新 clone。**主树不跑 `npm run build`／`verify:control`／全量**（会换掉主树 `dist/` 的线上协议）。 ***
-- Orca 的 `ORCA_AGENTS_TABLE` 夹具表：scratchpad 下 0700 目录里的 0600 文件、`command` ＝ `[node, <副本>/tests/fixtures/fake-codex.mjs, "integration", <marker>]`（🔴 **模式是 `integration`**：`ok`／`script` 会让 `ccloopProtocol.integration` 红）、`version` ＝ `9.9.9-fake`。
-- Orca 的端到端判据把 `HOME` 与四个 XDG 根改道并断言零写入 —— **本仓库今后往 `$HOME` 下写东西会让那条判据红**。
-- 🔴 **变异会留孤儿进程**：`materialize.test.ts` 的挂起夹具（`…/T/ccloop-agents-version-*/cli.mjs --version`）和 `worker.js` 都出现过，PPID 1。上一批 5 个已由人授权于 2026-09-27 清掉（Orca 会话 `94b09282`，SIGTERM 即退）。做完变异后跑 `pgrep -fl "ccloop-agents-version|worker.js"` 自查。
-- 本机 claude 会自动升级（2026-09-26／27 在 2.1.282 → 2.1.283 之间），而且 nvm 与 homebrew 各装了一份；**安装表的 `version` 要等于当时真 CLI 的版本**。真 claude 的 `--version` 在改道 HOME 下零写入（实测）。
-
-## 本轮实测、本仓库也用得上的
-
-- 🔴 *** **fake 只认形状，不认真 API 的约束。** *** fake claude 从不校验 `--json-schema`，于是一个真 API 必拒的 schema 在全部 fake 判据下都是绿的。⇒ **凡是交给真 CLI 的参数，至少要有一条判据直接读「runner 实际传了什么」**（本轮的 `claudePhaseSchemas.test.ts` 就是这个形状）。
-- 🔴 *** **跨仓词表不一致**：「isolated」「fake claude」、同一错误码在 `control` 与 `run` 下退出码语义不同。 *** 接字段前逐个问对端这个词、这个退出码是什么意思。
-- 🔴 **「BASE 红、HEAD 绿」会把设计上有意去掉的交叉核对也判成放宽**（Orca 不再重算本仓库的 hash）；**「变异零杀伤」只相对于跑过的文件范围成立**。
-- 🔴 子代理会在主树做实验、会替人签名、报的行号会错、声称跑过的变异可能没留证据、**写不了报告文件**；判定器读的行格式与报告格式不一致时会检查零行照样绿 ⇒ 派发写死禁令、收货核原始日志、判定器要先见红。
+- *** **已知红用 `node scripts/check-known-reds.mjs` 机械判**（名单 14 个名字）；唯一稳定红是 `stopProof`。 *** 2026-09-27 现测（clone，HOME＋四个 XDG 根改道，内容＝`test(runLoop): give the recovery-window criterion …` 那一笔）：85 文件／1005 条，1004 过，RC 0。改道 HOME 下只会有 `~/.npm/_logs`（既有判据自己跑 npm 留的）。
+- 🔴 **`runLoop.integration.test.ts` 的负载红**：`perAttemptTimeoutMs: 20` 同时约束 plan／verify，负载下 verify 会超时 ⇒ `exhausted`，特征是「… phase exceeded per-attempt timeout of 20ms」。人点名的那一条已放宽到 1000 ms；同文件还有 19 条是 20 ms，没改，改要人点名。
+- 🔴 *** **副本**：`git clone --local` 到会话 scratchpad、软链 `node_modules`、**必须 `npm run build`**；要新版本就重新 clone（Orca 的闸门会拦下 clone 里的 `git pull`）。变异与全量一律 `cd` 进 clone 再跑（有判据按工作目录找夹具）。**主树不跑 `npm run build`／`verify:control`／全量**。 ***
+- Orca 的 `ORCA_AGENTS_TABLE` 夹具表：0700 目录里的 0600 文件，`command` ＝ `[node, <副本>/tests/fixtures/fake-codex.mjs, "integration", <marker>]`（🔴 **必须是 `integration`**），`version` ＝ `9.9.9-fake`。Orca 的端到端判据改道 `HOME` 与四个 XDG 根并断言零写入 ⇒ 本仓库往 `$HOME` 下写东西会让它红。
+- 🔴 **变异会留孤儿进程**（挂起的 `--version` 夹具、`worker.js`，PPID 1）⇒ 变异后跑 `pgrep -fl "ccloop-agents-version|worker.js"`；杀进程要人授权（上一批已在 2026-09-27 按人授权清掉）。
+- 本机 claude 会自动升级，nvm 与 homebrew 各装了一份 ⇒ **安装表的 `version` 要等于当时真 CLI 的版本**。真 claude 的 `--version` 零写入（实测）。
+- 🔴 **fake 只认形状，不认真 API 的约束** ⇒ 交给真 CLI 的参数，至少要有一条判据直接读 runner 实际传了什么（`claudePhaseSchemas.test.ts`、`tests/agents/detectIsolation.test.ts` 就是这个形状）。**跨仓词表不一致**（「isolated」「fake claude」、同一错误码在两处退出码不同）⇒ 接字段前先问对端。
 
 ## awaitingHuman
 
 - **推送**归人（顺序：先本仓库、后 Orca）。
-- ✅ ~~孤儿进程要不要清~~ —— 已清（Orca 会话 `94b09282`）。
-- ✅ ~~Orca 台账 §14 列出的「按 R1 改写的 4 条既有判据」的人审~~（2026-09-27 Orca 会话 `94b09282` 人已认可）；agent 选择一轮本仓库改写的既有判据（约 47 条＋I-2 人指名的 3 条）；`src/runtime/codex/protocol.ts`／`src/runtime/types.ts`「真 codex 只在阶段末报 usage」要不要追加 ERRATUM。
-- **`stopProof` 那条稳定红的根因**、**Linux 覆盖**、**M3／M4**（见上文 §2）—— 未变。
+- agent 选择一轮本仓库改写的既有判据（约 47 条＋I-2 人指名的 3 条）尚未人审；`src/runtime/codex/protocol.ts`／`src/runtime/types.ts` 那句「真 codex 只在阶段末报 usage」要不要追加 ERRATUM。
+- **`stopProof` 稳定红的根因**、**Linux 覆盖**、**M3／M4**（见上文 §2）—— 未变。
+- 🔴 codex 周额度已用完：人说可以之前不许跑真 codex；付费 claude 每次都要人重新点头。
