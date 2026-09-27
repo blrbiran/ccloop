@@ -38,6 +38,12 @@ export const claudeDescriptor: AgentDescriptor = {
     "--setting-sources", "project,local",
     "--strict-mcp-config",
     "--disable-slash-commands",
+    // Human ruling 2026-09-27 ("B4 … 根治"): even with --no-session-persistence, claude made an empty
+    // ~/.claude/projects/<cwd>/memory/ at start-up for every target repository; turning auto memory off stops it
+    // (measured with the API unreachable: the directory appears without this setting and not with it).
+    "--settings", '{"autoMemoryEnabled":false}',
+    // Human ruling 2026-09-27 ("放，默认填100USD"): claude's own spending cap for each call.
+    "--max-budget-usd", "100",
   ],
   validateSelection(selection) {
     assertModel(selection.model);

@@ -17,6 +17,10 @@ const ISOLATION = [
   "--setting-sources", "project,local",
   "--strict-mcp-config",
   "--disable-slash-commands",
+  // Rewritten for the human ruling of 2026-09-27 on B4 and the budget cap ("同意改判据"): auto memory off (no
+  // ~/.claude/projects/<cwd>/memory/), and claude's own cap of 100 USD for each call.
+  "--settings", '{"autoMemoryEnabled":false}',
+  "--max-budget-usd", "100",
 ];
 const runner = fileURLToPath(new URL("../../scripts/claude-phase-runner.mjs", import.meta.url));
 const dirs: string[] = [];

@@ -67,8 +67,10 @@ describe("ccloop agents detect", () => {
     expect(parsed.candidates.claude).toContainEqual({ path, realpath: path, version: "2.1.282", runnable: true, source: "path", isPathDefault: true });
     // Rewritten for Orca's paid claude round findings (human ruling 2026-09-27, "B3 和 B1 授权改写"): the drafted claude
     // command carries the isolation arguments after the binary.
+    // Rewritten again for the human ruling of 2026-09-27 on B4 and the budget cap ("同意改判据"): the draft also turns
+    // claude's auto memory off and caps each call at 100 USD.
     expect(parsed.table.installations.claude).toMatchObject({
-      command: [path, "--permission-mode", "acceptEdits", "--no-session-persistence", "--setting-sources", "project,local", "--strict-mcp-config", "--disable-slash-commands"],
+      command: [path, "--permission-mode", "acceptEdits", "--no-session-persistence", "--setting-sources", "project,local", "--strict-mcp-config", "--disable-slash-commands", "--settings", '{"autoMemoryEnabled":false}', "--max-budget-usd", "100"],
       version: "2.1.282",
     });
   });
