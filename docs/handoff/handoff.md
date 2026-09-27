@@ -428,8 +428,8 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
    - `fix(claude): keep claude's stdout when it exits non-zero, where -p puts the API error` —— runner 的失败错误带退出码、stderr、stdout，各留末 8192 字符。只加判据。
    - `feat(agents): draft claude with the paid round's isolation arguments in agents detect` —— claude 草稿 `command` ＝ `[<path>, --permission-mode, acceptEdits, --no-session-persistence, --setting-sources, project,local, --strict-mcp-config, --disable-slash-commands]`（descriptor 可选字段 `draftCommandArgs`；codex 无；**不含 `--max-budget-usd`**）。人指名改写 2 条（`detect.test.ts` 与 `agents/command.test.ts` 的期望 command）。
    - `fix(claude): count the tokens claude wrote to and read from its cache` —— `cache_creation_input_tokens`／`cache_read_input_tokens` 进白名单（`usageEvidence.cacheFields`），有限值计入 `tokenUsage`，与 codex（`input_tokens` 含 cached）同口径。🔴 **同一 token 上限对真 claude 约紧两个数量级**。`docs/superpowers/specs/2026-07-18-claude-usage-evidence-design.md` 追加 §10 更正。人指名改写 `subprocessClaudeAdapter.test.ts` 的 14 条 usage 表判据（名字在 Orca 台账 §16）。
-   - B4（真实 `~/.claude/projects/<cwd>/memory/` 由 claude 自己建）只登记在 Orca spec §13.10；`configDir` → `CLAUDE_CONFIG_DIR` 能否根治（keychain OAuth 还在不在）要付费量，归人。
-5. 🟡 **下一件与本仓库有关的**：stream-json 逐条 usage（让 claude 下 deadline 中止可续）→ opencode／pi／litellm；`--max-budget-usd` 进不进 detect 默认归人。🔴 **codex 周额度已用完：人说可以之前不许跑真 codex。**
+   - `feat(agents): draft claude with auto memory off and a 100 USD cap per call` —— B4 根治（人裁「根治」「放，默认填100USD」）：claude 草稿在五个隔离参数后再加 `--settings {"autoMemoryEnabled":false}`、`--max-budget-usd 100`。不带这个设置时，claude **启动时**就建 `~/.claude/projects/<cwd>/memory/`（免费探针在 API 不可达下复现）；带上就不建。付费验证一次 plan 调用 RC 0、没有新条目、claude 自报 $0.152572（Orca 台账 §17）。人指名改写 3 条 detect 判据。⚠️ 已有的安装表不会自动带上。
+5. 🟡 **下一件与本仓库有关的**：stream-json 逐条 usage（让 claude 下 deadline 中止可续）→ opencode／pi／litellm；`--max-budget-usd` 已进 detect 默认（100）。🔴 **codex 周额度已用完：人说可以之前不许跑真 codex。**
 6. ⚠️ G1 边界不变：只有 ccloop↔Orca 的线上契约归 ccloop；Orca 的 `work item`／`group`／分层偏好一律不搬过来（Orca 本轮把 plan 与面板的层拆开逐字段合并，纯 Orca 侧，本仓库零改动）。
 
 ## 给本仓库留下的环境事实（**直接用，别再反推**）
@@ -452,6 +452,6 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 ## awaitingHuman
 
 - **推送**归人（顺序：先本仓库、后 Orca）。
-- B4 的根治要不要付费量（`configDir`／`CLAUDE_CONFIG_DIR` 与 keychain OAuth）、`--max-budget-usd` 进不进 detect 默认（上面第 4、5 条）；新负载 flake 进不进名单；孤儿进程要不要清。
+- 新负载 flake 进不进名单；孤儿进程要不要清。
 - ✅ ~~Orca 台账 §14 列出的「按 R1 改写的 4 条既有判据」的人审~~（2026-09-27 Orca 会话 `94b09282` 人已认可）；agent 选择一轮本仓库改写的既有判据（约 47 条＋I-2 人指名的 3 条）；`src/runtime/codex/protocol.ts`／`src/runtime/types.ts`「真 codex 只在阶段末报 usage」要不要追加 ERRATUM。
 - **`stopProof` 那条稳定红的根因**、**Linux 覆盖**、**M3／M4**（见上文 §2）—— 未变。
