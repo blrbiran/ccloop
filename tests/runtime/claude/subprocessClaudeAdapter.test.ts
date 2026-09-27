@@ -258,7 +258,10 @@ function expectSuccessfulUsageOutcome(
   }
 
   const serializedPayload = JSON.stringify(outcome.payload);
-  expect(serializedPayload).not.toContain("cache_creation_input_tokens");
+  // Rewritten for Orca's paid claude round findings (human ruling 2026-09-27, "B3 和 B1 授权改写"): this was
+  // "cache_creation_input_tokens", then the sample unknown field; the cache counts are whitelisted now, so an
+  // unknown field of the duplicate-alias envelope stands in for it.
+  expect(serializedPayload).not.toContain("unknown_usage_field");
   expect(serializedPayload).not.toContain("DO_NOT_PERSIST");
 }
 
@@ -370,6 +373,14 @@ describe("SubprocessClaudeAdapter", () => {
     outputTokens: { status: "absent" },
   } as const;
 
+  // Rewritten for Orca's paid claude round findings (human ruling 2026-09-27, "B3 和 B1 授权改写"): the runner now
+  // whitelists claude's two cache counts and adds each finite one to the total, so every expected evidence below records
+  // them; the duplicate-alias case, whose envelope has 77 cache-creation tokens, now totals 202 instead of 125.
+  const absentCacheFields = {
+    cache_creation_input_tokens: { status: "absent" },
+    cache_read_input_tokens: { status: "absent" },
+  } as const;
+
   for (const testCase of [
     {
       label: "snake-only usage envelope",
@@ -385,6 +396,7 @@ describe("SubprocessClaudeAdapter", () => {
         },
         selectedInputField: "input_tokens",
         selectedOutputField: "output_tokens",
+        cacheFields: absentCacheFields,
         normalizedTotal: 125,
       },
     },
@@ -402,6 +414,7 @@ describe("SubprocessClaudeAdapter", () => {
         },
         selectedInputField: "inputTokens",
         selectedOutputField: "outputTokens",
+        cacheFields: absentCacheFields,
         normalizedTotal: 125,
       },
     },
@@ -413,9 +426,10 @@ describe("SubprocessClaudeAdapter", () => {
         inputTokens: 999,
         outputTokens: 888,
         cache_creation_input_tokens: 77,
-        secretSentinel: "DO_NOT_PERSIST"
+        secretSentinel: "DO_NOT_PERSIST",
+        unknown_usage_field: 5
       }`,
-      expectedTokenUsage: 125,
+      expectedTokenUsage: 202,
       expectedUsageEvidence: {
         usageStatus: "present",
         fields: {
@@ -426,7 +440,8 @@ describe("SubprocessClaudeAdapter", () => {
         },
         selectedInputField: "input_tokens",
         selectedOutputField: "output_tokens",
-        normalizedTotal: 125,
+        cacheFields: { cache_creation_input_tokens: { status: "finite", value: 77 }, cache_read_input_tokens: { status: "absent" } },
+        normalizedTotal: 202,
       },
     },
     {
@@ -443,6 +458,7 @@ describe("SubprocessClaudeAdapter", () => {
         },
         selectedInputField: "input_tokens",
         selectedOutputField: "outputTokens",
+        cacheFields: absentCacheFields,
         normalizedTotal: 125,
       },
     },
@@ -464,6 +480,7 @@ describe("SubprocessClaudeAdapter", () => {
         fields: absentUsageFields,
         selectedInputField: null,
         selectedOutputField: null,
+        cacheFields: absentCacheFields,
         normalizedTotal: null,
       },
     },
@@ -476,6 +493,7 @@ describe("SubprocessClaudeAdapter", () => {
         fields: absentUsageFields,
         selectedInputField: null,
         selectedOutputField: null,
+        cacheFields: absentCacheFields,
         normalizedTotal: null,
       },
     },
@@ -493,6 +511,7 @@ describe("SubprocessClaudeAdapter", () => {
         },
         selectedInputField: null,
         selectedOutputField: null,
+        cacheFields: absentCacheFields,
         normalizedTotal: null,
       },
     },
@@ -511,6 +530,7 @@ describe("SubprocessClaudeAdapter", () => {
         },
         selectedInputField: null,
         selectedOutputField: "output_tokens",
+        cacheFields: absentCacheFields,
         normalizedTotal: 25,
       },
     },
@@ -529,6 +549,7 @@ describe("SubprocessClaudeAdapter", () => {
         },
         selectedInputField: "input_tokens",
         selectedOutputField: "output_tokens",
+        cacheFields: absentCacheFields,
         normalizedTotal: 7.5,
       },
     },
@@ -546,6 +567,7 @@ describe("SubprocessClaudeAdapter", () => {
         },
         selectedInputField: "input_tokens",
         selectedOutputField: "output_tokens",
+        cacheFields: absentCacheFields,
         normalizedTotal: null,
       },
     },
@@ -563,6 +585,7 @@ describe("SubprocessClaudeAdapter", () => {
         },
         selectedInputField: "input_tokens",
         selectedOutputField: "output_tokens",
+        cacheFields: absentCacheFields,
         normalizedTotal: null,
       },
     },
@@ -591,6 +614,7 @@ describe("SubprocessClaudeAdapter", () => {
         },
         selectedInputField: "inputTokens",
         selectedOutputField: "output_tokens",
+        cacheFields: absentCacheFields,
         normalizedTotal: 125,
       },
       125,
@@ -614,6 +638,7 @@ describe("SubprocessClaudeAdapter", () => {
         },
         selectedInputField: null,
         selectedOutputField: "output_tokens",
+        cacheFields: absentCacheFields,
         normalizedTotal: 25,
       },
       25,
@@ -637,6 +662,7 @@ describe("SubprocessClaudeAdapter", () => {
         },
         selectedInputField: "input_tokens",
         selectedOutputField: "output_tokens",
+        cacheFields: absentCacheFields,
         normalizedTotal: null,
       },
     );

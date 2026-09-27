@@ -84,6 +84,11 @@ function getSchemaForPhase(phase) {
 }
 
 const USAGE_FIELDS = ["input_tokens", "inputTokens", "output_tokens", "outputTokens"];
+// Orca paid claude round (2026-09-27), human ruling on its findings ("B1–B3 按你推荐"): claude's input_tokens leaves
+// out the prompt it wrote to or read from its cache, which in that round was about 145,000 tokens against 1,329
+// counted, so the token budget barely bound real claude. Codex's input_tokens already includes its cached input. Both
+// cache counts are now whitelisted and added to the total; any other usage property is still never copied.
+const CACHE_USAGE_FIELDS = ["cache_creation_input_tokens", "cache_read_input_tokens"];
 
 function inspectUsageField(usage, field) {
   if (!Object.prototype.hasOwnProperty.call(usage, field)) {
@@ -126,7 +131,13 @@ function buildUsageEvidence(envelope) {
   const selectedValues = [selectedInputField, selectedOutputField]
     .filter((field) => field !== null)
     .map((field) => fields[field].value);
-  const total = selectedValues.reduce((sum, value) => sum + value, 0);
+  const cacheFields = Object.fromEntries(
+    CACHE_USAGE_FIELDS.map((field) => [field, inspectUsageField(usage, field)]),
+  );
+  const cacheValues = CACHE_USAGE_FIELDS
+    .filter((field) => cacheFields[field].status === "finite")
+    .map((field) => cacheFields[field].value);
+  const total = [...selectedValues, ...cacheValues].reduce((sum, value) => sum + value, 0);
   const normalizedTotal = selectedValues.length > 0 && Number.isFinite(total) && total > 0
     ? total
     : null;
@@ -134,6 +145,7 @@ function buildUsageEvidence(envelope) {
   return {
     usageStatus,
     fields,
+    cacheFields,
     selectedInputField,
     selectedOutputField,
     normalizedTotal,

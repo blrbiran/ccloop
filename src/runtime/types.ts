@@ -31,6 +31,15 @@ export type UsageEvidence = {
     output_tokens: UsageFieldEvidence;
     outputTokens: UsageFieldEvidence;
   };
+  /**
+   * Claude only (Orca paid claude round, 2026-09-27): the prompt claude wrote to or read from its cache, which its
+   * input_tokens leaves out; each finite value is part of normalizedTotal. Codex's input_tokens already includes its
+   * cached input, so codex leaves this out.
+   */
+  cacheFields?: {
+    cache_creation_input_tokens: UsageFieldEvidence;
+    cache_read_input_tokens: UsageFieldEvidence;
+  };
   selectedInputField: "input_tokens" | "inputTokens" | null;
   selectedOutputField: "output_tokens" | "outputTokens" | null;
   normalizedTotal: number | null;

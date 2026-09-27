@@ -172,3 +172,24 @@ This increment is complete when:
 - focused tests, the full suite, type checking, and build pass;
 - no real Claude call has occurred;
 - The invocation remains unapproved and unrun until separately presented to the user.
+
+## 10. Correction (2026-09-27, Orca controller session `94b09282`; human ruling on the Orca paid claude round's findings)
+
+*The sections above are kept word for word; this section amends them.*
+
+- **What changed**: `cache_creation_input_tokens` and `cache_read_input_tokens` are no longer unknown usage fields. The runner
+  records them under `usageEvidence.cacheFields` (same `UsageFieldEvidence` statuses, `absent` when the envelope has none)
+  and adds each finite one to `normalizedTotal` / `tokenUsage`, which still requires a finite input or output field to be
+  selected and a finite positive sum. Every other usage property is still never copied (§3's "unknown properties … are never
+  copied" holds for them).
+- **Why**: in the first paid real-claude round through ccloop (Orca, claude 2.1.283, claude-opus-5-5) one task was counted
+  as 1,329 tokens while claude reported about 145,000 tokens written to or read from its prompt cache, so the token budget
+  barely bound real claude. Codex's `input_tokens` already includes its cached input; claude's leaves it out. The human
+  ruled for counting them ("B1–B3 按你推荐"), and named the criteria rewritten for it ("B3 和 B1 授权改写").
+- **Criteria**: the fourteen usage-table criteria of `tests/runtime/claude/subprocessClaudeAdapter.test.ts` record
+  `cacheFields`; the duplicate-alias case now totals 202 (its 77 cache-creation tokens counted), and its unknown-field
+  sentinel is `unknown_usage_field` instead of `cache_creation_input_tokens`. New criteria:
+  `tests/runtime/claude/claudePhaseUsageCache.test.ts`.
+- §6 rule 6 now reads: the total equals the sum of the selected values without alias duplication, plus each finite cache
+  value. §6 rule 7 is unchanged in wording; the plan of that date used `cache_creation_input_tokens` as its example unknown
+  field, which it no longer is.
