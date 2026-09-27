@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { assertContextOption, type MaterializedAgentConfigV1 } from "../../agents/types.js";
 import { claudeDescriptor, claudeModelArgument } from "../../agents/claude.js";
-import type { AttemptContext, AttemptPlan, ExecutePhaseResult, ExecutionResult, RuntimeAdapter, VerificationResult } from "../types.js";
+import { SingleCallOutputInvalid, type AttemptContext, type AttemptPlan, type ExecutePhaseResult, type ExecutionResult, type RuntimeAdapter, type SingleCallRequest, type SingleCallResult, type VerificationResult } from "../types.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./prompts.js";
 import type { ClaudePhaseRequest } from "./types.js";
 
@@ -55,6 +55,16 @@ type Outcome = {
   evidenceDir: string;
 };
 
+/** What one runner call needs from its caller: a phase's AttemptContext, or a single call's request (Orca single-call estimate). */
+type ClaudeCall = {
+  runDir: string;
+  attempt: number;
+  cwd: string;
+  timeLimitMs: number;
+  abortSignal?: AbortSignal;
+  onProcessRegistered?: AttemptContext["onProcessRegistered"];
+};
+
 export class ClaudeAgentAdapter implements RuntimeAdapter {
   private readonly extraArgs: string[];
 
@@ -67,10 +77,10 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     this.extraArgs = ["--model", claudeModelArgument(config.selection)];
   }
 
-  private async run(request: ClaudePhaseRequest, context: AttemptContext): Promise<Outcome> {
+  private async run(request: ClaudePhaseRequest, call: ClaudeCall): Promise<Outcome> {
     const installation = this.config.installation;
     const phase = request.phase;
-    const root = join(context.runDir, "claude", String(context.attempt), phase);
+    const root = join(call.runDir, "claude", String(call.attempt), phase);
     await mkdir(root, { recursive: true, mode: 0o700 });
     const evidenceDir = await mkdtemp(join(root, "call-"));
     const save = async (name: string, data: string) => writeFile(join(evidenceDir, name), data, { mode: 0o600 });
@@ -85,8 +95,8 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       }, null, 2));
       return result;
     };
-    if (context.abortSignal?.aborted) { result.reason = "aborted"; return persist(); }
-    const timeout = Math.min(installation.timeoutMs, context.state.budgetSnapshot.timeRemainingMs);
+    if (call.abortSignal?.aborted) { result.reason = "aborted"; return persist(); }
+    const timeout = Math.min(installation.timeoutMs, call.timeLimitMs);
     if (timeout <= 0) { result.reason = "timeout"; return persist(); }
     // Pre-create the raw logs with private permissions; the streams append to them.
     await save("stdout.json", ""); await save("stderr.log", "");
@@ -99,7 +109,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     };
     if (installation.configDir !== null) env.CLAUDE_CONFIG_DIR = installation.configDir;
     await new Promise<void>((resolve) => {
-      const child = spawn(process.execPath, [runner], { cwd: context.worktreePath, detached: true, stdio: ["pipe", "pipe", "pipe"], env });
+      const child = spawn(process.execPath, [runner], { cwd: call.cwd, detached: true, stdio: ["pipe", "pipe", "pipe"], env });
       const out = new StringDecoder("utf8"), err = new StringDecoder("utf8");
       let outBytes = 0, errBytes = 0, done = false, exited = false;
       let killTimer: NodeJS.Timeout | undefined, drainTimer: NodeJS.Timeout | undefined;
@@ -113,7 +123,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
         done = true;
         kill("SIGKILL");
         clearTimeout(timer); clearTimeout(killTimer); clearTimeout(drainTimer);
-        context.abortSignal?.removeEventListener("abort", abort);
+        call.abortSignal?.removeEventListener("abort", abort);
         result.stdout += out.end(); stderr += err.end();
         child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
         resolve();
@@ -150,8 +160,8 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
         if (!done) drainTimer = setTimeout(finish, 1000);
       });
       child.on("close", finish);
-      context.abortSignal?.addEventListener("abort", abort, { once: true });
-      if (context.abortSignal?.aborted) abort();
+      call.abortSignal?.addEventListener("abort", abort, { once: true });
+      if (call.abortSignal?.aborted) abort();
       child.once("spawn", () => {
         void (async () => {
           try {
@@ -160,7 +170,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
             const registration = { pid: child.pid!, pgid: child.pid!, startedAt: stdout.trim(), phase };
             await save("process.json", JSON.stringify(registration, null, 2));
             // Registered before the prompt exists anywhere the runner can read it (spec §4.7, §9 criterion 4).
-            await context.onProcessRegistered?.(registration);
+            await call.onProcessRegistered?.(registration);
             if (!done && result.reason === "completed") await writeRequest();
           } catch (e) { ioError = String(e); stop("io-error"); }
         })();
@@ -170,7 +180,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
   }
 
   private async phase<T>(request: ClaudePhaseRequest, context: AttemptContext): Promise<T> {
-    const outcome = await this.run(request, context);
+    const outcome = await this.run(request, this.call(context));
     if (outcome.reason === "aborted") throw new ClaudePhaseAborted(outcome.evidenceDir, await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)));
     if (outcome.reason !== "completed") throw new Error(`claude-${outcome.reason}: ${outcome.evidenceDir}`);
     let parsed: unknown;
@@ -182,6 +192,14 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     const usageEvidence = (parsed as { usageEvidence?: unknown }).usageEvidence;
     if (usageEvidence !== undefined) await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(usageEvidence, null, 2), { mode: 0o600 });
     return parsed as T;
+  }
+
+  private call(context: AttemptContext): ClaudeCall {
+    return {
+      runDir: context.runDir, attempt: context.attempt, cwd: context.worktreePath,
+      timeLimitMs: context.state.budgetSnapshot.timeRemainingMs,
+      abortSignal: context.abortSignal, onProcessRegistered: context.onProcessRegistered,
+    };
   }
 
   private base(context: AttemptContext) {
@@ -208,5 +226,34 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
 
   verify(context: AttemptContext): Promise<VerificationResult> {
     return this.phase<VerificationResult>({ phase: "verify", prompt: buildVerifierPrompt(context), ...this.base(context) }, context);
+  }
+
+  /**
+   * Orca single-call estimate (2026-09-27), spec §5.4: one call with the request's schema, every tool off and the output
+   * capped (the runner's single-call branch), registered before its prompt is written, like every phase. An abort
+   * carries the usage claude streamed before it; an answer with no structured object carries the usage it spent.
+   */
+  async singleCall(request: SingleCallRequest): Promise<SingleCallResult> {
+    const outcome = await this.run(
+      { phase: "single-call", prompt: request.prompt, attempt: 1, runDir: request.runDir, cwd: request.cwd, schema: request.responseSchema, maxOutputTokens: request.maxOutputTokens },
+      { runDir: request.runDir, attempt: 1, cwd: request.cwd, timeLimitMs: request.timeoutMs, abortSignal: request.signal, onProcessRegistered: request.onProcessRegistered },
+    );
+    if (outcome.reason === "aborted") throw new ClaudePhaseAborted(outcome.evidenceDir, await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)));
+    if (outcome.reason !== "completed") throw new Error(`claude-${outcome.reason}: ${outcome.evidenceDir}`);
+    let parsed: unknown;
+    try { parsed = JSON.parse(outcome.stdout); } catch { parsed = undefined; }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      await writeFile(join(outcome.evidenceDir, "decode-error.txt"), "runner stdout is not a JSON object", { mode: 0o600 });
+      throw new Error(`claude-result-invalid: ${outcome.evidenceDir}`);
+    }
+    const answer = parsed as { output?: unknown; outputError?: unknown; usageEvidence?: unknown; tokenUsage?: unknown };
+    const usageEvidence = answer.usageEvidence ?? null;
+    if (usageEvidence !== null) await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(usageEvidence, null, 2), { mode: 0o600 });
+    const tokenUsage = typeof answer.tokenUsage === "number" && Number.isSafeInteger(answer.tokenUsage) && answer.tokenUsage >= 0 ? answer.tokenUsage : null;
+    const output = answer.output;
+    if (answer.outputError !== null || output === null || typeof output !== "object" || Array.isArray(output)) {
+      throw new SingleCallOutputInvalid(outcome.evidenceDir, tokenUsage, usageEvidence);
+    }
+    return { output, tokenUsage, usageEvidence };
   }
 }

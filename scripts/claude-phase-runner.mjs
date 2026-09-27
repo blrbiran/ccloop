@@ -363,15 +363,23 @@ function failureMessage(code, stdout, stderr) {
 }
 
 async function runClaude(request, claudeCommand, extraArgs) {
-  const schema = getSchemaForPhase(request.phase);
+  // Orca single-call estimate (2026-09-27), spec §5.4 and Task 0 item 1 (claude 2.1.283, static): a single call answers
+  // the caller's schema with every tool off (`--tools ""`; claude --help: 'Use "" to disable all tools') and its output
+  // capped through CLAUDE_CODE_MAX_OUTPUT_TOKENS, in the empty directory the caller gave it. Phases are unchanged.
+  const singleCall = request.phase === "single-call";
+  const schema = singleCall ? request.schema : getSchemaForPhase(request.phase);
   // Orca claude stream usage (2026-09-27), spec §3.1: stream-json with partial messages, so the usage claude spends is
   // seen as it streams and survives an abort. Read line by line and never kept whole: the stream is several times the
   // size of the json envelope and echoes tool results (spec §2.2 item 8), so the old 10 MiB buffer could fail a long
   // execute. Kept: the result line, the observation, and the last FAILURE_OUTPUT_TAIL characters for failures (B2).
   const child = spawn(
     claudeCommand[0],
-    [...claudeCommand.slice(1), "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", JSON.stringify(schema), ...extraArgs, request.prompt],
-    { cwd: request.worktreePath, env: claudeEnv(), stdio: ["pipe", "pipe", "pipe"] },
+    [...claudeCommand.slice(1), "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", JSON.stringify(schema), ...(singleCall ? ["--tools", ""] : []), ...extraArgs, request.prompt],
+    {
+      cwd: singleCall ? request.cwd : request.worktreePath,
+      env: singleCall ? { ...claudeEnv(), CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(request.maxOutputTokens) } : claudeEnv(),
+      stdio: ["pipe", "pipe", "pipe"],
+    },
   );
 
   // Orca paid claude round (2026-09-27): the prompt is an argument, so claude reads nothing from stdin; left open, the
@@ -441,6 +449,21 @@ async function main() {
   try {
     const result = await runClaude(request, claudeCommand, extraArgs);
     const envelope = result.envelope;
+    // Orca single-call estimate (2026-09-27), spec §5.2 item 8: an answer with no structured object is reported, not
+    // thrown, so the usage claude spent on it is still booked. The caller's schema is claude's to enforce (--json-schema);
+    // ccloop carries no JSON Schema validator, and the caller validates what it receives.
+    if (request.phase === "single-call") {
+      const usageEvidence = envelope === null ? null : buildUsageEvidence(envelope);
+      const structured = envelope === null ? undefined : envelope.structured_output;
+      const valid = structured !== null && typeof structured === "object" && !Array.isArray(structured);
+      await writeJsonToStdout({
+        output: valid ? structured : null,
+        outputError: valid ? null : "single-call-output-invalid",
+        usageEvidence,
+        tokenUsage: usageEvidence === null ? null : usageEvidence.normalizedTotal,
+      });
+      return;
+    }
     if (envelope === null) throw new Error("Claude CLI did not return structured_output");
     const structured = envelope.structured_output;
 

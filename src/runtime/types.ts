@@ -153,6 +153,33 @@ export function observedTokensOf(error: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
+/**
+ * Orca single-call estimate (2026-09-27), spec §5.4: one read-only structured call. The prompt and schema are handed to
+ * the agent as they are; the adapter runs it in `cwd` (an empty private directory) and keeps its evidence under runDir.
+ */
+export type SingleCallRequest = {
+  prompt: string;
+  responseSchema: Record<string, unknown>;
+  maxOutputTokens: number;
+  cwd: string;
+  runDir: string;
+  /** The grant's activeMs; the adapter takes the smaller of this and its installation's timeoutMs. */
+  timeoutMs: number;
+  signal?: AbortSignal;
+  onProcessRegistered?: AttemptContext["onProcessRegistered"];
+};
+
+export type SingleCallResult = { output: unknown; tokenUsage: number | null; usageEvidence: unknown };
+
+/** Spec §5.2 item 8: the call ended but gave no structured object. The usage it spent is still carried, never 0 for null. */
+export class SingleCallOutputInvalid extends Error {
+  readonly code = "single-call-output-invalid" as const;
+  constructor(readonly evidenceDir: string, readonly tokenUsage: number | null, readonly usageEvidence: unknown) {
+    super(`single-call-output-invalid: ${evidenceDir}`);
+    this.name = "SingleCallOutputInvalid";
+  }
+}
+
 export type VerificationResult = {
   approved: boolean;
   rejectCategory: string;
@@ -170,4 +197,6 @@ export interface RuntimeAdapter {
   plan(context: AttemptContext): Promise<AttemptPlan>;
   execute(context: AttemptContext): Promise<ExecutePhaseResult>;
   verify(context: AttemptContext): Promise<VerificationResult>;
+  /** Orca single-call estimate (2026-09-27): only a kind whose descriptor answers singleCallExecution "v1" has it. */
+  singleCall?(request: SingleCallRequest): Promise<SingleCallResult>;
 }
