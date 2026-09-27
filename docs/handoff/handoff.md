@@ -1,4 +1,4 @@
-# ccloop Handoff — *** **Orca 的 agent 选择一轮在本仓库落了 T1–T6（2026-09-26）；claude 中止前观测用量（stream-json）一轮也在本仓库落完、等人审（2026-09-27，见文末「Orca 那条线」）；本仓库没有在飞的工作** ***；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
+# ccloop Handoff — *** **Orca 的 agent 选择一轮在本仓库落了 T1–T6（2026-09-26）；claude 中止前观测用量（stream-json）一轮也在本仓库落完、人已审过（2026-09-27，见文末「Orca 那条线」）；本仓库没有在飞的工作** ***；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -413,7 +413,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 指代某一笔引**提交主题行**（`git log --grep` 找得回）；判发布只跑 `/usr/bin/git ls-remote origin refs/heads/main` 与本地比。
 Orca 侧的进度源：agent 选择一轮 ＝ Orca 仓 `.superpowers/sdd/2026-09-26-agent-selection/progress.md`（§13–§20）；stream-usage 一轮 ＝ Orca 仓 `.superpowers/sdd/2026-09-27-claude-stream-usage/progress.md` §3。
 
-## ✅ claude 中止前观测用量（stream-json）—— 本仓库的部分已收口，等人审
+## ✅ claude 中止前观测用量（stream-json）—— 本仓库的部分已收口，人已审过
 
 - spec 与计划在 Orca 仓：`docs/superpowers/specs/2026-09-27-claude-stream-usage-design.md`（**§8 实施期更正优先**）、`docs/superpowers/plans/2026-09-27-claude-stream-usage.md`。
 - 本仓库的提交（按主题行找）：
@@ -428,7 +428,7 @@ Orca 侧的进度源：agent 选择一轮 ＝ Orca 仓 `.superpowers/sdd/2026-09
   - adapter：总是设 `CCLOOP_CLAUDE_OBSERVED_USAGE_PATH=<证据目录>/observed-usage.json`，`outcome.json` 记 `observedUsagePath`。`aborted` 时 `ClaudePhaseAborted.observedTokens` 取观测总数：只收正安全整数，否则为 `null`，从不当 0。中止的 execute 有观测就抛（与 codex 同形），没有就照旧返回 `null`。
   - ⚠️ **正常跑完的阶段也会留下 `observed-usage.json`**，因为 runner 写观测时并不知道阶段会不会被中止。第六条点名改写就是为此加进证据目录清单的。
 - **验证**（台账 §3）：spec §5.4 的 M1–M11 都见到了红；control 判据 N8 在 M7 下红在用量断言本身；两仓干净全量门的结果见下文。终审员的变异里有四处分支删掉不红，已写进 spec §8.4 挂账：`setEncoding`、写观测的 `catch`、`total !== null` 守卫、`outcome.json.observedUsagePath`。
-- **点名改写的既有判据，共七条，待人审**：
+- **点名改写的既有判据，共七条，人已认可**：
   - spec §5.3 的五条：`claudeAgentAdapter.test.ts` 两条；`claudePhaseRunnerEnv.test.ts` 两条；`fakeClaudeCli.test.ts` 的漂移判据，例子由 `--verbose` 换成 `--continue`。
   - 第六条：`claudeAgentAdapter.test.ts` 的证据目录清单加 `observed-usage.json`。
   - 第七条：`claudePhaseRunnerStream.test.ts` 的 N6，等待条件改为 `openMessage === false`。N6 在那一笔时已经发布。
