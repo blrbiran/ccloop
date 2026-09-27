@@ -433,7 +433,7 @@ Orca 侧的进度源：agent 选择一轮 ＝ Orca 仓 `.superpowers/sdd/2026-09
   - 第六条：`claudeAgentAdapter.test.ts` 的证据目录清单加 `observed-usage.json`。
   - 第七条：`claudePhaseRunnerStream.test.ts` 的 N6，等待条件改为 `openMessage === false`。N6 在那一笔时已经发布。
   - 依据都是人「有问题先按你的建议执行」下的控制器裁定。
-- 🔴 真 claude 下跑过一次（Orca 台账 stream-usage §3 末尾，n＝1）：中止的 execute 报出观测用量（40,176），run 可续、用量已知；**续跑因验收脚本的 token 额度太紧，被判 exhausted，没有落地**。七条点名改写已由人认可。
+- ✅ 真 claude 下付费跑了两次（Orca 台账 stream-usage §3 末尾，各 n＝1）。第二次整条链跑通：中止 → 报观测用量 → 可续 → 续跑落地。第一次续跑被判 exhausted，因为任务的**累计** token 额度只给了 150,000。七条点名改写与全部裁定都已由人认可。
 
 ## 本仓库现在的样子（与 Orca 有关的部分）
 
@@ -456,6 +456,6 @@ Orca 侧的进度源：agent 选择一轮 ＝ Orca 仓 `.superpowers/sdd/2026-09
 ## awaitingHuman
 
 - 推送归人（顺序：先本仓库、后 Orca、再 ccmem）。
-- 七条点名改写人已认可；台账里其余 `Ruling:` 待人审；要不要加大额度、再付费证明续跑落地，归人。
+- 七条点名改写与台账里的全部 `Ruling:` 人已认可；付费验证已完成。
 - codex 周额度人说已 reset；真 codex 每次仍要人点头。付费 claude 同。
 - `stopProof` 根因、Linux、M3／M4 —— 未变。
