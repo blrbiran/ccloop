@@ -22,6 +22,7 @@ import { readProcessStartedAt } from "./workerLauncher.js";
 import { recordCompletedPhase } from "./stopProof.js";
 import { testCrashPoint } from "./testCrashPoint.js";
 import { materializeResultRepository } from "./resultRepository.js";
+import { runSingleCall } from "./singleCall.js";
 import { registerAttemptRefNamespace } from "../workspace/worktreeManager.js";
 
 interface ManagedProcessV1 {
@@ -126,6 +127,9 @@ export async function runControlWorker(argv: string[]): Promise<void> {
     const armRequest = (request: NonNullable<typeof observedRequest>): void => {
       observedRequest = request;
       stopRequested.requested = true;
+      // Orca single-call estimate (2026-09-27), spec §5.3: a single call has no phase boundary to stop at, and its run is
+      // settled as interrupted whatever the call returns (spec §6.5), so the request stops it now, not at its deadline.
+      if (!isLoopEnvelope(envelope)) { phaseAbort.abort(); return; }
       if (deadlineTimer !== undefined || phaseAbort.signal.aborted) return;
       const delay = new Date(request.deadlineAt).getTime() - Date.now();
       if (delay <= 0) {
@@ -155,8 +159,35 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       stopRequested.requested = true;
       phaseAbort.abort();
     });
-    // Orca single-call estimate (2026-09-27), spec §5.2: until the single-call branch exists, only loop work runs.
-    if (!isLoopEnvelope(envelope)) throw new Error("control-work-kind-unsupported");
+    const onProcessRegistered = async (registration: { pid: number; pgid: number; startedAt: string; phase: string }): Promise<void> => {
+      await registerProcess(sourceDir, registration);
+      const request = await readHandoffRequestOptional(sourceDir);
+      if (request !== null) {
+        armRequest(request);
+        throw new Error("control-handoff-latched-before-prompt");
+      }
+    };
+    if (!isLoopEnvelope(envelope)) {
+      // Orca single-call estimate (2026-09-27), spec §5.2: one read-only structured call, forked before anything touches
+      // git -- no attempt ref namespace, no worktree, no result repository.
+      await runSingleCall(envelope, sourceDir, config, {
+        executionId,
+        signal: phaseAbort.signal,
+        onProcessRegistered,
+        settleRequest: async () => {
+          watcherStopped = true;
+          clearTimeout(deadlineTimer);
+          await watcher;
+          if (watcherError !== null) throw watcherError;
+          return observedRequest ?? await readHandoffRequestOptional(sourceDir);
+        },
+        seal: async () => {
+          await sealAcceptedWorker(sourceDir, executionId, nonce);
+          sealed = true;
+        },
+      });
+      return;
+    }
     const runDir = join(sourceDir, "run");
     registerAttemptRefNamespace(runDir, envelope.claim.runId);
     const contract = envelope.inputCheckpoint === null
@@ -166,14 +197,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       firstWorkspaceInput: envelope.inputCheckpoint ?? undefined,
       stopRequested,
       phaseSignal: phaseAbort.signal,
-      onProcessRegistered: async (registration) => {
-        await registerProcess(sourceDir, registration);
-        const request = await readHandoffRequestOptional(sourceDir);
-        if (request !== null) {
-          armRequest(request);
-          throw new Error("control-handoff-latched-before-prompt");
-        }
-      },
+      onProcessRegistered,
       onPhaseSettled: async (observation) => {
         if (observation.completedWithResult) await recordCompletedPhase(sourceDir);
         if (observation.tokenUsage !== null) {

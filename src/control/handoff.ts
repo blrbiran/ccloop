@@ -77,7 +77,7 @@ function requestPath(sourceDir: string): string {
   return join(controlDir(sourceDir), "handoff-request.json");
 }
 
-function candidatePath(sourceDir: string): string {
+export function candidatePath(sourceDir: string): string {
   return join(controlDir(sourceDir), "candidate.json");
 }
 
@@ -170,7 +170,7 @@ export async function requestHandoff(
   return ack;
 }
 
-function identity(envelope: StartEnvelopeV3): HandoffIdentityV1 {
+export function identity(envelope: StartEnvelopeV3): HandoffIdentityV1 {
   const claim = envelope.claim;
   return {
     groupId: claim.groupId,
