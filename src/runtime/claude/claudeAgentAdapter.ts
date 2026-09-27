@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
@@ -25,13 +25,26 @@ export function claudeRunnerPath(): string {
   return join(root, "scripts", "claude-phase-runner.mjs");
 }
 
-/** A phase stopped by the abort signal. The runner reports usage only at phase end, so nothing was observed. */
+/**
+ * A phase stopped by the abort signal. Orca claude stream usage (2026-09-27), spec §3.2: the runner writes the usage
+ * claude streamed before the stop (a lower bound: a message still open counts its opening snapshot) to the call's
+ * evidence directory, and that total is carried here; no observation stays null, never 0.
+ */
 export class ClaudePhaseAborted extends Error {
-  readonly observedTokens: null = null;
-  constructor(readonly evidenceDir: string) {
+  constructor(readonly evidenceDir: string, readonly observedTokens: number | null = null) {
     super(`claude-aborted: ${evidenceDir}`);
     this.name = "ClaudePhaseAborted";
   }
+}
+
+const OBSERVED_USAGE_FILE = "observed-usage.json";
+
+/** The runner's observation, or null when there is none it can vouch for (missing, corrupt, foreign, not > 0). */
+export async function readObservedTokens(path: string): Promise<number | null> {
+  try {
+    const parsed = JSON.parse(await readFile(path, "utf8")) as { schema?: unknown; total?: unknown };
+    return parsed.schema === "ccloop-claude-observed-usage-v1" && Number.isSafeInteger(parsed.total) && (parsed.total as number) > 0 ? parsed.total as number : null;
+  } catch { return null; }
 }
 
 type Outcome = {
@@ -68,7 +81,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       await save("outcome.json", JSON.stringify({
         reason: result.reason, code: result.code, signal: result.signal, evidenceDir,
         runner, claudeCommand: installation.command, extraArgs: this.extraArgs, configDir: installation.configDir,
-        ioError, stdoutTruncated, stderrTruncated,
+        ioError, stdoutTruncated, stderrTruncated, observedUsagePath: join(evidenceDir, OBSERVED_USAGE_FILE),
       }, null, 2));
       return result;
     };
@@ -82,6 +95,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       ...process.env,
       CCLOOP_CLAUDE_COMMAND: JSON.stringify(installation.command),
       CCLOOP_CLAUDE_EXTRA_ARGS: JSON.stringify(this.extraArgs),
+      CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: join(evidenceDir, OBSERVED_USAGE_FILE),
     };
     if (installation.configDir !== null) env.CLAUDE_CONFIG_DIR = installation.configDir;
     await new Promise<void>((resolve) => {
@@ -157,7 +171,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
 
   private async phase<T>(request: ClaudePhaseRequest, context: AttemptContext): Promise<T> {
     const outcome = await this.run(request, context);
-    if (outcome.reason === "aborted") throw new ClaudePhaseAborted(outcome.evidenceDir);
+    if (outcome.reason === "aborted") throw new ClaudePhaseAborted(outcome.evidenceDir, await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)));
     if (outcome.reason !== "completed") throw new Error(`claude-${outcome.reason}: ${outcome.evidenceDir}`);
     let parsed: unknown;
     try { parsed = JSON.parse(outcome.stdout); } catch { parsed = undefined; }
@@ -185,8 +199,9 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
         partialOutcomeRecoveryWindowMs: context.contract.executionPolicy.partialOutcomeRecoveryWindowMs,
       }, context);
     } catch (error) {
-      // As CodexAdapter: an aborted execute with no observed usage answers null. Claude never observes any.
-      if (context.abortSignal?.aborted) return null;
+      // As CodexAdapter (Orca claude stream usage, 2026-09-27): an aborted execute that was observed spending tokens
+      // throws, so runLoop can settle that usage; one that was not keeps answering null exactly as before.
+      if (context.abortSignal?.aborted && !(error instanceof ClaudePhaseAborted && error.observedTokens !== null)) return null;
       throw error;
     }
   }

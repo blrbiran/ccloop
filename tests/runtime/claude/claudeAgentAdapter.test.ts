@@ -1,13 +1,14 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentError, type MaterializedAgentConfigV1 } from "../../../src/agents/types.js";
 import { proveStopped, type StopProofRecord } from "../../../src/control/stopProof.js";
-import { ClaudeAgentAdapter, ClaudePhaseAborted, claudeRunnerPath } from "../../../src/runtime/claude/claudeAgentAdapter.js";
+import { ClaudeAgentAdapter, ClaudePhaseAborted, claudeRunnerPath, readObservedTokens } from "../../../src/runtime/claude/claudeAgentAdapter.js";
 import type { AttemptContext } from "../../../src/runtime/types.js";
 import { codexFixture } from "../codex/fixture.js";
 
@@ -23,7 +24,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f(); });
 
-async function fixture(mode: "ok" | "hang" | "grandchild", selection: Partial<MaterializedAgentConfigV1["selection"]> = {}, installation: Partial<MaterializedAgentConfigV1["installation"]> = {}) {
+async function fixture(mode: "ok" | "hang" | "grandchild" | "usage-then-hang" | "start-then-hang", selection: Partial<MaterializedAgentConfigV1["selection"]> = {}, installation: Partial<MaterializedAgentConfigV1["installation"]> = {}) {
   const f = await codexFixture("unused");
   const marker = join(f.dir, "claude-marker.json");
   cleanup.push(async () => {
@@ -99,7 +100,10 @@ describe("ClaudeAgentAdapter (Orca agent selection, spec §4.7)", () => {
     const root = join(f.context.runDir, "claude", "1", "plan");
     const [call] = await readdir(root);
     const dir = join(root, call!);
-    expect((await readdir(dir)).sort()).toEqual(["outcome.json", "process.json", "request.json", "stderr.log", "stdout.json", "usage.json"]);
+    // Orca claude stream usage (2026-09-27), spec §3.1(6), controller ruling in the round's ledger (sixth named
+    // rewrite): the runner writes its observation during every phase, so a completed call keeps it too; the 0600
+    // loop below now pins it.
+    expect((await readdir(dir)).sort()).toEqual(["observed-usage.json", "outcome.json", "process.json", "request.json", "stderr.log", "stdout.json", "usage.json"]);
     expect((await stat(dir)).mode & 0o777).toBe(0o700);
     for (const name of await readdir(dir)) expect((await stat(join(dir, name))).mode & 0o777).toBe(0o600);
     const request = await readFile(join(dir, "request.json"), "utf8");
@@ -218,4 +222,62 @@ describe("ClaudeAgentAdapter (Orca agent selection, spec §4.7)", () => {
     expect(await running).toBeNull();
     await expect.poll(() => alive(grandchild), { timeout: f.config.installation.killGraceMs + 500 }).toBe(false);
   }, 20_000);
+});
+
+// Orca claude stream usage (2026-09-27), spec §3.2 and §5.2 N2-N5, N9: an aborted phase reports what claude streamed.
+describe("ClaudeAgentAdapter, usage observed before an abort (Orca claude stream usage)", () => {
+  const abortWhenObserved = async (f: Awaited<ReturnType<typeof fixture>>, phase: "plan" | "execute") => {
+    const abort = new AbortController();
+    const running = phase === "plan" ? new ClaudeAgentAdapter(f.config).plan({ ...f.context, abortSignal: abort.signal }) : new ClaudeAgentAdapter(f.config).execute({ ...f.context, abortSignal: abort.signal });
+    const root = join(f.context.runDir, "claude", String(f.context.attempt), phase);
+    let observed = "";
+    await expect.poll(async () => {
+      try { const [call] = await readdir(root); observed = join(root, call!, "observed-usage.json"); return existsSync(observed); } catch { return false; }
+    }, { timeout: 10_000 }).toBe(true);
+    abort.abort();
+    return { outcome: await running.then((value) => ({ value }), (error: unknown) => ({ error })), observed };
+  };
+
+  it("N2: a phase aborted after a closed message reports that message's final usage as a lower bound", async () => {
+    const f = await fixture("usage-then-hang");
+    const { outcome, observed } = await abortWhenObserved(f, "plan");
+    expect((outcome as { error: unknown }).error).toBeInstanceOf(ClaudePhaseAborted);
+    expect(((outcome as { error: ClaudePhaseAborted }).error).observedTokens).toBe(1109);
+    expect(JSON.parse(await readFile(observed, "utf8"))).toMatchObject({ total: 1109, openMessage: false, lowerBound: true });
+  }, 20_000);
+
+  it("N3: a phase aborted inside a message reports that message's opening snapshot and says a message was open", async () => {
+    const f = await fixture("start-then-hang");
+    const { outcome, observed } = await abortWhenObserved(f, "plan");
+    expect(((outcome as { error: ClaudePhaseAborted }).error).observedTokens).toBe(1103);
+    expect(JSON.parse(await readFile(observed, "utf8"))).toMatchObject({ total: 1103, openMessage: true });
+  }, 20_000);
+
+  it("N4: an aborted execute that observed usage throws it instead of answering null", async () => {
+    const f = await fixture("usage-then-hang");
+    const { outcome } = await abortWhenObserved(f, "execute");
+    expect("error" in outcome).toBe(true);
+    expect(((outcome as { error: ClaudePhaseAborted }).error).observedTokens).toBe(1109);
+  }, 20_000);
+
+  it("N9b: the observation lands in the call's evidence directory and nothing new appears in the worktree", async () => {
+    const f = await fixture("usage-then-hang");
+    const before = (await exec("git", ["status", "--porcelain"], { cwd: f.context.worktreePath })).stdout;
+    const { observed } = await abortWhenObserved(f, "plan");
+    expect(observed.startsWith(join(f.context.runDir, "claude"))).toBe(true);
+    expect((await exec("git", ["status", "--porcelain"], { cwd: f.context.worktreePath })).stdout).toBe(before);
+  }, 20_000);
+
+  it("N5b: reads no usage from a missing, corrupt, zero or foreign observation file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claude-observed-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const path = join(dir, "observed-usage.json");
+    expect(await readObservedTokens(path)).toBeNull();
+    for (const body of ["{", JSON.stringify({ schema: "ccloop-claude-observed-usage-v1", total: 0 }), JSON.stringify({ schema: "other", total: 5 }), JSON.stringify({ schema: "ccloop-claude-observed-usage-v1", total: 1.5 })]) {
+      await writeFile(path, body);
+      expect(await readObservedTokens(path)).toBeNull();
+    }
+    await writeFile(path, JSON.stringify({ schema: "ccloop-claude-observed-usage-v1", total: 42 }));
+    expect(await readObservedTokens(path)).toBe(42);
+  });
 });
