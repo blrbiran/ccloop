@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it } from "vitest";
 // `.calls` and `.tasks` with the readers it already uses for fake codex, so both formats are pinned here
 // to fake codex's exactly; `.argv` is how the E2E sees a selection reach the CLI.
 const fake = fileURLToPath(new URL("../../fixtures/fake-claude-cli.mjs", import.meta.url));
+// Orca claude stream usage (2026-09-27, spec §5.1): alias so the stream-json tests below read as the brief specifies.
+const fakeCli = fake;
 const CONTINUATION = "Treat continuation input fields unfinished, pendingDecisions, and awaitingHuman as required planning inputs.";
 // The fixture tells phases apart by the --json-schema the phase runner passes (scripts/claude-phase-runner.mjs).
 const schemas = {
@@ -112,8 +114,70 @@ describe("fake claude CLI (Orca agent selection, spec §4.8)", () => {
 
   it("rejects an argument the phase runner never passes, so runner drift is loud", async () => {
     const cwd = await workdir();
-    const result = await launch(cwd, ["ok", join(cwd, "marker.json"), "-p", "--output-format", "json", "--json-schema", "{}", "--verbose", "x"]);
+    // Rewritten for Orca claude stream usage (2026-09-27, spec §5.3 correction, controller ruling under the human's
+    // "有问题先按你的建议执行"): the runner now passes --verbose, so the never-passed example is --continue.
+    const result = await launch(cwd, ["ok", join(cwd, "marker.json"), "-p", "--output-format", "json", "--json-schema", "{}", "--continue", "x"]);
     expect(result.code).toBe(2);
-    expect(result.stderr).toContain("fake-claude-cli: unknown argument --verbose");
+    expect(result.stderr).toContain("fake-claude-cli: unknown argument --continue");
+  });
+
+  // Orca claude stream usage (2026-09-27, spec §5.1): the runner now asks for stream-json; the fake answers in
+  // claude 2.1.283's measured event order (spec §2.2) with fixed usage the runner and adapter criteria assert.
+  const streamArgs = (phase: Phase, prompt: string) =>
+    ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", JSON.stringify(schemas[phase]), prompt];
+  const lines = (stdout: string) => stdout.split("\n").filter((line) => line !== "").map((line) => JSON.parse(line));
+
+  it("answers stream-json in claude's event order, closing each message with its final usage", async () => {
+    const cwd = await workdir();
+    const result = await launch(cwd, ["ok", join(cwd, "marker.json"), ...streamArgs("plan", prompts.plan("a"))]);
+    expect(result.code).toBe(0);
+    const events = lines(result.stdout);
+    expect(events.map((e) => e.type === "stream_event" ? `stream:${e.event.type}` : e.type)).toEqual(
+      ["system", "stream:message_start", "assistant", "stream:message_delta", "stream:message_stop", "result"]);
+    expect(events[1].event.message.usage).toEqual({ input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: 1 });
+    expect(events[3].event.usage).toEqual({ input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: 7 });
+    expect(events[5]).toMatchObject({ type: "result", usage: { input_tokens: 12, output_tokens: 3 } });
+    expect(Object.keys(events[5].structured_output)).toContain("summary");
+  });
+
+  it("stops after one closed message in usage-then-hang and after message_start in start-then-hang", async () => {
+    for (const [mode, last] of [["usage-then-hang", "stream:message_stop"], ["start-then-hang", "stream:message_start"]] as const) {
+      const cwd = await workdir();
+      const child = spawn(process.execPath, [fakeCli, mode, join(cwd, "marker.json"), ...streamArgs("plan", prompts.plan("a"))], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+      await expect.poll(() => stdout.includes(last === "stream:message_stop" ? '"message_stop"' : '"message_start"'), { timeout: 5000 }).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      child.kill("SIGKILL");
+      const kinds = lines(stdout).map((e) => e.type === "stream_event" ? `stream:${e.event.type}` : e.type);
+      expect(kinds.at(-1)).toBe(last);
+      expect(kinds).not.toContain("result");
+    }
+  });
+
+  it("floods more than 10 MiB of deltas before its result in flood mode", async () => {
+    const cwd = await workdir();
+    const result = await launch(cwd, ["flood", join(cwd, "marker.json"), ...streamArgs("plan", prompts.plan("a"))]);
+    expect(result.code).toBe(0);
+    expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(10 * 1024 * 1024);
+    expect(lines(result.stdout).at(-1)).toMatchObject({ type: "result", usage: { input_tokens: 12, output_tokens: 3 } });
+  });
+
+  it("reports one closed message before a scripted delay when usageBeforeDelay is set", async () => {
+    const cwd = await workdir();
+    const scriptPath = join(cwd, "script.json");
+    await writeFile(scriptPath, JSON.stringify({ a: { files: { "a.txt": "A\n" }, delayMs: { execute: 30_000 }, usageBeforeDelay: true } }));
+    const child = spawn(process.execPath, [fakeCli, "script", join(cwd, "marker.json"), scriptPath, ...streamArgs("execute", prompts.execute("a"))], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    await expect.poll(() => stdout.includes('"message_delta"'), { timeout: 5000 }).toBe(true);
+    child.kill("SIGKILL");
+    expect(stdout).not.toContain('"result"');
+  });
+
+  it("records whether the observed-usage path reached it", async () => {
+    const cwd = await workdir();
+    await launch(cwd, ["ok", join(cwd, "marker.json"), ...streamArgs("plan", prompts.plan("a"))]);
+    expect(JSON.parse(await readFile(join(cwd, "marker.json"), "utf8")).observedUsagePathEnv).toBeNull();
   });
 });
