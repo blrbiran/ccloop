@@ -182,7 +182,14 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
   private async phase<T>(request: ClaudePhaseRequest, context: AttemptContext): Promise<T> {
     const outcome = await this.run(request, this.call(context));
     if (outcome.reason === "aborted") throw new ClaudePhaseAborted(outcome.evidenceDir, await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)));
-    if (outcome.reason !== "completed") throw new Error(`claude-${outcome.reason}: ${outcome.evidenceDir}`);
+    if (outcome.reason !== "completed") {
+      // Orca ruling 26 (Orca ledger 2026-09-27-single-call-estimate §3.21; session c85d2c4e, 2026-09-28): a phase that
+      // timed out or failed still spent what claude streamed before it ended, as singleCall already reports; the error
+      // carries that observation (observedTokensOf) so runLoop books it, null when there is none -- never 0.
+      throw Object.assign(new Error(`claude-${outcome.reason}: ${outcome.evidenceDir}`), {
+        observedTokens: await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)),
+      });
+    }
     let parsed: unknown;
     try { parsed = JSON.parse(outcome.stdout); } catch { parsed = undefined; }
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
