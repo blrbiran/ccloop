@@ -482,7 +482,11 @@ Orca 侧的进度源：本轮 ＝ Orca 仓 `.superpowers/sdd/2026-09-27-single-c
 ## awaitingHuman
 
 - 推送归人（顺序：先本仓库、后 Orca、再 ccmem）。这一轮六笔已由人推送（2026-09-28 Orca 会话 `fa672d9e` 现测 `ls-remote`）；之后以现跑为准。
-- **审 S6 名单**（Orca 台账 §3.2），以及本轮全部 `Ruling:`（Orca 台账 §3）。
+- ✅ **人审已完成**（2026-09-28，Orca 会话 `292277d5`，Orca 台账 §3.21／§3.22）：S6 名单与全部 `Ruling:` 认可，不回退。已授权、未做的有：挂账四条都修（spawn 失败卡组、Linux argv、draft 显示、loop 阶段超时不带观测用量）；Orca 侧两处 v1 闸门补独立判据；删残留。
 - 付费 claude 验一次 single-call 估算（Orca 验收脚本 `--claude --scenario estimate`，`--task-tokens` 设 ≥1,000,000）：每次都要人点头。
-- 删不删这些残留：OS tmp 下 4 个 `ccloop-single-call-*` 目录（变异超时留下的），以及 scratchpad 里的各个 clone。
+- 🔴 **本仓库的新缺陷（2026-09-28 Orca 会话 `292277d5` 现测，人要求尽快修，优先级高于挂账四条）**：`tests/control/singleCallCapability.test.ts` 第 20、54、63 行用 `mkdtemp` 建 `ccloop-single-call-{table,refused,admitted}-*`，**整个文件没有任何 `rm`**，所以每跑一次全量就在 `$TMPDIR` 漏 6 个目录。
+  - 对照：`tests/control/singleCall.test.ts` 有 `afterEach` 负责 `rm`，只在超时或被杀时才会留下（`source`、`aux` 各 2 个，就是原来说的「4 个」）。
+  - 现测共 52 个：`table` 32、`admitted` 8、`refused` 8、`aux` 2、`source` 2。
+  - 修法：只加清理，不改断言。但它是既有判据文件，按 Rule 15(a) 开工前要逐条列给人看。修完要有一条能红的证明：跑一次全量，前后数 `$TMPDIR` 里的目录，要求差为 0。
+- **残留：人已裁定全部删**（52 个 `ccloop-single-call-*`，加上 Orca 会话 `f341f05f`、`fa672d9e` 的 scratchpad clone）。**还没执行**，删之前要再现测一遍清单。
 - `stopProof` 根因、Linux、M3／M4：未变。
