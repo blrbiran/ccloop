@@ -48,11 +48,14 @@ for (let index = 0; index < args.length; index += 1) {
   if (index !== args.length - 1) fail(`unexpected positional argument ${JSON.stringify(arg)}`);
   prompt = arg;
 }
+// Orca ruling 26 (2026-09-28): like claude -p, with no prompt argument the prompt is the whole of stdin.
+const promptVia = prompt === undefined ? "stdin" : "argv";
+if (prompt === undefined && print) prompt = readFileSync(0, "utf8");
 if (!print || (outputFormat !== "json" && outputFormat !== "stream-json") || schemaText === undefined || prompt === undefined) {
   fail("expected -p --output-format json|stream-json --json-schema <schema> [--model <model>] <prompt>");
 }
 writeFileSync(marker, JSON.stringify({
-  args, cwd: process.cwd(), prompt, model, claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null, pid: process.pid,
+  args, cwd: process.cwd(), prompt, promptVia, model, claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null, pid: process.pid,
   // Orca claude stream usage (2026-09-27, spec §5.1): lets criteria see whether the runner's observation path env
   // var reached this process, without the fake acting on it.
   observedUsagePathEnv: process.env.CCLOOP_CLAUDE_OBSERVED_USAGE_PATH ?? null,

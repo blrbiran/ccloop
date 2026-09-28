@@ -86,6 +86,10 @@ function getSchemaForPhase(phase) {
 
 async function readStdin() {
   let body = "";
+  // Orca ruling 26 (session c85d2c4e, 2026-09-28), measured: decoding each Buffer chunk on its own split a multi-byte
+  // character at a chunk boundary into U+FFFD, so a non-ASCII prompt over ~64 KiB reached claude altered. Decode as the
+  // stream (as claude's stdout below already is).
+  process.stdin.setEncoding("utf8");
   for await (const chunk of process.stdin) {
     body += chunk.toString();
   }
@@ -362,6 +366,13 @@ function failureMessage(code, stdout, stderr) {
   ].filter((line) => line !== null).join("\n");
 }
 
+// Orca ruling 26 (Orca ledger 2026-09-27-single-call-estimate §3.21; session c85d2c4e, 2026-09-28): Linux caps one argv
+// string at MAX_ARG_STRLEN (128 KiB) and every platform caps argv as a whole (macOS ARG_MAX, 1 MiB), so a large prompt --
+// an estimate over a big plan -- could not even be spawned. A prompt over this many bytes goes to claude on stdin instead
+// (claude 2.1.283, static: "Input must be provided either through stdin or as a prompt argument when using --print");
+// a smaller one stays the argument it has always been, the form the paid runs used.
+const PROMPT_ARGV_MAX_BYTES = 100 * 1024;
+
 async function runClaude(request, claudeCommand, extraArgs) {
   // Orca single-call estimate (2026-09-27), spec §5.4 and Task 0 item 1 (claude 2.1.283, static): a single call answers
   // the caller's schema with every tool off (`--tools ""`; claude --help: 'Use "" to disable all tools') and its output
@@ -372,9 +383,10 @@ async function runClaude(request, claudeCommand, extraArgs) {
   // seen as it streams and survives an abort. Read line by line and never kept whole: the stream is several times the
   // size of the json envelope and echoes tool results (spec §2.2 item 8), so the old 10 MiB buffer could fail a long
   // execute. Kept: the result line, the observation, and the last FAILURE_OUTPUT_TAIL characters for failures (B2).
+  const promptOnStdin = Buffer.byteLength(request.prompt, "utf8") > PROMPT_ARGV_MAX_BYTES;
   const child = spawn(
     claudeCommand[0],
-    [...claudeCommand.slice(1), "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", JSON.stringify(schema), ...(singleCall ? ["--tools", ""] : []), ...extraArgs, request.prompt],
+    [...claudeCommand.slice(1), "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", JSON.stringify(schema), ...(singleCall ? ["--tools", ""] : []), ...extraArgs, ...(promptOnStdin ? [] : [request.prompt])],
     {
       cwd: singleCall ? request.cwd : request.worktreePath,
       env: singleCall ? { ...claudeEnv(), CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(request.maxOutputTokens) } : claudeEnv(),
@@ -384,7 +396,10 @@ async function runClaude(request, claudeCommand, extraArgs) {
 
   // Orca paid claude round (2026-09-27): the prompt is an argument, so claude reads nothing from stdin; left open, the
   // pipe made every call wait 3 s ("no stdin data received in 3s, proceeding without it").
-  child.stdin?.end();
+  // Ruling 26: a prompt too large for argv is written here instead. A claude that exits before reading it all breaks the
+  // pipe; that is its exit to report, not an uncaught error in this runner.
+  child.stdin?.on("error", () => {});
+  child.stdin?.end(promptOnStdin ? request.prompt : undefined);
   trackClaudeProcessClose(child);
   currentClaudeProcess = child;
   const observationPath = process.env.CCLOOP_CLAUDE_OBSERVED_USAGE_PATH;
