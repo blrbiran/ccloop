@@ -1,4 +1,4 @@
-# ccloop Handoff — *** **Orca 的 agent 选择一轮（2026-09-26）、claude 中止前观测用量一轮（2026-09-27，人已审）之后，⑤ 预算预估链在本仓库落了通用的 `single-call` 活（2026-09-28，六笔人已推送，**等人审**，见文末「Orca 那条线」）；本仓库没有在飞的工作** ***；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
+# ccloop Handoff — *** **Orca 的 agent 选择一轮（2026-09-26）、claude 中止前观测用量一轮（2026-09-27，人已审）之后，⑤ 预算预估链在本仓库落了通用的 `single-call` 活（2026-09-28，六笔人已推送、**人已审**（2026-09-28），见文末「Orca 那条线」）；本仓库没有在飞的工作** ***；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -413,7 +413,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 指代某一笔引**提交主题行**（`git log --grep` 找得回）；判发布只跑 `/usr/bin/git ls-remote origin refs/heads/main` 与本地比。
 Orca 侧的进度源：本轮 ＝ Orca 仓 `.superpowers/sdd/2026-09-27-single-call-estimate/progress.md` §3（`Ruling:` 行＝控制器替人做的决定，**人还没审**）；上一轮 stream-usage ＝ 同目录下 `2026-09-27-claude-stream-usage/progress.md` §3（人已审）。
 
-## 🆕 ⑤ 预算预估链：本仓库新增通用的 `single-call` 活（2026-09-28，Orca 会话 `f341f05f`）—— **已落地、终审修复已过，等人审**
+## 🆕 ⑤ 预算预估链：本仓库新增通用的 `single-call` 活（2026-09-28，Orca 会话 `f341f05f`）—— **已落地、终审修复已过，人已审（2026-09-28，Orca 台账 §3.21／§3.22）**
 
 - spec／计划都在 Orca 仓：`docs/superpowers/specs/2026-09-27-single-call-estimate-design.md`（**§11「实施期更正」与文件头「修订二」优先**）、`docs/superpowers/plans/2026-09-27-single-call-estimate.md`。
 - 本仓库的提交（按主题行找，共六笔）：
