@@ -407,7 +407,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-09-28 第十七版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-09-28 第十八版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ **本节不写任何哈希、不记发布状态** —— 提交本文这个动作就会移动 HEAD，人也会自己推远端。
 指代某一笔引**提交主题行**（`git log --grep` 找得回）；判发布只跑 `/usr/bin/git ls-remote origin refs/heads/main` 与本地比。
@@ -441,11 +441,12 @@ Orca 侧的进度源：本轮 ＝ Orca 仓 `.superpowers/sdd/2026-09-27-single-c
   - runner 与 adapter 的输出校验重复，runner 那一支不承重；
   - adapter 的 `phase()` 与 `singleCall()` 近乎逐字重复。
 - **codex**：0.155.1 找不到模型输出上限的配置项 ⇒ codex 答 `singleCallExecution: null`，没有 single-call 方法。
-- **人审准备（2026-09-28，Orca 会话 `fa672d9e`）**：
-  - 本仓库只改了本文：S6 计数更正为「12 个测试文件加 helper」、孤儿进程已杀、六笔已由人推送。
-  - `src/**` 与 `tests/**` 一个字节没动。
-  - 本仓库这一侧的 S6 注释写法是对的（原文保留，加 ERRATUM）；Orca 那一侧的就地替换已在 Orca 还原。
-  - 人审清单的编号表在 Orca handoff §9.0e。本仓库相关的是第 1、2、10、13、14、20 条。
+- **人审（2026-09-28，Orca 会话 `fa672d9e` 准备、`292277d5` 审完）**：
+  - 本仓库相关的第 1、2、10、13、14、20 条**全部认可**，不回退（Orca 台账 §3.21）。S6 名单是 12 个测试文件加 helper。
+  - 本仓库这一侧的 S6 注释写法是对的（原文保留，加 ERRATUM），以后照抄。
+  - 两次会话都没动 `src/**` 和 `tests/**`。
+  - 本仓库接下来的活：先修临时目录泄漏，再做挂账四条（见下面的 awaitingHuman）。
+- **方向**：Orca 的新路线在 Orca 仓 `docs/handoff/goal.md` §10（需求追问与拆分、进度、标签、memory tab、A2A server）。会落到本仓库的只有两处：task 级阶段进度复用 `collect(afterSeq)` 已有的事件；A2A 只由 Orca 做 server。**本仓库暂时没有新的协议工作。**
 
 ## ✅ 上一轮：claude 中止前观测用量（stream-json）—— 本仓库部分已收口，人已审过
 
