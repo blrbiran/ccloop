@@ -1,4 +1,4 @@
-# ccloop Handoff — *** **本仓库没有在飞的工作。** Orca ⑤ 预算预估链在本仓库落的 `single-call` 活已由人审完；人授权的后续三笔（临时目录泄漏、超时带观测用量、大 prompt 走 stdin）已于 2026-09-28 落地，**`Ruling:` 行待人审**，见文末「Orca 那条线」 ***；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
+# ccloop Handoff — *** **本仓库没有在飞的工作。** Orca ⑤ 预算预估链在本仓库落的 `single-call` 活已由人审完；人授权的后续三笔（临时目录泄漏、超时带观测用量、大 prompt 走 stdin）已于 2026-09-28 落地，`Ruling:` 行人已认可；同日全套临时目录泄漏也已修，见文末「Orca 那条线」 ***；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -407,12 +407,22 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-09-28 第十九版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-09-28 第二十版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希、不记发布状态。指代某一笔引**提交主题行**（`git log --grep` 找得回）；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
-进度源都在 Orca 仓：本轮是 `.superpowers/sdd/2026-09-27-single-call-estimate/progress.md` §3.23（`Ruling:` 行是控制器替人做的决定，**人还没审**）；⑤ 那一轮与人审在同一文件的 §3.1–§3.22；stream-usage 那一轮在同目录的 `2026-09-27-claude-stream-usage/progress.md` §3。
+进度源都在 Orca 仓：本轮是 `.superpowers/sdd/2026-09-27-single-call-estimate/progress.md` §3.24（人已认可 §3.23 全部 `Ruling:`，并授权修全套临时目录泄漏）；⑤ 那一轮与人审在同一文件的 §3.1–§3.22；stream-usage 那一轮在同目录的 `2026-09-27-claude-stream-usage/progress.md` §3。
 
-## 🆕 本轮：人授权的待办已做完（2026-09-28，Orca 会话 `c85d2c4e`）
+## 🆕 本轮：全套临时目录泄漏已修（2026-09-28，Orca 会话 `2724716d`，台账 §3.24）
+
+本仓库一笔：`test: give every test file a temp root of its own, and a check that the suite leaves nothing in TMPDIR`。
+- 新 setup 文件 `tests/setup/scopeTmpdir.ts`：每个测试文件开跑时建一个临时根并把 `TMPDIR` 指过去，文件结束时还原并删根。`vitest.config.ts` 加一行 `setupFiles`。**一个既有判据文件都没动**（人原本授权逐个改 35 个文件，这个做法更少）。
+- 新护栏 `node scripts/check-tmp-leak.mjs`：在空 `TMPDIR` 下跑全量，剩任何条目退 1，没有测试结果退 2。
+- 变异：删 setup 的 `rmSync` ⇒ 退 1、剩 93；删 `setupFiles` ⇒ 退 1、剩 805；空过滤 ⇒ 退 2。
+- 门（新 clone，HOME＋四个 XDG 根改道）：build／typecheck RC 0；**1066 条、1065 过、1 红（`stopProof`），`check-known-reds` RC 0**；`TMPDIR` 剩 0（修前 805）。
+- 真 `$TMPDIR` 里的 `ccloop-*` 存量 94,729 个已按人授权删除。
+- ⚠️ **跑门或量泄漏时，`TMPDIR` 要用短路径的真目录**：放在会话 scratchpad 下太长（tsx 的 socket 超过 macOS 104 字节）会让 `agentsControl`／`command`／`evidence` 7 条假红；用软链（`/tmp/...`）会让 `runLoop` 7 条比路径的判据假红。
+
+## 上一轮：人授权的待办已做完（2026-09-28，Orca 会话 `c85d2c4e`）
 
 本仓库三笔（按主题行找）：
 - `test(control): stop singleCallCapability from leaking six temp dirs per run`：
@@ -436,8 +446,7 @@ Rule 15(a) 名单：既有判据文件只动了 `tests/control/singleCallCapabil
 
 ## 🔴 挂着的（都归人）
 
-- **全套临时目录泄漏**（本轮新发现）：每跑一次全量约在 `$TMPDIR` 漏 805 个目录，来自几十个前缀，不只 single-call 那一个文件。`accept.test.ts`、`agentsControl.test.ts` 里都没有 `rm`。`$TMPDIR` 下现存约 19 万个条目，其中 `ccloop-run` 约 2.4 万、`ccloop-repo` 约 1.5 万。修它要动大量既有判据文件，要人按 Rule 15(a) 授权；删存量也要人授权。
-  - 量法：把 `TMPDIR` 改道到空目录，跑全量，按 `rsplit('-',1)[0]` 统计前缀。
+- ~~全套临时目录泄漏~~：已修（见上）。
 - runner 的 stderr 按块 `toString`，与上面修掉的 stdin 缺陷同形，只影响错误信息文字。只登记。
 - spawn 失败或出流前退出 ⇒ 用量记 null ⇒ Orca 那边的组卡在 `usageUnknown`。要先定义「可证明零花费」，是设计。
 - 真 claude 下：single-call 估算、`--tools ""`、`CLAUDE_CODE_MAX_OUTPUT_TOKENS`、stdin 传 prompt，**都只有静态证据，一次都没跑过**。付费跑，每次都要人点头。
@@ -471,11 +480,10 @@ Rule 15(a) 名单：既有判据文件只动了 `tests/control/singleCallCapabil
 ## awaitingHuman
 
 - 推送归人，顺序：先本仓库，后 Orca，再 ccmem。本轮的三笔之后以现跑 `ls-remote` 为准。
-- 审 Orca 台账 §3.23 的 `Ruling:` 行。和本仓库有关的是：
+- ~~审 Orca 台账 §3.23 的 `Ruling:` 行~~：人已全部认可（台账 §3.24）。原列的几条是：
   - 判据按前缀计数、`TMPDIR` 改道；
   - 清理等 worker 退出；
   - 26(d) 两个 adapter 一起改；
   - 26(b) 按阈值分流；
   - 顺带修 `readStdin`（不在命名清单里；与方法论第 11 条「看见了就报，不要顺手修」有张力）。
-- 全套临时目录泄漏修不修、存量删不删。
 - 付费 claude 验一次 single-call 估算（Orca 验收脚本 `--claude --scenario estimate`，`--task-tokens` ≥1,000,000）。
