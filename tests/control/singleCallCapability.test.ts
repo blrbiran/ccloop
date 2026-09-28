@@ -1,7 +1,7 @@
-import { mkdtemp, readdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveAgent } from "../../src/agents/materialize.js";
 import { acceptStart } from "../../src/control/accept.js";
 import { runControlCommand } from "../../src/control/command.js";
@@ -16,8 +16,26 @@ const SEVEN = {
   handoffExecution: "mechanical-in-run-v1", contextWindowTokens: null, requestBoundProof: null,
 };
 
+// Temp-dir cleanup (Orca session c85d2c4e, 2026-09-28, human-authorized in Orca ledger 2026-09-27-single-call-estimate
+// §3.22): this file used to leak six dirs per full run. Cleanup only -- no assertion below changed. C4's worker may still
+// be sealing when the test returns (measured under load: rm raced it and hit ENOTEMPTY), so wait for its pid to exit first.
+const dirs: string[] = [];
+afterEach(async () => {
+  for (const dir of dirs.splice(0)) {
+    let pid: number | undefined;
+    try {
+      pid = (JSON.parse(await readFile(join(dir, "control", "accepted.json"), "utf8")) as { worker?: { pid?: number } }).worker?.pid;
+    } catch {}
+    for (const deadline = Date.now() + 10_000; pid !== undefined && Date.now() < deadline; await new Promise((r) => setTimeout(r, 20))) {
+      try { process.kill(pid, 0); } catch { break; }
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 async function twoAgentTable() {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-single-call-table-")));
+  dirs.push(dir);
   const script = join(dir, "script.json");
   await writeFile(script, "{}\n", { mode: 0o600 });
   return await writeAgentsTable({
@@ -52,6 +70,7 @@ describe("single-call capability and its accept gate (Orca single-call estimate)
   it("C3: accept refuses single-call work for an agent that answers null, by name and before anything is persisted", async () => {
     const { path, table } = await twoAgentTable();
     const sourceDir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-single-call-refused-")));
+    dirs.push(sourceDir);
     const { resolution } = await resolveAgent(table, { agent: "codex" });
     const envelope = singleCallEnvelope({ sourceDir, agent: resolution.selection, configHash: resolution.configHash });
     expect(await runControlCommand(["accept", "--agents", path], JSON.stringify(envelope))).toEqual({ code: 2, stdout: "", stderr: "single-call-unsupported\n" });
@@ -61,6 +80,7 @@ describe("single-call capability and its accept gate (Orca single-call estimate)
   it("C4: accept admits single-call work for claude and seals its envelope", async () => {
     const { path, table } = await twoAgentTable();
     const sourceDir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-single-call-admitted-")));
+    dirs.push(sourceDir);
     const { resolution } = await resolveAgent(table, { agent: "claude" });
     const envelope = singleCallEnvelope({ sourceDir, agent: resolution.selection, configHash: resolution.configHash });
     const status = await acceptStart(envelope, {
