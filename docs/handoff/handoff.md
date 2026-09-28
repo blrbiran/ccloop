@@ -431,7 +431,7 @@ Orca 侧的进度源：本轮 ＝ Orca 仓 `.superpowers/sdd/2026-09-27-single-c
   - 收到 handoff 请求时**立刻**中止调用。
   - 中止或失败时用量取观测值；拿不到就记 null，**从不当 0**。
   - `responseSchemaSha256` 是交给 `--json-schema` 的那个字符串的哈希。accept 用 `localeCompare` 把 envelope 的 key 重排后才存盘，所以它与 Orca 的字节**不可比**，Orca 只比 `promptSha256`。
-- ⚠️ **人裁 S6 是一揽子授权**（「这个session 中如果有需要的话，我授权你改」），**本仓库 Rule 15(a) 要逐条指名**。这一轮改写的既有判据按「文件＋测试名」逐条列在 Orca 台账 §3.2（13 个测试文件加 helper `startEnvelope`；只改 envelope 字面量；真正改了断言的只有 `protocol.test.ts` 的「names unsupported protocol versions…」一条）。**要人事后逐条认可或回退。**
+- ⚠️ **人裁 S6 是一揽子授权**（「这个session 中如果有需要的话，我授权你改」），**本仓库 Rule 15(a) 要逐条指名**。这一轮改写的既有判据按「文件＋测试名」逐条列在 Orca 台账 §3.2（12 个测试文件加 helper `agentsFixture.ts` 的 `startEnvelope`；只改 envelope 字面量；真正改了断言的只有 `protocol.test.ts` 的「names unsupported protocol versions…」一条）。**要人事后逐条认可或回退。**
 - **验证**：2026-09-28 在修复波那一笔（上面第 6 笔）的干净 clone 里（HOME 与四个 XDG 根改道）：build／typecheck RC 0；**1059 条、1057 过、2 红**；`check-known-reds` **RC 0**（名单 14 个名字，两条红是 `stopProof` 和 codexWatchdog 的日期 flake，都在名单内）；改道后的 HOME 下只有 `~/.npm/_logs`。原始数在 Orca 台账 `gates-report.md`（未入库过程文件）与 §3。
 - **挂账（未修）**：
   - prompt 作为单个 argv 参数传给 claude，Linux 单参数上限 128 KiB，大 plan 会 spawn 失败（macOS 无此限）；
@@ -471,7 +471,7 @@ Orca 侧的进度源：本轮 ＝ Orca 仓 `.superpowers/sdd/2026-09-27-single-c
 - 本机 claude 会自动升级，nvm（2.1.283）和 homebrew（2.0.19）各装了一份。
 - Orca 的 `ORCA_AGENTS_TABLE` 夹具表：fake codex **`integration`** 模式、`9.9.9-fake`。
 - 变异会留孤儿进程 ⇒ 跑 `pgrep -fl "ccloop-agents-version|worker.js|fake-claude-cli"`；杀进程要人授权。
-  - 2026-09-28 还剩一个：本会话 scratchpad 里 `ccloop-bin` 的 `worker.js`，未杀。
+  - 2026-09-28 留下的那个 `worker.js` 已由人授权杀掉（Orca 会话 `fa672d9e`）。
 - 判 flake 要等负载降下来、并记 `uptime`（高负载下单文件也能连红 3 次）。
 
 ## awaitingHuman
