@@ -1,4 +1,4 @@
-# ccloop Handoff — *** **Orca 的 agent 选择一轮（2026-09-26）、claude 中止前观测用量一轮（2026-09-27，人已审）之后，⑤ 预算预估链在本仓库落了通用的 `single-call` 活（2026-09-28，六笔只在本地，**等人审**，见文末「Orca 那条线」）；本仓库没有在飞的工作** ***；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
+# ccloop Handoff — *** **Orca 的 agent 选择一轮（2026-09-26）、claude 中止前观测用量一轮（2026-09-27，人已审）之后，⑤ 预算预估链在本仓库落了通用的 `single-call` 活（2026-09-28，六笔人已推送，**等人审**，见文末「Orca 那条线」）；本仓库没有在飞的工作** ***；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -476,7 +476,7 @@ Orca 侧的进度源：本轮 ＝ Orca 仓 `.superpowers/sdd/2026-09-27-single-c
 
 ## awaitingHuman
 
-- 推送归人（顺序：先本仓库、后 Orca、再 ccmem）。**本仓库这一轮六笔都只在本地**（写本节时现测 `ls-remote` 落后本地；以现跑为准）。
+- 推送归人（顺序：先本仓库、后 Orca、再 ccmem）。这一轮六笔已由人推送（2026-09-28 Orca 会话 `fa672d9e` 现测 `ls-remote`）；之后以现跑为准。
 - **审 S6 名单**（Orca 台账 §3.2），以及本轮全部 `Ruling:`（Orca 台账 §3）。
 - 付费 claude 验一次 single-call 估算（Orca 验收脚本 `--claude --scenario estimate`，`--task-tokens` 设 ≥1,000,000）：每次都要人点头。
 - 删不删这些残留：OS tmp 下 4 个 `ccloop-single-call-*` 目录（变异超时留下的），以及 scratchpad 里的各个 clone。
