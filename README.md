@@ -52,6 +52,8 @@ npm run dev -- <command> ...      # tsx src/cli.ts
 
 想全局有 `ccloop` 命令，`npm link` 即可（`package.json` 已声明 `bin`）。
 
+作为 Orca 的依赖时，Orca 用 git URL 钉到一个提交（`"ccloop": "github:blrbiran/ccloop#<commit>"`）。npm 会在临时 clone 里装 devDependencies、跑 `prepare`（即 `npm run build`），再只打包 `package.json` 的 `files` 列出的东西——所以除了 `dist/`，运行时从包根读的 `scripts/claude-phase-runner.mjs` 与它 import 的 `scripts/claude-stream.mjs` 也必须在 `files` 里（`tests/packaging/gitDependency.test.ts` 守着这一点）。副作用：在本仓库里 `npm install` 也会顺带 build 一次。
+
 自检：
 
 ```bash
