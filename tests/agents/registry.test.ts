@@ -56,8 +56,11 @@ describe("agent descriptors", () => {
     }
   });
 
-  it("accepts opaque models it cannot interpret, including aliases with a [1m] suffix and 200 characters", () => {
-    for (const model of ["opus", "sonnet[1m]", "litellm/anthropic/claude-x", "x".repeat(200)]) {
+  // Orca backlog #13(a), rewritten under the human's 2026-09-29 authorization (Orca session 2f65a729, "#13(a)/(b) 改测试部分
+  // 同意"): "sonnet[1m]" is no longer an opaque alias -- a model carrying the [1m] suffix is refused as
+  // agent-context-unsupported (tests/agents/claudeModelSuffix.test.ts); every other opaque model is still accepted.
+  it("accepts opaque models it cannot interpret, including 200 characters", () => {
+    for (const model of ["opus", "litellm/anthropic/claude-x", "x".repeat(200)]) {
       expect(() => claudeDescriptor.validateSelection({ agent: "claude", model, contextWindow: "agent-default" })).not.toThrow();
     }
   });

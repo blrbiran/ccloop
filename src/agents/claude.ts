@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { ClaudeAgentAdapter } from "../runtime/claude/claudeAgentAdapter.js";
 import type { AgentDescriptor } from "./registry.js";
 import {
+  AgentError,
   assertContextOption,
   assertModel,
   commonSearchDirs,
@@ -48,6 +49,13 @@ export const claudeDescriptor: AgentDescriptor = {
   validateSelection(selection) {
     assertModel(selection.model);
     assertContextOption(CONTEXT_OPTIONS, selection);
+    // Orca backlog #13(a) (2026-09-29; Orca agent selection spec §12 m-5): the CLI reads a `[1m]` model suffix as the
+    // 1M window (claudeModelArgument above), so a model that already carries one would get 1M under "agent-default"
+    // -- with capabilities answering contextWindowTokens null -- or be sent as `[1m][1m]`. Refused, never rewritten:
+    // the window is chosen by contextWindow alone.
+    if (/\[1m\]$/i.test(selection.model)) {
+      throw new AgentError("agent-context-unsupported", `model ${JSON.stringify(selection.model)} carries the [1m] suffix; choose contextWindow ${ONE_MILLION} instead`);
+    }
   },
   capabilities(config) {
     return {
