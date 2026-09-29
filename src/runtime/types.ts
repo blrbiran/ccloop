@@ -147,6 +147,14 @@ export function isPartialExecutionResult(result: ExecutionResult): result is Par
  * Honest registration: real codex reports usage only at phase end, so a deadline that aborts a phase
  * mid-turn usually gives the adapter nothing to observe — this then answers null, and the run's usage
  * stays unknown (unrecoverable), not a guessed value.
+ *
+ * *** ERRATUM (Orca backlog #15, human-authorized 2026-09-29, Orca session 2724716d) -- the sentence above that
+ * "real codex reports usage only at phase end" is written as a fact, but it was never measured. The plan it came
+ * from (Orca docs/superpowers/plans/2026-09-25-handoff-delivery.md, §0 item (10)) inferred it from reading the codex
+ * adapter's source and marked it as a guess, because no events.jsonl from a real codex run was kept in either
+ * repository to check it against; Orca's final review of that round names this comment (finding M4 in Orca
+ * .superpowers/sdd/2026-09-25-handoff-delivery/final-review.md). Read that sentence as unmeasured. What this function
+ * answers -- a positive safe integer the adapter observed, otherwise null, never 0 -- is unchanged. ***
  */
 export function observedTokensOf(error: unknown): number | null {
   const value = error !== null && typeof error === "object" ? (error as { observedTokens?: unknown }).observedTokens : undefined;
