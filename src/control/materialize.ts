@@ -144,9 +144,16 @@ export async function materializeFirstWorkspace(repoPath:string,runDir:string,at
 }
 
 const CONTINUATION_CONSTRAINT="Treat continuation input fields unfinished, pendingDecisions, and awaitingHuman as required planning inputs.";
+// Orca backlog #7 (2026-09-29; Orca handoff §9.0b): the constraint above told the model to treat these fields as inputs
+// while no prompt ever showed them -- continuation-input.json was only a path in relevantDocs, which the prompts do
+// not print. The fields themselves ride in one more constraint line, which both claude and codex print in their plan
+// and execute prompts (src/runtime/claude/prompts.ts).
+const CONTINUATION_INPUT_PREFIX="Continuation input from the predecessor run: ";
 export async function prepareContinuationContract(contract:LoopContract,runDir:string,input:InputCheckpointV1):Promise<LoopContract>{
  await mkdir(runDir,{recursive:true,mode:0o700});const runStat=await lstat(runDir);if(!runStat.isDirectory()||runStat.isSymbolicLink())fail("control-resume-run-dir-invalid");
  const canonicalRun=await realpath(runDir),canonicalBundle=await realpath(input.bundlePath),inputRoot=await realpath(join(dirname(canonicalRun),"input"));if(!within(inputRoot,canonicalBundle)||canonicalBundle===inputRoot)fail("control-resume-bundle-path-invalid");
  const loaded=await loadBundle(input);await assertUnchanged(input,loaded);const path=join(canonicalRun,"continuation-input.json");
- await writePrivate(path,Buffer.from(JSON.stringify({protocol:1,predecessorRunId:input.predecessorRunId,checkpointId:input.checkpointId,checkpointHash:input.checkpointHash,unfinished:loaded.manifest.unfinished,pendingDecisions:loaded.manifest.pendingDecisions,awaitingHuman:loaded.manifest.awaitingHuman})));const copy=structuredClone(contract);copy.context.relevantDocs=[...copy.context.relevantDocs,path];copy.context.constraints=[...copy.context.constraints,CONTINUATION_CONSTRAINT];return copy;
+ const continuation={protocol:1,predecessorRunId:input.predecessorRunId,checkpointId:input.checkpointId,checkpointHash:input.checkpointHash,unfinished:loaded.manifest.unfinished,pendingDecisions:loaded.manifest.pendingDecisions,awaitingHuman:loaded.manifest.awaitingHuman};
+ await writePrivate(path,Buffer.from(JSON.stringify(continuation)));const copy=structuredClone(contract);copy.context.relevantDocs=[...copy.context.relevantDocs,path];
+ copy.context.constraints=[...copy.context.constraints,CONTINUATION_CONSTRAINT,`${CONTINUATION_INPUT_PREFIX}${JSON.stringify({unfinished:continuation.unfinished,pendingDecisions:continuation.pendingDecisions,awaitingHuman:continuation.awaitingHuman})}`];return copy;
 }

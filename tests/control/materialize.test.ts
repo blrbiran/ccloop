@@ -9,6 +9,8 @@ import { materializeFirstWorkspace, prepareContinuationContract } from "../../sr
 import type { InputCheckpointV1 } from "../../src/control/protocol.js";
 import { runLoop } from "../../src/controller/runLoop.js";
 import type { RuntimeAdapter } from "../../src/runtime/types.js";
+import { buildExecutorPrompt, buildPlannerPrompt } from "../../src/runtime/claude/prompts.js";
+import type { AttemptContext } from "../../src/runtime/types.js";
 
 function git(repo: string, ...args: string[]): Buffer {
   return execFileSync("git", ["-C", repo, ...args], {
@@ -175,5 +177,25 @@ describe("committed continuation materialization", { timeout: 30_000 }, () => {
     await expect(materializeFirstWorkspace(h.targetRepo, h.runDir, 1, h.input, {
       afterValidation: async () => { await writeFile(join(h.input.bundlePath, first.file), "changed", { mode: 0o600 }); },
     })).rejects.toThrow("control-resume-source-changed");
+  });
+
+  // Orca backlog #7 (2026-09-29; Orca handoff §9.0b): the continuation's own prompts carry the predecessor's unfinished
+  // work, pending decisions and what awaits a human -- not only a path in relevantDocs that no prompt prints. Claude and
+  // codex both build their plan and execute prompts from the contract through these two builders (codexAdapter.ts
+  // imports them), so the builders' output is where this is measured.
+  it("puts the continuation input itself into the plan and execute prompts every adapter builds", async () => {
+    const h = await buildBundle();
+    const contract = {
+      objective: { taskId: "resume", goal: "continue", successCondition: "done", nonGoals: [] },
+      context: { repoPath: h.targetRepo, targetPaths: ["tracked.txt"], relevantDocs: [], buildTestCommands: ["true"], constraints: [] },
+      executionPolicy: { partialOutcomeRecoveryWindowMs: 0 },
+    } as unknown as LoopContract;
+    const prepared = await prepareContinuationContract(contract, h.runDir, h.input);
+    const prompts = [buildPlannerPrompt(prepared), buildExecutorPrompt({ contract: prepared, plan: null } as unknown as AttemptContext)];
+    for (const [index, prompt] of prompts.entries()) {
+      for (const text of ["finish the recovery", "choose validation depth", "approval remains pending"]) {
+        expect([index, text, prompt.includes(text)]).toEqual([index, text, true]);
+      }
+    }
   });
 });
