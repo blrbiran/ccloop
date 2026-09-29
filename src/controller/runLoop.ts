@@ -819,6 +819,14 @@ async function writeCompletedAttemptArtifacts(
   });
 }
 
+/**
+ * M3 (ls lock visibility progress §12.2; Orca backlog #14, human-authorized 2026-09-29, Orca session 2724716d): lock
+ * errors the transfer path below has already recorded as `owner_transfer_contended`. When the re-read after that
+ * abandonment meets the same lock during recovery, its error escapes to the attempt's outer catch, which still
+ * contains it exactly as before but does not record the one lock twice.
+ */
+const recordedContentions = new WeakSet<object>();
+
 async function persistBoundaryAnalysis(
   runDir: string,
   state: RunState,
@@ -992,7 +1000,16 @@ async function persistBoundaryAnalysis(
           // This does NOT guard the transfer CAS itself — that keeps relying on its CAS alone,
           // which is what §5.4's "no third guard" was about.
           await heartbeat.assertHeld();
-          ownerRecord = await readOwnerRecord(runDir);
+          try {
+            ownerRecord = await readOwnerRecord(runDir);
+          } catch (reReadError) {
+            // M3: the branches above have just recorded this lock; the same lock blocking the re-read is not a second one.
+            const contended = error instanceof OwnerTransferLockBusyError || error instanceof OwnerTransferLockUnattributableError || error instanceof OwnerTransferLockLivenessUndeterminedError;
+            if (contended && (reReadError instanceof OwnerTransferLockUnattributableError || reReadError instanceof OwnerTransferLockLivenessUndeterminedError)) {
+              recordedContentions.add(reReadError);
+            }
+            throw reReadError;
+          }
           ownership = evaluateOwnershipFor(ownerRecord);
         }
       }
@@ -1784,11 +1801,13 @@ export async function runLoopFromState(
       // write. Kept for parity with the sibling branch rather than removed, and said out loud so
       // the next reader does not mistake an unpinned line for a proven one.
       if (error instanceof OwnerTransferLockUnattributableError) {
-        await appendEvent(runDir, {
-          type: "owner_transfer_contended",
-          at: new Date().toISOString(),
-          detail: `owner transfer recovery blocked: ${String(error)}`,
-        });
+        if (!recordedContentions.has(error)) {
+          await appendEvent(runDir, {
+            type: "owner_transfer_contended",
+            at: new Date().toISOString(),
+            detail: `owner transfer recovery blocked: ${String(error)}`,
+          });
+        }
         await writeOwnedRunState(runDir, state);
         return state;
       }
@@ -1804,11 +1823,13 @@ export async function runLoopFromState(
       // really does diverge from the last disk write, and deleting this line (mutation M4-4) is
       // caught by that comparison. ***
       if (error instanceof OwnerTransferLockLivenessUndeterminedError) {
-        await appendEvent(runDir, {
-          type: "owner_transfer_contended",
-          at: new Date().toISOString(),
-          detail: `owner transfer recovery blocked: ${String(error)}`,
-        });
+        if (!recordedContentions.has(error)) {
+          await appendEvent(runDir, {
+            type: "owner_transfer_contended",
+            at: new Date().toISOString(),
+            detail: `owner transfer recovery blocked: ${String(error)}`,
+          });
+        }
         await writeOwnedRunState(runDir, state);
         return state;
       }

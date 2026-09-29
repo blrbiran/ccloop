@@ -2356,4 +2356,99 @@ describe("lease heartbeat lifecycle", () => {
       vi.resetModules();
     }
   });
+
+  // M3 (ls lock visibility progress §12.2; Orca backlog #14, human-authorized 2026-09-29, Orca session 2724716d): a
+  // transfer abandoned to a lock records `owner_transfer_contended` once, on the transfer path. When the re-read that
+  // follows finds a staged transaction and meets the SAME lock during recovery, that error escapes to the attempt's
+  // outer catch, which contains it as before but must not record the one lock a second time. The mock stages what a
+  // rival mid-transfer leaves on disk -- the transaction marker and its lock -- exactly when this process's own
+  // transfer is refused, so the first ownership read (before the transfer) found neither.
+  it.each([
+    {
+      name: "liveness-undetermined",
+      lock: (pid: number) => JSON.stringify({ holderProcessInstanceId: `pid:${pid}`, acquiredAt: "2026-09-23T00:00:00.000Z" }),
+      refuseKill: true,
+      error: (actual: typeof import("../../src/persistence/fileStore.js")) => new actual.OwnerTransferLockLivenessUndeterminedError(
+        "liveness of the owner-transfer lock holder cannot be determined (EPERM); this lock may or may not clear on its own -- inspect it with: ccloop unlock",
+      ),
+    },
+    {
+      name: "unattributable",
+      lock: () => "not-json\n",
+      refuseKill: false,
+      error: (actual: typeof import("../../src/persistence/fileStore.js")) => new actual.OwnerTransferLockUnattributableError(
+        "owner-transfer lock cannot be attributed to any process; it will not clear on its own -- inspect it with: ccloop unlock",
+      ),
+    },
+  ])("records one contention when the re-read after an abandoned transfer meets the same $name lock", async ({ lock, refuseKill, error }) => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = { ...baseContract, executionPolicy: { ...baseContract.executionPolicy, perAttemptTimeoutMs: 200 } };
+    const heldPid = process.pid;
+    const killSpy = refuseKill
+      ? vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+          if (pid === heldPid) {
+            const errno = new Error("operation not permitted") as NodeJS.ErrnoException;
+            errno.code = "EPERM";
+            throw errno;
+          }
+          return true;
+        })
+      : null;
+
+    vi.resetModules();
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>("../../src/persistence/fileStore.js");
+      return {
+        ...actual,
+        writeOwnerTransferArtifacts: async () => {
+          await writeFile(
+            join(runDir, ".owner-transfer.transaction.json"),
+            JSON.stringify({ version: 1, stagedAt: "2026-07-23T00:00:00.000Z", finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
+          );
+          await writeFile(join(runDir, ".owner-transfer.lock"), lock(heldPid));
+          throw error(actual);
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+            runId: "task-1",
+            logicalSessionId: "task-1:lost",
+            currentOwnerEpoch: 1,
+            currentProcessInstanceId: buildProcessInstanceId(),
+            lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+            ownerStatus: "lost",
+            supersededByEpoch: null,
+          }, null, 2));
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const finalState = await observedRunLoop(contract, runDir, adapter as never);
+
+      const contended = (await readEvents(runDir)).filter((event) => event.type === "owner_transfer_contended");
+      expect(contended.map((event) => event.detail.split(":")[0])).toEqual(["owner transfer abandoned"]);
+      // Still contained, still in place: the outer branch returned the attempt as it stood and persisted it.
+      expect(finalState.status).toBe("executing");
+      const persisted = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8")) as RunState;
+      expect(persisted.status).toBe(finalState.status);
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+      killSpy?.mockRestore();
+    }
+  });
 });
