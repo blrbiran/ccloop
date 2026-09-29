@@ -2451,4 +2451,66 @@ describe("lease heartbeat lifecycle", () => {
       killSpy?.mockRestore();
     }
   });
+
+  // M3 fix round 1 (Orca backlog #14, controller ruling 2026-09-29, Orca session 2724716d): the one-event rule above
+  // holds only because the kept transfer event already carries String(error) and its `ccloop unlock` way out. A transfer
+  // abandoned to a BUSY lock records a fixed detail with neither, so when the re-read then meets an unattributable lock
+  // the outer "recovery blocked" event is the only one that names the way out, and it must still be recorded.
+  it("still records the recovery-blocked contention when the abandoned transfer found the lock busy", async () => {
+    const repoPath = await createRepo();
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const baseContract = createContract(repoPath);
+    const contract: LoopContract = { ...baseContract, executionPolicy: { ...baseContract.executionPolicy, perAttemptTimeoutMs: 200 } };
+
+    vi.resetModules();
+    vi.doMock("../../src/persistence/fileStore.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/persistence/fileStore.js")>("../../src/persistence/fileStore.js");
+      return {
+        ...actual,
+        writeOwnerTransferArtifacts: async () => {
+          await writeFile(
+            join(runDir, ".owner-transfer.transaction.json"),
+            JSON.stringify({ version: 1, stagedAt: "2026-07-23T00:00:00.000Z", finalizeOrder: ["owner-transfer.json", "owner-record.json"] }, null, 2),
+          );
+          await writeFile(join(runDir, ".owner-transfer.lock"), "not-json\n");
+          throw new actual.OwnerTransferLockBusyError("owner-transfer lock busy");
+        },
+      };
+    });
+
+    try {
+      const { runLoop: observedRunLoop } = await import("../../src/controller/runLoop.js");
+      const adapter: RuntimeAdapter = {
+        async plan() {
+          return { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] };
+        },
+        async execute(context) {
+          await writeFile(join(runDir, "owner-record.json"), JSON.stringify({
+            runId: "task-1",
+            logicalSessionId: "task-1:lost",
+            currentOwnerEpoch: 1,
+            currentProcessInstanceId: buildProcessInstanceId(),
+            lastAffirmedAt: "2026-07-23T00:00:00.000Z",
+            ownerStatus: "lost",
+            supersededByEpoch: null,
+          }, null, 2));
+          await waitForAbort(context.abortSignal);
+          return null;
+        },
+        async verify() {
+          throw new Error("verify should not run");
+        },
+      };
+
+      const finalState = await observedRunLoop(contract, runDir, adapter as never);
+
+      const contended = (await readEvents(runDir)).filter((event) => event.type === "owner_transfer_contended");
+      expect(contended.map((event) => event.detail.split(":")[0])).toEqual(["owner transfer abandoned", "owner transfer recovery blocked"]);
+      expect(contended[1].detail).toContain("ccloop unlock");
+      expect(finalState.status).toBe("executing");
+    } finally {
+      vi.doUnmock("../../src/persistence/fileStore.js");
+      vi.resetModules();
+    }
+  });
 });

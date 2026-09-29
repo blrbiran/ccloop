@@ -1004,7 +1004,9 @@ async function persistBoundaryAnalysis(
             ownerRecord = await readOwnerRecord(runDir);
           } catch (reReadError) {
             // M3: the branches above have just recorded this lock; the same lock blocking the re-read is not a second one.
-            const contended = error instanceof OwnerTransferLockBusyError || error instanceof OwnerTransferLockUnattributableError || error instanceof OwnerTransferLockLivenessUndeterminedError;
+            // Not after a busy lock: that event's fixed detail carries neither String(error) nor the `ccloop unlock` way
+            // out, so the outer "recovery blocked" event is the only one that names it (M3 fix round 1).
+            const contended = error instanceof OwnerTransferLockUnattributableError || error instanceof OwnerTransferLockLivenessUndeterminedError;
             if (contended && (reReadError instanceof OwnerTransferLockUnattributableError || reReadError instanceof OwnerTransferLockLivenessUndeterminedError)) {
               recordedContentions.add(reReadError);
             }
