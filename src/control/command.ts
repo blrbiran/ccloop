@@ -32,6 +32,14 @@ export interface ControlCommandDeps {
   handle?: (request: ControlRequestV1, context: ControlContextV1) => Promise<unknown>;
 }
 
+// Orca backlog #11(c) (2026-09-29; ccloop handoff §2 "descriptor 维度偏松", Orca handoff §9.1): the shape Orca's
+// capabilitiesSchema requires of a request-bound proof's dimensions (Orca src/control/webProtocol.ts,
+// sortedDimensionsSchema): a strictly ascending -- so duplicate-free -- subset of the four budget dimensions. An answer
+// that breaks it is refused here, as control-response-invalid, rather than printed for Orca to refuse whole.
+const requestBoundDimensionsSchema = z
+  .array(z.enum(["activeMs", "attempts", "sessions", "tokens"]))
+  .refine((values) => values.every((value, index) => index === 0 || values[index - 1]! < value), "dimensions must be sorted and unique");
+
 const capabilityViewSchema = z
   .object({
     usageObservation: z.enum(["realtime", "phase-end", "unavailable"]),
@@ -44,8 +52,8 @@ const capabilityViewSchema = z
       .object({
         scheme: z.literal("adapter-request-bound-v1"),
         version: z.string().min(1),
-        workDimensions: z.array(z.string()),
-        handoffDimensions: z.array(z.string()),
+        workDimensions: requestBoundDimensionsSchema,
+        handoffDimensions: requestBoundDimensionsSchema,
         evidenceKind: z.string().min(1),
       })
       .strict()
