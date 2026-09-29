@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { collectExecution } from "../../src/control/collect.js";
+import { runControlCommand } from "../../src/control/command.js";
 import { evidencePath, readEvidence, writeEvidence } from "../../src/control/evidence.js";
 import { canonicalHash, type LoopStartEnvelope } from "../../src/control/protocol.js";
 import { FIXTURE_SELECTION } from "./agentsFixture.js";
@@ -87,5 +88,55 @@ describe("bounded evidence reads", () => {
     const largeRef = { artifactId: "evidence-large", hash: "b".repeat(64) };
     await writeFile(evidencePath(f.root, largeRef), large);
     await expect(readEvidence(f.root, largeRef)).rejects.toThrow("control-evidence-too-large");
+  });
+});
+
+function loopState(status: string, over: Record<string, unknown> = {}) {
+  return {
+    status, currentAttempt: 1, attemptsUsed: 1, lastTransitionAt: "2026-09-29T00:00:00.000Z", waitingOnHuman: false, stopReason: null,
+    budgetSnapshot: { attemptsRemaining: 2, timeRemainingMs: 1_000, tokenBudgetRemaining: 1_000 }, recentFailures: [], ...over,
+  };
+}
+
+async function writeLoopState(root: string, value: unknown): Promise<void> {
+  await mkdir(join(root, "run"), { recursive: true });
+  await writeFile(join(root, "run", "loop-state.json"), typeof value === "string" ? value : JSON.stringify(value));
+}
+
+// Orca labels and progress spec §3.2, criterion P1, §8 R17 (Orca plan 2026-09-29-labels-and-progress Task 6).
+describe("collect's progress", () => {
+  it("P1: answers the loop's progress while it runs, both attempt numbers from the same snapshot", async () => {
+    const f = await fixture();
+    await writeLoopState(f.root, loopState("executing", { currentAttempt: 2, attemptsUsed: 2, budgetSnapshot: { attemptsRemaining: 1, timeRemainingMs: 1, tokenBudgetRemaining: 1 } }));
+    expect((await collectExecution(f.envelope, 0)).progress).toEqual({
+      status: "executing", currentAttempt: 2, attemptsUsed: 2, attemptsRemaining: 1, lastTransitionAt: "2026-09-29T00:00:00.000Z",
+    });
+  });
+
+  it("P1: answers it once the loop ended too, and null before the loop wrote any state", async () => {
+    const f = await fixture();
+    expect((await collectExecution(f.envelope, 0)).progress).toBeNull();
+    await writeLoopState(f.root, loopState("succeeded"));
+    expect((await collectExecution(f.envelope, 0)).progress).toMatchObject({ status: "succeeded", attemptsRemaining: 2 });
+  });
+
+  it("R17: refuses a loop state that is not JSON, lacks a field progress takes, or names an unknown status", async () => {
+    const f = await fixture();
+    await writeLoopState(f.root, "{ not json");
+    await expect(collectExecution(f.envelope, 0)).rejects.toThrow("control-terminal-invalid");
+    const { budgetSnapshot: _dropped, ...withoutBudget } = loopState("executing");
+    await writeLoopState(f.root, withoutBudget);
+    await expect(collectExecution(f.envelope, 0)).rejects.toThrow("control-terminal-invalid");
+    await writeLoopState(f.root, loopState("thinking"));
+    await expect(collectExecution(f.envelope, 0)).rejects.toThrow("control-terminal-invalid");
+  });
+
+  it("P1: the control command's own strict response schema lets the progress through", async () => {
+    const f = await fixture();
+    await writeLoopState(f.root, loopState("verifying"));
+    // A table path with nothing at it passes the shape check; collect never reads the table (spec §4.2, I4).
+    const collected = await runControlCommand(["collect", "--agents", join(f.root, "agents.json")], JSON.stringify({ input: f.envelope, afterSeq: 0 }));
+    expect(collected.code, collected.stderr).toBe(0);
+    expect(JSON.parse(collected.stdout)).toMatchObject({ events: [], candidate: null, terminal: null, progress: { status: "verifying" } });
   });
 });

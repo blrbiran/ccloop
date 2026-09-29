@@ -177,7 +177,11 @@ describe("control over the installation table (agent selection)", { timeout: 30_
     expect(JSON.parse(inspected.stdout)).toMatchObject({ kind: "accepted" });
     const collected = await runControlCommand(["collect", "--agents", f.path], JSON.stringify({ input: f.envelope, afterSeq: 0 }));
     expect(collected.code, collected.stderr).toBe(0);
-    expect(JSON.parse(collected.stdout)).toEqual({ events: [], candidate: null, terminal: null });
+    // Human authorization (Orca session 2724716d, 2026-09-29: "授权改 ccloop tests/control/agentsControl.test.ts 那两处
+    // toEqual => 授权。"), ccloop Rule 15 (a)-(c): rewritten whole, not loosened. Orca labels and progress spec §3.2 /
+    // §8 R19 makes collect always answer `progress`, and no loop has written a state here, so it is null. What this
+    // encodes is unchanged: a table broken after accept does not stop collect from answering the run in full.
+    expect(JSON.parse(collected.stdout)).toEqual({ events: [], candidate: null, terminal: null, progress: null });
   });
 
   // Task 5 review fix I-1 (spec §4.2, §12 I4): a table DELETED after accept blocks recovery no more than a broken one
@@ -194,7 +198,11 @@ describe("control over the installation table (agent selection)", { timeout: 30_
     expect(JSON.parse(inspected.stdout)).toMatchObject({ kind: "accepted" });
     const collected = await runControlCommand(["collect", "--agents", f.path], JSON.stringify({ input: f.envelope, afterSeq: 0 }));
     expect(collected.code, collected.stderr).toBe(0);
-    expect(JSON.parse(collected.stdout)).toEqual({ events: [], candidate: null, terminal: null });
+    // Human authorization (Orca session 2724716d, 2026-09-29: "授权改 ccloop tests/control/agentsControl.test.ts 那两处
+    // toEqual => 授权。"), ccloop Rule 15 (a)-(c): rewritten whole, not loosened. Orca labels and progress spec §3.2 /
+    // §8 R19 makes collect always answer `progress`, and no loop has written a state here, so it is null. What this
+    // encodes is unchanged: a table deleted after accept does not stop collect from answering the run in full.
+    expect(JSON.parse(collected.stdout)).toEqual({ events: [], candidate: null, terminal: null, progress: null });
   });
 });
 

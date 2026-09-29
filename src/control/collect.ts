@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { isTerminalRunStatus } from "../state/stateMachine.js";
-import type { RunState } from "../state/types.js";
+import type { RunState, RunStatus } from "../state/types.js";
 import { ControlProtocolError, type StartEnvelopeV3 } from "./protocol.js";
 import { readPrivateFile } from "./paths.js";
 import { readUsageEvents, type UsageEventV1 } from "./usage.js";
@@ -10,13 +10,54 @@ import { proveStopped, type StopProofV1 } from "./stopProof.js";
 import { inspectStart, type ExecutionStatusV1 } from "./accept.js";
 import { readAcceptedOptional } from "./store.js";
 
+/** Orca labels and progress spec §3.2 (2026-09-28): the loop's latest state, as Orca shows a task's step. */
+export interface ProgressV1 {
+  status: RunStatus;
+  currentAttempt: number;
+  attemptsUsed: number;
+  attemptsRemaining: number;
+  lastTransitionAt: string;
+}
+
 export interface CollectionV1 {
   events: UsageEventV1[];
   candidate: (Omit<CandidateV1, "stopProof"> & { stopProof: StopProofV1 | null }) | null;
   terminal: RunState | null;
+  /** Running or terminal alike; null before the loop wrote any state. */
+  progress: ProgressV1 | null;
 }
 
 const safe = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+
+// Orca labels and progress spec §8 R17: loop-state.json is checked for the fields progress takes, never cast.
+const loopStateProgressSchema = z.object({
+  status: z.enum(["queued", "planning", "executing", "verifying", "succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"]),
+  currentAttempt: safe,
+  attemptsUsed: safe,
+  lastTransitionAt: z.string().min(1),
+  budgetSnapshot: z.object({ attemptsRemaining: safe }).passthrough(),
+}).passthrough();
+
+/**
+ * Orca labels and progress spec §3.2: the progress collect answers on every call, for a loop still running and for one
+ * that ended alike. No loop-state.json (ENOENT) is null; one that is not JSON, or lacks a field progress takes, is
+ * control-terminal-invalid -- the code readTerminal already answers for a broken loop state.
+ */
+async function readProgress(sourceDir: string): Promise<ProgressV1 | null> {
+  const target = join(sourceDir, "run", "loop-state.json");
+  let state: unknown;
+  try {
+    state = JSON.parse((await readPrivateFile(sourceDir, target)).toString("utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if (error instanceof SyntaxError) throw new ControlProtocolError("control-terminal-invalid");
+    throw error;
+  }
+  const parsed = loopStateProgressSchema.safeParse(state);
+  if (!parsed.success) throw new ControlProtocolError("control-terminal-invalid");
+  const { status, currentAttempt, attemptsUsed, lastTransitionAt, budgetSnapshot } = parsed.data;
+  return { status, currentAttempt, attemptsUsed, attemptsRemaining: budgetSnapshot.attemptsRemaining, lastTransitionAt };
+}
 
 async function readTerminal(sourceDir: string): Promise<RunState | null> {
   const target = join(sourceDir, "run", "loop-state.json");
@@ -42,6 +83,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     events,
     candidate: storedCandidate === null ? null : { ...storedCandidate, stopProof: proof },
     terminal: storedCandidate === null ? null : await readTerminal(input.work.sourceDir),
+    progress: await readProgress(input.work.sourceDir),
   };
 }
 

@@ -138,6 +138,15 @@ const collectionSchema = z.object({
     terminalOutcome: z.string().min(1), handoff: artifactRefSchema,
   }).strict().nullable(),
   terminal: terminalSchema.nullable(),
+  // Orca labels and progress spec §3.2: ccloop answers progress on every collect (null before any loop state). Strict,
+  // like the rest of this schema, so ccloop does not refuse its own answer.
+  progress: z.object({
+    status: z.enum(["queued", "planning", "executing", "verifying", "succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"]),
+    currentAttempt: safeInteger,
+    attemptsUsed: safeInteger,
+    attemptsRemaining: safeInteger,
+    lastTransitionAt: z.string().min(1),
+  }).strict().nullable(),
 }).strict();
 
 const METHODS = new Set<ControlMethodV1>([
