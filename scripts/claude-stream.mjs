@@ -120,21 +120,28 @@ function messageTotal(usage) {
  * message_start carries an opening snapshot whose output is low, and the message_delta that follows it carries the
  * message's final usage. So each message counts once, by its latest usage. `assistant` events repeat the
  * message_start usage and are not counted.
+ *
+ * Orca backlog #12(b) (2026-09-29): "follows it" is per stream. Every stream event names the agent that streamed it
+ * in `parent_tool_use_id` (null, or absent, for the main agent; a subagent's Task tool call id otherwise), so the
+ * open message is tracked per stream and a message_delta closes only its own stream's. A subagent's messages are
+ * still counted, each once: they are spent tokens too.
  */
 export function createUsageObserver() {
   const messages = new Map();
-  let current = null;
+  const current = new Map();
   return {
     observe(event) {
       const inner = event && event.type === "stream_event" ? event.event : null;
       if (!inner || typeof inner !== "object") return false;
+      const stream = typeof event.parent_tool_use_id === "string" ? event.parent_tool_use_id : null;
       if (inner.type === "message_start" && inner.message && typeof inner.message.id === "string" && inner.message.usage && typeof inner.message.usage === "object") {
-        current = inner.message.id;
-        messages.set(current, { id: current, state: "open", fields: inner.message.usage });
+        current.set(stream, inner.message.id);
+        messages.set(inner.message.id, { id: inner.message.id, state: "open", fields: inner.message.usage });
         return true;
       }
-      if (inner.type === "message_delta" && current !== null && messages.has(current) && inner.usage && typeof inner.usage === "object") {
-        messages.set(current, { id: current, state: "closed", fields: inner.usage });
+      const open = current.get(stream);
+      if (inner.type === "message_delta" && open !== undefined && messages.has(open) && inner.usage && typeof inner.usage === "object") {
+        messages.set(open, { id: open, state: "closed", fields: inner.usage });
         return true;
       }
       return false;
