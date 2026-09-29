@@ -37,7 +37,16 @@ type FileSnapshot = { size: number; mtimeMs: number; sha256: string };
 // pass spuriously even across a genuine rewrite), and deliberately omits atime (reading a
 // file legitimately updates it on some mounts, which would make the test flake).
 async function snapshotTree(root: string): Promise<Record<string, FileSnapshot>> {
-  const snapshot: Record<string, FileSnapshot> = {};
+  // Rewritten for M4 (ls lock visibility progress §12.2; Orca backlog #14, human-authorized 2026-09-29, Orca session
+  // 2724716d, criteria named in Orca docs/superpowers/plans/2026-09-29-backlog-hardening.md Task 9): the scan root is a
+  // directory too. Its own mtime moves when something creates and removes an entry directly under it -- a lock taken
+  // and released, say -- and nothing else here recorded that. It is kept under "." beside every path below it, in the
+  // same shape the Task 10 directory entries use.
+  // The human's words (Orca .superpowers/sdd/2026-09-29-labels-progress-and-backlog/progress.md §1), the ruling-88
+  // authorization every criterion using this helper now encodes: 「#14，要你指名判据 => 同意修改判据」.
+  const snapshot: Record<string, FileSnapshot> = {
+    ".": { size: -1, mtimeMs: (await lstat(root)).mtimeMs, sha256: "directory" },
+  };
 
   async function walk(dir: string): Promise<void> {
     const entries = await readdir(dir, { withFileTypes: true });
@@ -511,8 +520,10 @@ describe("sweep write surface", () => {
         "owner-transfer.json",
         "reconciliation-record.json",
       ];
-      expect(Object.keys(refusedBefore).sort()).toEqual(seededFiles);
-      expect(Object.keys(nonEligibleBefore).sort()).toEqual(seededFiles);
+      // Rewritten for M4 (Orca backlog #14, human-authorized 2026-09-29): snapshotTree now records the run directory
+      // itself as "."; the six seeded files are unchanged.
+      expect(Object.keys(refusedBefore).sort()).toEqual([".", ...seededFiles]);
+      expect(Object.keys(nonEligibleBefore).sort()).toEqual([".", ...seededFiles]);
 
       const stdoutLines: string[] = [];
       const stderrLines: string[] = [];
@@ -567,7 +578,9 @@ describe("sweep write surface", () => {
       expect(refusedAfter["events.jsonl"]).not.toEqual(refusedBefore["events.jsonl"]);
       const { "events.jsonl": _beforeEvents, ...refusedBeforeRest } = refusedBefore;
       const { "events.jsonl": _afterEvents, ...refusedAfterRest } = refusedAfter;
-      expect(Object.keys(refusedAfterRest).sort()).toEqual(seededFiles.filter((f) => f !== "events.jsonl"));
+      // Rewritten for M4 (Orca backlog #14, human-authorized 2026-09-29): "." is the refused run directory itself, so the
+      // equality below now also says no entry was created and removed directly under it (no lock taken and released).
+      expect(Object.keys(refusedAfterRest).sort()).toEqual([".", ...seededFiles.filter((f) => f !== "events.jsonl")]);
       expect(refusedAfterRest).toEqual(refusedBeforeRest);
       // No staging residue was manufactured either.
       for (const stagingPath of OWNER_TRANSFER_STAGING_PATHS) {
@@ -580,7 +593,8 @@ describe("sweep write surface", () => {
       // This is the subject of the mutation "sweep calls resume on non-eligible rows too": under
       // it, THIS directory gains resume_requested + resume_denied and this assertion fails.
       const nonEligibleAfter = await snapshotTree(nonEligibleRun);
-      expect(Object.keys(nonEligibleAfter).sort()).toEqual(seededFiles);
+      // Rewritten for M4 (Orca backlog #14, human-authorized 2026-09-29): as above, "." is the directory itself.
+      expect(Object.keys(nonEligibleAfter).sort()).toEqual([".", ...seededFiles]);
       expect(nonEligibleAfter).toEqual(nonEligibleBefore);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
