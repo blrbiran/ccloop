@@ -435,7 +435,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 
 ## 🔴 挂着的（都归人）
 
-- **#13(a)**：claude model 带 `[1m]` 后缀可以绕过上下文档位。修法要改既有判据 `tests/agents/registry.test.ts:56-61`「accepts opaque models … including aliases with a [1m] suffix …」，要人指名。
+- **#13(a)**：claude model 带 `[1m]` 后缀可以绕过上下文档位。✅ **人已授权（2026-09-29，Orca 会话 `2f65a729`）改写** `tests/agents/registry.test.ts:56-61`「accepts opaque models … including aliases with a [1m] suffix …」（从数组里去掉 `"sonnet[1m]"`）；照 Orca 计划 `2026-09-29-backlog-hardening.md` Task 7 执行，是 Orca handoff §4.0 列的下一件。
 - **#4**：`ccloop resume`／`sweep` 不支持 `--agents` 起的 run；run 目录里没有冻结的选择，要设计。
 - `stopProof` 根因、Linux：未变。
 - 真 claude 下：single-call 估算、stdin 传 prompt、`progress`、子代理 stream 配对（`parent_tool_use_id`）都只有 fake 证据，一次都没跑过。付费跑，每次都要人点头。
@@ -465,5 +465,5 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 ## awaitingHuman
 
 - 推送：以现跑 `ls-remote` 为准。**计划 C 的人那一步要求本仓库的打包提交先到 GitHub，Orca 才能钉它的 SHA。**
-- 审本轮 `Ruling:` 行（Orca 台账；和本仓库有关的：M3 去掉 Busy 分支、collect 单次读、`[1m]` 跳过、M4 改写判据的范围）。
+- ~~审本轮 `Ruling:` 行~~：人 2026-09-29 已裁「同意」（Orca 会话 `2f65a729`）。
 - 付费 claude 验一次 single-call 估算（Orca 验收脚本 `--claude --scenario estimate`，`--task-tokens` ≥1,000,000）。
