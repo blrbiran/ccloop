@@ -39,36 +39,36 @@ const loopStateProgressSchema = z.object({
 }).passthrough();
 
 /**
- * Orca labels and progress spec §3.2: the progress collect answers on every call, for a loop still running and for one
- * that ended alike. No loop-state.json (ENOENT) is null; one that is not JSON, or lacks a field progress takes, is
- * control-terminal-invalid -- the code readTerminal already answers for a broken loop state.
+ * The one read of run/loop-state.json per collect, so `terminal` and `progress` describe the same moment of the run
+ * (Task 6 fix round 1). No file (ENOENT) is null; bytes that are not JSON are control-terminal-invalid. The parsed value
+ * is boxed so a file holding the JSON literal `null` stays distinct from no file at all.
  */
-async function readProgress(sourceDir: string): Promise<ProgressV1 | null> {
+async function readLoopStateJson(sourceDir: string): Promise<{ state: unknown } | null> {
   const target = join(sourceDir, "run", "loop-state.json");
-  let state: unknown;
   try {
-    state = JSON.parse((await readPrivateFile(sourceDir, target)).toString("utf8"));
+    return { state: JSON.parse((await readPrivateFile(sourceDir, target)).toString("utf8")) };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     if (error instanceof SyntaxError) throw new ControlProtocolError("control-terminal-invalid");
     throw error;
   }
+}
+
+/**
+ * Orca labels and progress spec §3.2: the progress collect answers on every call, for a loop still running and for one
+ * that ended alike. A loop state that lacks a field progress takes is control-terminal-invalid -- the code a loop state
+ * that is not JSON already answers.
+ */
+function progressOf(state: unknown): ProgressV1 {
   const parsed = loopStateProgressSchema.safeParse(state);
   if (!parsed.success) throw new ControlProtocolError("control-terminal-invalid");
   const { status, currentAttempt, attemptsUsed, lastTransitionAt, budgetSnapshot } = parsed.data;
   return { status, currentAttempt, attemptsUsed, attemptsRemaining: budgetSnapshot.attemptsRemaining, lastTransitionAt };
 }
 
-async function readTerminal(sourceDir: string): Promise<RunState | null> {
-  const target = join(sourceDir, "run", "loop-state.json");
-  try {
-    const state = JSON.parse((await readPrivateFile(sourceDir, target)).toString("utf8")) as RunState;
-    return isTerminalRunStatus(state.status) ? state : null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    if (error instanceof SyntaxError) throw new ControlProtocolError("control-terminal-invalid");
-    throw error;
-  }
+function terminalOf(state: unknown): RunState | null {
+  const run = state as RunState;
+  return isTerminalRunStatus(run.status) ? run : null;
 }
 
 export async function collectExecution(input: StartEnvelopeV3, afterSeq: number): Promise<CollectionV1> {
@@ -79,11 +79,12 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const proof = accepted === null
     ? null
     : await proveStopped({ sourceDir: input.work.sourceDir, accepted });
+  const loopState = await readLoopStateJson(input.work.sourceDir);
   return {
     events,
     candidate: storedCandidate === null ? null : { ...storedCandidate, stopProof: proof },
-    terminal: storedCandidate === null ? null : await readTerminal(input.work.sourceDir),
-    progress: await readProgress(input.work.sourceDir),
+    terminal: storedCandidate === null || loopState === null ? null : terminalOf(loopState.state),
+    progress: loopState === null ? null : progressOf(loopState.state),
   };
 }
 
