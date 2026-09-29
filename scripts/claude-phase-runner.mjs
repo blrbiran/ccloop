@@ -433,7 +433,11 @@ async function runClaude(request, claudeCommand, extraArgs) {
         stdoutTail = (stdoutTail + chunk).slice(-FAILURE_OUTPUT_TAIL);
         splitter.push(chunk);
       });
-      child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
+      // Orca backlog #12(a) (2026-09-29): decoded as a stream, like claude's stdout just above and this runner's stdin
+      // (ruling 26); a chunk's own toString turned a multi-byte character cut at a chunk boundary into U+FFFD in the
+      // failure message.
+      child.stderr?.setEncoding("utf8");
+      child.stderr?.on("data", (chunk) => { stderr += chunk; });
       child.on("error", reject);
       child.on("close", (code) => {
         splitter.end();

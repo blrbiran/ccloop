@@ -61,8 +61,11 @@ async function runPhase<T>(
       stdout += chunk.toString();
     });
 
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+    // Orca backlog #12(a) (2026-09-29): stderr is decoded as a stream, so a multi-byte character cut across two chunks
+    // reaches the error message whole instead of as U+FFFD. (stdout above has the same shape; registered, not changed.)
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
     });
 
     child.on("error", (error) => {
