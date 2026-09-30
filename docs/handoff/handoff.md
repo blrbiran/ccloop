@@ -407,16 +407,19 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-09-30 第二十三版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-01 第二十四版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 进度与下一步以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
 ## ⛔ 与本仓库有关的下一件事
 
-- **没有在飞的工作。** #13(a) 已落地（主题行 `fix(agents): refuse a claude model that carries the [1m] context suffix itself`，Orca 会话 `1d7d9aa0`，2026-09-30）：claude 的 model 自带 `[1m]` 后缀（不分大小写）一律拒，码 `agent-context-unsupported`，不改写。按人授权改写了 `tests/agents/registry.test.ts` 的「accepts opaque models it cannot interpret, …」：数组去掉 `"sonnet[1m]"`，名字里「including aliases with a [1m] suffix」半句也删了（留着是假话）。变异 M7-1（删整段）、M7-2（去掉 `i`）都红；对照「新代码＋旧判据」也红。台账在 Orca 仓 `.superpowers/sdd/2026-09-30-13ab-and-pin-script/progress.md` §3。
-- **推送归人**：本仓库本地领先远端（上一版本节那笔 handoff，加上面这一笔 fix）。**不需要重钉**：Orca 不依赖这条新拒绝。
-- **#4（`resume`／`sweep` 支持 `run --agents` 起的 run）**：人裁设计为「`run --agents` 把选择原字节冻结进 `<runDir>/agent-selection.json`，续跑读它、物化、比 hash」，**时机与 Orca 续跑被打断的解冲突 run 一起做**，不单独做。要先量多一个文件会不会让 `ensureFreshRunDir` 或 `tests/registry/zeroWrite.test.ts` 变红（红了要人授权改判据）。
+- **没有在飞的工作，本仓库这一轮零改动**（Orca 会话 `e604b1ba`，2026-10-01：loop 方案人审后的跟进＋面板中英双语，全在 Orca 侧）。
+- **两件本仓库的行为问题，要人开口才动**（Orca 实测发现，Rule 16：本仓库自己的规矩管）：
+  1. **`rejectOn` 是对全部 evidence 字符串的大小写敏感子串匹配**，而真 verifier 判「通过」时会在解释里原样引用规则（实测原话：「…so REJECT:empty-document does not apply」）⇒ 好活被判 `safeToRetry:false` 的失败。Orca 真 claude 实测 3 个 agent 方案里 2 个中招（claude 2.1.285，6 次 verify，台账 Orca 仓 `.superpowers/sdd/2026-10-01-loop-plans-followups/progress.md` 的 C4 节）。另：verifier 自己判「不通过」时，`enforceVerificationContract` 直接返回，令牌不起作用，重不重试由 verifier 自报的 `safeToRetry` 决定。根治要在本仓库改匹配规则（整条相等或专用字段）；Orca 侧的缓解（不再依赖令牌）等人点名判据。
+  2. **阶段超时直接进 `setTimeout`**：大于 2,147,483,647 ms 时 Node 会改成 1 ms（Orca 在 v22.13.1 实测 9 ms 就触发）。Orca 已把自己派生的阶段超时截到这个数；别的客户端直传大数仍会中招。
+- **推送归人**：本仓库本地仍领先远端（以 `ls-remote` 现测为准）。**不需要重钉**：Orca 没依赖本仓库的新行为。
+- **#4（`resume`／`sweep` 支持 `run --agents` 起的 run）**：未变——人裁设计为「冻结选择进 `<runDir>/agent-selection.json`」，时机与 Orca 续跑被打断的解冲突 run 一起做。
 
 ## 🔗 Orca 通过 git 依赖钉住本仓库
 
@@ -425,28 +428,24 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 - Orca 的 `npm run verify` 现在多一步 `verify:ccloop-pin`：不设 `ORCA_CCLOOP_BIN`，对 Orca `node_modules` 里装的本仓库包跑 Orca 的 `ccloopDefaultE2E`。它只抓得住那条 E2E 用到的行为（包布局、`orca agents init/show`、面板启动），不是所有线协议变化。
 - ⚠️ **`files` 之外的运行时读取会让装好的包坏掉**：新增按路径读的运行时文件时，`tests/packaging/gitDependency.test.ts` 会红——要么进 `files`，要么别在运行时读。
 
-## Orca 这一轮对本仓库行为的依赖（**零改动，只是知情**）
+## Orca 对本仓库行为的依赖（**零改动，只是知情**）
 
-- Orca 新做了 **loop 方案层**：五个内置方案把几项输入展开成普通的本仓库契约。它依赖本仓库这些既有行为（都是读码加 fake 下的 E2E，没改本仓库）：
-  - `verification.requiredChecks` 在 worktree 里真跑；
-  - `allowlistPaths`／`denylistPaths`／`maxFilesTouched` 只查 executor **自报**的 `changedFiles`（完成的 execute 取模型的结构化输出，git porcelain 只用于部分结果）；
-  - `rejectOn` 是对全部 evidence 字符串的大小写敏感子串匹配，一中就 `safeToRetry:false`；
-  - `constraints` 进 planner／executor 的 prompt，不进 verifier；`nonGoals` 只进 planner；
-  - `partialOutcomeRecoveryWindowMs` 在 claude runner 里是 SIGTERM 到 SIGKILL 的等待，会被 `killGraceMs`（≤ 60 s）截断；codex 只在 prompt 里提它。
-  ⚠️ **这些行为若改，要告诉 Orca**（它的方案说明按这些写成了面板上的硬／软标注）。
-- fake codex（`tests/fixtures/fake-codex.mjs`）**恒报改了 `answer.txt`**：Orca 用它跑 loop 方案的 E2E 时撞上了 allowlist（`allowlist miss: answer.txt`），在 Orca 侧把 `answer.txt` 加进了 `targetPaths`。本仓库的夹具没动。
+- loop 方案把输入展开成普通契约，依赖：`requiredChecks` 在 worktree 里 `sh -lc` 真跑；`allowlistPaths`／`denylistPaths`／`maxFilesTouched` 只查 executor 自报的 `changedFiles`；`rejectOn` 见上面第 1 条；`constraints` 不进 verifier、`nonGoals` 只进 planner；verifier prompt 含 `Success condition:` 与 `rejectOn` 原文。
+- **Orca 方案 v2（2026-10-01）**：`maxFilesTouched` 默认 `Number.MAX_SAFE_INTEGER`（本仓库只做比较，不进 prompt，已核）；`perAttemptTimeoutMs` 默认 2,147,483,647，Web 路径上等于该 task 的 `work.activeMs`（`getPhaseTimeoutMs = min(perAttemptTimeoutMs, timeRemainingMs)` 的相等情形，见 `runLoop.ts` 那段注释）。
+- fake codex（`tests/fixtures/fake-codex.mjs`）恒报改了 `answer.txt` ⇒ Orca 的 loop E2E 把它放进 `targetPaths`。本仓库的夹具没动。
+- 真 verifier 在 `-p` 加 `--permission-mode acceptEdits` 下，6 次里 5 次 Bash 被拒（Read 可用）——Orca 实测记录，未查原因。
 
 ## 已落地（不要重做；细节在 Orca 各台账）
 
-- `collect` 多答 `progress`；待办批量（codex ERRATUM、claude stderr 按流解码、stream-usage 守卫判据、`message_delta` 按流收尾、续跑输入进 prompt、proof 维度收紧、M3 单条 `owner_transfer_contended`、M4 零写快照记根 mtime）；git 依赖打包（`prepare` 跑 build，`files` 带 `dist/` 与 runner 读的两个 scripts）；#13(a)。这些轮的 `Ruling:` 行人已审、同意（2026-09-29）。
+- `collect` 多答 `progress`；待办批量；git 依赖打包；#13(a)（claude model 自带 `[1m]` 一律拒）。这些轮的 `Ruling:` 行人已审过。
 - 两笔提交的 `Co-Authored-By` 被子代理写成了 `Claude Sonnet 5`（`docs(codex): append a named erratum …`、`fix(claude): close a streamed message …`），不许 amend，已记录。
-- **现行门**（全新 clone，内容＝主题行 `fix(agents): refuse a claude model that carries the [1m] context suffix itself`，Orca 会话 `1d7d9aa0` 跑了三次，结果相同）：build／typecheck RC 0；**1087 条、1086 过、1 红（`stopProof`）**；`check-known-reds` RC 0；`check-tmp-leak` RC 0。
+- **现行门**（2026-10-01，Orca 会话 `e604b1ba` 的门代理，全新 clone，内容＝主题行 `docs(handoff): stop naming #13(a) as the next thing in the title line; it has landed`）：build／typecheck RC 0；**1087 条、1085 过、2 红**——`stopProof`（稳定红）＋ `tests/validation/codexWatchdog.test.ts` 的 "matches historical double-space start identities on single-digit days"（`Matcher did not succeed in 1500ms`，负载 33 下；单独 3/3 绿；在已知名单里）；`check-known-reds` RC 0；`check-tmp-leak` RC 0。
 
 ## 🔴 挂着的
 
 - `stopProof` 根因、Linux：未变，要人先开口。
-- 真 claude 下：single-call 估算、stdin 传 prompt、`progress`、子代理 stream 配对、Orca 的 loop 方案都只有 fake 证据。付费跑每次都要人点头。
-- runner 与 adapter 的输出校验重复；adapter 的 `phase()` 与 `singleCall()` 近乎逐字重复；`SubprocessClaudeAdapter` 的 stdout 也按块 `toString`（与已修的 stderr 同形）—— 都只登记。
+- 真 claude 下：single-call 估算、stdin 传 prompt、`progress`、子代理 stream 配对、Orca 的 loop 方案整链都只有 fake 证据；只有 verify 单相跑过 6 次（上面第 1 条）。付费跑每次都要人点头。
+- runner 与 adapter 的输出校验重复；adapter 的 `phase()` 与 `singleCall()` 近乎逐字重复；`SubprocessClaudeAdapter` 的 stdout 也按块 `toString` —— 都只登记。
 
 ## 环境事实（直接用，别再反推）
 
@@ -464,4 +463,5 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 ## awaitingHuman
 
 - 推送：以现跑 `ls-remote` 为准。
+- `rejectOn` 匹配规则、`setTimeout` 溢出防护：要不要在本仓库改（上面两条）。
 - 付费 claude 验一次 single-call 估算（Orca 验收脚本 `--claude --scenario estimate`，`--task-tokens` ≥1,000,000）。
