@@ -24,7 +24,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f(); });
 
-async function fixture(mode: "ok" | "hang" | "grandchild" | "usage-then-hang" | "start-then-hang", selection: Partial<MaterializedAgentConfigV1["selection"]> = {}, installation: Partial<MaterializedAgentConfigV1["installation"]> = {}) {
+async function fixture(mode: "ok" | "hang" | "grandchild" | "usage-then-hang" | "start-then-hang" | "write-then-hang" | "write-quiet-then-hang" | "write-ignore-term" | "write-then-fail" | "answer-then-linger", selection: Partial<MaterializedAgentConfigV1["selection"]> = {}, installation: Partial<MaterializedAgentConfigV1["installation"]> = {}) {
   const f = await codexFixture("unused");
   const marker = join(f.dir, "claude-marker.json");
   cleanup.push(async () => {
@@ -286,4 +286,91 @@ describe("ClaudeAgentAdapter, usage observed before an abort (Orca claude stream
     await writeFile(path, JSON.stringify({ schema: "ccloop-claude-observed-usage-v1", total: 42 }));
     expect(await readObservedTokens(path)).toBe(42);
   });
+});
+
+// Consolidation step 1 (ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md §5, §7.3, §7.4; ruling R5).
+describe("ClaudeAgentAdapter, the execute result written after a stop (consolidation step 1)", () => {
+  const withWindow = (f: Awaited<ReturnType<typeof fixture>>, windowMs: number): AttemptContext => ({
+    ...f.context,
+    contract: { ...f.context.contract, executionPolicy: { ...f.context.contract.executionPolicy, partialOutcomeRecoveryWindowMs: windowMs } },
+  });
+  const waitFor = (path: string) => expect.poll(() => existsSync(path), { timeout: 10_000 }).toBe(true);
+
+  it("rewritten (R5) from SubprocessClaudeAdapter's large-partial criterion: an aborted execute with a changed worktree returns the runner's partial", async () => {
+    const f = await fixture("write-quiet-then-hang");
+    const abort = new AbortController();
+    const running = new ClaudeAgentAdapter(f.config).execute({ ...f.context, abortSignal: abort.signal });
+    await waitFor(`${f.marker}.wrote`);
+    abort.abort();
+    const result = await running;
+    expect(result).toMatchObject({ completionStatus: "partial", failureType: "timeout", changedFiles: ["partial.txt"] });
+    expect(result!.diffPatch).toContain("diff --git a/partial.txt b/partial.txt");
+    expect(result!.diffPatch.length).toBeGreaterThan(350_000);
+    // No observation (no stream event was emitted): tokenUsage stays absent, never 0 (spec §5.2).
+    expect("tokenUsage" in result!).toBe(false);
+  }, 20_000);
+
+  it("a returned partial carries the usage observed before the stop", async () => {
+    const f = await fixture("write-then-hang");
+    const abort = new AbortController();
+    const running = new ClaudeAgentAdapter(f.config).execute({ ...f.context, abortSignal: abort.signal });
+    await waitFor(`${f.marker}.wrote`);
+    const root = join(f.context.runDir, "claude", String(f.context.attempt), "execute");
+    // As abortWhenObserved: wait until the fake's message is closed (openMessage false), not merely until the file exists.
+    await expect.poll(async () => {
+      try {
+        const [call] = await readdir(root);
+        return JSON.parse(await readFile(join(root, call!, "observed-usage.json"), "utf8")).openMessage === false;
+      } catch { return false; }
+    }, { timeout: 10_000 }).toBe(true);
+    abort.abort();
+    const result = await running;
+    expect(result).toMatchObject({ completionStatus: "partial", changedFiles: ["partial.txt"] });
+    expect(result!.tokenUsage).toBe(1109);
+  }, 20_000);
+
+  it("an execute stopped by the adapter's own timeout returns the partial", async () => {
+    const f = await fixture("write-quiet-then-hang", {}, { timeoutMs: 1_500 });
+    const result = await new ClaudeAgentAdapter(f.config).execute(f.context);
+    expect(result).toMatchObject({ completionStatus: "partial", failureType: "timeout" });
+  }, 20_000);
+
+  it("the partial still arrives when the recovery window is longer than killGraceMs", async () => {
+    const f = await fixture("write-ignore-term", {}, { killGraceMs: 300 });
+    const abort = new AbortController();
+    const running = new ClaudeAgentAdapter(f.config).execute({ ...withWindow(f, 3_000), abortSignal: abort.signal });
+    await waitFor(`${f.marker}.wrote`);
+    abort.abort();
+    const result = await running;
+    expect(result).toMatchObject({ completionStatus: "partial", changedFiles: ["partial.txt"] });
+    const { pid } = JSON.parse(await readFile(f.marker, "utf8")) as { pid: number };
+    await expect.poll(() => alive(pid), { timeout: 2_000 }).toBe(false);
+  }, 30_000);
+
+  it("rewritten (R5) from SubprocessClaudeAdapter's partial-outcome criterion: a runner that fails during execute returns its partial", async () => {
+    const f = await fixture("write-then-fail");
+    const result = await new ClaudeAgentAdapter(f.config).execute(f.context);
+    expect(result).toMatchObject({ completionStatus: "partial", failureType: "error", changedFiles: ["partial.txt"] });
+  }, 20_000);
+
+  it("a complete answer written after a stop is returned for execute", async () => {
+    const f = await fixture("answer-then-linger");
+    const abort = new AbortController();
+    const running = new ClaudeAgentAdapter(f.config).execute({ ...f.context, abortSignal: abort.signal });
+    await waitFor(`${f.marker}.answered`);
+    abort.abort();
+    const result = await running;
+    expect(result).toMatchObject({ changedFiles: ["answer.txt"] });
+    expect("completionStatus" in result!).toBe(false);
+  }, 20_000);
+
+  it("a plan stopped after its answer still throws ClaudePhaseAborted", async () => {
+    const f = await fixture("answer-then-linger");
+    const abort = new AbortController();
+    const running = new ClaudeAgentAdapter(f.config).plan({ ...f.context, abortSignal: abort.signal });
+    await waitFor(`${f.marker}.answered`);
+    abort.abort();
+    const error = await running.then(() => { throw new Error("resolved"); }, (e: unknown) => e);
+    expect(error).toBeInstanceOf(ClaudePhaseAborted);
+  }, 20_000);
 });

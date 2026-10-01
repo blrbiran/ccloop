@@ -15,6 +15,10 @@ import type { ClaudePhaseRequest } from "./types.js";
 // handling follows runCodexPhase: the phase runner is the leader of its own process group (the claude CLI
 // and anything that CLI starts without detaching stay in it), the group is registered BEFORE the prompt is
 // written, and stopping signals the whole group. SubprocessClaudeAdapter stays as it was (spec §11).
+// ERRATUM (consolidation step 1, 2026-10-01, ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md):
+// "SubprocessClaudeAdapter stays as it was (spec §11)" no longer holds -- consolidation step 1 deleted it; this adapter
+// now also returns the execute result the runner writes after a stop (abort or its own timeout), with the usage
+// observed before the stop.
 const LIMIT = 16 * 1024 * 1024;
 const execFileAsync = promisify(execFile);
 
@@ -38,6 +42,18 @@ export class ClaudePhaseAborted extends Error {
 }
 
 const OBSERVED_USAGE_FILE = "observed-usage.json";
+
+/**
+ * Consolidation step 1 (2026-10-01, ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md §5.3): on execute
+ * the group gets this long past the recovery window before SIGKILL, so the runner can stop claude, read git and print
+ * its partial. Mirrored by Orca src/control/driverHandoff.ts (PARTIAL_FLUSH_MARGIN_MS), whose handoff grace waits it.
+ */
+export const PARTIAL_FLUSH_MARGIN_MS = 5_000;
+
+/** A JSON object, or undefined for anything else (consolidation step 1, spec §5.1). */
+const parseObject = (text: string): object | undefined => {
+  try { const v: unknown = JSON.parse(text); return v !== null && typeof v === "object" && !Array.isArray(v) ? v : undefined; } catch { return undefined; }
+};
 
 /** The runner's observation, or null when there is none it can vouch for (missing, corrupt, foreign, not > 0). */
 export async function readObservedTokens(path: string): Promise<number | null> {
@@ -63,6 +79,8 @@ type ClaudeCall = {
   timeLimitMs: number;
   abortSignal?: AbortSignal;
   onProcessRegistered?: AttemptContext["onProcessRegistered"];
+  /** Consolidation step 1 (spec §5.3): the SIGTERM-to-SIGKILL delay for this call; installation.killGraceMs when absent. */
+  stopGraceMs?: number;
 };
 
 export class ClaudeAgentAdapter implements RuntimeAdapter {
@@ -132,7 +150,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
         if (done || killTimer) return;
         if (result.reason === "completed") result.reason = reason;
         kill("SIGTERM");
-        killTimer = setTimeout(() => { kill("SIGKILL"); finish(); }, installation.killGraceMs);
+        killTimer = setTimeout(() => { kill("SIGKILL"); finish(); }, call.stopGraceMs ?? installation.killGraceMs);
       };
       const abort = () => stop("aborted");
       const timer = setTimeout(() => stop("timeout"), timeout);
@@ -179,8 +197,23 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     return persist();
   }
 
-  private async phase<T>(request: ClaudePhaseRequest, context: AttemptContext): Promise<T> {
-    const outcome = await this.run(request, this.call(context));
+  private async phase<T>(request: ClaudePhaseRequest, context: AttemptContext, afterStop?: { stopGraceMs: number }): Promise<T> {
+    const outcome = await this.run(request, { ...this.call(context), ...(afterStop ? { stopGraceMs: afterStop.stopGraceMs } : {}) });
+    // Consolidation step 1 (spec §5.1, §5.2): after a stop, an execute runner that exited cleanly and printed a JSON object
+    // printed the phase's result (its post-SIGTERM partial, or a complete answer it already had). A result without
+    // tokenUsage carries the usage observed before the stop; no observation leaves it absent, never 0.
+    if (afterStop !== undefined && (outcome.reason === "aborted" || outcome.reason === "timeout") && outcome.code === 0 && outcome.signal === null) {
+      const written = parseObject(outcome.stdout);
+      if (written !== undefined) {
+        const usageEvidence = (written as { usageEvidence?: unknown }).usageEvidence;
+        if (usageEvidence !== undefined) await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(usageEvidence, null, 2), { mode: 0o600 });
+        if ((written as { tokenUsage?: unknown }).tokenUsage === undefined) {
+          const observed = await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE));
+          if (observed !== null) (written as { tokenUsage?: number }).tokenUsage = observed;
+        }
+        return written as T;
+      }
+    }
     if (outcome.reason === "aborted") throw new ClaudePhaseAborted(outcome.evidenceDir, await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)));
     if (outcome.reason !== "completed") {
       // Orca ruling 26 (Orca ledger 2026-09-27-single-call-estimate §3.21; session c85d2c4e, 2026-09-28): a phase that
@@ -222,7 +255,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       return await this.phase<ExecutionResult>({
         phase: "execute", prompt: buildExecutorPrompt(context), ...this.base(context),
         partialOutcomeRecoveryWindowMs: context.contract.executionPolicy.partialOutcomeRecoveryWindowMs,
-      }, context);
+      }, context, { stopGraceMs: Math.max(this.config.installation.killGraceMs, context.contract.executionPolicy.partialOutcomeRecoveryWindowMs + PARTIAL_FLUSH_MARGIN_MS) });
     } catch (error) {
       // As CodexAdapter (Orca claude stream usage, 2026-09-27): an aborted execute that was observed spending tokens
       // throws, so runLoop can settle that usage; one that was not keeps answering null exactly as before.

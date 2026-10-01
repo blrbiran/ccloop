@@ -81,7 +81,21 @@ const emitMessageTail = async () => {
 };
 const emitClosedMessage = async () => { await emitStart(); await emitMessageTail(); };
 
-if (mode === "usage-then-hang" || mode === "start-then-hang") {
+// Consolidation step 1 (2026-10-01, ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md §7.4):
+// "write-then-hang" writes partial.txt (400 kB) in its cwd, under stream-json emits init + one closed message, then
+// hangs; "write-quiet-then-hang" the same without any stream event; "write-ignore-term" writes partial.txt, ignores
+// SIGTERM and hangs; "write-then-fail" writes partial.txt and exits 1; "answer-then-linger" answers like "ok", leaves a
+// grandchild holding its stdout (so the runner's close waits), writes <marker>.answered and exits 0.
+const PARTIAL_BYTES = "x".repeat(400_000) + "\n";
+const NEW_WRITE_MODES = new Set(["write-then-hang", "write-quiet-then-hang", "write-ignore-term", "write-then-fail"]);
+if (NEW_WRITE_MODES.has(mode)) {
+  writeFileSync("partial.txt", PARTIAL_BYTES);
+  if (mode === "write-ignore-term") process.on("SIGTERM", () => {});
+  if (mode === "write-then-hang" && stream) { await emitInit(); await emitClosedMessage(); }
+  writeFileSync(`${marker}.wrote`, "1");
+  if (mode === "write-then-fail") { process.stderr.write("fake-claude-cli: failing after a write\n"); process.exit(1); }
+  setInterval(() => {}, 1000);
+} else if (mode === "usage-then-hang" || mode === "start-then-hang") {
   // Orca claude stream usage (2026-09-27, spec §5.1): these two modes only emit under stream-json, matching a
   // runner that opened a stream and then stopped receiving before the message closed or even started.
   if (stream) { await emitInit(); if (mode === "usage-then-hang") await emitClosedMessage(); else await emitStart(); }
@@ -147,8 +161,14 @@ if (mode === "usage-then-hang" || mode === "start-then-hang") {
   };
   const delay = entry?.delayMs?.[phase];
   if (!refused) {
-    if (delay === undefined) await respond();
-    else {
+    if (delay === undefined) {
+      await respond();
+      if (mode === "answer-then-linger") {
+        spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: ["ignore", "inherit", "ignore"] });
+        writeFileSync(`${marker}.answered`, "1");
+        process.exit(0);
+      }
+    } else {
       if (stream && entry?.usageBeforeDelay === true) { await emitInit(); await emitClosedMessage(); openedBeforeDelay = true; }
       setTimeout(() => { void respond(); }, delay);
     }
