@@ -311,3 +311,13 @@ corrections, which the plan (`docs/superpowers/plans/2026-10-01-claude-adapter-c
 - **§6, wiring.** §7.4's Orca criteria test `handoffGraceMsOf` alone; the plan adds one criterion that reaches it
   through `settleIfPastGrace` with a real frozen window, and mutation M10 (the driver passes 0) must turn it red.
 - **§8.** The plan adds M9 (execute passes no post-stop option at all) and M10 (above).
+
+## 12. Correction after implementation (2026-10-01, Orca session `be653b22`)
+
+- §7.2 says `tests/validation/prepareA04.test.ts` held "44 criteria". A fresh read at deletion time counted 46 `it(` sites,
+  two of them `it.each`, i.e. 52 expanded criteria, in the same three `describe` blocks. The whole file was deleted as
+  §7.2 says; only the count was wrong. Measured by the Task 3 implementer (ledger
+  `.superpowers/sdd/2026-10-01-claude-adapter-consolidation-step1/progress.md`, Task 3 line).
+- §8's M7/M8 (Orca) were carried as: M10 (driver passes 0 instead of the window) and "driver passes killGraceMs 0", each
+  seen red in an Orca clone by the Task 4 implementer; M7/M8 as written are covered by the `handoffGraceMsOf` unit
+  criteria the same task added.
