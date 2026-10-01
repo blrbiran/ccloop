@@ -44,23 +44,16 @@ const KNOWN_REDS = new Set([
   // Stable red (non-flake), root cause unexamined, nobody authorized touching it.
   "tests/control/stopProof.test.ts > quiet execution proof > does not treat leader exit as group quiet and proves only after the full tree is gone",
   // Load flakes (all "Test timed out in 5000ms"), §9 of the design spec.
-  "run-scenario CLI > records env names only and tracks descendants rooted at the spawned pid",
   // Consolidation step 1 (2026-10-01): two names renamed with their criteria; five run-scenario names removed with theirs.
   "runLoop > persists phase usage evidence from the claude agent adapter without recomputing controller totals",
   "runLoop > accounts an execute timeout that rejects after the abort as exhaustion",
-  "run-scenario CLI > fails on an existing run directory without creating evidence or harvesting stale run data",
   "claude phase runner > waits for close before interrupting a close-pending successful execute",
   "Codex phase process > kills a TERM-ignoring process before returning abort",
   // Added in §11.1, measured after Task 2 (5 more names + one codexWatchdog pair = 6 more names).
-  "run-scenario CLI > runs when invoked through a canonical-path alias",
-  "run-scenario CLI > creates a fresh nested evidence directory when its parent does not exist",
   "isolated Codex acceptance harness > succeeds only with real controller, three phases and published answer",
   "accepts the controller's zero-clamped soft budget and records the overrun",
   "matches historical double-space start identities on single-digit days",
   "still reaps registered groups when the observation file becomes unwritable",
-  // Orca ruling review R29 (human ruling 2026-09-27): a 5000 ms load timeout seen once in a full run at load 39
-  // (tests/validation/evidence.test.ts), green 3/3 when rerun alone.
-  "run-scenario CLI > records claudeChildExited as NOT_OBSERVABLE when no adapter descendant was tracked",
 ]);
 
 const reportPath = process.argv[2];

@@ -45,38 +45,7 @@ Expected preflight result: tests, typecheck, and build succeed; `claude --versio
 
 If `npm ci` prints audit or vulnerability output, treat it as observational only. It does not authorize `npm audit fix`, `npm audit fix --force`, editing `package.json`, editing `package-lock.json`, or any other dependency change. Stop and report the finding instead.
 
-## A-04 mechanical prepare (no paid call)
-
-Run this command from the repository root while the current checkout is on branch `main`. `prepare-a04.ts` now freezes the approved main revision, runs deterministic verification in an isolated temporary checkout based on that revision, and leaves the operator's main checkout out of the `npm test` / `npm run typecheck` / `npm run build` path.
-
-```bash
-npx --no-install tsx validation/v1/scripts/prepare-a04.ts \
-  --fixture .validation-runs/fixture-01 \
-  --contract .validation-runs/contracts/A-04.json \
-  --run-dir .validation-runs/runs/A-04 \
-  --evidence-dir .validation-runs/evidence/A-04 \
-  --adapter-config examples/v1/claude-adapter-config.json \
-  --token-budget 550000 \
-  --per-attempt-timeout-ms 600000 \
-  --total-runtime-budget-ms 1200000 \
-  --partial-recovery-window-ms 5000
-```
-
-A-04 prepare now checks metadata-backed historical context from the current `main` checkout. It no longer requires the deleted `evidence-first-v1` linked worktree or its preserved `.validation-runs/` tree to remain present as hard prerequisites. Fresh local `.validation-runs/**` outputs created during non-paid prepare are not historical preserved evidence and must not be treated as A-01 through A-03 artifacts.
-
-Expected result:
-- a spec 6.1 metadata-backed read-only inspection succeeds first, confirming the current `main` checkout, the required handover/spec/plan documents, the backup branch anchor, and surfacing retained stashes plus any discovered legacy worktree / `.validation-runs/` paths only as soft signals;
-- main deterministic verification (`npm test`, `npm run typecheck`, `npm run build`) passes next inside an isolated temporary checkout based on the verified `main` revision, with `node_modules` copied locally into that checkout when present so the preserved runtime environment stays self-contained;
-- the A-04 freshness check confirms the fixture is clean and the contract/run/evidence paths are still fresh before contract render;
-- `.validation-runs/contracts/A-04.json` is created once and schema-validates as Scenario A with only the approved A-04 execution-policy fields overridden;
-- the focused evidence-chain regression set runs after contract render and before the final pre-approval gate;
-- the final pre-approval gate re-reads `.validation-runs/contracts/A-04.json` from disk, re-parses it under schema, and recomputes its sha256 before copying that exact contract into the preserved verified checkout;
-- `.validation-runs/runs/A-04/` and `.validation-runs/evidence/A-04/` still do not exist;
-- stdout prints an approval package containing the preserved verified checkout path/head, the read-only inspection results, and an exact command whose runnable `run-scenario.ts` target and `--contract` argument both resolve inside that verified checkout rather than the operator checkout; the preserved checkout does not symlink `node_modules` back to the operator checkout, `--adapter-config` must realpath-resolve under the repo root (including through any symlink target) and realpath-resolve inside that preserved checkout so the approved command cannot drift to an external config, and `mainCheckoutMustRemainUnchanged: true` is backed by a deterministic repo snapshot that catches ignored-file drift such as `dist/**`.
-
-`.validation-runs/contracts/A-04.json` in this worktree is a local non-paid prepare artifact, not preserved real-run evidence.
-Passing focused checks on this branch does not by itself authorize a paid Scenario A call.
-`prepare-a04.ts` must not invoke Claude or create `review.json`.
+> Retired (2026-10-01, ccloop consolidation step 1): run-scenario.ts and prepare-a04.ts drove ccloop through --adapter claude, which no longer exists. Paid real-claude acceptance now goes through Orca's acceptance script. The evidence these scripts produced stays where it is.
 
 ## Evidence Files and Status Definitions
 
@@ -148,15 +117,7 @@ Approval checkpoint before the paid call: show the user `scenario A`, `1 attempt
 
 Run the scenario once with fresh paths:
 
-```bash
-npx --no-install tsx validation/v1/scripts/run-scenario.ts \
-  --scenario A \
-  --contract .validation-runs/contracts/A-01.json \
-  --fixture .validation-runs/fixture-01 \
-  --run-dir .validation-runs/runs/A-01 \
-  --evidence-dir .validation-runs/evidence/A-01 \
-  --adapter-config examples/v1/claude-adapter-config.json
-```
+> Retired: see the note above (`run-scenario.ts` no longer exists).
 
 Finalize exactly once after reviewing the evidence:
 
@@ -185,15 +146,7 @@ Approval checkpoint before the paid call: show `scenario B`, `1 attempt`, `30000
 
 Run the scenario once with fresh paths:
 
-```bash
-npx --no-install tsx validation/v1/scripts/run-scenario.ts \
-  --scenario B \
-  --contract .validation-runs/contracts/B-01.json \
-  --fixture .validation-runs/fixture-01 \
-  --run-dir .validation-runs/runs/B-01 \
-  --evidence-dir .validation-runs/evidence/B-01 \
-  --adapter-config examples/v1/claude-adapter-config.json
-```
+> Retired: see the note above (`run-scenario.ts` no longer exists).
 
 Use only the retained run directory plus Git commands to judge handoff sufficiency. Do not modify or remove the retained worktree.
 
@@ -255,15 +208,7 @@ Approval checkpoint before the paid call: show `scenario C`, `1 attempt`, `per-a
 
 Run `C` once with fresh paths:
 
-```bash
-npx --no-install tsx validation/v1/scripts/run-scenario.ts \
-  --scenario C \
-  --contract .validation-runs/contracts/C-01.json \
-  --fixture .validation-runs/fixture-01 \
-  --run-dir .validation-runs/runs/C-01 \
-  --evidence-dir .validation-runs/evidence/C-01 \
-  --adapter-config examples/v1/claude-adapter-config.json
-```
+> Retired: see the note above (`run-scenario.ts` no longer exists).
 
 Finalize exactly once after review, using the evidence-backed conclusion:
 
@@ -291,15 +236,7 @@ Approval checkpoint before the paid call: show `scenario D`, `1 attempt`, `per-a
 
 Run `D` once with fresh paths:
 
-```bash
-npx --no-install tsx validation/v1/scripts/run-scenario.ts \
-  --scenario D \
-  --contract .validation-runs/contracts/D-01.json \
-  --fixture .validation-runs/fixture-01 \
-  --run-dir .validation-runs/runs/D-01 \
-  --evidence-dir .validation-runs/evidence/D-01 \
-  --adapter-config examples/v1/claude-adapter-config.json
-```
+> Retired: see the note above (`run-scenario.ts` no longer exists).
 
 Finalize exactly once after review, using the evidence-backed D boundary classification and verdict mapping:
 
@@ -350,15 +287,7 @@ Approval checkpoint before the paid call: show `scenario E`, `1 attempt`, `30000
 
 Run the scenario once with fresh paths:
 
-```bash
-npx --no-install tsx validation/v1/scripts/run-scenario.ts \
-  --scenario E \
-  --contract .validation-runs/contracts/E-01.json \
-  --fixture .validation-runs/fixture-01 \
-  --run-dir .validation-runs/runs/E-01 \
-  --evidence-dir .validation-runs/evidence/E-01 \
-  --adapter-config examples/v1/claude-adapter-config.json
-```
+> Retired: see the note above (`run-scenario.ts` no longer exists).
 
 Finalize exactly once after review, using the evidence-backed conclusion:
 
