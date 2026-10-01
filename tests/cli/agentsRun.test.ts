@@ -61,6 +61,9 @@ describe("ccloop run --agents --agent-selection (Orca agent selection, spec §4.
     // P23 m6: `--agents` must be refused by `sweep` too, not only `resume` — sweep has its own early-return
     // branch in parseArgs, so this exercises a path resume's case does not.
     // Rewritten (consolidation step 2, controller ruling C-5 under the human's standing instruction, 2026-10-01).
+    // *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling FW-3) -- sweep no longer has an early-return
+    // branch of its own: resume and sweep share the `command !== "run"` branch of parseArgs, so this row and resume's
+    // row above exercise the same `--agent-selection` refusal. ***
     [["sweep", "--root", "r", "--agents", "t", "--agent-selection", "s"], "--agent-selection is only supported by run"],
     // Rewritten (consolidation step 4, controller ruling C-2 under the human's standing instruction, 2026-10-01).
     [["resume", "--run-dir", "r", "--agents", "t", "--adapter", "codex"], "--adapter was removed; use --agents <table>"],

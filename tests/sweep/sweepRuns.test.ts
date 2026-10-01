@@ -781,6 +781,8 @@ describe("sweepRuns", () => {
     // §8/§12's ordering (banner before adapter) is unchanged by this wave, and the notes belong
     // on the banner's side of it: they describe what was found on disk before anything was
     // started, which is the same question `--adapter claude` is being approved against.
+    // *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling FW-3) -- `--adapter claude` no longer exists;
+    // the question is now the one an operator answers by approving `sweep --agents` against the table. ***
     const order: string[] = [];
     const rows: ScanRow[] = [runRow(`${ROOT}/run-1`, ELIGIBLE)];
 

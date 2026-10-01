@@ -289,6 +289,9 @@ async function createSweepRepo(): Promise<string> {
 // maxAttempts is 2 and the seeded run has already used attempt 1, so the single scripted attempt
 // this contract allows is the LAST one: a rejected verification there lands on
 // evaluateStopDecision's `attemptNumber >= maxAttempts` branch, i.e. "exhausted".
+// *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling FW-3) -- the attempt is no longer scripted: it is
+// played by ccloop's fake codex (`frames` mode, through `sweep --agents`), which plays the frame list's second entry
+// for attempt 2. ***
 function createSweepContract(repoPath: string): LoopContract {
   return {
     objective: { taskId: "task-1", goal: "Fix", successCondition: "pass", nonGoals: [] },

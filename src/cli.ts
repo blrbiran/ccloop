@@ -375,6 +375,8 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     // The agents-table form of `run` (spec §4.9) builds its adapter from the table, not from --adapter.
+    // *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling FW-3) -- --adapter no longer exists; the agents
+    // table is the only form of `run`, so there is no other adapter source to contrast it with. ***
     if (parsed.command === "run") return await runWithAgents(parsed);
 
     // Consolidation step 2, spec §3.2: `resume --agents` rebuilds the adapter from the selection the run froze.

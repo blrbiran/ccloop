@@ -87,7 +87,7 @@ node dist/cli.js run \
 
 `run --agents` 会把校验过的选择**冻结**进 `<runDir>/agent-selection.json`（`0600`，已存在就拒绝、不覆盖）。之后 `resume`／`sweep` 不再收 `--agent-selection`，只用这份冻结的选择对着**当时的** agents 表重建 adapter——选择对应的配置变了（kind、`configDir`、kind 自己的字段或 selection；hash 对不上）或 CLI 升级了（版本漂移），都会在动 run 目录之前拒绝。
 
-⚠️ `--run-dir` 必须是**干净的**：如果里面已经有 `loop-state.json`、`events.jsonl` 或非空的 `worktrees/`，`run` 会直接报错退出。V1 不支持在已有 run 上重新初始化——想续跑请用 `resume`。
+⚠️ `--run-dir` 必须是**干净的**：如果里面已经有 `loop-state.json`、`events.jsonl` 或非空的 `worktrees/`，`run` 会直接报错退出；留着一份 `agent-selection.json`（比如上一次 `run --agents` 冻结后中途失败）也会被拒绝，退出码 1，错误码 `agent-selection-exists`。V1 不支持在已有 run 上重新初始化——想续跑请用 `resume`。
 
 ### 3.2 `resume`
 
@@ -276,11 +276,12 @@ runner 是固定的：`ClaudeAgentAdapter` 总是起这个 `scripts/claude-phase
 
 ## 7. Run 目录长什么样
 
-以下是一次真实 scripted 跑完之后的实测结果：
+以下是一次 run 跑完之后 run 目录的结构（`agent-selection.json` 由 `run --agents` 写入）：
 
 ```
 <runDir>/
 ├── loop-contract.json      # 契约的副本 —— 所以 resume 不需要 --contract
+├── agent-selection.json    # run --agents 冻结的选择（0600）—— resume／sweep 靠它重建 adapter
 ├── loop-state.json         # 状态机快照（原子写）
 ├── owner-record.json       # 所有权：epoch、进程实例 id、租约续期时间
 ├── owner-transfer.json     # 仅在发生过所有权移交时出现

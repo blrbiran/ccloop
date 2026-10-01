@@ -21,7 +21,7 @@ describe("Codex CLI",()=>{
     const cli=fileURLToPath(new URL("../../src/cli.ts",import.meta.url));
     const loader=fileURLToPath(new URL("../../node_modules/tsx/dist/loader.mjs",import.meta.url));
     const result=await exec(process.execPath,["--import",loader,cli,"run","--contract",contract,"--run-dir",f.runDir,"--agents",tablePath,"--agent-selection",selectionPath],{cwd:f.dir,timeout:15000}).then(r=>({...r,code:0}),e=>({stdout:e.stdout,stderr:e.stderr,code:e.code}));
-    if(budgetMode==="strict") {expect(result.code).toBe(1);await expect(readFile(f.marker)).rejects.toThrow();}
+    if(budgetMode==="strict") {expect(result.code).toBe(1);expect(result.stderr).toContain("agents-table-invalid");await expect(readFile(f.marker)).rejects.toThrow();}
     else {expect(result.code).toBe(0);expect(result.stderr).toContain("soft");expect(JSON.parse(await readFile(join(f.runDir,"loop-state.json"),"utf8")).status).toBe("succeeded");expect((await readFile(f.marker+".calls","utf8")).trim().split("\n")).toEqual(["plan","execute","verify"]);}
   },30000);
 });

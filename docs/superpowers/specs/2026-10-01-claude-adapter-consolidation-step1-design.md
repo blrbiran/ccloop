@@ -321,3 +321,20 @@ corrections, which the plan (`docs/superpowers/plans/2026-10-01-claude-adapter-c
 - §8's M7/M8 (Orca) were carried as: M10 (driver passes 0 instead of the window) and "driver passes killGraceMs 0", each
   seen red in an Orca clone by the Task 4 implementer; M7/M8 as written are covered by the `handoffGraceMsOf` unit
   criteria the same task added.
+
+## 13. Correction (final review, 2026-10-01)
+
+Recorded by the final-review fix agent, Orca session `be653b22`, from the Orca final whole-branch review (I1) and the
+controller's ruling on it.
+
+- §6 calls `120_000` ms "the existing ceiling". With §6's own formula it is not: every Orca loop plan freezes a
+  window of 60_000 (Orca `src/control/loopPlans.ts`), so a default run already gets
+  `max(killGraceMs, 60_000 + 5_000) + 60_000 = 125_000` ms, and a `120_000` fallback is *shorter* than a normal
+  grace — the outcome-unknown would come earlier, the direction §6 calls unsafe.
+- Orca now counts an unusable recovery window (an invalid value, or a start envelope it cannot read) as 60_000 ms,
+  Orca's own default window. The grace on that path is then `max(killGraceMs, 65_000) + 60_000`, which is at least
+  125_000 ms, i.e. no shorter than any default run's grace. (`killGraceMs` itself, when unusable, still falls back
+  as before.)
+- This is still not a true ceiling: a plan may raise the window up to `handoff.activeMs`, and such a run's normal grace
+  exceeds the fallback. Accepted, because the path is reachable only from corrupt state (Orca writes the window into
+  every frozen contract itself).
