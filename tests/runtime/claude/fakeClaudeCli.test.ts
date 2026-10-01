@@ -265,4 +265,16 @@ describe("fake claude CLI (Orca agent selection, spec §4.8)", () => {
     expect((await callWith("ALPHA again")).code).toBe(3);
     expect(await readFile(join(cwd, "marker.json.tasks"), "utf8")).toBe("single-call single-call-queue#1\nsingle-call single-call-queue#0\nsingle-call -\n");
   });
+
+  // Orca N1 (2026-10-02, plan Task C1, fix round 1): a script that still has a "single-call" entry (F1-F4's shape) is not
+  // hijacked by a queue beside it.
+  it("F5b: a script with both a single-call entry and a single-call-queue answers from the single-call entry and leaves the queue unused", async () => {
+    const cwd = await workdir();
+    const scriptPath = join(cwd, "script.json");
+    await writeFile(scriptPath, JSON.stringify({ "single-call": { output: { answer: "entry" } }, "single-call-queue": [{ output: { answer: "queued" } }] }));
+    const result = await launchEnv(cwd, ["script", join(cwd, "marker.json"), scriptPath, ...singleCallArgs()], withoutCap());
+    expect(result.code).toBe(0);
+    expect(lines(result.stdout).at(-1)).toMatchObject({ structured_output: { answer: "entry" } });
+    expect(existsSync(join(cwd, "marker.json.single-call-queue"))).toBe(false);
+  });
 });
