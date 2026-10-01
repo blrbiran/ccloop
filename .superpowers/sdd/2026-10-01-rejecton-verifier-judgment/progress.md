@@ -15,3 +15,10 @@ Task 2: red t2-red.txt (named criterion fails on the new toContain); green t2-gr
 Task 2: complete (commits 21dfb1c..d9aabad, tests: .superpowers/sdd/2026-10-01-rejecton-verifier-judgment/run.sh .superpowers/sdd/2026-10-01-rejecton-verifier-judgment/t2-done.txt tests/runtime/claude/subprocessClaudeAdapter.test.ts → RC=0)
 Task 3: Ruling: the framework spec file had no trailing newline; the append adds one after its last line (that line's text unchanged) — cost: a one-byte change to published text, visible in the diff.
 Task 3: Ruling: the handoff roll also records the human's adapter/CLI consolidation request and the read-only inventory's conclusion (not in the plan) — the next agent needs it — cost: none.
+Task 3: complete (commits d9aabad..3011dea, docs only; no test command)
+Task 4: gate (Orca session ceca1c47 scratchpad ccgate/, script ccgate.sh): fresh clone at 3011dea, HOME + 4 XDG + TMPDIR redirected; build RC 0, typecheck RC 0; 1091 tests, 1090 passed, 1 failed (stopProof, the known stable red); check-known-reds RC 0 (unexpected 0); check-tmp-leak RC 0 (0 entries left). 1-min load 5.05 → 18.38 during the run.
+Task 4: complete (gate only; no commit of code)
+Final review: fresh reviewer (Fable), range 97fc9bf..3011dea, package review-97fc9bf..3011dea.diff: Critical 0, Important 0, Minor 3; "Ready to merge: Yes". Controller checked the reviewer's test-3 mutation output (Orca session scratchpad rv-t3-mut.txt): restamping a rejecting verdict as reject-on-matched/safeToRetry:false turns test 3 red — the red the ledger had not recorded for test 3.
+Final: minor (deferred): runLoop.integration.test.ts test 2's `not.toContain("tests fail")` on the check text is a premise guard placed before the call (never-red shape); unlabeled.
+Final: minor (deferred): tests 3 and 4 assert `status not "succeeded"` loosely; verify.json carries the real assertion.
+Final: Ruling: the plan workspace .superpowers/sdd/2026-10-01-rejecton-verifier-judgment/ is kept, not deleted — this repo commits its ledgers (CLAUDE.md Rule 16) and recursive deletes need the human — cost: scratch files (run outputs) stay in an ignored directory.
