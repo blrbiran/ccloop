@@ -77,13 +77,15 @@ npm test              # vitest run
 
 ```bash
 node dist/cli.js run \
-  --contract   examples/v1/minimal-contract.json \
-  --run-dir    /tmp/ccloop-runs/task-1 \
-  --adapter    scripted \
-  --adapter-config examples/v1/scripted-adapter-config.json
+  --contract        examples/v1/minimal-contract.json \
+  --run-dir         /tmp/ccloop-runs/task-1 \
+  --agents          /abs/private/agents.json \
+  --agent-selection /abs/private/selection.json
 ```
 
-四个 flag **全部必填**，没有默认值。
+四个 flag **全部必填**，没有默认值。`--agents` 是 agents 表（装了哪些 agent CLI、各在哪、什么版本），`--agent-selection` 是这一次选哪个、用什么 model，连同它的 `configHash`——两份文件怎么来见 §6.0。
+
+`run --agents` 会把校验过的选择**冻结**进 `<runDir>/agent-selection.json`（`0600`，已存在就拒绝、不覆盖）。之后 `resume`／`sweep` 不再收 `--agent-selection`，只用这份冻结的选择对着**当时的** agents 表重建 adapter——选择对应的配置变了（kind、`configDir`、kind 自己的字段或 selection；hash 对不上）或 CLI 升级了（版本漂移），都会在动 run 目录之前拒绝。
 
 ⚠️ `--run-dir` 必须是**干净的**：如果里面已经有 `loop-state.json`、`events.jsonl` 或非空的 `worktrees/`，`run` 会直接报错退出。V1 不支持在已有 run 上重新初始化——想续跑请用 `resume`。
 
@@ -92,13 +94,10 @@ node dist/cli.js run \
 ```bash
 node dist/cli.js resume \
   --run-dir /tmp/ccloop-runs/task-1 \
-  --adapter scripted \
-  --adapter-config examples/v1/scripted-adapter-config.json
+  --agents  /abs/private/agents.json
 ```
 
-claude 的 run 由 `run --agents` 起；在 #4 做完之前，`resume`／`sweep` 还不能续跑它们。
-
-不需要 `--contract`：契约已经在 run 目录里了。resume 会做所有权判定（这个 run 还归不归我）、边界分析（上次停在哪个 phase）、必要时走 owner-transfer。
+不需要 `--agent-selection`：用的是 `run --agents` 冻结在 `<runDir>/agent-selection.json` 里的那份；没有这份文件的 run 目录（不是 `run --agents` 起的）会被拒绝。不需要 `--contract`：契约已经在 run 目录里了。resume 会做所有权判定（这个 run 还归不归我）、边界分析（上次停在哪个 phase）、必要时走 owner-transfer。
 
 ### 3.3 `ls`
 
@@ -117,17 +116,16 @@ node dist/cli.js ls --json /tmp/ccloop-runs    # 机器读的 {schemaVersion:1, 
 
 ```bash
 node dist/cli.js sweep \
-  --root /tmp/ccloop-runs \
-  --adapter scripted \
-  --adapter-config examples/v1/scripted-adapter-config.json \
+  --root     /tmp/ccloop-runs \
+  --agents   /abs/private/agents.json \
   --max-runs 5
 ```
 
-claude 的 run 由 `run --agents` 起；在 #4 做完之前，`resume`／`sweep` 还不能续跑它们。
+每个被挑中的 run 各用**它自己**冻结的 `agent-selection.json` 建 adapter，所以一次 sweep 里不同 run 可以是不同的 agent。
 
 - `--max-runs` 必须是**字面上的正整数**（`1e3`、`2abc` 一律拒绝，不做容错解析）。它是人批准这次 sweep 的上限。
 - 它 bound 的是**进入的 run 数**，不是 attempt 总数——每个 run 各自还有自己契约里的 `maxAttempts`。
-- 顺序是硬的：先读 adapter config（读不了就 exit 1，一个 run 都不扫），再扫描，再打 banner，最后才构造 adapter。
+- 顺序是硬的：先读 agents 表（读不了就 exit 1，一个 run 都不扫），再扫描，再打 banner，最后才逐个 run 构造 adapter（某个 run 的 adapter 建不起来，那一个 run 报 `refused`）。
 
 ### 3.5 `unlock`
 
@@ -220,17 +218,43 @@ Schema 在 `src/contract/schema.ts`（zod，`.strict()`——**多一个字段�
 
 Adapter 契约（`src/runtime/types.ts`）有三个 phase：`plan` / `execute` / `verify`。ccloop 通过 stdin 发一个 JSON 请求，从 stdout 读一个 JSON 结果。
 
-### 6.1 `scripted`——用来测试和演示
+### 6.0 agents 表与选择文件：CLI 唯一的入口
 
-```json
-{ "frames": [ { "plan": {...}, "execution": {...}, "verification": {...} } ] }
+> consolidation step 4（2026-10-01）删掉了 `--adapter`／`--adapter-config`。`run`／`resume`／`sweep` 带上其中任何一个都会 exit 1，报 `--adapter was removed; use --agents <table>`。现在 CLI 只认 `--agents`。
+
+agents 表（`ccloop-agents-table-v1`）登记装了哪些 agent CLI。`node dist/cli.js agents detect` 在 PATH 和常见安装目录里找 codex／claude，打印一份草稿表（只打到 stdout，不写任何文件）；挑出要的条目存成文件，再用 `agents validate` 核对版本：
+
+```bash
+node dist/cli.js agents detect                          # 草稿：{"schema":"ccloop-agents-detect-v1","table":{...},"candidates":[...]}
+node dist/cli.js agents validate /abs/private/agents.json   # 每条安装的 --version 是否与表里一致
 ```
 
-一个 frame 就是一次 attempt 的三段回放。不调任何模型，**确定性**，测试和跑通链路时用它。见 `examples/v1/scripted-adapter-config.json`。
+表文件必须是**绝对路径、就是它自己的 realpath**（macOS 上 `/tmp` 要写成 `/private/tmp`），文件和所在目录都属于当前用户、组和其他人不可写。一条 codex 安装长这样：
+
+```json
+{ "schema": "ccloop-agents-table-v1",
+  "installations": { "codex": {
+    "kind": "codex", "command": ["/abs/path/to/codex"], "version": "0.155.1", "configDir": null,
+    "timeoutMs": 120000, "killGraceMs": 250, "sandbox": "workspace-write", "budgetMode": "soft" } } }
+```
+
+选择文件是 `{"selection": {...}, "configHash": "<64 位 hex>"}`。两个字段都向 ccloop 要，不要手算：
+
+```bash
+echo '{"agent":{"agent":"codex","model":"<model>"}}' \
+  | node dist/cli.js control capabilities --agents /abs/private/agents.json
+# 回答里的 selection 与 configHash 原样抄进选择文件
+```
+
+`run` 时 ccloop 会对着当时的表重算一遍：版本对不上报 `agent-version-drift`，hash 对不上报 `control-config-hash-mismatch`，都在读契约、动 run 目录之前。
+
+### 6.1 `scripted`——只在测试里
+
+`ScriptedAdapter`（`{ "frames": [ { "plan": {...}, "execution": {...}, "verification": {...} } ] }`，一个 frame 就是一次 attempt 的三段回放）还在，但它只是一个库类：测试直接 new 它喂给 `runLoop`／`resumeLoop`。CLI 已经没有选它的路——`examples/v1/scripted-adapter-config.json` 随 `--adapter` 一起删了。
 
 ### 6.2 `claude`——真跑
 
-claude 现在只经由 `run --agents <table> --agent-selection <file>` 或 `control` 跑；`--adapter` 不再接受 `claude`。`ClaudeAgentAdapter`（`src/runtime/claude/claudeAgentAdapter.ts`）每个 phase 起一个 `scripts/claude-phase-runner.mjs` 子进程：stdin 收 JSON 请求、stdout 吐 JSON 结果。
+claude 只经由 `run --agents <table> --agent-selection <file>`（及其后的 `resume`／`sweep --agents`）或 `control` 跑。`ClaudeAgentAdapter`（`src/runtime/claude/claudeAgentAdapter.ts`）每个 phase 起一个 `scripts/claude-phase-runner.mjs` 子进程：stdin 收 JSON 请求、stdout 吐 JSON 结果。
 
 仓库自带的 `scripts/claude-phase-runner.mjs` 是参考实现，它做了这些事：
 
@@ -352,22 +376,32 @@ agent 什么都没干，「**没有 ref**」＝发布失败 —— 这两件事�
 
 ---
 
-## 9. 五分钟跑通（scripted，不花钱）
+## 9. 跑通一次（codex）
+
+⚠️ **CLI 上没有不调模型的跑法了。** 以前这里用 `--adapter scripted`，它随 consolidation step 4（2026-10-01）删了。测试套件不花钱，是因为它把 agents 表的 `command` 指向假的 codex（`tests/fixtures/fake-codex.mjs`）——那是测试夹具，不是给用户的生产路径。下面这条会真调 codex，**先确认你能承受它的 token 开销**。
 
 ```bash
 npm install && npm run build
-RUN_DIR=$(mktemp -d)/run-1
+PRIV=$(cd "$(mktemp -d)" && pwd -P)       # 表必须在自己的 realpath 上
+RUN_DIR="$PRIV/runs/run-1"
+
+node dist/cli.js agents detect             # 从草稿里取 codex 那条，存成 "$PRIV/agents.json"（见 §6.0）
+chmod 600 "$PRIV/agents.json"
+echo '{"agent":{"agent":"codex","model":"<model>"}}' \
+  | node dist/cli.js control capabilities --agents "$PRIV/agents.json"
+# 把回答里的 selection 与 configHash 存成 "$PRIV/selection.json"：{"selection":…,"configHash":…}
 
 node dist/cli.js run \
   --contract examples/v1/minimal-contract.json \
   --run-dir "$RUN_DIR" \
-  --adapter scripted \
-  --adapter-config examples/v1/scripted-adapter-config.json
+  --agents "$PRIV/agents.json" \
+  --agent-selection "$PRIV/selection.json"
 echo "exit=$?"        # 期望 0
 
 cat "$RUN_DIR/loop-state.json"          # status 应为 succeeded
 cat "$RUN_DIR/events.jsonl"
 ls  "$RUN_DIR/attempts/1"               # plan.json execution.json verify.json diff.patch …
+cat "$RUN_DIR/agent-selection.json"     # run --agents 冻结的选择，resume／sweep 用它
 node dist/cli.js ls "$(dirname "$RUN_DIR")"
 ```
 
@@ -375,7 +409,7 @@ node dist/cli.js ls "$(dirname "$RUN_DIR")"
 
 ⚠️ `minimal-contract.json` 里 `context.repoPath` 是 `"."`，所以请在一个 **git 仓库**里跑，否则 `git worktree add` 会失败。
 
-跑通之后改用 `run --agents <table> --agent-selection <file>`（见 §6.2）选 claude，就是真跑了。**先确认你能承受它的 token 开销**。
+想换 claude：表里加一条 claude 安装，选择文件里 `agent` 换成它的 id（见 §6.2）。
 
 ---
 

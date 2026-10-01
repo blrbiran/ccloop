@@ -10,7 +10,7 @@ it("accepts the controller's zero-clamped soft budget and records the overrun",a
   try {
     const bin=join(dir,"fake-codex"),output=join(dir,"evidence");
     const fake=new URL("../fixtures/fake-codex.mjs",import.meta.url);
-    await writeFile(bin,`#!${process.execPath}\nif(process.argv.includes("--version")){console.log("fixture");}else{process.argv=[process.execPath,${JSON.stringify(fileURLToPath(fake))},"high-usage",${JSON.stringify(join(dir,"marker"))},...process.argv.slice(2)];await import(${JSON.stringify(fake.href)});}\n`);await chmod(bin,0o700);
+    await writeFile(bin,`#!${process.execPath}\nif(process.argv.includes("--version")){console.log("fixture 1.0.0");}else{process.argv=[process.execPath,${JSON.stringify(fileURLToPath(fake))},"high-usage",${JSON.stringify(join(dir,"marker"))},...process.argv.slice(2)];await import(${JSON.stringify(fake.href)});}\n`);await chmod(bin,0o700);
     expect(await runValidation({codex:bin,model:"fixture",output})).toBe(0);
     expect(JSON.parse(await readFile(join(output,"summary.json"),"utf8"))).toMatchObject({tokenUsage:120000,softBudgetOverrun:20000});
   }finally{await rm(dir,{recursive:true,force:true});}

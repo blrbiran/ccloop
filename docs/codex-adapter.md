@@ -3,19 +3,34 @@
 ccloop owns agent execution; Orca controls ccloop. This adapter invokes a fresh
 `codex exec` for each plan, execute, and verify phase. It does not invoke Claude.
 
-Use `--adapter codex --adapter-config /absolute/path/codex.json` with `run`,
-`resume`, or `sweep`. All configuration fields below are required:
+Consolidation step 4 (2026-10-01) removed `--adapter`/`--adapter-config`; codex is
+selected through an agents table. Describe the installation in the table, then
+`run --agents /absolute/private/agents.json --agent-selection /absolute/private/selection.json`;
+`resume --run-dir <dir> --agents <table>` and `sweep --root <root> --agents <table> --max-runs <n>`
+continue with the selection `run` froze in `<runDir>/agent-selection.json`. All
+installation fields below are required:
 
 ```json
 {
-  "command": ["/absolute/path/to/codex"],
-  "model": "your-explicit-model",
-  "budgetMode": "soft",
-  "sandbox": "workspace-write",
-  "timeoutMs": 120000,
-  "killGraceMs": 250
+  "schema": "ccloop-agents-table-v1",
+  "installations": {
+    "codex": {
+      "kind": "codex",
+      "command": ["/absolute/path/to/codex"],
+      "version": "0.155.1",
+      "configDir": null,
+      "budgetMode": "soft",
+      "sandbox": "workspace-write",
+      "timeoutMs": 120000,
+      "killGraceMs": 250
+    }
+  }
 }
 ```
+
+The model is chosen in the selection file, `{"selection": {...}, "configHash": "..."}`,
+whose two fields are the answer of
+`echo '{"agent":{"agent":"codex","model":"your-explicit-model"}}' | ccloop control capabilities --agents <table>`.
 
 The executable must be absolute; the model is passed as one argument without a
 shell. Unknown configuration keys and strict budget mode are rejected. Plan and

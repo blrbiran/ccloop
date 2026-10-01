@@ -17,7 +17,7 @@ async function fixture(mode:string){
   const dir=await mkdtemp(join(tmpdir(),"codex-acceptance-test-"));dirs.push(dir);
   const bin=join(dir,"fake-codex"),marker=join(dir,"marker"),output=join(dir,"output");
   const fake=fileURLToPath(new URL("../fixtures/fake-codex.mjs",import.meta.url));
-  await writeFile(bin,`#!${process.execPath}\nif(process.argv.includes("--version")){console.log("fake-codex 1");}else{process.argv=[process.execPath,${JSON.stringify(fake)},${JSON.stringify(mode)},${JSON.stringify(marker)},...process.argv.slice(2)];await import(${JSON.stringify(new URL("../fixtures/fake-codex.mjs",import.meta.url).href)});}\n`);
+  await writeFile(bin,`#!${process.execPath}\nif(process.argv.includes("--version")){console.log("fake-codex 1.0.0");}else{process.argv=[process.execPath,${JSON.stringify(fake)},${JSON.stringify(mode)},${JSON.stringify(marker)},...process.argv.slice(2)];await import(${JSON.stringify(new URL("../fixtures/fake-codex.mjs",import.meta.url).href)});}\n`);
   await chmod(bin,0o700);return {dir,bin,marker,output,options:{codex:bin,model:"fixture",output}};
 }
 describe("isolated Codex acceptance harness",()=>{

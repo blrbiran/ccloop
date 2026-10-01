@@ -1,6 +1,6 @@
 # V1 Evidence-First Validation Operator Procedure
 
-Run every command from the repository root. For the non-paid A-04 prepare path below, the current checkout must be on branch `main`. This procedure uses only the current Task 1-3 TypeScript CLIs plus safe Claude CLI envelope checks. Do not overwrite existing paths, do not delete retained metadata anchors or historical records, and do not launch `claude -p` or the validation harness during preflight.
+Run every command from the repository root. The A-04 prepare path and `run-scenario.ts` are retired (see the "Retired (2026-10-01" note under Preflight); the preflight below still runs. This procedure uses only the current Task 1-3 TypeScript CLIs plus safe Claude CLI envelope checks. Do not overwrite existing paths, do not delete retained metadata anchors or historical records, and do not launch `claude -p` or the validation harness during preflight.
 
 ## Guardrails
 
@@ -8,7 +8,7 @@ Run every command from the repository root. For the non-paid A-04 prepare path b
 - These literals are operator examples, not the accepted final evidence set on `main`. The accepted review files are `A-04-08`, `B-02`, `C-05`, `D-01`, and `E-01`; preserved runs such as `B-01` and `C-01` through `C-04` remain historical but superseded.
 - If any example path already exists, stop and choose a new literal such as `fixture-02` or `A-02`; then reuse that exact literal consistently in the matching contract, run, evidence, and review commands.
 - Never overwrite or clean up `.validation-runs/`, retained worktrees, or earlier evidence.
-- Before every real Claude-backed `run-scenario.ts` invocation, obtain explicit approval for that paid call.
+- `run-scenario.ts` is retired (see the "Retired (2026-10-01" note under Preflight); every real Claude-backed paid call, wherever it is made now, still needs explicit approval first.
 - If Claude authentication needs interactive setup, stop and ask the user to run the exact login command themselves. Do not paste credentials into files, prompts, or shell history.
 - Immediate stop conditions: `git.json.mainCheckoutChanged === true`, any uncontrolled descendant remains in `processes.json.survivorPids`, any artifact path escapes the run directory, or evidence is corrupt enough that terminal state, events, and required checks cannot be reconciled.
 - Defect gate: if any scenario is confirmed `FAIL / PRODUCT_DEFECT`, preserve all evidence, stop the sequence immediately, and write a defect-specific follow-up plan before changing product code.

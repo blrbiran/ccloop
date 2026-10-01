@@ -10,7 +10,7 @@ async function fixture() {
   const dir=await mkdtemp(join(tmpdir(),"codex-watchdog-")),bin=join(dir,"bin");await mkdir(bin);
   const marker=join(dir,"marker"),codex=join(bin,"fake-codex"),output=join(dir,"output");
   const fake=new URL("../fixtures/fake-codex.mjs",import.meta.url);
-  await writeFile(codex,`#!${process.execPath}\nif(process.argv.includes("--version")){console.log("fixture");}else{process.argv=[process.execPath,${JSON.stringify(fileURLToPath(fake))},"ignore-term",${JSON.stringify(marker)},...process.argv.slice(2)];await import(${JSON.stringify(fake.href)});}`);await chmod(codex,0o700);
+  await writeFile(codex,`#!${process.execPath}\nif(process.argv.includes("--version")){console.log("fixture 1.0.0");}else{process.argv=[process.execPath,${JSON.stringify(fileURLToPath(fake))},"ignore-term",${JSON.stringify(marker)},...process.argv.slice(2)];await import(${JSON.stringify(fake.href)});}`);await chmod(codex,0o700);
   return {dir,bin,marker,codex,output};
 }
 const json=async(path:string)=>JSON.parse(await readFile(path,"utf8"));

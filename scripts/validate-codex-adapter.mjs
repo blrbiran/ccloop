@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile, spawn } from "node:child_process";
-import { open, mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { open, mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -129,11 +129,23 @@ export async function runValidation(options, testing = {}) {
     };
     const {loopContractSchema} = await import("../dist/src/contract/schema.js");
     await save(join(output, "contract.json"), loopContractSchema.parse(contract));
-    await save(join(output, "adapter.json"), {command:[codex],model,budgetMode:"soft",sandbox:"workspace-write",timeoutMs:120000,killGraceMs:250});
+    // Consolidation step 4 (2026-10-01): `run --adapter codex --adapter-config` was removed. The same codex settings
+    // are one installation in an agents table, and the selection file carries the configHash ccloop's own
+    // resolveAgent computes for it (the table must sit at its own realpath, so it is written under the real output).
+    // The version is read from the `--version` answer already saved above (the pattern of materialize.ts's probe), so
+    // the script adds no codex spawn of its own; `run --agents` probes again and refuses a drift itself.
+    const {resolveAgent} = await import("../dist/src/agents/materialize.js");
+    const codexVersion = /\d+\.\d+\.\d+(?:-[\w.]+)?/.exec(version.stdout)?.[0];
+    if (codexVersion === undefined) throw new Error("codex --version answered no x.y.z");
+    const table = {schema:"ccloop-agents-table-v1",installations:{codex:{kind:"codex",command:[codex],version:codexVersion,configDir:null,timeoutMs:120000,killGraceMs:250,sandbox:"workspace-write",budgetMode:"soft"}}};
+    const tablePath = join(await realpath(output), "agents.json"), selectionPath = join(output, "selection.json");
+    await save(tablePath, table);
+    const {resolution} = await resolveAgent(table, {agent:"codex",model}, {probeVersion: async () => codexVersion});
+    await save(selectionPath, {selection:resolution.selection,configHash:resolution.configHash});
     const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
     stdoutFile = await open(join(output,"cli.stdout.log"), "wx", 0o600);
     stderrFile = await open(join(output,"cli.stderr.log"), "wx", 0o600);
-    child = spawn(process.execPath, [cli,"run","--contract",join(output,"contract.json"),"--run-dir",runDir,"--adapter","codex","--adapter-config",join(output,"adapter.json")], {cwd:repo,detached:true,stdio:["ignore",stdoutFile.fd,stderrFile.fd]});
+    child = spawn(process.execPath, [cli,"run","--contract",join(output,"contract.json"),"--run-dir",runDir,"--agents",tablePath,"--agent-selection",selectionPath], {cwd:repo,detached:true,stdio:["ignore",stdoutFile.fd,stderrFile.fd]});
     done = new Promise((resolve, reject) => {child.once("error",reject);child.once("exit",(code,signal)=>resolve({code,signal}));});
     // Attach the deadline before any asynchronous observation work.
     const bounded = Promise.race([done, new Promise((_,reject) => {outerTimer = setTimeout(()=>reject(new Error("outer timeout")), testing.outerTimeoutMs ?? 420000);})]);

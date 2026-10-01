@@ -6,10 +6,10 @@
 
 ```text
 ccloop control capabilities|accept|inspect|handoff|collect|read-evidence \
-  --adapter codex --adapter-config /absolute/private/config.json
+  --agents /absolute/private/agents.json
 ```
 
-The adapter config must be an absolute, canonical regular file, not a symlink. Stdin contains exactly one JSON value. The selected method determines the strict stdin payload, so stdin does not repeat the method name. A successful response is exactly one compact JSON value followed by one newline. Diagnostics are never written to stdout.
+Consolidation step 4 (2026-10-01) removed --adapter/--adapter-config; `control` had already refused them since agent selection (2026-09-26), and `--agents <table>` is its only form. The agents table must be an absolute, canonical regular file, not a symlink. Stdin contains exactly one JSON value. The selected method determines the strict stdin payload, so stdin does not repeat the method name. A successful response is exactly one compact JSON value followed by one newline. Diagnostics are never written to stdout.
 
 Exit codes are:
 
