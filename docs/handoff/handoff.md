@@ -407,7 +407,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-01 第二十七版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-01 第二十八版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 进度与下一步以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
@@ -416,7 +416,11 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 
 - **推送归人，顺序要紧**：本仓库先推（或与 Orca 同时）。Orca 的 `tests/scheduler` 现在要一份含 fake codex `frames` 模式的本仓库 checkout（主题行 `test(fixtures): fake codex plays scripted frames per attempt…` 之后）；而本仓库主题行 `refactor(cli): delete --adapter and --adapter-config; …` 之后的 CLI 已不认 `--adapter` ⇒ 只推 Orca 不推本仓库，Orca 的 scheduler 判据会红。
 - 人推之后，Orca 的 agent 跑 `node scripts/pin-ccloop.mjs <SHA>` 重钉（七项核对），再由人推 Orca。Orca 生产代码不依赖今天的新行为，重钉只是让钉住的包跟上。
-- **人要审的**：本仓库这四步里，控制器在「先按你的建议执行」之下替人定了第②–④步的设计与若干既有判据的改动（名单在三本台账，见下）。
+- ✅ **人已审完**三本台账的 `Ruling:`，全部认可（各台账末尾「Human review」一节）。
+- **会话 `b5e8d368`（2026-10-01）又加了三笔，等人推**（之后 Orca 重钉，钉住的包要带上 runner 修复）：
+  - `refactor(cli): refuse an unknown flag on run, resume and sweep …`——人裁「不需要提示，直接不支持就好」：`run`／`resume`／`sweep` 不认的 `--` flag 一律 `unknown flag <flag>`，`--adapter`／`--adapter-config` 也在内；以前拼错的 flag 会被成对解析静默吞掉。
+  - `fix(claude): deliver an interrupted execute's partial whole instead of cut at 8192 bytes`——**付费真 claude 跑出来的真 bug**：runner 中断路径写完 stdout 立刻 `process.exit`，macOS 管道异步写，partial 在 8192 字节处被截断 ⇒ adapter 解析失败、partial 和中断前用量都被丢掉。fake 判据的 partial 都很小，所以一直绿。
+  - `docs(sdd): ledger of the live claude check …`（台账 `.superpowers/sdd/2026-10-01-live-partial-and-resume/progress.md`）。
 - **仍挂着、要人开口才动**：阶段超时直接进 `setTimeout`（大于 2,147,483,647 ms 时 Node 改成 1 ms；Orca 已截自己派生的值）；`stopProof` 根因；Linux。
 
 ## 本轮做完了什么（2026-10-01，Orca 会话 `be653b22`；**不要重做**）
@@ -427,7 +431,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
   - 行为变化（人已知情）：runLoop 自己的阶段超时下，有 partial 时中断前观测的用量**现在会记账**（以前进了没人读的 `abortedError`）；没有 partial 时仍丢（挂账）。
 - **②（#4）** `run --agents` 先读契约、查 run 目录新鲜度，再把 `{selection, configHash}` 写进 `<runDir>/agent-selection.json`（0600、`wx`）；`resume --run-dir <dir> --agents <table>`、`sweep --root <root> --agents <table> --max-runs <n>` 用冻结的选择重建 adapter，拒绝码 `agent-selection-missing`／`agent-selection-file-invalid`／`control-config-hash-mismatch`，拒绝时 run 目录逐字节不变；sweep 里建不出 adapter 的候选报 `refused`、不占 `--max-runs`。spec `…/2026-10-01-agents-resume-sweep-design.md`。
 - **③（本仓库部分）** `tests/fixtures/fake-codex.mjs` 加 `frames` 模式：`frames <marker> <framesFile>`，帧按 cwd 末段 `attempt-<n>` 选，无帧退 3。Orca 的 57 条整轮判据靠它跑 `run --agents`。
-- **④** `run`／`resume`／`sweep` 带 `--adapter` 或 `--adapter-config` 一律报 `--adapter was removed; use --agents <table>`；`validate-codex-adapter.mjs` 改用 agents 表；`examples/v1/scripted-adapter-config.json` 删除；`ScriptedAdapter` 类与 `sweepRuns` 的 `createAdapter` 选项形态保留（判据直接用）。spec `…/2026-10-01-retire-old-cli-entry-design.md`。
+- **④** `run`／`resume`／`sweep` 不再认 `--adapter`／`--adapter-config`（会话 `b5e8d368` 起报 `unknown flag <flag>`，不再有专门提示）；`validate-codex-adapter.mjs` 改用 agents 表；`examples/v1/scripted-adapter-config.json` 删除；`ScriptedAdapter` 类与 `sweepRuns` 的 `createAdapter` 选项形态保留（判据直接用）。spec `…/2026-10-01-retire-old-cli-entry-design.md`。
 - 台账：`.superpowers/sdd/2026-10-01-claude-adapter-consolidation-step1/`、`…-agents-resume-sweep/`、`…-retire-old-cli-entry/`（各有 `progress.md`，`Ruling:` 行就是替人定的裁定）。
 - **门**（全新 clone，HOME＋四个 XDG 根改道，短真 TMPDIR；内容＝主题行 `fix(review): final-review fixes -- strict codex row names its refusal, README run-dir, errata, spec §13`）：build／typecheck RC 0；**1043 条、1042 过、1 红（`stopProof`）**；`check-known-reds` RC 0；`check-tmp-leak` RC 0。
 
@@ -449,14 +453,16 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 ## 🔴 挂着的
 
 - `stopProof` 根因、Linux：未变，要人先开口。
-- 真 claude 下：中断后读 partial、`resume --agents`、single-call 估算、stdin 传 prompt、`progress`、子代理 stream 配对、Orca 的 loop 方案整链都只有 fake 证据。付费跑每次都要人点头。
+- 真 claude 下（会话 `b5e8d368`，各 n＝1，claude 2.1.286）：**中断后读 partial** 在修复后跑通（6 个文件、`tokenUsage` 进账）；**`resume --agents`** 在**人工补齐的移交记录**上跑通（续跑 attempt 2 成功）。仍只有 fake 证据：single-call 估算、stdin 传 prompt、`progress`、子代理 stream 配对、Orca 的 loop 方案整链。付费跑每次都要人点头。
+- 🔴 **崩溃的 run 没有 CLI 路径能续跑**（会话 `b5e8d368` 实测）：`resume`／`sweep` 只认 loop 自己在 `stale_candidate` 边界写下的 `owner-transfer.json`；被直接杀掉的 run 没有它，租约过期后 `resume` 报 `cannot read run artifacts: ENOENT … owner-transfer.json`。README §3.2「接管一个被中断的 run」因此会误导。要不要支持，归人。
+- runner 是 `detached` 起的，ccloop 被 SIGKILL 后 runner 与 claude 继续跑完（继续花钱），没人收。
 - `agent-selection.json` 只冻结选择与 hash：`command`／`timeoutMs`／`killGraceMs` 跟随 resume 时的表；claude CLI 自动升级后旧 run 会被 `agent-version-drift` 拒绝续跑（设计如此，没有放行开关）。
 - `PhaseOutcome.abortedError` 有人写没人读：runLoop 自己超时、且没有 partial 时，观测到的用量仍丢（codex 同）。
 - 已有的登记：runner 与 adapter 的输出校验重复；adapter 的 `phase()` 与 `singleCall()` 近乎逐字重复；`evidenceRequired` 的子串问题（`rejectOn` spec §7）。
 
 ## 环境事实（直接用，别再反推）
 
-- 已知红用 `node scripts/check-known-reds.mjs` 机械判（名单 9 个名字）；唯一稳定红是 `stopProof`。临时目录泄漏用 `node scripts/check-tmp-leak.mjs` 判。
+- 已知红用 `node scripts/check-known-reds.mjs` 机械判（名单 9 个名字）；唯一稳定红是 `stopProof`。现行门（会话 `b5e8d368`，内容＝主题行 `fix(claude): deliver an interrupted execute's partial whole …`）：1045 条、1044 过、只红 `stopProof`，`check-known-reds`／`check-tmp-leak` RC 0。临时目录泄漏用 `node scripts/check-tmp-leak.mjs` 判。
 - 副本：`git clone --local` 到会话 scratchpad，软链 `node_modules`，`npm run build`，`cd` 进 clone 再跑。主树不跑 build，也不跑全量（主树的 `dist/` 常是旧的，`endToEnd`／`claudeEndToEnd` 在主树会假红）。HOME 与四个 XDG 根要改道；**TMPDIR 要短、要是真目录**（`mktemp -d /private/tmp/cl-XXXX`）。
   - Orca 的闸门会拦 clone 里的 `git pull`；同步单个文件用 `cat 主树文件 > clone 文件`（`cp` 带 `-i`）。
   - 被 Orca 当作 `ORCA_CCLOOP_BIN` 的 clone 不许同时拿来做变异。
@@ -471,4 +477,6 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 - 推送：以现跑 `ls-remote` 为准；本仓库先于 Orca。
 - 审控制器替人定的裁定（三本台账的 `Ruling:` 行）。
 - `setTimeout` 溢出防护：要不要在本仓库改。
-- 付费 claude 验一次「中断后读 partial」与 `resume --agents`（以及 single-call 估算，`--task-tokens` ≥1,000,000）。
+- 推本仓库会话 `b5e8d368` 的三笔（先于 Orca）。
+- 崩溃 run 要不要能续跑；runner 孤儿要不要收。
+- 付费 claude 验 single-call 估算（`--task-tokens` ≥1,000,000）。
