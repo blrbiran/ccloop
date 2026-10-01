@@ -309,7 +309,10 @@ describe("SubprocessClaudeAdapter", () => {
       },
     } as any);
 
-    expect(prompt).toContain("Reject-on conditions (must force approved=false when present in evidence):");
+    // Rewritten under the human's 2026-10-01 ruling (rejectOn spec, option D; "点名改写必要的test"): the verifier is
+    // told to reject when a condition holds, not that ccloop searches evidence for it.
+    expect(prompt).toContain("Reject-on conditions (if any of these holds for this attempt, approved must be false):");
+    expect(prompt).not.toContain("when present in evidence");
     expect(prompt).toContain("tests fail");
     expect(prompt).toContain("Required evidence labels (approved must be false if any are missing from evidence):");
     expect(prompt).toContain("command output");

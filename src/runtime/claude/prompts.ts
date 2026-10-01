@@ -57,7 +57,7 @@ export function buildVerifierPrompt(context: AttemptContext): string {
     `Success condition: ${contract.objective.successCondition}`,
     "Required checks:",
     formatList(contract.verification.requiredChecks),
-    "Reject-on conditions (must force approved=false when present in evidence):",
+    "Reject-on conditions (if any of these holds for this attempt, approved must be false):",
     formatList(contract.verification.rejectOn),
     "Required evidence labels (approved must be false if any are missing from evidence):",
     formatList(contract.verification.evidenceRequired),
