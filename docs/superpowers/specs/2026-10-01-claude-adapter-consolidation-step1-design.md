@@ -292,3 +292,22 @@ every output redirected to a file and read back whole.
 - Orca: web build, typecheck, full suite, web check, `verify:panel`, `verify:ccloop-pin`, `check-tmp-leak` RC 0, the
   real `~/.orca` unchanged. A red in a known load flake (`driverLanding`, `driverRecovery`, `controlShutdown`,
   `driverProgress` R2, `handoffE2E`, `ccloopPort`) counts only if its file alone is not 3/3 green.
+
+## 11. Addendum after publication (plan writing, 2026-10-01, Orca session `be653b22`)
+
+The sections above were pushed by the human before this addendum; they keep their words. Read them with these
+corrections, which the plan (`docs/superpowers/plans/2026-10-01-claude-adapter-consolidation-step1.md`) implements.
+
+- **Approval.** The human, after the review round: "这一轮执行过程中如果有问题，先按你的建议执行（不要再找我）" and
+  "使用 subagent driven 的方式实现". The controller takes this as approval of this spec, including §5.2's change in
+  what `runLoop` books on its own timeout, and of executing the plan without a further review stop.
+- **§3, `sweepRuns.ts`.** `adapterName` keeps `"claude"` in its type. Narrowing it fails typecheck on
+  `tests/sweep/sweepRuns.test.ts`'s banner criterion, which passes `adapterName: "claude"` and expects `adapter=claude`;
+  that criterion is not in §7. The two comments still get their ERRATUM.
+- **§6, no start envelope.** A run whose handoff is judged before ccloop was started has no frozen contract to read;
+  its recovery window counts 0 (nothing is executing, so there is nothing to wait for), not "unusable".
+- **§6, `killGraceMs: 0`.** With the formula of §6 a run whose frozen `killGraceMs` is 0 now gets 65 000 ms, not
+  60 000 ms (the margin applies with a window of 0). The rewritten criterion states it.
+- **§6, wiring.** §7.4's Orca criteria test `handoffGraceMsOf` alone; the plan adds one criterion that reaches it
+  through `settleIfPastGrace` with a real frozen window, and mutation M10 (the driver passes 0) must turn it red.
+- **§8.** The plan adds M9 (execute passes no post-stop option at all) and M10 (above).
