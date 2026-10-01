@@ -16,7 +16,7 @@ import type { LoopContract } from "../../src/contract/schema.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
 import { evaluateRunBoundary } from "../../src/stop/stopController.js";
-import type { AttemptContext, OwnerRecord, OwnerTransferRecord, ReconciliationRecord, RuntimeAdapter } from "../../src/runtime/types.js";
+import type { AttemptContext, OwnerRecord, OwnerTransferRecord, ReconciliationRecord, RuntimeAdapter, VerificationResult } from "../../src/runtime/types.js";
 import type { RunState } from "../../src/state/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -4838,5 +4838,58 @@ describe("runLoop", () => {
       { cwd: repoPath },
     );
     expect(stdout.trim().split("\n")).toContain(`refs/ccloop/${runId}/attempts/1`);
+  });
+});
+
+// Spec 2026-10-01-rejecton-verifier-judgment-design.md (human ruling 2026-10-01, option D): rejectOn is a condition
+// for the verifier to judge; ccloop no longer substring-searches evidence for it. Orca measured a real approving
+// verifier quoting the rule ("...so REJECT:empty-document does not apply") and the old search failed that good work.
+describe("rejectOn is the verifier's judgment, not a search over evidence", () => {
+  const frame = (verification: Partial<VerificationResult> & { evidence: string[] }) => ({
+    plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
+    execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "ok" },
+    verification: { approved: true, rejectCategory: "", primaryTargetPaths: ["src/index.ts"], failingCommand: null, safeToRetry: false, pauseSignals: [], stopSignals: [], ...verification },
+  });
+  const verifyRecord = async (runDir: string) =>
+    JSON.parse(await readFile(join(runDir, "attempts", "1", "verify.json"), "utf8")) as { approved: boolean; rejectCategory: string; safeToRetry: boolean };
+
+  it("an approving agent verifier that quotes the rule, or names it alone, still succeeds", async () => {
+    const contract = createContract(await createRepo()); // rejectOn ["tests fail"], requiredChecks ["true"]
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const adapter = new ScriptedAdapter([frame({ evidence: ["no failures, so tests fail does not apply", "tests fail"] })]);
+    const finalState = await runLoop(contract, runDir, adapter);
+    expect(finalState.status).toBe("succeeded");
+    expect(finalState.attemptsUsed).toBe(1);
+  });
+
+  it("a command verifier whose passing check prints the token still succeeds", async () => {
+    const base = createContract(await createRepo());
+    // The token is only in the check's output: the command text holds an octal escape, not "tests fail".
+    const contract: LoopContract = { ...base, verification: { ...base.verification, verifierType: "command", requiredChecks: ["printf 'tests\\040fail\\n'"] } };
+    expect(contract.verification.requiredChecks[0]).not.toContain("tests fail");
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const adapter = new ScriptedAdapter([frame({ evidence: [] })]);
+    const finalState = await runLoop(contract, runDir, adapter);
+    expect(finalState.status).toBe("succeeded");
+  });
+
+  it("a rejecting verifier keeps its own category and retry choice", async () => {
+    const base = createContract(await createRepo());
+    const contract: LoopContract = { ...base, executionPolicy: { ...base.executionPolicy, maxAttempts: 1 } };
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const adapter = new ScriptedAdapter([frame({ approved: false, rejectCategory: "tests-red", safeToRetry: true, evidence: ["tests fail"] })]);
+    const finalState = await runLoop(contract, runDir, adapter);
+    expect(finalState.status).not.toBe("succeeded");
+    expect(await verifyRecord(runDir)).toMatchObject({ approved: false, rejectCategory: "tests-red", safeToRetry: true });
+  });
+
+  it("evidenceRequired is still enforced on an approval", async () => {
+    const base = createContract(await createRepo());
+    const contract: LoopContract = { ...base, executionPolicy: { ...base.executionPolicy, maxAttempts: 1 }, verification: { ...base.verification, evidenceRequired: ["coverage report"] } };
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    const adapter = new ScriptedAdapter([frame({ evidence: ["looks good"] })]);
+    const finalState = await runLoop(contract, runDir, adapter);
+    expect(finalState.status).not.toBe("succeeded");
+    expect(await verifyRecord(runDir)).toMatchObject({ approved: false, rejectCategory: "missing-required-evidence" });
   });
 });

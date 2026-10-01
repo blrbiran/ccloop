@@ -227,32 +227,22 @@ function enforceVerificationContract(contract: LoopContract, verification: Verif
     return verification;
   }
 
-  const matchedRejectOn =
-    contract.verification.rejectOn.find((rejectCondition) => evidenceIncludes(verification.evidence, rejectCondition)) ?? null;
+  // rejectOn is a condition the verifier judges (it is in the verifier prompt); ccloop does not search evidence for
+  // it. A substring cannot tell "occurred" from "mentioned" (spec 2026-10-01-rejecton-verifier-judgment-design.md).
   const missingEvidence = contract.verification.evidenceRequired.filter(
     (requiredEvidence) => !evidenceIncludes(verification.evidence, requiredEvidence),
   );
 
-  if (matchedRejectOn === null && missingEvidence.length === 0) {
+  if (missingEvidence.length === 0) {
     return verification;
-  }
-
-  const enforcementNotes: string[] = [];
-
-  if (matchedRejectOn !== null) {
-    enforcementNotes.push(`contract rejectOn matched: ${matchedRejectOn}`);
-  }
-
-  if (missingEvidence.length > 0) {
-    enforcementNotes.push(`missing required evidence: ${missingEvidence.join(", ")}`);
   }
 
   return {
     ...verification,
     approved: false,
-    rejectCategory: matchedRejectOn !== null ? "reject-on-matched" : "missing-required-evidence",
+    rejectCategory: "missing-required-evidence",
     safeToRetry: false,
-    evidence: [...verification.evidence, ...enforcementNotes],
+    evidence: [...verification.evidence, `missing required evidence: ${missingEvidence.join(", ")}`],
   };
 }
 
