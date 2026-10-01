@@ -186,7 +186,7 @@ Schema 在 `src/contract/schema.ts`（zod，`.strict()`——**多一个字段�
   "verification": {
     "verifierType": "agent",      // "command" | "agent"
     "requiredChecks": ["……"],     // 至少一个
-    "rejectOn": ["tests fail"],   // 至少一个
+    "rejectOn": ["tests fail"],   // 至少一个；交给 verifier 判断的拒绝条件，ccloop 不在 evidence 里搜它。command verifier 下不起作用——按输出拒绝请写成检查命令（如 ! grep -q 'tests fail' out.log）
     "evidenceRequired": ["command output"]
   },
   "escalationAndExit": {

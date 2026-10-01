@@ -388,3 +388,10 @@ Broader orchestration layer:
 ## Why This Design
 
 This design keeps the first release small enough to implement while protecting the property that matters most: the loop stops for explicit reasons, leaves durable evidence, and yields to humans at the right moments. The kernel remains portable, but v1 stays concrete by centering on a single code-task loop with a Claude adapter.
+
+## Correction (2026-10-01): rejectOn
+
+`rejectOn` (§ Verification) is a condition the verifier judges; it is listed in the verifier prompt. ccloop does not
+search evidence for it: a substring search turned approvals that merely mentioned a condition into failures with no
+retry. For `verifierType: "command"` it has no effect; a condition on check output is written as a check. Design:
+`docs/superpowers/specs/2026-10-01-rejecton-verifier-judgment-design.md`.
