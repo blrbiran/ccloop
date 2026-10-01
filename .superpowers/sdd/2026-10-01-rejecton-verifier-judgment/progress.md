@@ -22,3 +22,4 @@ Final review: fresh reviewer (Fable), range 97fc9bf..3011dea, package review-97f
 Final: minor (deferred): runLoop.integration.test.ts test 2's `not.toContain("tests fail")` on the check text is a premise guard placed before the call (never-red shape); unlabeled.
 Final: minor (deferred): tests 3 and 4 assert `status not "succeeded"` loosely; verify.json carries the real assertion.
 Final: Ruling: the plan workspace .superpowers/sdd/2026-10-01-rejecton-verifier-judgment/ is kept, not deleted — this repo commits its ledgers (CLAUDE.md Rule 16) and recursive deletes need the human — cost: scratch files (run outputs) stay in an ignored directory.
+Human (2026-10-01, after the round): on the rulings listed in the final message: "同意"; on recursive deletes: "批准删除已经无用的目录" (the Orca session deleted its own scratchpad clones and temp homes; this workspace's run outputs are evidence the lines above cite and stay).
