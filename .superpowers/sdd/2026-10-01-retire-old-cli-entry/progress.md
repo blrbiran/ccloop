@@ -19,3 +19,6 @@ Task 2: review — spec ✅ quality ✅; minors: script throws on a codex --vers
 Task 2: complete (commits 9335665..4d0c3ca, review clean)
 - Ruling: Task 3 (mutations E1/E2) folded — Task 1's implementer saw both red in a clone.
 Task 3: complete (folded)
+
+## Human review (2026-10-01, recorded by Orca session b5e8d368)
+- The human approved every `Ruling:` line above, and the criterion edits they carry, as written ("几条都同意"). Nothing is reverted.

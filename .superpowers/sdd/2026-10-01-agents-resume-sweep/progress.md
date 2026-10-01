@@ -20,3 +20,6 @@ Task 2: review — spec ✅ quality ✅; minors: no criterion for 'unreadable ta
 Task 2: complete (commits 4e7e15b..5cb7aa9, review clean)
 - Ruling: Task 3 is folded: mutations A1–A4 were run by Task 1's implementer, A5/A6 by Task 2's (each seen red in a clone); the README edit moves into step 4's docs task, which rewrites the same sections — costs if wrong: README states pre-#4 limits until step 4's docs commit.
 Task 3: complete (folded; see ruling above)
+
+## Human review (2026-10-01, recorded by Orca session b5e8d368)
+- The human approved every `Ruling:` line above, and the criterion edits they carry, as written ("几条都同意"). Nothing is reverted.

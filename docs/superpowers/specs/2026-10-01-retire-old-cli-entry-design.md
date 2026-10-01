@@ -69,3 +69,20 @@ ones. These are living docs; a named note records the change.
 
 - After this step Orca's pinned ccloop must be repinned (human pushes ccloop first) before Orca's `verify:ccloop-pin`
   can see the new entry; Orca no longer uses the old one after step 3.
+
+## 6. Correction after the human review (2026-10-01, Orca session b5e8d368)
+
+The human ruled against the removal message ("不需要提示，直接不支持就好": ccloop is unreleased, nobody uses the old
+entry). §3.1's message `--adapter was removed; use --agents <table>` is gone. `run`, `resume` and `sweep` now refuse any
+`--`-prefixed flag outside `--contract`, `--run-dir`, `--agents`, `--agent-selection`, `--root`, `--max-runs` with
+`unknown flag <flag>`, the old two among them. The check runs on the flag positions of the flag/value pairing, before any
+other flag check. A non-`--` token in a flag position (a positional root) is not caught by it and still reads as
+`missing required flags`, as before. The removal criteria were rewritten whole to expect `unknown flag <flag>`, plus a
+row for a misspelled flag (`--task-tokens`), which the pairing used to drop without a word.
+
+Mutations, re-run against this check:
+
+| # | Mutation | Expected red |
+|---|---|---|
+| U1 | drop the unknown-flag check | every row of `unknown flags on run, resume and sweep` and the three `unknown flag` rows of `agentsRun.test.ts` |
+| U2 | run the check after the `--agent-selection`/required-flags checks | the rows that omit other required flags (`run --adapter scripted`, `resume --adapter codex`) |

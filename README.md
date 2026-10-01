@@ -220,7 +220,7 @@ Adapter 契约（`src/runtime/types.ts`）有三个 phase：`plan` / `execute` /
 
 ### 6.0 agents 表与选择文件：CLI 唯一的入口
 
-> consolidation step 4（2026-10-01）删掉了 `--adapter`／`--adapter-config`。`run`／`resume`／`sweep` 带上其中任何一个都会 exit 1，报 `--adapter was removed; use --agents <table>`。现在 CLI 只认 `--agents`。
+> consolidation step 4（2026-10-01）删掉了 `--adapter`／`--adapter-config`。`run`／`resume`／`sweep` 带上其中任何一个都会 exit 1，报 `unknown flag --adapter`（或 `unknown flag --adapter-config`）——和别的不认识的 flag 一样，没有专门的提示。现在 CLI 只认 `--agents`。
 
 agents 表（`ccloop-agents-table-v1`）登记装了哪些 agent CLI。`node dist/cli.js agents detect` 在 PATH 和常见安装目录里找 codex／claude，打印一份草稿表（只打到 stdout，不写任何文件）；挑出要的条目存成文件，再用 `agents validate` 核对版本：
 

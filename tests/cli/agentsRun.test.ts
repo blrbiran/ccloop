@@ -50,8 +50,10 @@ describe("ccloop run --agents --agent-selection (Orca agent selection, spec §4.
   it.each([
     // Rewritten (consolidation step 4, controller ruling C-2 under the human's standing instruction, 2026-10-01).
     // --adapter and --adapter-config were removed: beside --agents they are refused with the removal message.
-    [["run", "--contract", "c", "--run-dir", "r", "--agents", "t", "--agent-selection", "s", "--adapter", "codex"], "--adapter was removed; use --agents <table>"],
-    [["run", "--contract", "c", "--run-dir", "r", "--agents", "t", "--agent-selection", "s", "--adapter-config", "a"], "--adapter was removed; use --agents <table>"],
+    // *** ERRATUM (2026-10-01, Orca session b5e8d368, HUMAN RULING: "不需要提示，直接不支持就好") -- no removal message
+    // any more: these two rows and resume's `--adapter` row below are rewritten to expect `unknown flag <flag>`. ***
+    [["run", "--contract", "c", "--run-dir", "r", "--agents", "t", "--agent-selection", "s", "--adapter", "codex"], "unknown flag --adapter"],
+    [["run", "--contract", "c", "--run-dir", "r", "--agents", "t", "--agent-selection", "s", "--adapter-config", "a"], "unknown flag --adapter-config"],
     [["run", "--contract", "c", "--run-dir", "r", "--agents", "t"], "missing required flags"],
     [["run", "--contract", "c", "--run-dir", "r", "--agent-selection", "s"], "missing required flags"],
     // Rewritten (consolidation step 2, controller ruling C-5 under the human's standing instruction, 2026-10-01).
@@ -66,7 +68,7 @@ describe("ccloop run --agents --agent-selection (Orca agent selection, spec §4.
     // row above exercise the same `--agent-selection` refusal. ***
     [["sweep", "--root", "r", "--agents", "t", "--agent-selection", "s"], "--agent-selection is only supported by run"],
     // Rewritten (consolidation step 4, controller ruling C-2 under the human's standing instruction, 2026-10-01).
-    [["resume", "--run-dir", "r", "--agents", "t", "--adapter", "codex"], "--adapter was removed; use --agents <table>"],
+    [["resume", "--run-dir", "r", "--agents", "t", "--adapter", "codex"], "unknown flag --adapter"],
     [["sweep", "--root", "r", "--agents", "t"], "missing required flags"],
   ])("refuses %j", (argv, message) => {
     expect(() => parseArgs(argv)).toThrow(message);

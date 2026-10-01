@@ -41,19 +41,25 @@ async function framesAgents(frames: Frame[]): Promise<{ tablePath: string; selec
 // Either old flag, on any of the three commands, is refused with one message, exit 1. Rows that omit every other
 // required flag (`run --adapter scripted`, `resume --adapter codex`) pin the check BEFORE the other flags: checked
 // after them, those rows would report missing flags instead.
-describe("the removed --adapter entry", () => {
+// *** ERRATUM (2026-10-01, Orca session b5e8d368, HUMAN RULING: "不需要提示，直接不支持就好") -- there is no removal
+// message any more: run, resume and sweep refuse every flag they do not take as `unknown flag <flag>`, the old
+// `--adapter`/`--adapter-config` among them, the way `ls` and `unlock` already did. The rows below are rewritten
+// whole under that ruling; the "checked before the other flags" premise above still holds for the new check. ***
+describe("unknown flags on run, resume and sweep", () => {
   it.each([
-    [["run", "--contract", "c", "--run-dir", "r", "--adapter", "codex", "--adapter-config", "a"]],
-    [["run", "--adapter", "scripted"]],
-    [["resume", "--run-dir", "r", "--adapter-config", "a"]],
-    [["sweep", "--root", "r", "--adapter", "codex", "--adapter-config", "a", "--max-runs", "1"]],
-    [["resume", "--adapter", "codex"]],
-  ])("refuses %j with the removal message, exit 1", async (argv) => {
-    expect(() => parseArgs(argv)).toThrow(/^--adapter was removed; use --agents <table>$/);
+    [["run", "--contract", "c", "--run-dir", "r", "--adapter", "codex", "--adapter-config", "a"], "--adapter"],
+    [["run", "--adapter", "scripted"], "--adapter"],
+    [["resume", "--run-dir", "r", "--adapter-config", "a"], "--adapter-config"],
+    [["sweep", "--root", "r", "--adapter", "codex", "--adapter-config", "a", "--max-runs", "1"], "--adapter"],
+    [["resume", "--adapter", "codex"], "--adapter"],
+    // Not only the retired flags: a misspelled one is refused too, instead of being read as absent.
+    [["run", "--contract", "c", "--run-dir", "r", "--agents", "t", "--agent-selection", "s", "--task-tokens", "9"], "--task-tokens"],
+  ])("refuses %j as an unknown flag, exit 1", async (argv, flag) => {
+    expect(() => parseArgs(argv)).toThrow(new RegExp(`^unknown flag ${flag}$`));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await expect(main(argv)).resolves.toBe(1);
-      expect(errorSpy.mock.calls).toEqual([["--adapter was removed; use --agents <table>"]]);
+      expect(errorSpy.mock.calls).toEqual([[`unknown flag ${flag}`]]);
     } finally {
       errorSpy.mockRestore();
     }

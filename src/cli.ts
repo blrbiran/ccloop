@@ -68,6 +68,9 @@ function parseMaxRuns(maxRunsRaw: string): number {
   return Number(maxRunsRaw);
 }
 
+// Every flag run, resume or sweep takes. Which command needs which is checked after the unknown-flag check.
+const KNOWN_LOOP_FLAGS = new Set(["--contract", "--run-dir", "--agents", "--agent-selection", "--root", "--max-runs"]);
+
 export function parseArgs(argv: string[]): ParsedArgs {
   const command = argv[0];
 
@@ -155,13 +158,19 @@ export function parseArgs(argv: string[]): ParsedArgs {
   // Consolidation step 4 (spec 2026-10-01-retire-old-cli-entry-design.md §3.1, controller ruling C-1): the old
   // entry `--adapter scripted|codex --adapter-config <file>` is gone from run, resume and sweep. Checked before any
   // other flag, on the raw arguments, so the refusal reads the same whatever else is on the line.
-  if (argv.slice(1).some((arg) => arg === "--adapter" || arg === "--adapter-config")) {
-    throw new Error("--adapter was removed; use --agents <table>");
-  }
-
+  // *** ERRATUM (2026-10-01, Orca session b5e8d368, HUMAN RULING: "不需要提示，直接不支持就好") -- there is no removal
+  // message: the check below refuses any flag run, resume and sweep do not take as `unknown flag <flag>`, the old
+  // `--adapter`/`--adapter-config` among them. It still runs before any other flag check, but on the flag positions
+  // of the pairing, not on the raw arguments. ***
   const values = new Map<string, string>();
   for (let index = 1; index < argv.length; index += 2) {
     values.set(argv[index]!, argv[index + 1]!);
+  }
+  for (const flag of values.keys()) {
+    // Only `--` tokens: a positional in a flag position (e.g. `sweep <root> …`) still reads as missing flags below.
+    if (flag.startsWith("--") && !KNOWN_LOOP_FLAGS.has(flag)) {
+      throw new Error(`unknown flag ${flag}`);
+    }
   }
 
   // Orca agent selection (2026-09-26), spec §4.9: `--agents <table> --agent-selection <file>` replaces

@@ -53,3 +53,6 @@ Task 3: complete (commits 9086586..7f58b9b, review clean)
 - Ruling: an unusable recovery window counts as 60_000 (Orca's loop-plan default) → grace ≥ 125_000 — the only non-guess bound Orca owns; a true ceiling needs handoff.activeMs, which the corrupt envelope is the source of — costs if wrong: on a corrupt envelope with a window > 60_000 the driver calls outcome-unknown early, as before.
 - Fix wave dispatched with the list in scratchpad/final/fix-wave.md
 - Final fix wave: ccloop 6bc2693, Orca f6caf82; scoped re-review: items 1–8 ADDRESSED, no new breakage. Remaining: handoffs (controller), gate (running).
+
+## Human review (2026-10-01, recorded by Orca session b5e8d368)
+- The human approved every `Ruling:` line above, and the criterion edits they carry, as written ("几条都同意"). Nothing is reverted.
