@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -156,5 +156,35 @@ describe("ccloop resume --agents (consolidation step 2, spec §3.2)", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("agent-selection-file-invalid");
     expect(await snapshot(w.runDir)).toEqual(before);
+  }, 30_000);
+});
+
+describe("ccloop sweep --agents (consolidation step 2, spec §3.3)", () => {
+  // Spec §4 criterion 4. Two interrupted runs under one root: `run` was started by `run --agents` and froze its
+  // selection; `a-missing` is the same interrupted run without the frozen file, and sorts first. Under --max-runs 1 the
+  // refusal must not spend the quota, or the valid run behind it would never be resumed.
+  it("sweep --agents resumes the run with a frozen selection and refuses the one without", async () => {
+    const w = await interruptedRun();
+    const selectionPath = join(w.dir, "selection.json");
+    await writeFile(selectionPath, JSON.stringify({ selection: w.selection, configHash: w.configHash }), { mode: 0o600 });
+    const started = await ccloop(["run", "--contract", w.contractPath, "--run-dir", w.runDir, "--agents", w.tablePath, "--agent-selection", selectionPath], w.dir);
+    expect(started.code, started.stderr).toBe(0);
+    await w.seed();
+    await writeFile(`${w.config.command[3]}.argv`, "");
+    await exec("git", ["checkout", "--", "answer.txt"], { cwd: w.repo });
+    const missing = join(w.dir, "a-missing");
+    await cp(w.runDir, missing, { recursive: true });
+    await rm(join(missing, "agent-selection.json"));
+    const before = await snapshot(missing);
+
+    const result = await ccloop(["sweep", "--root", w.dir, "--agents", w.tablePath, "--max-runs", "1"], w.dir);
+
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(await readFile(join(w.runDir, "loop-state.json"), "utf8")).status).toBe("succeeded");
+    expect(await snapshot(missing)).toEqual(before);
+    const refused = result.stdout.split("\n").find((line) => line.startsWith(`${missing}\t`));
+    expect(refused?.split("\t")[1]).toBe("refused");
+    expect(refused).toContain("agent-selection-missing");
+    expect(result.stdout).toContain(`${w.runDir}\tsucceeded`);
   }, 30_000);
 });

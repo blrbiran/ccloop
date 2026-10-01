@@ -114,6 +114,18 @@ describe("ccloop run --agents --agent-selection (Orca agent selection, spec §4.
     expect(existsSync(join(w.runDir, "agent-selection.json"))).toBe(false);
   }, 30_000);
 
+  // Controller ruling (consolidation step 2, ledger): the contract is read before the selection is frozen. Frozen first,
+  // a bad --contract would leave agent-selection.json behind, and the retry into the same directory would then be
+  // refused with agent-selection-exists.
+  it("an unreadable contract leaves no frozen selection behind", async () => {
+    const w = await world();
+    const { resolution } = await resolveAgent(w.table, w.selection);
+    await writeFile(w.selectionPath, JSON.stringify({ selection: w.selection, configHash: resolution.configHash }), { mode: 0o600 });
+    const result = await runCli({ ...w, contractPath: join(w.dir, "no-such-contract.json") });
+    expect(result.code).toBe(1);
+    expect(existsSync(join(w.runDir, "agent-selection.json"))).toBe(false);
+  }, 30_000);
+
   it("runs the selected installation, whose model reaches the claude CLI", async () => {
     const w = await world();
     const { resolution } = await resolveAgent(w.table, w.selection);

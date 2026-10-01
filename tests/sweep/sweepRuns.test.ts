@@ -17,6 +17,7 @@ import type { SweepDeps, SweepOptions } from "../../src/sweep/sweepRuns.js";
 import { ResumeNotEligibleError } from "../../src/controller/resumeLoop.js";
 import type { ResumeLoopOptions } from "../../src/controller/resumeLoop.js";
 import { RunLeaseHeldError } from "../../src/ownership/lease.js";
+import { AgentError } from "../../src/agents/types.js";
 import type { ScanRow } from "../../src/registry/scanRuns.js";
 import type { FieldObservation } from "../../src/registry/types.js";
 import type { RuntimeAdapter } from "../../src/runtime/types.js";
@@ -100,7 +101,7 @@ type Harness = {
 function harness(
   rows: ScanRow[],
   resume: (runDir: string, adapter: RuntimeAdapter, options?: ResumeLoopOptions) => Promise<RunState>,
-  overrides: Partial<SweepOptions> = {},
+  overrides: Partial<Extract<SweepOptions, { adapterName: "scripted" | "claude" | "codex" }>> = {},
   lockPresence?: (runDir: string) => Promise<boolean>,
 ): Harness {
   const resumeCalls: string[] = [];
@@ -804,5 +805,69 @@ describe("sweepRuns", () => {
         + `this sweep does not read it and makes no claim about whether its holder is alive`,
     );
     expect(order[2]).toBe("createAdapter");
+  });
+});
+
+// Consolidation step 2 (spec 2026-10-01-agents-resume-sweep-design.md §3.3, criteria 4 and 5): `sweep --agents` hands
+// sweepRuns `adapterForRun` instead of `createAdapter`, and each candidate's adapter is rebuilt from the selection that
+// run froze. The createAdapter criteria above are untouched; these drive the second form through the same harness, with
+// createAdapter removed so exactly one of the two forms is present.
+function withAdapterForRun(h: Harness, adapterForRun: (runDir: string) => Promise<RuntimeAdapter>): SweepOptions {
+  const { createAdapter: _unused, adapterName: _name, ...common } = h.options as Extract<SweepOptions, { adapterName: "scripted" | "claude" | "codex" }>;
+  return { ...common, adapterName: "agents", adapterForRun };
+}
+
+describe("sweepRuns with adapterForRun (consolidation step 2)", () => {
+  it("with adapterForRun, the banner and lock notes come before the first adapter is built", async () => {
+    // §3.3 keeps §8/§12's order: what the operator approves is printed before anything about any run is built. A sweep
+    // that built (and so probed `--version` for) every candidate's agent first would act before saying what it found.
+    const order: string[] = [];
+    const rows: ScanRow[] = [runRow(`${ROOT}/run-1`, ELIGIBLE), runRow(`${ROOT}/run-2`, ELIGIBLE)];
+    const h = harness(rows, () => Promise.resolve(finishedState), { stderr: (line) => order.push(`stderr:${line}`) }, () =>
+      Promise.resolve(true),
+    );
+    const options = withAdapterForRun(h, (runDir) => {
+      order.push(`adapterForRun:${runDir}`);
+      return Promise.resolve(inertAdapter);
+    });
+
+    expect(await sweepRuns(options, h.deps)).toBe(0);
+
+    const first = order.indexOf(`adapterForRun:${ROOT}/run-1`);
+    expect(first).toBeGreaterThan(-1);
+    const banner = order.findIndex((line) => line.startsWith("stderr:sweep: 2 run(s)"));
+    expect(banner).toBeGreaterThan(-1);
+    expect(order[banner]).toContain("adapter=agents");
+    const notes = order.flatMap((line, index) => (line.includes("owner_transfer_lock_present") ? [index] : []));
+    expect(notes).toHaveLength(2);
+    for (const index of [banner, ...notes]) expect(index).toBeLessThan(first);
+    // Per candidate, not once up front: each run is built from its own frozen selection.
+    expect(order.filter((line) => line.startsWith("adapterForRun:"))).toEqual([
+      `adapterForRun:${ROOT}/run-1`,
+      `adapterForRun:${ROOT}/run-2`,
+    ]);
+  });
+
+  it("a candidate whose adapter cannot be built is refused and does not consume --max-runs", async () => {
+    // A run with no frozen selection is never adopted and pays for nothing, so — like a resume-gate refusal — it must
+    // not starve the run behind it under a quota of 1. Its report line names why it was refused.
+    const rows: ScanRow[] = [runRow(`${ROOT}/run-1`, ELIGIBLE), runRow(`${ROOT}/run-2`, ELIGIBLE)];
+    const h = harness(rows, (_runDir, _adapter, resumeOptions) => {
+      resumeOptions?.onAdopted?.();
+      return Promise.resolve(finishedState);
+    });
+    const options = withAdapterForRun(h, (runDir) =>
+      runDir === `${ROOT}/run-1`
+        ? Promise.reject(new AgentError("agent-selection-missing", runDir))
+        : Promise.resolve(inertAdapter),
+    );
+    options.maxRuns = 1;
+
+    expect(await sweepRuns(options, h.deps)).toBe(0);
+
+    const line = h.stdoutLines.find((entry) => entry.startsWith(`${ROOT}/run-1\t`));
+    expect(line?.split("\t")[1]).toBe("refused");
+    expect(line).toContain("agent-selection-missing");
+    expect(h.resumeCalls).toEqual([`${ROOT}/run-2`]);
   });
 });

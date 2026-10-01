@@ -87,18 +87,29 @@ export type SweepDeps = {
 
 export type SweepOptions = {
   root: string;
-  adapterName: "scripted" | "claude" | "codex";
-  // §8: a CLOSURE, not an already-constructed adapter. §8's first line requires that a failure
-  // READING the adapter config exits 1 without scanning, while §8/§12 require the banner to be
-  // printed after the scan and before the adapter is constructed. The only shape satisfying both
-  // is: the caller reads and parses the config first (failing before sweepRuns is entered) and
-  // hands in a construction closure that performs no I/O, which sweepRuns calls after the banner.
-  createAdapter: () => RuntimeAdapter;
   maxRuns: number;
   stopRequested: StopRequestSignal;
   stdout: (line: string) => void;
   stderr: (line: string) => void;
-};
+} & (
+  | {
+      adapterName: "scripted" | "claude" | "codex";
+      // §8: a CLOSURE, not an already-constructed adapter. §8's first line requires that a failure
+      // READING the adapter config exits 1 without scanning, while §8/§12 require the banner to be
+      // printed after the scan and before the adapter is constructed. The only shape satisfying both
+      // is: the caller reads and parses the config first (failing before sweepRuns is entered) and
+      // hands in a construction closure that performs no I/O, which sweepRuns calls after the banner.
+      createAdapter: () => RuntimeAdapter;
+    }
+  | {
+      // Consolidation step 2, spec 2026-10-01-agents-resume-sweep-design.md §3.3 (C-3): each run's adapter is
+      // rebuilt from the selection that run froze, so it is built per candidate, in the loop, right before that
+      // candidate's resume — after the banner and lock notes, like createAdapter. A rejection is a refusal of that
+      // candidate, not of the sweep.
+      adapterName: "agents";
+      adapterForRun: (runDir: string) => Promise<RuntimeAdapter>;
+    }
+);
 
 // The filter, and the whole of what it claims. `eligibleForContinuation` is an OBSERVED field on
 // owner-transfer.json — one of the eight criteria evaluateResumeEligibility applies, and
@@ -185,7 +196,10 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
     }
   }
 
-  const adapter = options.createAdapter();
+  // The createAdapter form builds its one adapter here, exactly as before; the adapterForRun form
+  // (consolidation step 2, §3.3) builds one per candidate inside the loop, right before its resume.
+  const adapterSource: { shared: RuntimeAdapter } | { perRun: (runDir: string) => Promise<RuntimeAdapter> } =
+    "adapterForRun" in options ? { perRun: options.adapterForRun } : { shared: options.createAdapter() };
 
   let adopted = 0;
   let attempted = 0;
@@ -198,6 +212,17 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
     interrupted: 0,
     refused: 0,
     error: 0,
+  };
+  const emit = (path: string, report: { outcome: Outcome; detail: string }): void => {
+    // Every per-run outcome is a reported outcome, never a sweep failure (§7). A concurrent
+    // sweep losing the lease gate lands here too, and that is expected, not an error.
+    tally[report.outcome] += 1;
+    const sink = report.outcome === "error" ? options.stderr : options.stdout;
+    // §8 is "one line per attempted run", and `detail` is a String(error): a ZodError out of
+    // loadContract runs to a dozen lines. Unfolded, one run becomes that many output lines, all
+    // but the first without a path column — and a cron job parsing the report by line reads one
+    // run as a dozen ownerless records. Folded on the same rule as the note line above.
+    sink(`${path}\t${report.outcome}\t${report.detail.replace(/\r?\n/g, " ")}`);
   };
   for (const candidate of candidates) {
     // §6, quota accounting point (the amended ruling): the bound is on runs that actually ENTERED
@@ -214,6 +239,20 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
     if (options.stopRequested.requested) break;
 
     attempted += 1;
+    let adapter: RuntimeAdapter;
+    if ("shared" in adapterSource) {
+      adapter = adapterSource.shared;
+    } else {
+      // §3.3: a candidate whose adapter cannot be built (no frozen selection, an invalid one, drift,
+      // a hash mismatch) is refused and the sweep goes on. It was never adopted, so — like a
+      // resume-gate refusal — it spends none of --max-runs.
+      try {
+        adapter = await adapterSource.perRun(candidate.path);
+      } catch (error) {
+        emit(candidate.path, { outcome: "refused", detail: error instanceof Error ? error.message : String(error) });
+        continue;
+      }
+    }
     let report: { outcome: Outcome; detail: string };
     try {
       const finalState = await resume(candidate.path, adapter, {
@@ -263,15 +302,7 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
       report = classifyThrow(error);
     }
 
-    // Every per-run outcome is a reported outcome, never a sweep failure (§7). A concurrent
-    // sweep losing the lease gate lands here too, and that is expected, not an error.
-    tally[report.outcome] += 1;
-    const sink = report.outcome === "error" ? options.stderr : options.stdout;
-    // §8 is "one line per attempted run", and `detail` is a String(error): a ZodError out of
-    // loadContract runs to a dozen lines. Unfolded, one run becomes that many output lines, all
-    // but the first without a path column — and a cron job parsing the report by line reads one
-    // run as a dozen ownerless records. Folded on the same rule as the note line above.
-    sink(`${candidate.path}\t${report.outcome}\t${report.detail.replace(/\r?\n/g, " ")}`);
+    emit(candidate.path, report);
   }
 
   // C1's summary added `adopted` and `refused`, which are not mutually exclusive: a run that

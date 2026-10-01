@@ -325,6 +325,9 @@ async function runWithAgents(parsed: Extract<ParsedArgs, { command: "run"; agent
     throw new AgentError("agent-selection-file-invalid", error instanceof Error ? error.message : String(error));
   }
   const { file, adapter } = await adapterForSelectionFile(table, raw);
+  // Consolidation step 2 (controller ruling, Orca session be653b22): the contract is read BEFORE the freeze, so an
+  // unreadable or invalid contract leaves no agent-selection.json behind for a retry into the same directory to trip on.
+  const contract = await loadContract(parsed.contractPath);
   // Consolidation step 2, spec §3.1 (C-1): freeze the validated selection into the run directory so `resume --agents`
   // can rebuild this agent. runLoop's own freshness refusal runs first, so a non-fresh directory is never written
   // into; `wx` refuses a leftover file instead of overwriting it, which would rebind someone else's run.
@@ -337,7 +340,6 @@ async function runWithAgents(parsed: Extract<ParsedArgs, { command: "run"; agent
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new AgentError("agent-selection-exists", frozenPath);
     throw error;
   }
-  const contract = await loadContract(parsed.contractPath);
   const finalState = await runLoop(contract, parsed.runDir, adapter);
   return finalState.status === "succeeded" ? 0 : 2;
 }
@@ -480,10 +482,26 @@ export async function main(argv: string[]): Promise<number> {
       return finalState.status === "succeeded" ? 0 : 2;
     }
 
-    // Consolidation step 2: the sweep `--agents` form is parsed (spec §3.3) but its runtime lands in the next task.
+    // Consolidation step 2, spec §3.3: `sweep --agents` builds each candidate's adapter from the selection that run
+    // froze. The table is read before the scan, so an unreadable table exits 1 having swept nothing (as an unreadable
+    // adapter config does); a candidate whose adapter cannot be built is reported `refused` by sweepRuns.
     if (parsed.command === "sweep" && "agentsTablePath" in parsed) {
-      console.error("sweep --agents: not available in this build");
-      return 1;
+      const table = await readAgentsTable(parsed.agentsTablePath);
+      const stopRequested = createStopRequestSignal();
+      const unregisterStopHandlers = registerStopHandlers(stopRequested);
+      try {
+        return await sweepRuns({
+          root: parsed.root,
+          adapterName: "agents",
+          adapterForRun: (runDir) => adapterForFrozenSelection(table, runDir),
+          maxRuns: parsed.maxRuns,
+          stopRequested,
+          stdout: (line) => console.log(line),
+          stderr: (line) => console.error(line),
+        });
+      } finally {
+        unregisterStopHandlers();
+      }
     }
 
     // `sweep` returns HERE — before loadAdapter, not merely before the two `? 0 : 2` mappings
