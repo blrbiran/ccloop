@@ -1,5 +1,4 @@
 import { execFile, spawn } from "node:child_process";
-import { once } from "node:events";
 import { promisify } from "node:util";
 import { buildUsageEvidence, createLineSplitter, createUsageObserver, writeObservation } from "./claude-stream.mjs";
 
@@ -255,12 +254,15 @@ async function buildPartialExecutionOutcome(request, failureType, failureMessage
   };
 }
 
+// Resolves once the payload has left the process, not once it is queued: on macOS a pipe write is asynchronous, and the
+// interrupt path calls process.exit right after this, which drops whatever is still queued (live claude, 2026-10-01: a
+// partial cut at 8192 bytes). write() returning true only means the queue is under its high-water mark.
 async function writeJsonToStdout(value) {
   const payload = JSON.stringify(value);
 
-  if (!process.stdout.write(payload)) {
-    await once(process.stdout, "drain");
-  }
+  await new Promise((resolve, reject) => {
+    process.stdout.write(payload, (error) => (error ? reject(error) : resolve()));
+  });
 }
 
 let currentRequest = null;

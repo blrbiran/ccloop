@@ -705,6 +705,47 @@ setInterval(() => {}, 1000);
     expect(partial.diffPatch).toContain("+brand new contents");
   });
 
+  // Live claude, 2026-10-01 (Orca session b5e8d368): an execute cut by its timeout had written seven ~400-word files; the
+  // runner's partial reached the adapter cut at 8192 bytes, so the adapter could not parse it and dropped it. On macOS a
+  // pipe write is asynchronous, and exiting right after a write that returned true loses what is still queued. A partial
+  // this size, delivered after SIGTERM, must arrive whole.
+  it("delivers a partial larger than one pipe chunk whole after SIGTERM", async () => {
+    const worktreePath = await createCommittedRepo({ "tracked.txt": "before\n" });
+    const markerPath = join(await mkdtemp(join(tmpdir(), "ccloop-large-partial-")), "marker.log");
+    const binDir = await createFakeClaudeBinary(`
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.CLAUDE_MARKER_PATH, "started\\n");
+process.on("SIGTERM", () => process.exit(143));
+setInterval(() => {}, 1000);
+`);
+    const line = "x".repeat(99);
+    await writeFile(join(worktreePath, "large.txt"), `${line}\n`.repeat(200));
+
+    const { child, result } = spawnPhaseRunner(
+      {
+        phase: "execute",
+        prompt: "run execute",
+        attempt: 1,
+        runDir: worktreePath,
+        worktreePath,
+        partialOutcomeRecoveryWindowMs: 1000,
+      },
+      {
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        CLAUDE_MARKER_PATH: markerPath,
+      },
+    );
+    await waitForFileToContain(markerPath, "started");
+    child.kill("SIGTERM");
+
+    const outcome = await result;
+    expect(outcome.code).toBe(0);
+    expect(Buffer.byteLength(outcome.stdout)).toBeGreaterThan(16_384);
+    const partial = JSON.parse(outcome.stdout);
+    expect(partial).toMatchObject({ completionStatus: "partial", failureType: "timeout", changedFiles: ["large.txt"] });
+    expect(partial.diffPatch.split(`+${line}\n`)).toHaveLength(201);
+  }, MARKER_WAIT_TEST_TIMEOUT_MS);
+
   it("includes both staged and unstaged edits in partial execute diff recovery", async () => {
     const worktreePath = await createCommittedRepo({
       "staged.txt": "before staged\n",
