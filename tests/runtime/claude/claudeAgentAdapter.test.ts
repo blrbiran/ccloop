@@ -364,6 +364,24 @@ describe("ClaudeAgentAdapter, the execute result written after a stop (consolida
     expect("completionStatus" in result!).toBe(false);
   }, 20_000);
 
+  // Spec §5.2: "A result that already carries tokenUsage is left as it is." The runner turns the answer's envelope
+  // usage (12 + 3) into tokenUsage 15, while the call's observation holds the closed message's 1109.
+  it("a result written after a stop that already carries tokenUsage keeps it", async () => {
+    const f = await fixture("answer-then-linger");
+    const abort = new AbortController();
+    const running = new ClaudeAgentAdapter(f.config).execute({ ...f.context, abortSignal: abort.signal });
+    await waitFor(`${f.marker}.answered`);
+    const root = join(f.context.runDir, "claude", String(f.context.attempt), "execute");
+    // The observation that differs is really there before the stop, so an overwrite would be seen.
+    await expect.poll(async () => {
+      const [call] = await readdir(root);
+      return readObservedTokens(join(root, call!, "observed-usage.json"));
+    }, { timeout: 10_000 }).toBe(1109);
+    abort.abort();
+    const result = await running;
+    expect(result!.tokenUsage).toBe(15);
+  }, 20_000);
+
   it("a plan stopped after its answer still throws ClaudePhaseAborted", async () => {
     const f = await fixture("answer-then-linger");
     const abort = new AbortController();

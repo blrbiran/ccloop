@@ -15,10 +15,10 @@ import type { ClaudePhaseRequest } from "./types.js";
 // handling follows runCodexPhase: the phase runner is the leader of its own process group (the claude CLI
 // and anything that CLI starts without detaching stay in it), the group is registered BEFORE the prompt is
 // written, and stopping signals the whole group. SubprocessClaudeAdapter stays as it was (spec §11).
-// ERRATUM (consolidation step 1, 2026-10-01, ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md):
-// "SubprocessClaudeAdapter stays as it was (spec §11)" no longer holds -- consolidation step 1 deleted it; this adapter
-// now also returns the execute result the runner writes after a stop (abort or its own timeout), with the usage
-// observed before the stop.
+// *** ERRATUM (consolidation step 1, 2026-10-01, Orca session be653b22, ruling R5) -- "SubprocessClaudeAdapter stays
+// as it was (spec §11)" no longer holds: ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md deletes it
+// in this consolidation step (its task 2 lands the deletion), and this adapter now also returns the execute result the
+// runner writes after a stop (abort or its own timeout), with the usage observed before the stop. ***
 const LIMIT = 16 * 1024 * 1024;
 const execFileAsync = promisify(execFile);
 
