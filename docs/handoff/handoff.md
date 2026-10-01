@@ -1,4 +1,4 @@
-# ccloop Handoff — *** **下一件事已由人定（2026-10-01）：合并 claude adapter、删 CLI 老入口，分四步，每步先 spec 后实现，见文末「Orca 那条线」。** 2026-10-01 已落地 `rejectOn` 改为只交给 verifier 判断（人裁 D，已推送、Orca 已重钉）。*** 更早各轮（⑤ 预估链、临时目录泄漏、`collect.progress`、git 依赖打包、#13(a)）都已落地、人已审；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
+# ccloop Handoff — *** **adapter／CLI 合并四步已全部做完（2026-10-01，Orca 会话 `be653b22`）：只剩 `ClaudeAgentAdapter`，CLI 只剩 `--agents` 入口，`resume`／`sweep` 能续跑 `run --agents` 起的 run。下一件事见文末「Orca 那条线」（先推本仓库，再让 Orca 重钉）。** *** 更早各轮（`rejectOn` 改由 verifier 判断、⑤ 预估链、临时目录泄漏、`collect.progress`、git 依赖打包、#13(a)）都已落地、人已审；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -407,63 +407,68 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-01 第二十六版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-01 第二十七版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 进度与下一步以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
 ## ⛔ 与本仓库有关的下一件事
 
-- **本轮在本仓库落了一件（Orca 会话 `ceca1c47`，2026-10-01，人裁「D 同意」）**：`rejectOn` 不再是 evidence 子串搜索，改为只交给 verifier 判断。按提交主题行找：`fix(runLoop): stop overriding an approving verifier because its evidence mentions a rejectOn condition`、`fix(prompts): tell the verifier to reject when a rejectOn condition holds`；spec `docs/superpowers/specs/2026-10-01-rejecton-verifier-judgment-design.md`，计划同名，台账 `.superpowers/sdd/2026-10-01-rejecton-verifier-judgment/progress.md`。
-  - 丢掉的两件（spec §6，人已知情）：verifier 判通过却点名命中条件时的兜底；检查命令退出 0 但输出／命令文本含令牌时的拒绝。两者此前都没有任何判据钉住。按输出拒绝请写成检查命令。
-  - 登记未修（spec §7）：`evidenceRequired` 同一个子串函数、方向相反；每条检查 evidence 都以字面量 `command output` 开头，README 示例的 `evidenceRequired: ["command output"]` 恒被满足。
-- **仍挂着、要人开口才动**：**阶段超时直接进 `setTimeout`**：大于 2,147,483,647 ms 时 Node 会改成 1 ms（Orca 在 v22.13.1 实测 9 ms 就触发）。Orca 已把自己派生的阶段超时截到这个数；别的客户端直传大数仍会中招。
-- **人提出并已定顺序（2026-10-01）、spec 未写**：人裁四步依次做——①删 `SubprocessClaudeAdapter` 与 `--adapter claude`（先做；runner 判据迁到 ClaudeAgentAdapter 一侧）②#4：`resume`／`sweep` 能续跑 `run --agents` 起的 run ③Orca 旧 `orca run --adapter-config` 路径**退役**（人选方案二；约 76 条判据迁走或删），`scripted` 随之不再需要老入口 ④最后删整个老入口。人原话：「先将这些问题解决，再删老入口」「同意按你建议的顺序走」「选方案二」。以下是原登记：claude adapter 只留 `ClaudeAgentAdapter`、CLI 只留新入口（`--agents`／`control`），旧的吸收有用部分后删。盘点结论（Orca 会话 `ceca1c47`，只读）：老入口还承载 `scripted`（Orca 旧 `orca run` 路径约 76 条判据在用）、`--adapter codex`、以及唯一能用的 `resume`／`sweep`（#4 未做）；`subprocessClaudeAdapter.test.ts` 多数判据测的是 runner，要迁不要删。**先出 spec，人审后再动。**
-- **推送归人**：以 `ls-remote` 现测为准。Orca 已重钉到带 `rejectOn` 修正的那一笔（钉住的 SHA 见下节）；之后本仓库只有 handoff／台账提交，不需要再重钉。
-- **#4（`resume`／`sweep` 支持 `run --agents` 起的 run）**：未变——人裁设计为「冻结选择进 `<runDir>/agent-selection.json`」，时机与 Orca 续跑被打断的解冲突 run 一起做。
+- **推送归人，顺序要紧**：本仓库先推（或与 Orca 同时）。Orca 的 `tests/scheduler` 现在要一份含 fake codex `frames` 模式的本仓库 checkout（主题行 `test(fixtures): fake codex plays scripted frames per attempt…` 之后）；而本仓库主题行 `refactor(cli): delete --adapter and --adapter-config; …` 之后的 CLI 已不认 `--adapter` ⇒ 只推 Orca 不推本仓库，Orca 的 scheduler 判据会红。
+- 人推之后，Orca 的 agent 跑 `node scripts/pin-ccloop.mjs <SHA>` 重钉（七项核对），再由人推 Orca。Orca 生产代码不依赖今天的新行为，重钉只是让钉住的包跟上。
+- **人要审的**：本仓库这四步里，控制器在「先按你的建议执行」之下替人定了第②–④步的设计与若干既有判据的改动（名单在三本台账，见下）。
+- **仍挂着、要人开口才动**：阶段超时直接进 `setTimeout`（大于 2,147,483,647 ms 时 Node 改成 1 ms；Orca 已截自己派生的值）；`stopProof` 根因；Linux。
+
+## 本轮做完了什么（2026-10-01，Orca 会话 `be653b22`；**不要重做**）
+
+人定的顺序：①删 `SubprocessClaudeAdapter` 与 `--adapter claude` ②#4 ③Orca 旧 `orca run --adapter-config` 退役 ④删老入口。每步 spec → 计划 → subagent 实现 → 逐任务审查 → 终审 → 修复波 → 全新 clone 的门。
+
+- **①** 只剩 `ClaudeAgentAdapter`。execute 被中断或超时后，runner 若以 0 退出并吐出 JSON 对象（worktree 有改动时的 partial，或 claude 已答完的完整结果），就当作结果返回；没有自带 `tokenUsage` 时填中断前的观测值（无观测不填，绝不填 0）；execute 的停止宽限 = `max(killGraceMs, partialOutcomeRecoveryWindowMs + PARTIAL_FLUSH_MARGIN_MS(5 s))`，plan／verify／single-call 仍用 `killGraceMs`。runner 判据原样迁到 `tests/runtime/claude/claudePhaseRunner.test.ts`（`describe` 改名 `claude phase runner`）。v1 的 `run-scenario`／`prepare-a04`／`lib/a04.ts` 退役。spec `docs/superpowers/specs/2026-10-01-claude-adapter-consolidation-step1-design.md`（§11 加、§12／§13 更正），计划同名。
+  - 行为变化（人已知情）：runLoop 自己的阶段超时下，有 partial 时中断前观测的用量**现在会记账**（以前进了没人读的 `abortedError`）；没有 partial 时仍丢（挂账）。
+- **②（#4）** `run --agents` 先读契约、查 run 目录新鲜度，再把 `{selection, configHash}` 写进 `<runDir>/agent-selection.json`（0600、`wx`）；`resume --run-dir <dir> --agents <table>`、`sweep --root <root> --agents <table> --max-runs <n>` 用冻结的选择重建 adapter，拒绝码 `agent-selection-missing`／`agent-selection-file-invalid`／`control-config-hash-mismatch`，拒绝时 run 目录逐字节不变；sweep 里建不出 adapter 的候选报 `refused`、不占 `--max-runs`。spec `…/2026-10-01-agents-resume-sweep-design.md`。
+- **③（本仓库部分）** `tests/fixtures/fake-codex.mjs` 加 `frames` 模式：`frames <marker> <framesFile>`，帧按 cwd 末段 `attempt-<n>` 选，无帧退 3。Orca 的 57 条整轮判据靠它跑 `run --agents`。
+- **④** `run`／`resume`／`sweep` 带 `--adapter` 或 `--adapter-config` 一律报 `--adapter was removed; use --agents <table>`；`validate-codex-adapter.mjs` 改用 agents 表；`examples/v1/scripted-adapter-config.json` 删除；`ScriptedAdapter` 类与 `sweepRuns` 的 `createAdapter` 选项形态保留（判据直接用）。spec `…/2026-10-01-retire-old-cli-entry-design.md`。
+- 台账：`.superpowers/sdd/2026-10-01-claude-adapter-consolidation-step1/`、`…-agents-resume-sweep/`、`…-retire-old-cli-entry/`（各有 `progress.md`，`Ruling:` 行就是替人定的裁定）。
+- **门**（全新 clone，HOME＋四个 XDG 根改道，短真 TMPDIR；内容＝主题行 `fix(review): final-review fixes -- strict codex row names its refusal, README run-dir, errata, spec §13`）：build／typecheck RC 0；**1043 条、1042 过、1 红（`stopProof`）**；`check-known-reds` RC 0；`check-tmp-leak` RC 0。
 
 ## 🔗 Orca 通过 git 依赖钉住本仓库
 
-- Orca `package.json`：`"ccloop": "github:blrbiran/ccloop#1e4e43437c72a405fccd09f0158b87593218cc9e（2026-10-01 重钉，带 `rejectOn` 修正）"`。lock 的 `resolved` 是 `git+ssh://…`。Orca 没设 `ORCA_CCLOOP_BIN` 时（`orca panel`／`orca agents`）用的就是这份；开发与门仍走 `ORCA_CCLOOP_BIN`（本仓库 clone 的 build）。
-- **重钉规矩**：只有 Orca 依赖了本仓库的**新行为**（线协议、新命令）才重钉。顺序：本仓库提交 → **人推本仓库** → Orca 的 agent 跑 `node scripts/pin-ccloop.mjs <SHA>`（装包＋七项核对，任何一项不过就非 0）→ 人推 Orca。只能钉 GitHub 上已有的 SHA。
-- Orca 的 `npm run verify` 现在多一步 `verify:ccloop-pin`：不设 `ORCA_CCLOOP_BIN`，对 Orca `node_modules` 里装的本仓库包跑 Orca 的 `ccloopDefaultE2E`。它只抓得住那条 E2E 用到的行为（包布局、`orca agents init/show`、面板启动），不是所有线协议变化。
-- ⚠️ **`files` 之外的运行时读取会让装好的包坏掉**：新增按路径读的运行时文件时，`tests/packaging/gitDependency.test.ts` 会红——要么进 `files`，要么别在运行时读。
+- Orca `package.json`：`"ccloop": "github:blrbiran/ccloop#1e4e43437c72a405fccd09f0158b87593218cc9e"`（2026-10-01 钉，带 `rejectOn` 修正；**合并四步之后尚未重钉**）。lock 的 `resolved` 是 `git+ssh://…`。Orca 没设 `ORCA_CCLOOP_BIN` 时（`orca panel`／`orca agents`）用的就是这份；开发与门走 `ORCA_CCLOOP_BIN`（本仓库 clone 的 build）。
+- **重钉规矩**：只有 Orca 依赖了本仓库的**新行为**才重钉。顺序：本仓库提交 → **人推本仓库** → Orca 的 agent 跑 `node scripts/pin-ccloop.mjs <SHA>` → 人推 Orca。只能钉 GitHub 上已有的 SHA。
+- Orca 的 `npm run verify` 有 `verify:ccloop-pin`：不设 `ORCA_CCLOOP_BIN`，对 `node_modules` 里装的本仓库包跑 Orca 的 `ccloopDefaultE2E`。
+- ⚠️ **`files` 之外的运行时读取会让装好的包坏掉**：新增按路径读的运行时文件时，`tests/packaging/gitDependency.test.ts` 会红。
+- ⚠️ 本地 `dist/` 里可能还留着已删的 `subprocessClaudeAdapter.js`（git 安装不受影响；从这棵树 `npm pack` 会带上）。
 
 ## Orca 对本仓库行为的依赖（**零改动，只是知情**）
 
-- loop 方案把输入展开成普通契约，依赖：`requiredChecks` 在 worktree 里 `sh -lc` 真跑；`allowlistPaths`／`denylistPaths`／`maxFilesTouched` 只查 executor 自报的 `changedFiles`；`rejectOn` 只进 verifier prompt（本轮起 ccloop 不再在 evidence 里搜它）；`constraints` 不进 verifier、`nonGoals` 只进 planner；verifier prompt 含 `Success condition:` 与 `rejectOn` 原文。
-- **Orca 方案 v2（2026-10-01，同日由人裁就地改）**：`maxFilesTouched` 默认 `Number.MAX_SAFE_INTEGER`（本仓库只做比较，不进 prompt，已核）；`perAttemptTimeoutMs` 默认 3 小时（10,800,000），Web 路径上取它与 task `work.activeMs` 的较小值；design／investigate 改为 command verifier（每个目标文档一条「存在且非空」检查），bugfix 的先红要求进 successCondition；三者 `rejectOn` 都是占位 `REJECT:unused`。
-- fake codex（`tests/fixtures/fake-codex.mjs`）恒报改了 `answer.txt` ⇒ Orca 的 loop E2E 把它放进 `targetPaths`。本仓库的夹具没动。
+- loop 方案把输入展开成普通契约，依赖：`requiredChecks` 在 worktree 里 `sh -lc` 真跑；路径约束只查 executor 自报的 `changedFiles`；`rejectOn` 只进 verifier prompt；`constraints` 不进 verifier、`nonGoals` 只进 planner；verifier prompt 含 `Success condition:` 与 `rejectOn` 原文。
+- Orca 方案 v2：`maxFilesTouched` 默认 `Number.MAX_SAFE_INTEGER`；`perAttemptTimeoutMs` 默认 3 小时；`partialOutcomeRecoveryWindowMs` 默认 60,000（Orca 的 handoff 宽限据此等 `max(killGraceMs, 窗口 + 5 s) + 60 s`，`PARTIAL_FLUSH_MARGIN_MS` 在 Orca 手抄一份——改本仓库这个数要同时改 Orca）。
+- fake codex 恒报改了 `answer.txt` ⇒ Orca 的 loop E2E 把它放进 `targetPaths`。
 - 真 verifier 在 `-p` 加 `--permission-mode acceptEdits` 下，6 次里 5 次 Bash 被拒（Read 可用）——Orca 实测记录，未查原因。
-
-## 已落地（不要重做；细节在 Orca 各台账）
-
-- `collect` 多答 `progress`；待办批量；git 依赖打包；#13(a)（claude model 自带 `[1m]` 一律拒）。这些轮的 `Ruling:` 行人已审过。
-- 两笔提交的 `Co-Authored-By` 被子代理写成了 `Claude Sonnet 5`（`docs(codex): append a named erratum …`、`fix(claude): close a streamed message …`），不许 amend，已记录。
-- **现行门**（2026-10-01，Orca 会话 `e604b1ba` 的门代理，全新 clone，内容＝主题行 `docs(handoff): stop naming #13(a) as the next thing in the title line; it has landed`）：build／typecheck RC 0；**1087 条、1085 过、2 红**——`stopProof`（稳定红）＋ `tests/validation/codexWatchdog.test.ts` 的 "matches historical double-space start identities on single-digit days"（`Matcher did not succeed in 1500ms`，负载 33 下；单独 3/3 绿；在已知名单里）；`check-known-reds` RC 0；`check-tmp-leak` RC 0。
 
 ## 🔴 挂着的
 
 - `stopProof` 根因、Linux：未变，要人先开口。
-- 真 claude 下：single-call 估算、stdin 传 prompt、`progress`、子代理 stream 配对、Orca 的 loop 方案整链都只有 fake 证据；只有 verify 单相跑过 6 次（上面第 1 条）。付费跑每次都要人点头。
-- runner 与 adapter 的输出校验重复；adapter 的 `phase()` 与 `singleCall()` 近乎逐字重复；`SubprocessClaudeAdapter` 的 stdout 也按块 `toString` —— 都只登记。
+- 真 claude 下：中断后读 partial、`resume --agents`、single-call 估算、stdin 传 prompt、`progress`、子代理 stream 配对、Orca 的 loop 方案整链都只有 fake 证据。付费跑每次都要人点头。
+- `agent-selection.json` 只冻结选择与 hash：`command`／`timeoutMs`／`killGraceMs` 跟随 resume 时的表；claude CLI 自动升级后旧 run 会被 `agent-version-drift` 拒绝续跑（设计如此，没有放行开关）。
+- `PhaseOutcome.abortedError` 有人写没人读：runLoop 自己超时、且没有 partial 时，观测到的用量仍丢（codex 同）。
+- 已有的登记：runner 与 adapter 的输出校验重复；adapter 的 `phase()` 与 `singleCall()` 近乎逐字重复；`evidenceRequired` 的子串问题（`rejectOn` spec §7）。
 
 ## 环境事实（直接用，别再反推）
 
-- 已知红用 `node scripts/check-known-reds.mjs` 机械判（名单 14 个名字）；唯一稳定红是 `stopProof`。临时目录泄漏用 `node scripts/check-tmp-leak.mjs` 判。
-- 副本：`git clone --local` 到会话 scratchpad，软链 `node_modules`，`npm run build`，`cd` 进 clone 再跑。主树不跑 build，也不跑全量。HOME 与四个 XDG 根要改道；**TMPDIR 要短、要是真目录**（`mktemp -d /private/tmp/cl-XXXX`）。
-  - Orca 的闸门会拦 clone 里的 `git pull`；同步单个文件用 `cat 主树文件 > clone 文件`（`cp` 带 `-i`）。还原副本里的变异也用 `cat`＋`cmp`。
+- 已知红用 `node scripts/check-known-reds.mjs` 机械判（名单 9 个名字）；唯一稳定红是 `stopProof`。临时目录泄漏用 `node scripts/check-tmp-leak.mjs` 判。
+- 副本：`git clone --local` 到会话 scratchpad，软链 `node_modules`，`npm run build`，`cd` 进 clone 再跑。主树不跑 build，也不跑全量（主树的 `dist/` 常是旧的，`endToEnd`／`claudeEndToEnd` 在主树会假红）。HOME 与四个 XDG 根要改道；**TMPDIR 要短、要是真目录**（`mktemp -d /private/tmp/cl-XXXX`）。
+  - Orca 的闸门会拦 clone 里的 `git pull`；同步单个文件用 `cat 主树文件 > clone 文件`（`cp` 带 `-i`）。
   - 被 Orca 当作 `ORCA_CCLOOP_BIN` 的 clone 不许同时拿来做变异。
-- ⚠️ **测试文件别在收集期整文件跳过**（`describe.skipIf` 包住全部测试）：vitest 对这样的文件不跑任何文件级 hook，setup 已建的临时目录不会被删。改成 `beforeEach` 里 `ctx.skip()`。
+- ⚠️ **测试文件别在收集期整文件跳过**（`describe.skipIf` 包住全部测试）：改成 `beforeEach` 里 `ctx.skip()`。
 - 本机 claude 会自动升级；nvm 和 homebrew 各装了一份。
 - 变异会留孤儿进程 ⇒ `pgrep -fl "ccloop-agents-version|worker.js|fake-claude-cli"`；杀进程要人授权。
-- 判 flake 要等负载降下来，并记 `uptime`。本机在两份 clone 并跑时 1 分钟负载能到 40–48。
+- 判 flake 要等负载降下来，并记 `uptime`。
 - 写文件工具可能把非 NFC 的字面量改掉 ⇒ 判据里有这类文本时，写完用 python 核字节。
-- Claude Code 的权限分类器会拒 `ECC_GATEGUARD=off DISABLE_OMC=1` 这类环境变量；它们只压本地 hook，不影响测试行为，不设也行。
 
 ## awaitingHuman
 
-- 推送：以现跑 `ls-remote` 为准。
+- 推送：以现跑 `ls-remote` 为准；本仓库先于 Orca。
+- 审控制器替人定的裁定（三本台账的 `Ruling:` 行）。
 - `setTimeout` 溢出防护：要不要在本仓库改。
-- adapter／CLI 合并四步：每一步的 spec 待写、待人审（顺序见上方「人提出并已定顺序」）。下一会话从第①步（删 `SubprocessClaudeAdapter` 与 `--adapter claude`）开始；先用 `superpowers:brainstorming`，`superpowers:writing-plans` 之后按人选的执行方式做。
-- 付费 claude 验一次 single-call 估算（Orca 验收脚本 `--claude --scenario estimate`，`--task-tokens` ≥1,000,000）。
+- 付费 claude 验一次「中断后读 partial」与 `resume --agents`（以及 single-call 估算，`--task-tokens` ≥1,000,000）。
