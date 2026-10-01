@@ -10,6 +10,9 @@ import { afterEach, describe, expect, it } from "vitest";
 // extra arguments from CCLOOP_CLAUDE_COMMAND / CCLOOP_CLAUDE_EXTRA_ARGS as JSON arrays. Unset, it must run
 // `claude` from PATH with exactly the arguments it always used — the older SubprocessClaudeAdapter still
 // depends on that.
+// *** ERRATUM (consolidation step 1, 2026-10-01, Orca session be653b22, ruling R5) -- SubprocessClaudeAdapter was deleted in consolidation step 1
+// (ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md); what still runs the runner with these variables unset is the
+// criteria that moved unchanged to tests/runtime/claude/claudePhaseRunner.test.ts, which put a stand-in `claude` on PATH. ***
 const runner = fileURLToPath(new URL("../../../scripts/claude-phase-runner.mjs", import.meta.url));
 const fakeCli = fileURLToPath(new URL("../../fixtures/fake-claude-cli.mjs", import.meta.url));
 const dirs: string[] = [];

@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { access, chmod, mkdtemp, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupAttemptWorkspaceBestEffort, createLeaseLossSignal, createStopRequestSignal, parseChangedPathsFromGitStatus, runLoop, runLoopFromState } from "../../src/controller/runLoop.js";
@@ -11,7 +10,7 @@ import { initializeRunFiles, writeOwnerRecord } from "../../src/persistence/file
 import { RunHeartbeatStoppedError, RunLeaseLostError } from "../../src/ownership/lease.js";
 import type { LeaseHeartbeat } from "../../src/controller/leaseHeartbeat.js";
 import { evaluateResumeEligibility, resumeLoop } from "../../src/controller/resumeLoop.js";
-import { SubprocessClaudeAdapter } from "../../src/runtime/claude/subprocessClaudeAdapter.js";
+import { ClaudeAgentAdapter } from "../../src/runtime/claude/claudeAgentAdapter.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
@@ -20,7 +19,6 @@ import type { AttemptContext, OwnerRecord, OwnerTransferRecord, ReconciliationRe
 import type { RunState } from "../../src/state/types.js";
 
 const execFileAsync = promisify(execFile);
-const phaseRunnerPath = fileURLToPath(new URL("../../scripts/claude-phase-runner.mjs", import.meta.url));
 
 const BUDGET_EXHAUSTED_REASON = "runtime or token budget exhausted";
 
@@ -4203,69 +4201,66 @@ describe("runLoop", () => {
     expect(finalState.budgetSnapshot.timeRemainingMs).toBe(0);
   });
 
-  it("persists phase usage evidence from the subprocess adapter without recomputing controller totals", async () => {
+  // Rewritten (consolidation step 1, ruling R5; ccloop spec docs/superpowers/specs/2026-10-01-claude-adapter-consolidation-step1-design.md
+  // §7.3): SubprocessClaudeAdapter was deleted, so the same assertions now run through ClaudeAgentAdapter. The
+  // usage-aware fake `claude` is named by the installation's `command` instead of being put on PATH; the runner still
+  // accepts its bare {structured_output, usage} line.
+  it("persists phase usage evidence from the claude agent adapter without recomputing controller totals", async () => {
     const repoPath = await createRepo();
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
     const contract = createContract(repoPath);
-    const originalPath = process.env.PATH;
     const fakeBinDir = await createUsageAwareFakeClaude();
-    const adapter = new SubprocessClaudeAdapter({ command: ["node", phaseRunnerPath] });
+    const adapter = new ClaudeAgentAdapter({
+      schema: "ccloop-agent-config-v1", kind: "claude",
+      installation: { kind: "claude", command: [join(fakeBinDir, "claude")], version: "9.9.9-fake", configDir: null, timeoutMs: 20_000, killGraceMs: 300 },
+      selection: { agent: "claude", model: "claude-opus-5-5", contextWindow: "agent-default" },
+    });
 
-    try {
-      process.env.PATH = `${fakeBinDir}:${originalPath ?? ""}`;
+    const finalState = await runLoop(contract, runDir, adapter);
+    const attemptDir = join(runDir, "attempts", "1");
+    const plan = JSON.parse(await readFile(join(attemptDir, "plan.json"), "utf8")) as {
+      tokenUsage: number;
+      usageEvidence: {
+        normalizedTotal: number | null;
+        selectedInputField: string | null;
+        selectedOutputField: string | null;
+      };
+    };
+    const execution = JSON.parse(await readFile(join(attemptDir, "execution.json"), "utf8")) as {
+      tokenUsage: number;
+      usageEvidence: {
+        normalizedTotal: number | null;
+        selectedInputField: string | null;
+        selectedOutputField: string | null;
+      };
+    };
+    const verify = JSON.parse(await readFile(join(attemptDir, "verify.json"), "utf8")) as {
+      tokenUsage: number;
+      usageEvidence: {
+        normalizedTotal: number | null;
+        selectedInputField: string | null;
+        selectedOutputField: string | null;
+      };
+    };
+    const persistedState = await readRunState(runDir);
+    const serializedArtifacts = JSON.stringify({ plan, execution, verify });
 
-      const finalState = await runLoop(contract, runDir, adapter);
-      const attemptDir = join(runDir, "attempts", "1");
-      const plan = JSON.parse(await readFile(join(attemptDir, "plan.json"), "utf8")) as {
-        tokenUsage: number;
-        usageEvidence: {
-          normalizedTotal: number | null;
-          selectedInputField: string | null;
-          selectedOutputField: string | null;
-        };
-      };
-      const execution = JSON.parse(await readFile(join(attemptDir, "execution.json"), "utf8")) as {
-        tokenUsage: number;
-        usageEvidence: {
-          normalizedTotal: number | null;
-          selectedInputField: string | null;
-          selectedOutputField: string | null;
-        };
-      };
-      const verify = JSON.parse(await readFile(join(attemptDir, "verify.json"), "utf8")) as {
-        tokenUsage: number;
-        usageEvidence: {
-          normalizedTotal: number | null;
-          selectedInputField: string | null;
-          selectedOutputField: string | null;
-        };
-      };
-      const persistedState = await readRunState(runDir);
-      const serializedArtifacts = JSON.stringify({ plan, execution, verify });
-
-      expect(finalState.status).toBe("succeeded");
-      expect(plan.tokenUsage).toBe(110);
-      expect(execution.tokenUsage).toBe(220);
-      expect(verify.tokenUsage).toBe(330);
-      expect(plan.usageEvidence.normalizedTotal).toBe(plan.tokenUsage);
-      expect(execution.usageEvidence.normalizedTotal).toBe(execution.tokenUsage);
-      expect(verify.usageEvidence.normalizedTotal).toBe(verify.tokenUsage);
-      expect(plan.usageEvidence.selectedInputField).toBe("input_tokens");
-      expect(plan.usageEvidence.selectedOutputField).toBe("output_tokens");
-      expect(execution.usageEvidence.selectedInputField).toBe("inputTokens");
-      expect(execution.usageEvidence.selectedOutputField).toBe("outputTokens");
-      expect(verify.usageEvidence.selectedInputField).toBe("input_tokens");
-      expect(verify.usageEvidence.selectedOutputField).toBe("outputTokens");
-      expect(persistedState.budgetSnapshot.tokenBudgetRemaining).toBe(1000 - 110 - 220 - 330);
-      expect(serializedArtifacts).not.toContain("DO_NOT_PERSIST");
-      expect(serializedArtifacts).not.toContain("unknown_usage");
-    } finally {
-      if (originalPath === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = originalPath;
-      }
-    }
+    expect(finalState.status).toBe("succeeded");
+    expect(plan.tokenUsage).toBe(110);
+    expect(execution.tokenUsage).toBe(220);
+    expect(verify.tokenUsage).toBe(330);
+    expect(plan.usageEvidence.normalizedTotal).toBe(plan.tokenUsage);
+    expect(execution.usageEvidence.normalizedTotal).toBe(execution.tokenUsage);
+    expect(verify.usageEvidence.normalizedTotal).toBe(verify.tokenUsage);
+    expect(plan.usageEvidence.selectedInputField).toBe("input_tokens");
+    expect(plan.usageEvidence.selectedOutputField).toBe("output_tokens");
+    expect(execution.usageEvidence.selectedInputField).toBe("inputTokens");
+    expect(execution.usageEvidence.selectedOutputField).toBe("outputTokens");
+    expect(verify.usageEvidence.selectedInputField).toBe("input_tokens");
+    expect(verify.usageEvidence.selectedOutputField).toBe("outputTokens");
+    expect(persistedState.budgetSnapshot.tokenBudgetRemaining).toBe(1000 - 110 - 220 - 330);
+    expect(serializedArtifacts).not.toContain("DO_NOT_PERSIST");
+    expect(serializedArtifacts).not.toContain("unknown_usage");
   });
 
   it("stops after plan token usage exhausts the token budget", async () => {

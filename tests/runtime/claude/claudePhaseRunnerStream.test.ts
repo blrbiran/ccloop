@@ -41,6 +41,10 @@ function start(w: Awaited<ReturnType<typeof world>>, mode: string, withPath = tr
 // Controller ruling (2026-09-27, on Task 2's subprocessClaudeAdapter.test.ts blocker): a stand-in `claude` named
 // directly by CCLOOP_CLAUDE_COMMAND, standing in for the older SubprocessClaudeAdapter criteria's fixtures that
 // print a bare {structured_output, usage} line with no stream-json framing at all.
+// *** ERRATUM (consolidation step 1, 2026-10-01, Orca session be653b22, ruling R5) -- SubprocessClaudeAdapter and
+// tests/runtime/claude/subprocessClaudeAdapter.test.ts were deleted in consolidation step 1
+// (ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md); the fixtures this comment means moved unchanged to
+// tests/runtime/claude/claudePhaseRunner.test.ts. ***
 function startCommand(w: Awaited<ReturnType<typeof world>>, command: string[]) {
   const env: NodeJS.ProcessEnv = { ...process.env, CCLOOP_CLAUDE_COMMAND: JSON.stringify(command), CCLOOP_CLAUDE_EXTRA_ARGS: "[]" };
   delete env.CCLOOP_CLAUDE_OBSERVED_USAGE_PATH;
@@ -108,6 +112,9 @@ describe("claude phase runner over stream-json (Orca claude stream usage)", () =
 
   // node's own CLI parsing would otherwise intercept flags after the script (e.g. `-p`, its --print alias), so the
   // stand-in is a script file, as tests/runtime/claude/subprocessClaudeAdapter.test.ts's fixtures already are.
+  // *** ERRATUM (consolidation step 1, 2026-10-01, Orca session be653b22, ruling R5) -- that file was deleted in consolidation step 1
+  // (ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md); the fixtures it names now live, unchanged, in
+  // tests/runtime/claude/claudePhaseRunner.test.ts. ***
   async function standIn(dir: string, ...lines: string[]) {
     const script = join(dir, "stand-in-claude.mjs");
     await writeFile(script, lines.map((line) => `process.stdout.write(${JSON.stringify(`${line}\n`)});`).join("\n"));

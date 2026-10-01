@@ -413,6 +413,10 @@ async function runClaude(request, claudeCommand, extraArgs) {
     // Orca claude stream usage (2026-09-27): real claude's json envelope and its stream's result event both carry
     // type "result"; the older SubprocessClaudeAdapter criteria's stand-ins print a bare {structured_output, usage}
     // line, still accepted so they keep testing what they test.
+    // *** ERRATUM (consolidation step 1, 2026-10-01, Orca session be653b22, ruling R5) -- SubprocessClaudeAdapter was deleted in consolidation step 1
+    // (ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md); the stand-ins this sentence means now live, unchanged,
+    // in tests/runtime/claude/claudePhaseRunner.test.ts, and tests/controller/runLoop.integration.test.ts's usage-aware
+    // fake reaches this runner through ClaudeAgentAdapter with the same bare line. ***
     if (event && typeof event === "object" && !Array.isArray(event) && Object.prototype.hasOwnProperty.call(event, "structured_output")) {
       fallbackEnvelope = event;
     }

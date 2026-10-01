@@ -92,9 +92,11 @@ node dist/cli.js run \
 ```bash
 node dist/cli.js resume \
   --run-dir /tmp/ccloop-runs/task-1 \
-  --adapter claude \
-  --adapter-config examples/v1/claude-adapter-config.json
+  --adapter scripted \
+  --adapter-config examples/v1/scripted-adapter-config.json
 ```
+
+claude 的 run 由 `run --agents` 起；在 #4 做完之前，`resume`／`sweep` 还不能续跑它们。
 
 不需要 `--contract`：契约已经在 run 目录里了。resume 会做所有权判定（这个 run 还归不归我）、边界分析（上次停在哪个 phase）、必要时走 owner-transfer。
 
@@ -116,10 +118,12 @@ node dist/cli.js ls --json /tmp/ccloop-runs    # 机器读的 {schemaVersion:1, 
 ```bash
 node dist/cli.js sweep \
   --root /tmp/ccloop-runs \
-  --adapter claude \
-  --adapter-config examples/v1/claude-adapter-config.json \
+  --adapter scripted \
+  --adapter-config examples/v1/scripted-adapter-config.json \
   --max-runs 5
 ```
+
+claude 的 run 由 `run --agents` 起；在 #4 做完之前，`resume`／`sweep` 还不能续跑它们。
 
 - `--max-runs` 必须是**字面上的正整数**（`1e3`、`2abc` 一律拒绝，不做容错解析）。它是人批准这次 sweep 的上限。
 - 它 bound 的是**进入的 run 数**，不是 attempt 总数——每个 run 各自还有自己契约里的 `maxAttempts`。
@@ -226,11 +230,7 @@ Adapter 契约（`src/runtime/types.ts`）有三个 phase：`plan` / `execute` /
 
 ### 6.2 `claude`——真跑
 
-```json
-{ "command": ["node", "scripts/claude-phase-runner.mjs"] }
-```
-
-`command` 是一个**任意子进程**——ccloop 不关心它内部怎么实现，只要满足「stdin 收 JSON、stdout 吐 JSON、exit 0」。
+claude 现在只经由 `run --agents <table> --agent-selection <file>` 或 `control` 跑；`--adapter` 不再接受 `claude`。`ClaudeAgentAdapter`（`src/runtime/claude/claudeAgentAdapter.ts`）每个 phase 起一个 `scripts/claude-phase-runner.mjs` 子进程：stdin 收 JSON 请求、stdout 吐 JSON 结果。
 
 仓库自带的 `scripts/claude-phase-runner.mjs` 是参考实现，它做了这些事：
 
@@ -375,7 +375,7 @@ node dist/cli.js ls "$(dirname "$RUN_DIR")"
 
 ⚠️ `minimal-contract.json` 里 `context.repoPath` 是 `"."`，所以请在一个 **git 仓库**里跑，否则 `git worktree add` 会失败。
 
-跑通之后再把 `--adapter` 换成 `claude`、`--adapter-config` 换成 `examples/v1/claude-adapter-config.json`，就是真跑了。**先确认你能承受它的 token 开销**。
+跑通之后改用 `run --agents <table> --agent-selection <file>`（见 §6.2）选 claude，就是真跑了。**先确认你能承受它的 token 开销**。
 
 ---
 

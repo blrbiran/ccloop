@@ -1,3 +1,4 @@
+// Consolidation step 1 (2026-10-01, ccloop spec docs/superpowers/specs/2026-10-01-claude-adapter-consolidation-step1-design.md §7.1, ruling R5): moved unchanged from tests/runtime/claude/subprocessClaudeAdapter.test.ts when SubprocessClaudeAdapter was deleted; these criteria drive scripts/claude-phase-runner.mjs directly or test the prompt builders.
 import { execFile, spawn } from "node:child_process";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { buildExecutorPrompt, buildVerifierPrompt } from "../../../src/runtime/claude/prompts.js";
-import { SubprocessClaudeAdapter } from "../../../src/runtime/claude/subprocessClaudeAdapter.js";
 
 const execFileAsync = promisify(execFile);
 const phaseRunnerPath = fileURLToPath(new URL("../../../scripts/claude-phase-runner.mjs", import.meta.url));
@@ -49,10 +49,6 @@ const contract = {
   },
 } as const;
 
-const adapter = new SubprocessClaudeAdapter({
-  command: ["node", "tests/fixtures/fake-claude.mjs"],
-});
-
 async function createFakeClaudeBinary(source: string): Promise<string> {
   const binDir = await mkdtemp(join(tmpdir(), "ccloop-claude-bin-"));
   const claudePath = join(binDir, "claude");
@@ -60,13 +56,6 @@ async function createFakeClaudeBinary(source: string): Promise<string> {
 ${source}`);
   await chmod(claudePath, 0o755);
   return binDir;
-}
-
-async function createNodeScript(prefix: string, source: string): Promise<string> {
-  const scriptDir = await mkdtemp(join(tmpdir(), prefix));
-  const scriptPath = join(scriptDir, "script.mjs");
-  await writeFile(scriptPath, source);
-  return scriptPath;
 }
 
 function spawnPhaseRunner(
@@ -265,7 +254,7 @@ function expectSuccessfulUsageOutcome(
   expect(serializedPayload).not.toContain("DO_NOT_PERSIST");
 }
 
-describe("SubprocessClaudeAdapter", () => {
+describe("claude phase runner", () => {
   it("includes the current attempt plan in the executor prompt", () => {
     const prompt = buildExecutorPrompt({
       attempt: 1,
@@ -320,52 +309,6 @@ describe("SubprocessClaudeAdapter", () => {
     expect(prompt).toContain("Current execution outcome:");
     expect(prompt).toContain('"changedFiles": [');
     expect(prompt).toContain('"src/index.ts"');
-  });
-
-  it("passes phase context through the wrapper and parses structured JSON", async () => {
-    const context = {
-      attempt: 1,
-      runDir: ".runs/demo",
-      worktreePath: "/tmp/worktree",
-      contract,
-      state: { status: "planning" },
-    } as any;
-
-    expect((await adapter.plan(context)).summary).toBe("change src/index.ts");
-
-    const execution = await adapter.execute(context);
-    expect(execution).not.toBeNull();
-    if (execution === null) {
-      throw new Error("expected execute result");
-    }
-    expect(execution.changedFiles).toEqual(["src/index.ts"]);
-    expect(execution.commandOutputs).toEqual(["/tmp/worktree"]);
-
-    expect((await adapter.verify(context)).approved).toBe(true);
-  });
-
-  it("preserves partial execute outcomes returned by the wrapper", async () => {
-    const context = {
-      attempt: 2,
-      runDir: ".runs/partial",
-      worktreePath: "/tmp/worktree",
-      contract,
-      state: { status: "executing" },
-    } as any;
-
-    const execution = await adapter.execute(context);
-    expect(execution).not.toBeNull();
-    if (execution === null) {
-      throw new Error("expected partial execute result");
-    }
-    expect(execution).toMatchObject({
-      completionStatus: "partial",
-      failureType: "timeout",
-      failureMessage: "subprocess timed out",
-      changedFiles: ["secret.txt"],
-    });
-    expect(execution).not.toHaveProperty("usageEvidence");
-    expect(execution).not.toHaveProperty("tokenUsage");
   });
 
 
@@ -671,92 +614,6 @@ describe("SubprocessClaudeAdapter", () => {
     );
   });
 
-  it("waits for close before parsing wrapper stdout", async () => {
-    const delayedWrapperPath = await createNodeScript(
-      "ccloop-wrapper-close-",
-      `let body = "";
-for await (const chunk of process.stdin) {
-  body += chunk.toString();
-}
-const request = JSON.parse(body);
-const payload = JSON.stringify({
-  changedFiles: ["src/index.ts"],
-  diffPatch: "diff --git a/src/index.ts b/src/index.ts",
-  commandOutputs: [request.worktreePath],
-  stdoutStderrLog: "ok"
-});
-const splitAt = payload.length - 5;
-process.stdout.write(payload.slice(0, splitAt));
-const tail = ${JSON.stringify('setTimeout(() => { process.stdout.write(process.argv[1]); }, 25); setTimeout(() => process.exit(0), 35);')};
-const { spawn } = await import("node:child_process");
-spawn(process.execPath, ["-e", tail, payload.slice(splitAt)], { stdio: ["ignore", "inherit", "ignore"] });
-process.exit(0);
-`,
-    );
-    const delayedAdapter = new SubprocessClaudeAdapter({ command: ["node", delayedWrapperPath] });
-    const context = {
-      attempt: 3,
-      runDir: ".runs/close",
-      worktreePath: "/tmp/worktree",
-      contract,
-      state: { status: "executing" },
-    } as any;
-
-    await expect(delayedAdapter.execute(context)).resolves.toMatchObject({
-      changedFiles: ["src/index.ts"],
-      commandOutputs: ["/tmp/worktree"],
-      stdoutStderrLog: "ok",
-    });
-  });
-
-  it("returns null when aborted execute yields no final result", async () => {
-    const markerPath = join(await mkdtemp(join(tmpdir(), "ccloop-wrapper-no-result-")), "marker.log");
-    const worktreePath = await createCommittedRepo({
-      "clean.txt": "clean",
-    });
-    const binDir = await createFakeClaudeBinary(`
-import { appendFileSync } from "node:fs";
-const markerPath = process.env.CLAUDE_MARKER_PATH;
-appendFileSync(markerPath, "started");
-process.on("SIGTERM", () => {
-  appendFileSync(markerPath, "SIGTERM");
-  process.exit(0);
-});
-setInterval(() => {}, 1000);
-`);
-    const originalPath = process.env.PATH;
-    const originalMarkerPath = process.env.CLAUDE_MARKER_PATH;
-    process.env.PATH = `${binDir}:${originalPath ?? ""}`;
-    process.env.CLAUDE_MARKER_PATH = markerPath;
-
-    const interruptedAdapter = new SubprocessClaudeAdapter({ command: ["node", phaseRunnerPath] });
-    const abortController = new AbortController();
-    const context = {
-      attempt: 5,
-      runDir: ".runs/interrupt-no-result",
-      worktreePath,
-      contract,
-      state: { status: "executing" },
-      abortSignal: abortController.signal,
-    } as any;
-
-    try {
-      const executionPromise = interruptedAdapter.execute(context);
-      await waitForFileToContain(markerPath, "started");
-      abortController.abort();
-
-      await expect(executionPromise).resolves.toBeNull();
-      expect(await readFile(markerPath, "utf8")).toContain("SIGTERM");
-    } finally {
-      process.env.PATH = originalPath;
-      if (originalMarkerPath === undefined) {
-        delete process.env.CLAUDE_MARKER_PATH;
-      } else {
-        process.env.CLAUDE_MARKER_PATH = originalMarkerPath;
-      }
-    }
-  }, MARKER_WAIT_TEST_TIMEOUT_MS);
-
   for (const phase of ["plan", "execute", "verify"] as const) {
     it(`terminates the inner Claude process when ${phase} is interrupted`, async () => {
       const markerPath = join(await mkdtemp(join(tmpdir(), `ccloop-wrapper-${phase}-`)), "marker.log");
@@ -807,71 +664,6 @@ setInterval(() => {}, 1000);
       expect(outcome.signal).toBeNull();
     }, MARKER_WAIT_TEST_TIMEOUT_MS);
   }
-
-  it("parses a large partial execute payload after wrapper interruption", async () => {
-    const markerPath = join(await mkdtemp(join(tmpdir(), "ccloop-wrapper-large-partial-")), "marker.log");
-    const worktreePath = await createCommittedRepo({
-      "big.txt": "before\n",
-    });
-    const binDir = await createFakeClaudeBinary(`
-import { appendFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-const markerPath = process.env.CLAUDE_MARKER_PATH;
-writeFileSync(join(process.cwd(), "big.txt"), "x".repeat(400_000) + "\\n");
-appendFileSync(markerPath, "started\\n");
-process.on("SIGTERM", () => {
-  appendFileSync(markerPath, "SIGTERM\\n");
-  process.exit(0);
-});
-setInterval(() => {}, 1000);
-`);
-    const originalPath = process.env.PATH;
-    const originalMarkerPath = process.env.CLAUDE_MARKER_PATH;
-    process.env.PATH = `${binDir}:${originalPath ?? ""}`;
-    process.env.CLAUDE_MARKER_PATH = markerPath;
-
-    const interruptedAdapter = new SubprocessClaudeAdapter({ command: ["node", phaseRunnerPath] });
-    const abortController = new AbortController();
-    const context = {
-      attempt: 4,
-      runDir: ".runs/interrupt-large-partial",
-      worktreePath,
-      contract,
-      state: { status: "executing" },
-      abortSignal: abortController.signal,
-    } as any;
-
-    try {
-      const executionPromise = interruptedAdapter.execute(context);
-      await waitForFileToContain(markerPath, "started");
-      abortController.abort();
-
-      const execution = await executionPromise;
-      const markerContents = await readFile(markerPath, "utf8");
-
-      expect(markerContents).toContain("SIGTERM");
-      expect(execution).not.toBeNull();
-      if (execution === null) {
-        throw new Error("expected partial execute result");
-      }
-      expect(execution).toMatchObject({
-        completionStatus: "partial",
-        failureType: "timeout",
-        changedFiles: ["big.txt"],
-      });
-      expect(execution).not.toHaveProperty("usageEvidence");
-      expect(execution).not.toHaveProperty("tokenUsage");
-      expect(execution.diffPatch).toContain("diff --git a/big.txt b/big.txt");
-      expect(execution.diffPatch.length).toBeGreaterThan(350_000);
-    } finally {
-      process.env.PATH = originalPath;
-      if (originalMarkerPath === undefined) {
-        delete process.env.CLAUDE_MARKER_PATH;
-      } else {
-        process.env.CLAUDE_MARKER_PATH = originalMarkerPath;
-      }
-    }
-  }, MARKER_WAIT_TEST_TIMEOUT_MS);
 
   it("includes brand-new untracked files in partial execute diff recovery", async () => {
     const worktreePath = await createCommittedRepo({

@@ -141,6 +141,9 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
   // and no contract has been read at this point. Both numbers are required: §12's whole argument
   // is that choosing `--adapter claude` is an INFORMED and BOUNDED approval of this sweep, and
   // without N the "informed" half does not hold.
+  // *** ERRATUM (consolidation step 1, 2026-10-01, Orca session be653b22, ruling R5) -- `--adapter claude` no longer exists: ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md
+  // deleted SubprocessClaudeAdapter and the CLI's `claude` adapter in consolidation step 1, so a sweep is approved with
+  // `--adapter scripted` or `--adapter codex`; the argument above holds for whichever adapter is named. ***
   //
   // The count is named for what it counts. A bare "eligible" reads as "these N runs will run",
   // while the filter covers ONE of evaluateResumeEligibility's eight criteria (isObservedEligible
@@ -148,6 +151,8 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
   // at the gate, which empties the "informed" half just as surely as dropping N would. The
   // qualification is the same one `ccloop ls` prints over the same field (CONSISTENCY_NOTICE in
   // ../registry/renderRuns.ts), stated in the same terms so the two read-only surfaces agree.
+  // *** ERRATUM (consolidation step 1, 2026-10-01, Orca session be653b22, ruling R5) -- the same correction: `--adapter claude` was removed from the
+  // CLI in consolidation step 1 (ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md); read it as the adapter the operator names. ***
   options.stderr(
     `sweep: ${candidates.length} run(s) under ${options.root} observed eligibleForContinuation=true ` +
       `(an observed field, not a decision that the run may be resumed), ` +

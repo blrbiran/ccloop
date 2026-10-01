@@ -4,8 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { SubprocessClaudeAdapter } from "../../../src/runtime/claude/subprocessClaudeAdapter.js";
-import { codexFixture } from "../codex/fixture.js";
 
 // Orca backlog #12(a) (2026-09-29; Orca handoff §4.0 and ccloop handoff "挂着的": the runner's stderr was decoded chunk
 // by chunk with toString, the same fault ruling 26 closed on stdin). A failure message is what a person reads to learn
@@ -53,15 +51,5 @@ describe("stderr decoding across chunks (Orca backlog #12(a))", () => {
     expect(code).toBe(1);
     expect(stderr).toContain(`stderr: ${MESSAGE}`);
     expect(stderr).not.toContain("�");
-  }, 20_000);
-
-  it("SubprocessClaudeAdapter's error carries a character its command's stderr split across two chunks", async () => {
-    const { script } = await splitStderrStandIn();
-    const f = await codexFixture("unused");
-    dirs.push(f.dir);
-    const error = await new SubprocessClaudeAdapter({ command: [process.execPath, script] }).plan(f.context).then(() => null, (e: unknown) => e);
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain(MESSAGE);
-    expect((error as Error).message).not.toContain("�");
   }, 20_000);
 });

@@ -45,10 +45,11 @@ const KNOWN_REDS = new Set([
   "tests/control/stopProof.test.ts > quiet execution proof > does not treat leader exit as group quiet and proves only after the full tree is gone",
   // Load flakes (all "Test timed out in 5000ms"), §9 of the design spec.
   "run-scenario CLI > records env names only and tracks descendants rooted at the spawned pid",
-  "runLoop > persists phase usage evidence from the subprocess adapter without recomputing controller totals",
+  // Consolidation step 1 (2026-10-01): two names renamed with their criteria; five run-scenario names removed with theirs.
+  "runLoop > persists phase usage evidence from the claude agent adapter without recomputing controller totals",
   "runLoop > accounts an execute timeout that rejects after the abort as exhaustion",
   "run-scenario CLI > fails on an existing run directory without creating evidence or harvesting stale run data",
-  "SubprocessClaudeAdapter > waits for close before interrupting a close-pending successful execute",
+  "claude phase runner > waits for close before interrupting a close-pending successful execute",
   "Codex phase process > kills a TERM-ignoring process before returning abort",
   // Added in §11.1, measured after Task 2 (5 more names + one codexWatchdog pair = 6 more names).
   "run-scenario CLI > runs when invoked through a canonical-path alias",

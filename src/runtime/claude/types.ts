@@ -1,9 +1,5 @@
 export type ClaudePhase = "plan" | "execute" | "verify";
 
-export type SubprocessAdapterConfig = {
-  command: string[];
-};
-
 type ClaudePhaseRequestBase = {
   prompt: string;
   attempt: number;

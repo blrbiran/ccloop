@@ -14,7 +14,6 @@ import { createStopRequestSignal, runLoop } from "./controller/runLoop.js";
 import type { StopRequestSignal } from "./controller/runLoop.js";
 import { renderScanTable, scanRootFailureDetail, toScanResult } from "./registry/renderRuns.js";
 import { defaultScanDeps, scanRuns } from "./registry/scanRuns.js";
-import { SubprocessClaudeAdapter } from "./runtime/claude/subprocessClaudeAdapter.js";
 import { CodexAdapter } from "./runtime/codex/codexAdapter.js";
 import { ScriptedAdapter } from "./runtime/scriptedAdapter.js";
 import type { RuntimeAdapter } from "./runtime/types.js";
@@ -27,7 +26,7 @@ export type ParsedArgs =
       command: "run";
       contractPath: string;
       runDir: string;
-      adapter: "scripted" | "claude" | "codex";
+      adapter: "scripted" | "codex";
       adapterConfigPath: string;
     }
   // Orca agent selection (2026-09-26), spec §4.9: the agents-table form of `run`, used by Orca's reconcile run.
@@ -41,13 +40,13 @@ export type ParsedArgs =
   | {
       command: "resume";
       runDir: string;
-      adapter: "scripted" | "claude" | "codex";
+      adapter: "scripted" | "codex";
       adapterConfigPath: string;
     }
   | {
       command: "sweep";
       root: string;
-      adapter: "scripted" | "claude" | "codex";
+      adapter: "scripted" | "codex";
       adapterConfigPath: string;
       maxRuns: number;
     }
@@ -190,7 +189,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       throw new Error("missing required flags");
     }
 
-    if (sweepAdapter !== "scripted" && sweepAdapter !== "claude" && sweepAdapter !== "codex") {
+    if (sweepAdapter !== "scripted" && sweepAdapter !== "codex") {
       throw new Error("invalid adapter");
     }
 
@@ -219,7 +218,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     throw new Error("missing required flags");
   }
 
-  if (adapter !== "scripted" && adapter !== "claude" && adapter !== "codex") {
+  if (adapter !== "scripted" && adapter !== "codex") {
     throw new Error("invalid adapter");
   }
 
@@ -250,14 +249,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
 // adapter config BEFORE the scan (§8's first line: a config that cannot be read exits 1 without
 // scanning) yet must not construct the adapter until sweepRuns adopts a run — the two halves that
 // run/resume perform together happen at different times there.
-function buildAdapter(adapter: "scripted" | "claude" | "codex", config: unknown): RuntimeAdapter {
+function buildAdapter(adapter: "scripted" | "codex", config: unknown): RuntimeAdapter {
   if (adapter === "scripted") {
     return new ScriptedAdapter((config as ScriptedAdapterConfig).frames);
   }
 
-  if (adapter === "codex") return new CodexAdapter(config);
-
-  return new SubprocessClaudeAdapter(config as ConstructorParameters<typeof SubprocessClaudeAdapter>[0]);
+  return new CodexAdapter(config);
 }
 
 // `sweep` is deliberately NOT in this parameter's type. It carries an `adapter` and an

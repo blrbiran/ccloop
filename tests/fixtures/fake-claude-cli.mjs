@@ -17,6 +17,9 @@
 //   <marker>.calls  `<phase>`                     (fake codex's format; not written by hang/grandchild)
 //   <marker>.tasks  `<phase> <entry key or ->`   (fake codex's format; script mode only)
 // <marker> itself is overwritten with {args, cwd, prompt, model, claudeConfigDir, pid} on every call.
+// *** ERRATUM (consolidation step 1, 2026-10-01, Orca session be653b22, ruling R5) -- tests/fixtures/fake-claude.mjs no longer exists: it was deleted in
+// consolidation step 1 (ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md) together with SubprocessClaudeAdapter, its
+// only user. This file is the only fake claude left. ***
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 

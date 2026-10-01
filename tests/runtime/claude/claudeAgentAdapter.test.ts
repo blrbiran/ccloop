@@ -16,6 +16,9 @@ import { codexFixture } from "../codex/fixture.js";
 // claude CLI (here tests/fixtures/fake-claude-cli.mjs) through scripts/claude-phase-runner.mjs in a
 // registered process group. These criteria exist because the older SubprocessClaudeAdapter never
 // registered anything, which made the control stop proof hold vacuously (spec §1.2).
+// *** ERRATUM (consolidation step 1, 2026-10-01, Orca session be653b22, ruling R5) -- SubprocessClaudeAdapter no longer exists: it was deleted in
+// consolidation step 1 (ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md); its runner-level criteria moved unchanged to
+// tests/runtime/claude/claudePhaseRunner.test.ts, and ClaudeAgentAdapter is the only claude adapter. ***
 const exec = promisify(execFile);
 const fakeCli = fileURLToPath(new URL("../../fixtures/fake-claude-cli.mjs", import.meta.url));
 const alive = async (pid: number) => exec("ps", ["-o", "stat=", "-p", String(pid)]).then((r) => r.stdout.trim().length > 0 && !r.stdout.trim().startsWith("Z"), () => false);
