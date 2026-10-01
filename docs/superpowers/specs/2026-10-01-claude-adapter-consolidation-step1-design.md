@@ -56,6 +56,18 @@ Orca never passes `--adapter claude` (measured: no match in `src`, `tests`, `scr
 - `adapterName` in `src/sweep/sweepRuns.ts` loses `"claude"`. Its two comments about approving `--adapter claude`
   are published text: each keeps its words and gets a named ERRATUM appended at the end of its comment block.
 - `examples/v1/claude-adapter-config.json`.
+- Published comments that this step makes false keep their words and get a named ERRATUM at the end of their block.
+  Found by scanning `src`, `scripts`, `tests`, `validation` and `README.md` for `SubprocessClaudeAdapter`,
+  `subprocessClaudeAdapter`, `subprocess adapter` and `fake-claude.mjs`, outside the files this step deletes; the plan
+  re-runs the scan before editing:
+  - `src/runtime/claude/claudeAgentAdapter.ts` (header: "SubprocessClaudeAdapter stays as it was")
+  - `scripts/claude-phase-runner.mjs` (the comment naming "the older SubprocessClaudeAdapter criteria's stand-ins")
+  - `tests/runtime/claude/claudeAgentAdapter.test.ts` (header)
+  - `tests/runtime/claude/claudePhaseRunnerEnv.test.ts` (header: "the older SubprocessClaudeAdapter still …")
+  - `tests/runtime/claude/claudePhaseRunnerStream.test.ts` (the two comments naming `subprocessClaudeAdapter.test.ts`
+    and its fixtures; the criterion name that says "older SubprocessClaudeAdapter stand-ins" stays — those stand-ins
+    move with the runner criteria)
+  - `tests/fixtures/fake-claude-cli.mjs` (header: "fake-claude.mjs … stays untouched")
 - README §3.2 (`resume`) and §3.4 (`sweep`): the examples use `--adapter scripted` with
   `examples/v1/scripted-adapter-config.json`, with one line saying that claude runs are started by `run --agents` and
   that continuing them needs step ② (#4). Any other README mention of `--adapter claude` is rewritten the same way.
@@ -97,9 +109,18 @@ unchanged, because their fixtures leave the worktree clean.
 
 A post-SIGTERM partial carries no `usageEvidence`/`tokenUsage`. When the result has no `tokenUsage` and
 `readObservedTokens` gives a value, the adapter sets `tokenUsage` to that value; when it gives `null`, `tokenUsage`
-stays absent — never 0. `runLoop` books `tokenUsage` the same way it books `observedTokens` from a thrown
-`ClaudePhaseAborted`, so the usage Orca sees for an aborted claude execute is unchanged by this step; only the shape
-it arrives in changes. A result that already carries `tokenUsage` is left as it is.
+stays absent — never 0. A result that already carries `tokenUsage` is left as it is.
+
+What `runLoop` books then depends on how the execute was stopped (measured in `runLoop.ts`):
+
+- **Handoff abort, stop request** (the phase did not reach `runLoop`'s own timeout): today the thrown
+  `ClaudePhaseAborted` becomes a `PhaseExecutionError` whose `tokenUsage` is booked; after this step the partial's
+  `tokenUsage` is booked through `settlePhase`. Same number, different shape.
+- **`runLoop`'s own phase timeout** (`awaitAbortedResult: true`): today a thrown error lands in
+  `PhaseOutcome.abortedError`, which nothing reads, so the observation is **not booked**. After this step, when the
+  runner returns a partial, its `tokenUsage` **is** booked. This is a change in what is booked, in the direction of
+  booking usage that was spent; when there is no partial (clean worktree) nothing changes and the observation is still
+  lost (registered in §9).
 
 ### 5.3 Stop grace
 
@@ -197,8 +218,9 @@ names is the file at the base commit; the plan lists them again from a fresh rea
   §5: an aborted execute whose worktree holds a ~400 kB change returns the partial (`failureType: "timeout"`,
   `diffPatch` longer than 350 000 characters), not `null` and not `ClaudePhaseAborted`.
 - `runLoop > persists phase usage evidence from the subprocess adapter without recomputing controller totals` → the
-  same assertions with `ClaudeAgentAdapter` and `tests/fixtures/fake-claude-cli.mjs`; renamed to say "claude agent
-  adapter" instead of "subprocess adapter".
+  same assertions with `ClaudeAgentAdapter`; the test's usage-aware fake `claude` is named by the installation's
+  `command` instead of being put on `PATH` (the runner still accepts its bare `{structured_output, usage}` line);
+  renamed to say "claude agent adapter" instead of "subprocess adapter".
 
 Each rewritten criterion carries a comment naming this spec and ruling R5.
 
@@ -210,6 +232,10 @@ Each rewritten criterion carries a comment naming this spec and ruling R5.
 - With `killGraceMs` smaller than `partialOutcomeRecoveryWindowMs` (e.g. 300 ms vs 3 000 ms) and a fake claude that
   ignores SIGTERM until the window ends, the partial still arrives (the runner was not SIGKILLed at `killGraceMs`).
 - An aborted **plan** whose runner prints a JSON object still throws `ClaudePhaseAborted` (the rule is execute-only).
+
+The criteria above need a fake claude that changes the worktree and then hangs, with and without ignoring SIGTERM.
+`tests/fixtures/fake-claude-cli.mjs` has no such mode (its modes: `ok`, `script`, `hang`, `grandchild`,
+`usage-then-hang`, `start-then-hang`, `flood`), so this step adds modes to it; existing modes are not changed.
 - Orca: `handoffGraceMsOf` with a recovery window larger than `killGraceMs` is that window + 5 000 + 60 000; with a
   smaller one it is unchanged; with an unusable window it is 120 000.
 
@@ -222,7 +248,10 @@ Both keep every case they have today (with a recovery window that does not chang
 
 ### 7.6 Known-reds list (`scripts/check-known-reds.mjs`)
 
-The four `run-scenario CLI > …` names leave the list with their criteria. The two renamed criteria are renamed there:
+The five `run-scenario CLI > …` names leave the list with their criteria (`records env names only …`,
+`fails on an existing run directory …`, `runs when invoked through a canonical-path alias`,
+`creates a fresh nested evidence directory …`, `records claudeChildExited as NOT_OBSERVABLE …`), taking the list from
+14 names to 9. The two renamed criteria are renamed there:
 `SubprocessClaudeAdapter > waits for close before interrupting a close-pending successful execute` →
 `claude phase runner > …`, and the `runLoop > persists phase usage evidence …` name → its new name. No name is added.
 
@@ -237,7 +266,7 @@ Each runs in a `git clone --local` copy only; restoration is proved by `git diff
 | M3 | fill `tokenUsage` with 0 when there is no observation | the new no-observation half of the usage criterion |
 | M4 | execute stop grace back to `killGraceMs` | the window-larger-than-grace criterion |
 | M5 | accept the stdout only on `aborted`, not on `timeout` | the adapter-timeout criterion |
-| M6 | accept the stdout when the runner exited non-zero | none of the clean-worktree criteria may change; if all stay green, add a criterion that does go red before claiming M6 |
+| M6 | accept the stdout when the runner exited non-zero | expected to stay green: the runner never prints a JSON object and then exits non-zero except when the write itself failed, and `ClaudeAgentAdapter` cannot be given a stand-in runner. If it stays green it is recorded as an equivalent mutant with that reason, not claimed as covered |
 | M7 | Orca: drop the window from `handoffGraceMsOf` | the new Orca criterion |
 | M8 | Orca: unusable window counts 0 instead of falling back | the new Orca criterion |
 
@@ -247,6 +276,8 @@ Each runs in a `git clone --local` copy only; restoration is proved by `git diff
   nothing claude prints after the interrupt — the partial is built from git. Not changed here.
 - `ClaudeAgentAdapter`'s drain after the runner's `exit` (`drainTimer`, 1 000 ms) is pinned by no criterion (§7.2).
 - Exports of `validation/v1/lib/evidence.ts` that only `run-scenario.ts` used become unused.
+- `PhaseOutcome.abortedError` is set but never read: an execute that throws after `runLoop`'s own timeout loses its
+  observed usage (§5.2). Applies to codex and to claude without a partial. Not changed here.
 - `partialOutcomeRecoveryWindowMs` has no upper bound in the contract schema; a large window lengthens the execute
   stop on both sides by design (R3, R4).
 
