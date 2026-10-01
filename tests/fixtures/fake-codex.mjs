@@ -4,6 +4,9 @@ const mode=process.argv[2], marker=process.argv[3];
 // Orca agent selection (2026-09-26), spec §4.8: `--version` with no `exec` answers a fixed version and
 // writes nothing; every other call appends what the real codex would receive (from `exec` on) as one
 // JSON array line to `<marker>.argv`. Every mode below is otherwise unchanged.
+// Orca retire-legacy-orca-run (2026-10-01), spec §3.4: mode `frames`, argv `frames <marker> <framesFile>`, plays
+// the frame of the attempt number (the working directory's `attempt-<n>`, minus one) from the framesFile list of
+// the task named in the prompt (else the `"*"` list); no frame ⇒ stderr `no frame for <task> attempt <n>`, exit 3.
 if(process.argv.at(-1)==="--version"&&!process.argv.includes("exec")) {await new Promise(resolve=>process.stdout.write("9.9.9-fake\n",resolve));process.exit(0);}
 appendFileSync(marker+".argv",JSON.stringify(process.argv.slice(process.argv.indexOf("exec")))+"\n");
 const CONTINUATION="Treat continuation input fields unfinished, pendingDecisions, and awaitingHuman as required planning inputs.";
@@ -42,6 +45,16 @@ process.stdin.on("end",()=>{
     entry=key===undefined?undefined:script[key];
     appendFileSync(marker+".tasks",`${phase} ${key??"-"}\n`);
     if(phase==="execute" && entry===undefined) {process.stderr.write(`fake-codex script has no entry for task ${task}\n`);process.exitCode=3;return;}
+  }
+  if(mode==="frames") {
+    const task={plan:/^Plan one isolated L2 attempt for task (.+)\.$/m,execute:/^Execute one isolated attempt for task (.+)\.$/m,verify:/^Verify task (.+)\.$/m}[phase].exec(prompt)?.[1];
+    const frames=JSON.parse(readFileSync(process.argv[4],"utf8"));
+    const attempt=Number(/attempt-(\d+)$/.exec(process.cwd())?.[1]);
+    const frame=(frames[task]??frames["*"])?.[attempt-1];
+    if(frame===undefined) {process.stderr.write(`fake-codex frames: no frame for ${task} attempt ${attempt}\n`);process.exitCode=3;return;}
+    if(phase==="plan") body={summary:"frames",primaryTargetPaths:[]};
+    if(phase==="execute") body={changedFiles:frame.changedFiles??[],diffPatch:"",commandOutputs:[],stdoutStderrLog:""};
+    if(phase==="verify") body={approved:frame.approved??true,rejectCategory:"",primaryTargetPaths:[],failingCommand:null,safeToRetry:frame.safeToRetry??false,evidence:[],pauseSignals:[],stopSignals:frame.stopSignals??[]};
   }
   const respond=()=>{
   if(mode==="script" && phase==="execute") for(const [path,content] of Object.entries(entry.files)) writeFileSync(path,content);
