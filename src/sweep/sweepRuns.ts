@@ -155,6 +155,9 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
   // *** ERRATUM (consolidation step 1, 2026-10-01, Orca session be653b22, ruling R5) -- `--adapter claude` no longer exists: ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md
   // deleted SubprocessClaudeAdapter and the CLI's `claude` adapter in consolidation step 1, so a sweep is approved with
   // `--adapter scripted` or `--adapter codex`; the argument above holds for whichever adapter is named. ***
+  // *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling C-1) -- the CLI no longer
+  // takes `--adapter` at all (ccloop spec 2026-10-01-retire-old-cli-entry-design.md): a sweep from the CLI is approved
+  // with `sweep --agents <table>`, and each run's agent is the one that run froze. ***
   //
   // The count is named for what it counts. A bare "eligible" reads as "these N runs will run",
   // while the filter covers ONE of evaluateResumeEligibility's eight criteria (isObservedEligible
@@ -164,6 +167,9 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
   // ../registry/renderRuns.ts), stated in the same terms so the two read-only surfaces agree.
   // *** ERRATUM (consolidation step 1, 2026-10-01, Orca session be653b22, ruling R5) -- the same correction: `--adapter claude` was removed from the
   // CLI in consolidation step 1 (ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md); read it as the adapter the operator names. ***
+  // *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling C-1) -- the CLI no longer
+  // takes `--adapter` at all (ccloop spec 2026-10-01-retire-old-cli-entry-design.md): a sweep from the CLI is approved
+  // with `sweep --agents <table>`, and each run's agent is the one that run froze. ***
   options.stderr(
     `sweep: ${candidates.length} run(s) under ${options.root} observed eligibleForContinuation=true ` +
       `(an observed field, not a decision that the run may be resumed), ` +

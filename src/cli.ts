@@ -17,21 +17,12 @@ import { createStopRequestSignal, runLoop } from "./controller/runLoop.js";
 import type { StopRequestSignal } from "./controller/runLoop.js";
 import { renderScanTable, scanRootFailureDetail, toScanResult } from "./registry/renderRuns.js";
 import { defaultScanDeps, scanRuns } from "./registry/scanRuns.js";
-import { CodexAdapter } from "./runtime/codex/codexAdapter.js";
-import { ScriptedAdapter } from "./runtime/scriptedAdapter.js";
 import type { RuntimeAdapter } from "./runtime/types.js";
 import { sweepRuns } from "./sweep/sweepRuns.js";
 import { attachLockInspections, defaultLockRowDeps } from "./unlock/lockRows.js";
 import { unlockOwnerTransferLock } from "./unlock/unlockCommand.js";
 
 export type ParsedArgs =
-  | {
-      command: "run";
-      contractPath: string;
-      runDir: string;
-      adapter: "scripted" | "codex";
-      adapterConfigPath: string;
-    }
   // Orca agent selection (2026-09-26), spec §4.9: the agents-table form of `run`, used by Orca's reconcile run.
   | {
       command: "run";
@@ -39,19 +30,6 @@ export type ParsedArgs =
       runDir: string;
       agentsTablePath: string;
       agentSelectionPath: string;
-    }
-  | {
-      command: "resume";
-      runDir: string;
-      adapter: "scripted" | "codex";
-      adapterConfigPath: string;
-    }
-  | {
-      command: "sweep";
-      root: string;
-      adapter: "scripted" | "codex";
-      adapterConfigPath: string;
-      maxRuns: number;
     }
   // Consolidation step 2 (spec 2026-10-01-agents-resume-sweep-design.md §3.2/§3.3): the agents-table forms of resume and
   // sweep, which continue runs started by `run --agents` with the selection each run froze into its run directory.
@@ -76,15 +54,13 @@ export type ParsedArgs =
   // ruling 73 forbids. The refusal happens once, in parseArgs, where the operator typed it.
   | ({ command: "unlock"; runDir: string } & ({ force: false } | { force: true; expectedDigest: string }));
 
-type ScriptedAdapterConfig = {
-  frames: ConstructorParameters<typeof ScriptedAdapter>[0];
-};
-
 // §12's governance position: --max-runs is the bound a human approves the sweep against, so
 // anything that is not literally a positive integer refuses the sweep rather than defaulting
 // it. The digits-only test is deliberate — Number("1e3") is 1000 and parseInt("2abc") is 2,
 // and neither is a bound anyone typed.
 // (Consolidation step 2: moved here unchanged from the sweep branch of parseArgs, so both sweep forms share it.)
+// *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling C-1) -- only one sweep
+// form is left, `sweep --agents`; the `--adapter` form was removed. ***
 function parseMaxRuns(maxRunsRaw: string): number {
   if (!/^\d+$/.test(maxRunsRaw) || Number(maxRunsRaw) < 1) {
     throw new Error("--max-runs must be a positive integer");
@@ -176,6 +152,13 @@ export function parseArgs(argv: string[]): ParsedArgs {
     throw new Error("expected `run`, `resume`, `sweep`, `ls`, or `unlock` command");
   }
 
+  // Consolidation step 4 (spec 2026-10-01-retire-old-cli-entry-design.md §3.1, controller ruling C-1): the old
+  // entry `--adapter scripted|codex --adapter-config <file>` is gone from run, resume and sweep. Checked before any
+  // other flag, on the raw arguments, so the refusal reads the same whatever else is on the line.
+  if (argv.slice(1).some((arg) => arg === "--adapter" || arg === "--adapter-config")) {
+    throw new Error("--adapter was removed; use --agents <table>");
+  }
+
   const values = new Map<string, string>();
   for (let index = 1; index < argv.length; index += 2) {
     values.set(argv[index]!, argv[index + 1]!);
@@ -191,119 +174,37 @@ export function parseArgs(argv: string[]): ParsedArgs {
   // freezes its selection into `<runDir>/agent-selection.json`, and `resume`/`sweep` take `--agents <table>` (without
   // `--agent-selection`, which stays `run`'s alone) to continue such runs with it. The exclusivity with
   // --adapter/--adapter-config is unchanged and still checked first. ***
+  // *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling C-1) -- --adapter and
+  // --adapter-config no longer exist, so there is nothing for `--agents` to replace or be exclusive with, and no
+  // `sweep` early return or run/resume flag parsing below: either old flag is refused by the check above, and
+  // `--agents` is required by all three commands (with `--agent-selection` for `run`). ***
   const agentsTablePath = values.get("--agents");
   const agentSelectionPath = values.get("--agent-selection");
-  if (agentsTablePath !== undefined || agentSelectionPath !== undefined) {
-    if (values.has("--adapter") || values.has("--adapter-config")) {
-      throw new Error("--agents and --adapter are mutually exclusive");
+  if (command !== "run") {
+    // The selection is the run's own (frozen by `run --agents`), not the caller's.
+    if (agentSelectionPath !== undefined) {
+      throw new Error("--agent-selection is only supported by run");
     }
-    if (command !== "run") {
-      // The selection is the run's own (frozen by `run --agents`), not the caller's.
-      if (agentSelectionPath !== undefined) {
-        throw new Error("--agent-selection is only supported by run");
-      }
-      if (command === "resume") {
-        const resumeRunDir = values.get("--run-dir");
-        if (!resumeRunDir || !agentsTablePath) {
-          throw new Error("missing required flags");
-        }
-        return { command, runDir: resumeRunDir, agentsTablePath };
-      }
-      const sweepRoot = values.get("--root");
-      const sweepMaxRunsRaw = values.get("--max-runs");
-      if (!sweepRoot || !agentsTablePath || !sweepMaxRunsRaw) {
+    if (command === "resume") {
+      const resumeRunDir = values.get("--run-dir");
+      if (!resumeRunDir || !agentsTablePath) {
         throw new Error("missing required flags");
       }
-      return { command, root: sweepRoot, agentsTablePath, maxRuns: parseMaxRuns(sweepMaxRunsRaw) };
+      return { command, runDir: resumeRunDir, agentsTablePath };
     }
-    const agentsRunDir = values.get("--run-dir");
-    const agentsContractPath = values.get("--contract");
-    if (!agentsRunDir || !agentsContractPath || !agentsTablePath || !agentSelectionPath) {
+    const sweepRoot = values.get("--root");
+    const sweepMaxRunsRaw = values.get("--max-runs");
+    if (!sweepRoot || !agentsTablePath || !sweepMaxRunsRaw) {
       throw new Error("missing required flags");
     }
-    return { command, contractPath: agentsContractPath, runDir: agentsRunDir, agentsTablePath, agentSelectionPath };
+    return { command, root: sweepRoot, agentsTablePath, maxRuns: parseMaxRuns(sweepMaxRunsRaw) };
   }
-
-  // `sweep` takes its root as `--root`, not as a positional (L3 §6): the pairing loop above is
-  // pure flag/value, so `sweep <root> --adapter x` would pair `<root>` with `--adapter` and then
-  // report missing flags on a command line that reads as legal. Handled before the `--run-dir`
-  // check below because a sweep has no single run directory to require.
-  if (command === "sweep") {
-    const root = values.get("--root");
-    const sweepAdapter = values.get("--adapter");
-    const sweepAdapterConfigPath = values.get("--adapter-config");
-    const maxRunsRaw = values.get("--max-runs");
-
-    if (!root || !sweepAdapter || !sweepAdapterConfigPath || !maxRunsRaw) {
-      throw new Error("missing required flags");
-    }
-
-    if (sweepAdapter !== "scripted" && sweepAdapter !== "codex") {
-      throw new Error("invalid adapter");
-    }
-
-    return {
-      command,
-      root,
-      adapter: sweepAdapter,
-      adapterConfigPath: sweepAdapterConfigPath,
-      maxRuns: parseMaxRuns(maxRunsRaw),
-    };
-  }
-
-  const runDir = values.get("--run-dir");
-  const adapter = values.get("--adapter");
-  const adapterConfigPath = values.get("--adapter-config");
-
-  if (!runDir || !adapter || !adapterConfigPath) {
+  const agentsRunDir = values.get("--run-dir");
+  const agentsContractPath = values.get("--contract");
+  if (!agentsRunDir || !agentsContractPath || !agentsTablePath || !agentSelectionPath) {
     throw new Error("missing required flags");
   }
-
-  if (adapter !== "scripted" && adapter !== "codex") {
-    throw new Error("invalid adapter");
-  }
-
-  if (command === "resume") {
-    return {
-      command,
-      runDir,
-      adapter,
-      adapterConfigPath,
-    };
-  }
-
-  const contractPath = values.get("--contract");
-  if (!contractPath) {
-    throw new Error("missing required flags");
-  }
-
-  return {
-    command,
-    contractPath,
-    runDir,
-    adapter,
-    adapterConfigPath,
-  };
-}
-
-// Construction only, no I/O. Split out of loadAdapter because `sweep` has to read and parse its
-// adapter config BEFORE the scan (§8's first line: a config that cannot be read exits 1 without
-// scanning) yet must not construct the adapter until sweepRuns adopts a run — the two halves that
-// run/resume perform together happen at different times there.
-function buildAdapter(adapter: "scripted" | "codex", config: unknown): RuntimeAdapter {
-  if (adapter === "scripted") {
-    return new ScriptedAdapter((config as ScriptedAdapterConfig).frames);
-  }
-
-  return new CodexAdapter(config);
-}
-
-// `sweep` is deliberately NOT in this parameter's type. It carries an `adapter` and an
-// `adapterConfigPath` and so is structurally accepted by `Exclude<ParsedArgs, { command: "ls" }>`,
-// which would let a future edit place the sweep branch after this call — legal to the compiler,
-// and a violation of both the config-read ordering above and C3's banner ordering.
-async function loadAdapter(parsed: Extract<ParsedArgs, { command: "run" | "resume"; adapterConfigPath: string }>): Promise<RuntimeAdapter> {
-  return buildAdapter(parsed.adapter, JSON.parse(await readFile(parsed.adapterConfigPath, "utf8")) as unknown);
+  return { command, contractPath: agentsContractPath, runDir: agentsRunDir, agentsTablePath, agentSelectionPath };
 }
 
 // Selection-file shape (P18: the selection itself is validated with agents/types.js's own
@@ -361,6 +262,8 @@ async function adapterForSelectionFile(
   }
   const adapter = getDescriptor(config.kind).createAdapter(config);
   // The same notice `run --adapter codex` prints below.
+  // *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling C-1) -- `run --adapter
+  // codex` and its notice line were removed; this is now the only place the notice is printed. ***
   if (config.kind === "codex") console.error("Codex budgetMode=soft: token usage is accounted after each phase; no strict token cap is guaranteed.");
   return { file: file.data, adapter };
 }
@@ -472,10 +375,10 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     // The agents-table form of `run` (spec §4.9) builds its adapter from the table, not from --adapter.
-    if (parsed.command === "run" && "agentsTablePath" in parsed) return await runWithAgents(parsed);
+    if (parsed.command === "run") return await runWithAgents(parsed);
 
     // Consolidation step 2, spec §3.2: `resume --agents` rebuilds the adapter from the selection the run froze.
-    if (parsed.command === "resume" && "agentsTablePath" in parsed) {
+    if (parsed.command === "resume") {
       const table = await readAgentsTable(parsed.agentsTablePath);
       const adapter = await adapterForFrozenSelection(table, parsed.runDir);
       const finalState = await resumeLoop(parsed.runDir, adapter);
@@ -485,63 +388,24 @@ export async function main(argv: string[]): Promise<number> {
     // Consolidation step 2, spec §3.3: `sweep --agents` builds each candidate's adapter from the selection that run
     // froze. The table is read before the scan, so an unreadable table exits 1 having swept nothing (as an unreadable
     // adapter config does); a candidate whose adapter cannot be built is reported `refused` by sweepRuns.
-    if (parsed.command === "sweep" && "agentsTablePath" in parsed) {
-      const table = await readAgentsTable(parsed.agentsTablePath);
-      const stopRequested = createStopRequestSignal();
-      const unregisterStopHandlers = registerStopHandlers(stopRequested);
-      try {
-        return await sweepRuns({
-          root: parsed.root,
-          adapterName: "agents",
-          adapterForRun: (runDir) => adapterForFrozenSelection(table, runDir),
-          maxRuns: parsed.maxRuns,
-          stopRequested,
-          stdout: (line) => console.log(line),
-          stderr: (line) => console.error(line),
-        });
-      } finally {
-        unregisterStopHandlers();
-      }
+    // *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling C-1) -- there is no
+    // adapter config any more: `--adapter-config` was removed with `--adapter`, and this is the only form of sweep. ***
+    const table = await readAgentsTable(parsed.agentsTablePath);
+    const stopRequested = createStopRequestSignal();
+    const unregisterStopHandlers = registerStopHandlers(stopRequested);
+    try {
+      return await sweepRuns({
+        root: parsed.root,
+        adapterName: "agents",
+        adapterForRun: (runDir) => adapterForFrozenSelection(table, runDir),
+        maxRuns: parsed.maxRuns,
+        stopRequested,
+        stdout: (line) => console.log(line),
+        stderr: (line) => console.error(line),
+      });
+    } finally {
+      unregisterStopHandlers();
     }
-
-    // `sweep` returns HERE — before loadAdapter, not merely before the two `? 0 : 2` mappings
-    // below. Its exit codes are sweepRuns' own (1 iff the scan failed at its root, else 0), and
-    // exit 2 is not among them. Placing it after loadAdapter would still satisfy "before the
-    // mappings" while constructing the adapter before the sweep has scanned or printed its
-    // banner, breaking §8's ordering and C1's createAdapter contract.
-    if (parsed.adapter === "codex") console.error("Codex budgetMode=soft: token usage is accounted after each phase; no strict token cap is guaranteed.");
-
-    if (parsed.command === "sweep") {
-      // §8's first line: read and parse the config before scanning, so an unreadable config
-      // exits 1 having swept nothing. What crosses into sweepRuns is a closure that does no I/O.
-      const config = JSON.parse(await readFile(parsed.adapterConfigPath, "utf8")) as unknown;
-      const adapterName = parsed.adapter;
-      const stopRequested = createStopRequestSignal();
-      const unregisterStopHandlers = registerStopHandlers(stopRequested);
-
-      try {
-        return await sweepRuns({
-          root: parsed.root,
-          adapterName,
-          createAdapter: () => buildAdapter(adapterName, config),
-          maxRuns: parsed.maxRuns,
-          stopRequested,
-          stdout: (line) => console.log(line),
-          stderr: (line) => console.error(line),
-        });
-      } finally {
-        unregisterStopHandlers();
-      }
-    }
-
-    const adapter = await loadAdapter(parsed);
-    if (parsed.command === "resume") {
-      const finalState = await resumeLoop(parsed.runDir, adapter);
-      return finalState.status === "succeeded" ? 0 : 2;
-    }
-    const contract = await loadContract(parsed.contractPath);
-    const finalState = await runLoop(contract, parsed.runDir, adapter);
-    return finalState.status === "succeeded" ? 0 : 2;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     return 1;

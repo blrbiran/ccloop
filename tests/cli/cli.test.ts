@@ -1,42 +1,78 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { resolveAgent } from "../../src/agents/materialize.js";
+import type { AgentSelectionV1, AgentsTableV1 } from "../../src/agents/types.js";
 import { main, parseArgs, registerStopHandlers } from "../../src/cli.js";
 import { createStopRequestSignal } from "../../src/controller/runLoop.js";
 import type { LoopContract } from "../../src/contract/schema.js";
 
-describe("parseArgs", () => {
-  it("parses the run command", () => {
-    expect(
-      parseArgs([
-        "run",
-        "--contract",
-        "examples/v1/minimal-contract.json",
-        "--run-dir",
-        ".runs/demo",
-        "--adapter",
-        "scripted",
-        "--adapter-config",
-        "examples/v1/scripted-adapter-config.json",
-      ]),
-    ).toEqual({
-      command: "run",
-      contractPath: "examples/v1/minimal-contract.json",
-      runDir: ".runs/demo",
-      adapter: "scripted",
-      adapterConfigPath: "examples/v1/scripted-adapter-config.json",
-    });
-  });
+// Consolidation step 4 (spec 2026-10-01-retire-old-cli-entry-design.md §3.2, controller ruling C-2): the CLI's runs go
+// through an agents table of one codex installation -- ccloop's fake codex in `frames` mode, which plays frame
+// `attempt - 1` of `frames` for every task -- instead of the removed `--adapter scripted --adapter-config <file>`.
+// The table sits in a fresh directory of its own (owner-only, and its own realpath, as readAgentsTable requires).
+// `selectionFile` is the selection file's content, `{selection, configHash}` plus a newline, exactly what
+// `run --agents` freezes into a run directory.
+const fakeCodex = fileURLToPath(new URL("../fixtures/fake-codex.mjs", import.meta.url));
+type Frame = { changedFiles?: string[]; approved?: boolean; safeToRetry?: boolean; stopSignals?: string[] };
+async function framesAgents(frames: Frame[]): Promise<{ tablePath: string; selectionFile: string }> {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-cli-agents-")));
+  const framesPath = join(dir, "frames.json");
+  await writeFile(framesPath, JSON.stringify({ "*": frames }));
+  const table: AgentsTableV1 = {
+    schema: "ccloop-agents-table-v1",
+    installations: {
+      "codex-fake": { kind: "codex", command: [process.execPath, fakeCodex, "frames", join(dir, "marker"), framesPath], version: "9.9.9-fake", configDir: null, timeoutMs: 10_000, killGraceMs: 50, sandbox: "workspace-write", budgetMode: "soft" },
+    },
+  };
+  const tablePath = join(dir, "agents.json");
+  await writeFile(tablePath, JSON.stringify(table), { mode: 0o600 });
+  const selection: AgentSelectionV1 = { agent: "codex-fake", model: "gpt-6-sol", contextWindow: "agent-default" };
+  const { resolution } = await resolveAgent(table, selection);
+  return { tablePath, selectionFile: `${JSON.stringify({ selection, configHash: resolution.configHash })}\n` };
+}
 
+// Consolidation step 4 (spec 2026-10-01-retire-old-cli-entry-design.md §3.1, controller ruling C-1; replaces the
+// criteria whose subject was the deleted parsing -- `--adapter` value validation and `--adapter-config` required).
+// Either old flag, on any of the three commands, is refused with one message, exit 1. Rows that omit every other
+// required flag (`run --adapter scripted`, `resume --adapter codex`) pin the check BEFORE the other flags: checked
+// after them, those rows would report missing flags instead.
+describe("the removed --adapter entry", () => {
+  it.each([
+    [["run", "--contract", "c", "--run-dir", "r", "--adapter", "codex", "--adapter-config", "a"]],
+    [["run", "--adapter", "scripted"]],
+    [["resume", "--run-dir", "r", "--adapter-config", "a"]],
+    [["sweep", "--root", "r", "--adapter", "codex", "--adapter-config", "a", "--max-runs", "1"]],
+    [["resume", "--adapter", "codex"]],
+  ])("refuses %j with the removal message, exit 1", async (argv) => {
+    expect(() => parseArgs(argv)).toThrow(/^--adapter was removed; use --agents <table>$/);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(main(argv)).resolves.toBe(1);
+      expect(errorSpy.mock.calls).toEqual([["--adapter was removed; use --agents <table>"]]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
+
+describe("parseArgs", () => {
   it("returns exit code 1 when required flags are missing", async () => {
     await expect(main(["run"])).resolves.toBe(1);
   });
 
-  it("returns 0 for the scripted example run", async () => {
+  // Migrated (consolidation step 4, controller ruling C-2): the example contract run, started through
+  // `run --agents --agent-selection` with the one frame the removed examples/v1/scripted-adapter-config.json held
+  // (src/index.ts changed, approved).
+  it("returns 0 for the example contract run", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-cli-scripted-"));
+    const { tablePath, selectionFile } = await framesAgents([{ changedFiles: ["src/index.ts"], approved: true }]);
+    const selectionPath = join(tablePath, "..", "selection.json");
+    await writeFile(selectionPath, selectionFile, { mode: 0o600 });
 
     await expect(
       main([
@@ -45,34 +81,26 @@ describe("parseArgs", () => {
         "examples/v1/minimal-contract.json",
         "--run-dir",
         runDir,
-        "--adapter",
-        "scripted",
-        "--adapter-config",
-        "examples/v1/scripted-adapter-config.json",
+        "--agents",
+        tablePath,
+        "--agent-selection",
+        selectionPath,
       ]),
     ).resolves.toBe(0);
   });
 });
 
 describe("parseArgs resume", () => {
-  it("parses a resume command", () => {
-    const parsed = parseArgs(["resume", "--run-dir", "/tmp/run", "--adapter", "scripted", "--adapter-config", "/tmp/cfg.json"]);
-    expect(parsed).toEqual({ command: "resume", runDir: "/tmp/run", adapter: "scripted", adapterConfigPath: "/tmp/cfg.json" });
-  });
-
-  it("still parses a run command", () => {
-    const parsed = parseArgs(["run", "--contract", "/c.json", "--run-dir", "/r", "--adapter", "scripted", "--adapter-config", "/a.json"]);
-    expect(parsed.command).toBe("run");
-  });
-
+  // Migrated (consolidation step 4, controller ruling C-2): the run directory holds only a valid frozen selection, so
+  // `resume --agents` builds its adapter and the refusal is resumeLoop's own (no run artifacts to read).
   it("prints the refusal reason to stderr when resume is refused (spec §9)", async () => {
     const runDir = await mkdtemp(join(tmpdir(), "ccloop-cli-resume-empty-"));
-    const adapterConfigPath = join(runDir, "adapter-config.json");
-    await writeFile(adapterConfigPath, JSON.stringify({ frames: [] }));
+    const { tablePath, selectionFile } = await framesAgents([]);
+    await writeFile(join(runDir, "agent-selection.json"), selectionFile, { mode: 0o600 });
 
     const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const code = await main(["resume", "--run-dir", runDir, "--adapter", "scripted", "--adapter-config", adapterConfigPath]);
+      const code = await main(["resume", "--run-dir", runDir, "--agents", tablePath]);
       expect(code).toBe(1);
       expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("cannot read run artifacts"));
     } finally {
@@ -305,27 +333,28 @@ async function seedEligibleRun(runDir: string, contract: LoopContract) {
 
 // A frame whose verification is REJECTED: with the run already on its last allowed attempt this
 // is what drives the run to "exhausted" rather than "succeeded".
-function rejectedFrame() {
-  return {
-    plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] },
-    execution: { changedFiles: ["src/index.ts"], diffPatch: "diff --git a/src/index.ts b/src/index.ts", commandOutputs: ["edited"], stdoutStderrLog: "ok" },
-    verification: { approved: false, rejectCategory: "tests fail", primaryTargetPaths: ["src/index.ts"], failingCommand: "npm test", safeToRetry: true, evidence: ["red"], pauseSignals: [], stopSignals: [] },
-  };
+// *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling C-2) -- the frame is now a
+// fake-codex `frames` entry (changed files, approved, safeToRetry) rather than a ScriptedAdapter frame; the seeded run
+// resumes at attempt 2, so the fake codex plays the list's second entry. ***
+function rejectedFrame(): Frame {
+  return { changedFiles: ["src/index.ts"], approved: false, safeToRetry: true };
 }
 
 // One eligible run under a scannable root, plus a readable scripted adapter config OUTSIDE that
 // root (a stray file inside it would become a scan row of its own).
-async function seedSweepRoot(): Promise<{ root: string; runDir: string; adapterConfigPath: string }> {
+// *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling C-2) -- the scripted adapter
+// config is gone with `--adapter`: what sits OUTSIDE the root is now the agents table (same reason), and the run
+// directory carries the frozen selection `sweep --agents` rebuilds each run's agent from. ***
+async function seedSweepRoot(): Promise<{ root: string; runDir: string; tablePath: string }> {
   const repoPath = await createSweepRepo();
   const root = await mkdtemp(join(tmpdir(), "ccloop-sweep-root-"));
   const runDir = join(root, "run-1");
   await seedEligibleRun(runDir, createSweepContract(repoPath));
 
-  const configDir = await mkdtemp(join(tmpdir(), "ccloop-sweep-cfg-"));
-  const adapterConfigPath = join(configDir, "adapter-config.json");
-  await writeFile(adapterConfigPath, JSON.stringify({ frames: [rejectedFrame()] }));
+  const { tablePath, selectionFile } = await framesAgents([rejectedFrame(), rejectedFrame()]);
+  await writeFile(join(runDir, "agent-selection.json"), selectionFile, { mode: 0o600 });
 
-  return { root, runDir, adapterConfigPath };
+  return { root, runDir, tablePath };
 }
 
 describe("parseArgs unlock", () => {
@@ -421,24 +450,15 @@ describe("main unlock", () => {
 });
 
 describe("parseArgs sweep", () => {
-  it("parses --root, --adapter, --adapter-config and --max-runs", () => {
-    expect(
-      parseArgs(["sweep", "--root", "/tmp/root", "--adapter", "scripted", "--adapter-config", "/tmp/cfg.json", "--max-runs", "3"]),
-    ).toEqual({
-      command: "sweep",
-      root: "/tmp/root",
-      adapter: "scripted",
-      adapterConfigPath: "/tmp/cfg.json",
-      maxRuns: 3,
-    });
-  });
-
   // §6's stated reason for spelling the root as a flag: the flag/value pairing loop this command
   // shares with run/resume would read a POSITIONAL root as the value of nothing and then pair
   // `--adapter` as a key of its own, reporting missing flags on a command line that looks legal.
+  // *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling C-2) -- `--adapter` was
+  // removed (and is refused before any pairing); the same misreading now pairs `--agents` and `--max-runs` off by
+  // one, which is what this criterion exercises. ***
   it("rejects a positional root, which the flag/value pairing would misread", () => {
     expect(() =>
-      parseArgs(["sweep", "/tmp/root", "--adapter", "scripted", "--adapter-config", "/tmp/cfg.json", "--max-runs", "3"]),
+      parseArgs(["sweep", "/tmp/root", "--agents", "/tmp/agents.json", "--max-runs", "3"]),
     ).toThrow(/missing required flags/);
   });
 });
@@ -448,11 +468,11 @@ describe("main sweep", () => {
   // refusal to sweep, never a defaulted sweep. Every OTHER flag here is valid and the same
   // command with `--max-runs 1` exits 0 below, so exit 1 can only come from this flag.
   it("exits 1 when --max-runs is missing", async () => {
-    const { root, adapterConfigPath } = await seedSweepRoot();
+    const { root, tablePath } = await seedSweepRoot();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await expect(
-        main(["sweep", "--root", root, "--adapter", "scripted", "--adapter-config", adapterConfigPath]),
+        main(["sweep", "--root", root, "--agents", tablePath]),
       ).resolves.toBe(1);
       expect(errorSpy).toHaveBeenCalledWith("missing required flags");
       // §8's first line: a sweep that never started never scanned, so no banner was printed.
@@ -468,7 +488,7 @@ describe("main sweep", () => {
   });
 
   it("exits 1 when --max-runs is not a positive integer", async () => {
-    const { root, adapterConfigPath } = await seedSweepRoot();
+    const { root, tablePath } = await seedSweepRoot();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       // Every way the value can fail to be a positive integer, including the two that
@@ -476,7 +496,7 @@ describe("main sweep", () => {
       for (const value of ["0", "-1", "2.5", "abc", "1e3", "2abc"]) {
         errorSpy.mockClear();
         await expect(
-          main(["sweep", "--root", root, "--adapter", "scripted", "--adapter-config", adapterConfigPath, "--max-runs", value]),
+          main(["sweep", "--root", root, "--agents", tablePath, "--max-runs", value]),
         ).resolves.toBe(1);
         // The reason matters: without it this test would pass for any refusal at all — including
         // one that never recognised `sweep` as a command.
@@ -491,13 +511,15 @@ describe("main sweep", () => {
 
   // §8's first line: a config that cannot be READ exits 1 WITHOUT scanning. The root here is the
   // same valid root the exit-0 test sweeps, so the assertion is not "some failure happened".
-  it("exits 1 when the adapter config cannot be read", async () => {
-    const { root, adapterConfigPath } = await seedSweepRoot();
-    const missingConfigPath = join(adapterConfigPath, "..", "does-not-exist.json");
+  // *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling C-2) -- the config is now
+  // the agents table (`--adapter-config` was removed); main reads it before the scan, so the same holds for it. ***
+  it("exits 1 when the agents table cannot be read", async () => {
+    const { root, tablePath } = await seedSweepRoot();
+    const missingTablePath = join(tablePath, "..", "does-not-exist.json");
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await expect(
-        main(["sweep", "--root", root, "--adapter", "scripted", "--adapter-config", missingConfigPath, "--max-runs", "1"]),
+        main(["sweep", "--root", root, "--agents", missingTablePath, "--max-runs", "1"]),
       ).resolves.toBe(1);
       expect(errorSpy.mock.calls.flat().join("\n")).toContain("ENOENT");
       // Same needle, same reason, as the banner guard above.
@@ -511,12 +533,12 @@ describe("main sweep", () => {
   // stderr assertion is what distinguishes it from the argument failures above, which would also
   // be exit 1 — this run got as far as the scan and the scan is what refused.
   it("exits 1 when the root does not exist", async () => {
-    const { adapterConfigPath } = await seedSweepRoot();
+    const { tablePath } = await seedSweepRoot();
     const missingRoot = join(await mkdtemp(join(tmpdir(), "ccloop-sweep-missing-")), "does-not-exist");
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await expect(
-        main(["sweep", "--root", missingRoot, "--adapter", "scripted", "--adapter-config", adapterConfigPath, "--max-runs", "1"]),
+        main(["sweep", "--root", missingRoot, "--agents", tablePath, "--max-runs", "1"]),
       ).resolves.toBe(1);
       expect(errorSpy.mock.calls.flat().join("\n")).toContain(`sweep: cannot scan ${missingRoot}`);
     } finally {
@@ -528,7 +550,7 @@ describe("main sweep", () => {
   // `exhausted` is a REPORTED OUTCOME of a sweep that completed, not a sweep failure. Were the
   // sweep branch to fall through to either run/resume mapping this would be 2.
   it("exits 0 when a run reaches exhausted", async () => {
-    const { root, runDir, adapterConfigPath } = await seedSweepRoot();
+    const { root, runDir, tablePath } = await seedSweepRoot();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
@@ -538,7 +560,7 @@ describe("main sweep", () => {
       expect(before.status).toBe("executing");
 
       const code = await main([
-        "sweep", "--root", root, "--adapter", "scripted", "--adapter-config", adapterConfigPath, "--max-runs", "1",
+        "sweep", "--root", root, "--agents", tablePath, "--max-runs", "1",
       ]);
 
       // The run really did reach `exhausted` — without this the exit code could be 0 for a

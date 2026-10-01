@@ -123,6 +123,8 @@ describe("ccloop resume --agents (consolidation step 2, spec §3.2)", () => {
   }, 30_000);
 
   // A run started before this step, or with --adapter, has no frozen file and is resumable only the way it always was.
+  // *** ERRATUM (consolidation step 4, 2026-10-01, Orca session be653b22, controller ruling C-2) -- "resumable only the
+  // way it always was" no longer holds: `resume --adapter` was removed, so such a run is not resumable from the CLI. ***
   it("refuses a run with no frozen selection, leaving it unchanged", async () => {
     const w = await interruptedRun();
     await w.seed();

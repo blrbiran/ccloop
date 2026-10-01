@@ -48,8 +48,10 @@ describe("ccloop run --agents --agent-selection (Orca agent selection, spec §4.
   });
 
   it.each([
-    [["run", "--contract", "c", "--run-dir", "r", "--agents", "t", "--agent-selection", "s", "--adapter", "codex"], "--agents and --adapter are mutually exclusive"],
-    [["run", "--contract", "c", "--run-dir", "r", "--agents", "t", "--agent-selection", "s", "--adapter-config", "a"], "--agents and --adapter are mutually exclusive"],
+    // Rewritten (consolidation step 4, controller ruling C-2 under the human's standing instruction, 2026-10-01).
+    // --adapter and --adapter-config were removed: beside --agents they are refused with the removal message.
+    [["run", "--contract", "c", "--run-dir", "r", "--agents", "t", "--agent-selection", "s", "--adapter", "codex"], "--adapter was removed; use --agents <table>"],
+    [["run", "--contract", "c", "--run-dir", "r", "--agents", "t", "--agent-selection", "s", "--adapter-config", "a"], "--adapter was removed; use --agents <table>"],
     [["run", "--contract", "c", "--run-dir", "r", "--agents", "t"], "missing required flags"],
     [["run", "--contract", "c", "--run-dir", "r", "--agent-selection", "s"], "missing required flags"],
     // Rewritten (consolidation step 2, controller ruling C-5 under the human's standing instruction, 2026-10-01).
@@ -60,7 +62,8 @@ describe("ccloop run --agents --agent-selection (Orca agent selection, spec §4.
     // branch in parseArgs, so this exercises a path resume's case does not.
     // Rewritten (consolidation step 2, controller ruling C-5 under the human's standing instruction, 2026-10-01).
     [["sweep", "--root", "r", "--agents", "t", "--agent-selection", "s"], "--agent-selection is only supported by run"],
-    [["resume", "--run-dir", "r", "--agents", "t", "--adapter", "codex"], "--agents and --adapter are mutually exclusive"],
+    // Rewritten (consolidation step 4, controller ruling C-2 under the human's standing instruction, 2026-10-01).
+    [["resume", "--run-dir", "r", "--agents", "t", "--adapter", "codex"], "--adapter was removed; use --agents <table>"],
     [["sweep", "--root", "r", "--agents", "t"], "missing required flags"],
   ])("refuses %j", (argv, message) => {
     expect(() => parseArgs(argv)).toThrow(message);
