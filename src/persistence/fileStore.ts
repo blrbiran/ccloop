@@ -47,7 +47,7 @@ async function directoryHasEntries(path: string): Promise<boolean> {
   }
 }
 
-async function ensureFreshRunDir(runDir: string): Promise<void> {
+export async function ensureFreshRunDir(runDir: string): Promise<void> {
   await mkdir(runDir, { recursive: true });
 
   const blockingPaths = [

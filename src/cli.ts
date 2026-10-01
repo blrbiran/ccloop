@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { runAgentsCommand } from "./agents/command.js";
@@ -7,9 +8,11 @@ import { resolveAgent } from "./agents/materialize.js";
 import { getDescriptor } from "./agents/registry.js";
 import { readAgentsTable } from "./agents/table.js";
 import { AgentError, agentSelectionSchema } from "./agents/types.js";
+import type { AgentsTableV1 } from "./agents/types.js";
 import { runControlCommand } from "./control/command.js";
 import { loadContract } from "./contract/loadContract.js";
 import { resumeLoop } from "./controller/resumeLoop.js";
+import { ensureFreshRunDir } from "./persistence/fileStore.js";
 import { createStopRequestSignal, runLoop } from "./controller/runLoop.js";
 import type { StopRequestSignal } from "./controller/runLoop.js";
 import { renderScanTable, scanRootFailureDetail, toScanResult } from "./registry/renderRuns.js";
@@ -50,6 +53,19 @@ export type ParsedArgs =
       adapterConfigPath: string;
       maxRuns: number;
     }
+  // Consolidation step 2 (spec 2026-10-01-agents-resume-sweep-design.md §3.2/§3.3): the agents-table forms of resume and
+  // sweep, which continue runs started by `run --agents` with the selection each run froze into its run directory.
+  | {
+      command: "resume";
+      runDir: string;
+      agentsTablePath: string;
+    }
+  | {
+      command: "sweep";
+      root: string;
+      agentsTablePath: string;
+      maxRuns: number;
+    }
   | {
       command: "ls";
       root: string;
@@ -63,6 +79,18 @@ export type ParsedArgs =
 type ScriptedAdapterConfig = {
   frames: ConstructorParameters<typeof ScriptedAdapter>[0];
 };
+
+// §12's governance position: --max-runs is the bound a human approves the sweep against, so
+// anything that is not literally a positive integer refuses the sweep rather than defaulting
+// it. The digits-only test is deliberate — Number("1e3") is 1000 and parseInt("2abc") is 2,
+// and neither is a bound anyone typed.
+// (Consolidation step 2: moved here unchanged from the sweep branch of parseArgs, so both sweep forms share it.)
+function parseMaxRuns(maxRunsRaw: string): number {
+  if (!/^\d+$/.test(maxRunsRaw) || Number(maxRunsRaw) < 1) {
+    throw new Error("--max-runs must be a positive integer");
+  }
+  return Number(maxRunsRaw);
+}
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const command = argv[0];
@@ -158,6 +186,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
   // way cannot be resumed or swept (spec §11). Placed before `sweep`'s own early return (below) rather than
   // after it (plan-review P23 m6): `sweep` must refuse `--agents` too, and its branch returns before the
   // run/resume flag parsing this task was originally anchored to.
+  // *** ERRATUM (consolidation step 2, 2026-10-01, Orca session be653b22, controller ruling C-2/C-3) -- "only `run`
+  // takes it -- a run started this way cannot be resumed or swept (spec §11)" no longer holds: `run --agents` now
+  // freezes its selection into `<runDir>/agent-selection.json`, and `resume`/`sweep` take `--agents <table>` (without
+  // `--agent-selection`, which stays `run`'s alone) to continue such runs with it. The exclusivity with
+  // --adapter/--adapter-config is unchanged and still checked first. ***
   const agentsTablePath = values.get("--agents");
   const agentSelectionPath = values.get("--agent-selection");
   if (agentsTablePath !== undefined || agentSelectionPath !== undefined) {
@@ -165,7 +198,23 @@ export function parseArgs(argv: string[]): ParsedArgs {
       throw new Error("--agents and --adapter are mutually exclusive");
     }
     if (command !== "run") {
-      throw new Error("--agents is only supported by run");
+      // The selection is the run's own (frozen by `run --agents`), not the caller's.
+      if (agentSelectionPath !== undefined) {
+        throw new Error("--agent-selection is only supported by run");
+      }
+      if (command === "resume") {
+        const resumeRunDir = values.get("--run-dir");
+        if (!resumeRunDir || !agentsTablePath) {
+          throw new Error("missing required flags");
+        }
+        return { command, runDir: resumeRunDir, agentsTablePath };
+      }
+      const sweepRoot = values.get("--root");
+      const sweepMaxRunsRaw = values.get("--max-runs");
+      if (!sweepRoot || !agentsTablePath || !sweepMaxRunsRaw) {
+        throw new Error("missing required flags");
+      }
+      return { command, root: sweepRoot, agentsTablePath, maxRuns: parseMaxRuns(sweepMaxRunsRaw) };
     }
     const agentsRunDir = values.get("--run-dir");
     const agentsContractPath = values.get("--contract");
@@ -193,20 +242,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
       throw new Error("invalid adapter");
     }
 
-    // §12's governance position: --max-runs is the bound a human approves the sweep against, so
-    // anything that is not literally a positive integer refuses the sweep rather than defaulting
-    // it. The digits-only test is deliberate — Number("1e3") is 1000 and parseInt("2abc") is 2,
-    // and neither is a bound anyone typed.
-    if (!/^\d+$/.test(maxRunsRaw) || Number(maxRunsRaw) < 1) {
-      throw new Error("--max-runs must be a positive integer");
-    }
-
     return {
       command,
       root,
       adapter: sweepAdapter,
       adapterConfigPath: sweepAdapterConfigPath,
-      maxRuns: Number(maxRunsRaw),
+      maxRuns: parseMaxRuns(maxRunsRaw),
     };
   }
 
@@ -275,7 +316,7 @@ const selectionFileSchema = z
 // materialized here against the table as it is NOW. resolveAgent probes `<command> --version` and refuses a
 // drifted installation (agent-version-drift); a table entry edited since Orca froze the selection changes the
 // hash (control-config-hash-mismatch). Either refusal happens before the contract is read or anything runs.
-async function runWithAgents(parsed: Extract<ParsedArgs, { agentsTablePath: string }>): Promise<number> {
+async function runWithAgents(parsed: Extract<ParsedArgs, { command: "run"; agentsTablePath: string }>): Promise<number> {
   const table = await readAgentsTable(parsed.agentsTablePath);
   let raw: unknown;
   try {
@@ -283,6 +324,33 @@ async function runWithAgents(parsed: Extract<ParsedArgs, { agentsTablePath: stri
   } catch (error) {
     throw new AgentError("agent-selection-file-invalid", error instanceof Error ? error.message : String(error));
   }
+  const { file, adapter } = await adapterForSelectionFile(table, raw);
+  // Consolidation step 2, spec §3.1 (C-1): freeze the validated selection into the run directory so `resume --agents`
+  // can rebuild this agent. runLoop's own freshness refusal runs first, so a non-fresh directory is never written
+  // into; `wx` refuses a leftover file instead of overwriting it, which would rebind someone else's run.
+  await ensureFreshRunDir(parsed.runDir);
+  await mkdir(parsed.runDir, { recursive: true });
+  const frozenPath = join(parsed.runDir, FROZEN_SELECTION_FILE);
+  try {
+    await writeFile(frozenPath, `${JSON.stringify(file)}\n`, { mode: 0o600, flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new AgentError("agent-selection-exists", frozenPath);
+    throw error;
+  }
+  const contract = await loadContract(parsed.contractPath);
+  const finalState = await runLoop(contract, parsed.runDir, adapter);
+  return finalState.status === "succeeded" ? 0 : 2;
+}
+
+// Consolidation step 2: the selection `run --agents` froze for a run, beside the run's own files.
+export const FROZEN_SELECTION_FILE = "agent-selection.json";
+
+// The one place a selection file is validated, resolved against the table as it is now, and compared with its hash
+// (shared by `run --agents` and `resume --agents`). Prints the codex soft-budget notice once the adapter exists.
+async function adapterForSelectionFile(
+  table: AgentsTableV1,
+  raw: unknown,
+): Promise<{ file: z.infer<typeof selectionFileSchema>; adapter: RuntimeAdapter }> {
   const file = selectionFileSchema.safeParse(raw);
   if (!file.success) throw new AgentError("agent-selection-file-invalid", file.error.message);
   const { config, resolution } = await resolveAgent(table, file.data.selection);
@@ -292,9 +360,21 @@ async function runWithAgents(parsed: Extract<ParsedArgs, { agentsTablePath: stri
   const adapter = getDescriptor(config.kind).createAdapter(config);
   // The same notice `run --adapter codex` prints below.
   if (config.kind === "codex") console.error("Codex budgetMode=soft: token usage is accounted after each phase; no strict token cap is guaranteed.");
-  const contract = await loadContract(parsed.contractPath);
-  const finalState = await runLoop(contract, parsed.runDir, adapter);
-  return finalState.status === "succeeded" ? 0 : 2;
+  return { file: file.data, adapter };
+}
+
+// Consolidation step 2, spec §3.2 (C-2): the adapter for a run started by `run --agents`, rebuilt from the selection
+// that run froze. Reads only; every refusal (no file, unreadable or invalid file, drift, hash mismatch) happens before
+// the caller touches the run directory.
+async function adapterForFrozenSelection(table: AgentsTableV1, runDir: string): Promise<RuntimeAdapter> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(join(runDir, FROZEN_SELECTION_FILE), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new AgentError("agent-selection-missing", runDir);
+    throw new AgentError("agent-selection-file-invalid", error instanceof Error ? error.message : String(error));
+  }
+  return (await adapterForSelectionFile(table, raw)).adapter;
 }
 
 // L3 §5.4's escape hatch. ONE counter across both signals: the first fills the stop slot the loop
@@ -390,7 +470,21 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     // The agents-table form of `run` (spec §4.9) builds its adapter from the table, not from --adapter.
-    if ("agentsTablePath" in parsed) return await runWithAgents(parsed);
+    if (parsed.command === "run" && "agentsTablePath" in parsed) return await runWithAgents(parsed);
+
+    // Consolidation step 2, spec §3.2: `resume --agents` rebuilds the adapter from the selection the run froze.
+    if (parsed.command === "resume" && "agentsTablePath" in parsed) {
+      const table = await readAgentsTable(parsed.agentsTablePath);
+      const adapter = await adapterForFrozenSelection(table, parsed.runDir);
+      const finalState = await resumeLoop(parsed.runDir, adapter);
+      return finalState.status === "succeeded" ? 0 : 2;
+    }
+
+    // Consolidation step 2: the sweep `--agents` form is parsed (spec §3.3) but its runtime lands in the next task.
+    if (parsed.command === "sweep" && "agentsTablePath" in parsed) {
+      console.error("sweep --agents: not available in this build");
+      return 1;
+    }
 
     // `sweep` returns HERE — before loadAdapter, not merely before the two `? 0 : 2` mappings
     // below. Its exit codes are sweepRuns' own (1 iff the scan failed at its root, else 0), and

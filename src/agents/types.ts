@@ -60,6 +60,10 @@ export const AGENT_ERROR_CODES = [
   // code itself already exists (src/control/accept.ts throws it via ControlProtocolError on the control-wire
   // path); this only widens AgentError's own code union to also carry it.
   "control-config-hash-mismatch",
+  // Consolidation step 2 (2026-10-01): `run --agents` refuses a run directory already holding a frozen selection;
+  // `resume --agents` refuses a run directory holding none.
+  "agent-selection-exists",
+  "agent-selection-missing",
 ] as const;
 export type AgentErrorCode = (typeof AGENT_ERROR_CODES)[number];
 

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,13 +52,67 @@ describe("ccloop run --agents --agent-selection (Orca agent selection, spec §4.
     [["run", "--contract", "c", "--run-dir", "r", "--agents", "t", "--agent-selection", "s", "--adapter-config", "a"], "--agents and --adapter are mutually exclusive"],
     [["run", "--contract", "c", "--run-dir", "r", "--agents", "t"], "missing required flags"],
     [["run", "--contract", "c", "--run-dir", "r", "--agent-selection", "s"], "missing required flags"],
-    [["resume", "--run-dir", "r", "--agents", "t", "--agent-selection", "s"], "--agents is only supported by run"],
+    // Rewritten (consolidation step 2, controller ruling C-5 under the human's standing instruction, 2026-10-01).
+    // resume and sweep now take `--agents <table>`, but never `--agent-selection`: the selection is the run's own
+    // (frozen into its run directory by `run --agents`), not the caller's.
+    [["resume", "--run-dir", "r", "--agents", "t", "--agent-selection", "s"], "--agent-selection is only supported by run"],
     // P23 m6: `--agents` must be refused by `sweep` too, not only `resume` — sweep has its own early-return
     // branch in parseArgs, so this exercises a path resume's case does not.
-    [["sweep", "--root", "r", "--agents", "t", "--agent-selection", "s"], "--agents is only supported by run"],
+    // Rewritten (consolidation step 2, controller ruling C-5 under the human's standing instruction, 2026-10-01).
+    [["sweep", "--root", "r", "--agents", "t", "--agent-selection", "s"], "--agent-selection is only supported by run"],
+    [["resume", "--run-dir", "r", "--agents", "t", "--adapter", "codex"], "--agents and --adapter are mutually exclusive"],
+    [["sweep", "--root", "r", "--agents", "t"], "missing required flags"],
   ])("refuses %j", (argv, message) => {
     expect(() => parseArgs(argv)).toThrow(message);
   });
+
+  // Consolidation step 2 (spec 2026-10-01-agents-resume-sweep-design.md §3.2/§3.3): resume and sweep continue a run
+  // started by `run --agents` with the table alone; sweep keeps its literal positive-integer --max-runs.
+  it("parses the agents form of resume and sweep", () => {
+    expect(parseArgs(["resume", "--run-dir", "r", "--agents", "t"])).toEqual({ command: "resume", runDir: "r", agentsTablePath: "t" });
+    expect(parseArgs(["sweep", "--root", "r", "--agents", "t", "--max-runs", "2"])).toEqual({ command: "sweep", root: "r", agentsTablePath: "t", maxRuns: 2 });
+    expect(() => parseArgs(["sweep", "--root", "r", "--agents", "t", "--max-runs", "1e3"])).toThrow("--max-runs must be a positive integer");
+  });
+
+  // Consolidation step 2, spec §3.1 (C-1): the selection is frozen into the run directory before the run starts, so
+  // `resume --agents` can rebuild the same agent later. Owner-only (0600), like every selection file Orca writes.
+  it("freezes the selection into the run directory before the run starts", async () => {
+    const w = await world();
+    const { resolution } = await resolveAgent(w.table, w.selection);
+    const frozen = { selection: w.selection, configHash: resolution.configHash };
+    await writeFile(w.selectionPath, JSON.stringify(frozen), { mode: 0o600 });
+    const result = await runCli(w);
+    expect(result.code, result.stderr).toBe(0);
+    const path = join(w.runDir, "agent-selection.json");
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual(frozen);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  }, 30_000);
+
+  // An existing frozen file can only be a leftover; overwriting it would rebind someone else's run.
+  it("refuses a run directory that already holds a frozen selection, leaving it unchanged", async () => {
+    const w = await world();
+    const { resolution } = await resolveAgent(w.table, w.selection);
+    await writeFile(w.selectionPath, JSON.stringify({ selection: w.selection, configHash: resolution.configHash }), { mode: 0o600 });
+    await mkdir(w.runDir, { recursive: true });
+    await writeFile(join(w.runDir, "agent-selection.json"), "{}\n");
+    const result = await runCli(w);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("agent-selection-exists");
+    expect(await readFile(join(w.runDir, "agent-selection.json"), "utf8")).toBe("{}\n");
+    expect(existsSync(join(w.runDir, "loop-state.json"))).toBe(false);
+  }, 30_000);
+
+  // The freshness refusal runLoop would give is run first, so a non-fresh directory is never written into.
+  it("refuses a non-fresh run directory before freezing anything", async () => {
+    const w = await world();
+    const { resolution } = await resolveAgent(w.table, w.selection);
+    await writeFile(w.selectionPath, JSON.stringify({ selection: w.selection, configHash: resolution.configHash }), { mode: 0o600 });
+    await mkdir(w.runDir, { recursive: true });
+    await writeFile(join(w.runDir, "events.jsonl"), "");
+    const result = await runCli(w);
+    expect(result.code).toBe(1);
+    expect(existsSync(join(w.runDir, "agent-selection.json"))).toBe(false);
+  }, 30_000);
 
   it("runs the selected installation, whose model reaches the claude CLI", async () => {
     const w = await world();
