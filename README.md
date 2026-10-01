@@ -234,12 +234,12 @@ claude 现在只经由 `run --agents <table> --agent-selection <file>` 或 `cont
 
 仓库自带的 `scripts/claude-phase-runner.mjs` 是参考实现，它做了这些事：
 
-- 在 `request.worktreePath` 里调 `claude -p --output-format json --json-schema <该 phase 的 schema> <prompt>`，用 JSON Schema 硬约束模型输出。
+- 在 `request.worktreePath` 里调 `claude -p --output-format stream-json --verbose --include-partial-messages --json-schema <该 phase 的 schema> <prompt>`，用 JSON Schema 硬约束模型输出。
 - 用 `git status --porcelain=v1 -z --untracked-files=all` + `git diff` 采集本次 attempt 真实改了哪些文件、diff 是什么——**不信模型自报**。
 - 从 claude 的 `usage` 里提取 token 计数（同时兼容 `input_tokens` / `inputTokens` 两种字段名），并把「字段缺失 / 类型不对 / 非有限数」各自记成不同的观测状态，而不是悄悄当 0。
 - 收到 `SIGTERM` / `SIGINT` 时，在 `partialOutcomeRecoveryWindowMs` 窗口内尽量吐出一份带 `completionStatus: "partial"` 的部分结果。
 
-要接别的模型或别的工具链，照着这个文件的 IO 契约另写一个即可，然后把 `command` 指过去。
+runner 是固定的：`ClaudeAgentAdapter` 总是起这个 `scripts/claude-phase-runner.mjs`，不能换成别的 runner。能配的只有 agents 表里的 `installation.command`——也就是 runner 去调的那个 claude CLI。
 
 ### 6.3 Prompt 从哪来
 
