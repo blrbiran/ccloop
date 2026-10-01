@@ -12,6 +12,8 @@
 // Orca single-call estimate (2026-09-27, spec §5.4): `--tools ""` marks a single call (phase "single-call"),
 // answered from the script's "single-call" entry {output, delayMs, usageBeforeDelay}; <marker> also records
 // maxOutputTokensEnv.
+// Orca N1 (2026-10-02, plan Task C1): with no "single-call" entry, "single-call-queue" answers a sequence of single calls
+// in order (each entry optionally only for a prompt containing its `match`); <marker>.single-call-queue lists used indexes.
 // Files next to <marker>, all appended, one line per call:
 //   <marker>.argv   the claude arguments as one JSON array (every call except `--version`)
 //   <marker>.calls  `<phase>`                     (fake codex's format; not written by hang/grandchild)
@@ -20,7 +22,7 @@
 // *** ERRATUM (consolidation step 1, 2026-10-01, Orca session be653b22, ruling R5) -- tests/fixtures/fake-claude.mjs no longer exists: it was deleted in
 // consolidation step 1 (ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md) together with SubprocessClaudeAdapter, its
 // only user. This file is the only fake claude left. ***
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 
 const mode = process.argv[2], marker = process.argv[3];
@@ -129,8 +131,17 @@ if (NEW_WRITE_MODES.has(mode)) {
       ? "single-call"
       : { plan: /^Plan one isolated L2 attempt for task (.+)\.$/m, execute: /^Execute one isolated attempt for task (.+)\.$/m, verify: /^Verify task (.+)\.$/m }[phase].exec(prompt)?.[1];
     const script = task === undefined ? {} : JSON.parse(readFileSync(process.argv[4], "utf8"));
-    const key = prompt.includes(CONTINUATION) && script[`${task}#continuation`] !== undefined ? `${task}#continuation` : script[task] !== undefined ? task : undefined;
+    let key = prompt.includes(CONTINUATION) && script[`${task}#continuation`] !== undefined ? `${task}#continuation` : script[task] !== undefined ? task : undefined;
     entry = key === undefined ? undefined : script[key];
+    // Orca N1 (2026-10-02, requirement to split, plan Task C1): with no "single-call" entry, a "single-call-queue" answers a
+    // sequence of single calls: the first unused entry whose `match` (if any) the prompt contains. Used indexes are
+    // appended to <marker>.single-call-queue, so a script rewritten between calls keeps its consumed prefix.
+    if (phase === "single-call" && key === undefined && Array.isArray(script["single-call-queue"])) {
+      const usedPath = `${marker}.single-call-queue`;
+      const used = new Set(existsSync(usedPath) ? readFileSync(usedPath, "utf8").split("\n").filter(Boolean).map(Number) : []);
+      const index = script["single-call-queue"].findIndex((candidate, i) => !used.has(i) && (candidate.match === undefined || prompt.includes(candidate.match)));
+      if (index >= 0) { appendFileSync(usedPath, `${index}\n`); key = `single-call-queue#${index}`; entry = script["single-call-queue"][index]; }
+    }
     appendFileSync(`${marker}.tasks`, `${phase} ${key ?? "-"}\n`);
     if ((phase === "execute" || phase === "single-call") && entry === undefined) {
       process.stderr.write(`fake-claude-cli script has no entry for task ${task}\n`);

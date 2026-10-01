@@ -248,4 +248,21 @@ describe("fake claude CLI (Orca agent selection, spec §4.8)", () => {
     expect(await readFile(join(cwd, "marker.json.calls"), "utf8")).toBe("plan\n");
     expect(JSON.parse(await readFile(join(cwd, "marker.json"), "utf8")).maxOutputTokensEnv).toBeNull();
   });
+
+  // Orca N1 (2026-10-02, requirement to split, plan Task C1): a sequence of single calls, each answered by the first
+  // unused queue entry whose `match` the prompt contains; F1-F4's single "single-call" entry is unchanged.
+  it("F5: answers single calls from single-call-queue in order, honouring match, and refuses when it is used up", async () => {
+    const cwd = await workdir();
+    const scriptPath = join(cwd, "script.json");
+    await writeFile(scriptPath, JSON.stringify({ "single-call-queue": [{ match: "ALPHA", output: { answer: "a" } }, { output: { answer: "b" } }] }));
+    const callWith = (prompt: string) => launchEnv(cwd, ["script", join(cwd, "marker.json"), scriptPath,
+      "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", JSON.stringify(answerSchema), "--tools", "", prompt], withoutCap());
+    const first = await callWith("beta prompt");
+    expect(first.code).toBe(0);
+    expect(lines(first.stdout).at(-1)).toMatchObject({ structured_output: { answer: "b" } });
+    const second = await callWith("an ALPHA prompt");
+    expect(lines(second.stdout).at(-1)).toMatchObject({ structured_output: { answer: "a" } });
+    expect((await callWith("ALPHA again")).code).toBe(3);
+    expect(await readFile(join(cwd, "marker.json.tasks"), "utf8")).toBe("single-call single-call-queue#1\nsingle-call single-call-queue#0\nsingle-call -\n");
+  });
 });
