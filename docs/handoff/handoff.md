@@ -1,4 +1,4 @@
-# ccloop Handoff — *** **本仓库没有在飞的工作。** Orca ⑤ 预算预估链在本仓库落的 `single-call` 活已由人审完；人授权的后续三笔（临时目录泄漏、超时带观测用量、大 prompt 走 stdin）已于 2026-09-28 落地、人已认可；2026-09-29 又落了 `collect.progress`、一批待办与 git 依赖打包（`Ruling:` 行人已同意）；2026-09-30 #13(a) 也已落地，**本仓库没有在飞的工作**，见文末「Orca 那条线」 ***；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
+# ccloop Handoff — *** **下一件事已由人定（2026-10-01）：合并 claude adapter、删 CLI 老入口，分四步，每步先 spec 后实现，见文末「Orca 那条线」。** 2026-10-01 已落地 `rejectOn` 改为只交给 verifier 判断（人裁 D，已推送、Orca 已重钉）。*** 更早各轮（⑤ 预估链、临时目录泄漏、`collect.progress`、git 依赖打包、#13(a)）都已落地、人已审；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -407,7 +407,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-01 第二十五版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-01 第二十六版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 进度与下一步以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
@@ -419,12 +419,12 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
   - 登记未修（spec §7）：`evidenceRequired` 同一个子串函数、方向相反；每条检查 evidence 都以字面量 `command output` 开头，README 示例的 `evidenceRequired: ["command output"]` 恒被满足。
 - **仍挂着、要人开口才动**：**阶段超时直接进 `setTimeout`**：大于 2,147,483,647 ms 时 Node 会改成 1 ms（Orca 在 v22.13.1 实测 9 ms 就触发）。Orca 已把自己派生的阶段超时截到这个数；别的客户端直传大数仍会中招。
 - **人提出并已定顺序（2026-10-01）、spec 未写**：人裁四步依次做——①删 `SubprocessClaudeAdapter` 与 `--adapter claude`（先做；runner 判据迁到 ClaudeAgentAdapter 一侧）②#4：`resume`／`sweep` 能续跑 `run --agents` 起的 run ③Orca 旧 `orca run --adapter-config` 路径**退役**（人选方案二；约 76 条判据迁走或删），`scripted` 随之不再需要老入口 ④最后删整个老入口。人原话：「先将这些问题解决，再删老入口」「同意按你建议的顺序走」「选方案二」。以下是原登记：claude adapter 只留 `ClaudeAgentAdapter`、CLI 只留新入口（`--agents`／`control`），旧的吸收有用部分后删。盘点结论（Orca 会话 `ceca1c47`，只读）：老入口还承载 `scripted`（Orca 旧 `orca run` 路径约 76 条判据在用）、`--adapter codex`、以及唯一能用的 `resume`／`sweep`（#4 未做）；`subprocessClaudeAdapter.test.ts` 多数判据测的是 runner，要迁不要删。**先出 spec，人审后再动。**
-- **推送归人**：本仓库本地仍领先远端（以 `ls-remote` 现测为准）。**不需要重钉**：Orca 没依赖本仓库的新行为。
+- **推送归人**：以 `ls-remote` 现测为准。Orca 已重钉到带 `rejectOn` 修正的那一笔（钉住的 SHA 见下节）；之后本仓库只有 handoff／台账提交，不需要再重钉。
 - **#4（`resume`／`sweep` 支持 `run --agents` 起的 run）**：未变——人裁设计为「冻结选择进 `<runDir>/agent-selection.json`」，时机与 Orca 续跑被打断的解冲突 run 一起做。
 
 ## 🔗 Orca 通过 git 依赖钉住本仓库
 
-- Orca `package.json`：`"ccloop": "github:blrbiran/ccloop#926d74f5c2bb42d8009d25258623c276e98e3ee9"`。lock 的 `resolved` 是 `git+ssh://…`。Orca 没设 `ORCA_CCLOOP_BIN` 时（`orca panel`／`orca agents`）用的就是这份；开发与门仍走 `ORCA_CCLOOP_BIN`（本仓库 clone 的 build）。
+- Orca `package.json`：`"ccloop": "github:blrbiran/ccloop#1e4e43437c72a405fccd09f0158b87593218cc9e（2026-10-01 重钉，带 `rejectOn` 修正）"`。lock 的 `resolved` 是 `git+ssh://…`。Orca 没设 `ORCA_CCLOOP_BIN` 时（`orca panel`／`orca agents`）用的就是这份；开发与门仍走 `ORCA_CCLOOP_BIN`（本仓库 clone 的 build）。
 - **重钉规矩**：只有 Orca 依赖了本仓库的**新行为**（线协议、新命令）才重钉。顺序：本仓库提交 → **人推本仓库** → Orca 的 agent 跑 `node scripts/pin-ccloop.mjs <SHA>`（装包＋七项核对，任何一项不过就非 0）→ 人推 Orca。只能钉 GitHub 上已有的 SHA。
 - Orca 的 `npm run verify` 现在多一步 `verify:ccloop-pin`：不设 `ORCA_CCLOOP_BIN`，对 Orca `node_modules` 里装的本仓库包跑 Orca 的 `ccloopDefaultE2E`。它只抓得住那条 E2E 用到的行为（包布局、`orca agents init/show`、面板启动），不是所有线协议变化。
 - ⚠️ **`files` 之外的运行时读取会让装好的包坏掉**：新增按路径读的运行时文件时，`tests/packaging/gitDependency.test.ts` 会红——要么进 `files`，要么别在运行时读。
@@ -465,6 +465,5 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 
 - 推送：以现跑 `ls-remote` 为准。
 - `setTimeout` 溢出防护：要不要在本仓库改。
-- adapter／CLI 合并：spec 待写、待人审。
-- Orca 重钉以拿到 `rejectOn` 修正：顺序是人先推本仓库，再由 Orca 的 agent 跑 `node scripts/pin-ccloop.mjs <SHA>`；重钉时 Orca 要更正自己描述子串规则的注释与 spec（spec §6）。
+- adapter／CLI 合并四步：每一步的 spec 待写、待人审（顺序见上方「人提出并已定顺序」）。下一会话从第①步（删 `SubprocessClaudeAdapter` 与 `--adapter claude`）开始；先用 `superpowers:brainstorming`，`superpowers:writing-plans` 之后按人选的执行方式做。
 - 付费 claude 验一次 single-call 估算（Orca 验收脚本 `--claude --scenario estimate`，`--task-tokens` ≥1,000,000）。
