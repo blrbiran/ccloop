@@ -97,7 +97,15 @@ node dist/cli.js resume \
   --agents  /abs/private/agents.json
 ```
 
-不需要 `--agent-selection`：用的是 `run --agents` 冻结在 `<runDir>/agent-selection.json` 里的那份；没有这份文件的 run 目录（不是 `run --agents` 起的）会被拒绝。不需要 `--contract`：契约已经在 run 目录里了。resume 会做所有权判定（这个 run 还归不归我）、边界分析（上次停在哪个 phase）、必要时走 owner-transfer。
+不需要 `--agent-selection`：用的是 `run --agents` 冻结在 `<runDir>/agent-selection.json` 里的那份；没有这份文件的 run 目录（不是 `run --agents` 起的）会被拒绝。不需要 `--contract`：契约已经在 run 目录里了。resume 按顺序检查，任何一步不通过就拒绝：
+
+- 租约还新鲜（owner 还在续约）⇒ 拒绝。
+- run 目录是 Orca control store 里的 control run（`<dir>/run`，同级有 `control/` 目录）⇒ 拒绝，那类 run 由 Orca 自己恢复。
+- run 里登记过、还没结束的 claude / codex 进程组：先回收（终止），回收不了或无法确认身份就拒绝。每个被回收的进程组记一条 `orphan_process_group_reaped` 事件。
+- 没有 `owner-transfer.json` 的 run（进程被杀、没有人交接过）：只在 run 状态可续跑（planning / executing / verifying）、并且确认旧 owner 进程已经死亡时，resume 自己写下 owner-transfer 和 reconciliation 记录并接管（事件 `owner_crash_adopted`，随后是 `resume_adopted`）。owner 还活着，或者死活无法确定，一律拒绝。
+- 之后照旧：8 条续跑资格检查、认领、继续跑 loop。
+
+Ctrl-C 的后果：单次 Ctrl-C（或 SIGTERM）让 loop 在下一个 phase 边界停下，然后释放租约再退出；第二次 Ctrl-C 立即以退出码 130 退出，不释放租约。两种情况下，只要进程已经不在了，状态可续跑的 run 都能被 `resume` 接管（租约过期之后；`kill -9` 同理，claude 子进程会随父进程退出，不会留下孤儿）。
 
 ### 3.3 `ls`
 
