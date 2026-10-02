@@ -1,11 +1,12 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { resumeLoop, ResumeNotEligibleError } from "../../src/controller/resumeLoop.js";
-import { CRASH_ADOPTION_REASON } from "../../src/controller/adoptCrashedRun.js";
+import { adoptCrashedRun } from "../../src/controller/adoptCrashedRun.js";
+import { readOwnerRecord, readRunState } from "../../src/persistence/fileStore.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import { buildProcessInstanceId } from "../../src/runtime/processIdentity.js";
 import { readProcessStart } from "../../src/ownership/ownerLiveness.js";
@@ -196,7 +197,6 @@ describe("resume adopts a killed run (spec 2026-10-02 crash-resume §4.3)", () =
       newProcessInstanceId: buildProcessInstanceId(), reason: "owner process confirmed dead by resume",
       eligibleForContinuation: true,
     });
-    expect(CRASH_ADOPTION_REASON).toBe("owner process confirmed dead by resume");
     const reconciliation = await readJson(join(runDir, "reconciliation-record.json"));
     expect(reconciliation).toMatchObject({
       staleConfirmed: true, ownershipVerdict: "OWNER_LOST", lastTrustedBoundary: "execute",
@@ -233,6 +233,25 @@ describe("resume adopts a killed run (spec 2026-10-02 crash-resume §4.3)", () =
     const events = await readEvents(runDir);
     expect(events.map((e) => e.type)).not.toContain("owner_crash_adopted");
     expect(events.filter((e) => e.type === "resume_denied").map((e) => e.detail)).toEqual([refusal.message]);
+  });
+
+  // Controller ruling, Task 6 fix round 1: on the adoption path the owner is classified BEFORE reaping. A resume
+  // that refuses because the owner may be alive (stalled heartbeat, SIGSTOP, wake from sleep) must not have
+  // SIGTERMed that live owner's claude call on the way.
+  it("refuses a no-transfer run whose owner is alive without reaping its registered group", async () => {
+    const { runDir, contract } = await newRunDir();
+    await seedKilledRun(runDir, contract, { id: buildProcessInstanceId(), leaseAffirmedAt: expiredLease() });
+    const group = await seedOrphanGroup(runDir);
+    const before = await snapshot(runDir);
+
+    const refusal = await refusalOf(resumeLoop(runDir, new ScriptedAdapter([successFrame()])));
+
+    expect(refusal.message.startsWith("no owner transfer and the owner is alive: ")).toBe(true);
+    expect(alive(group)).toBe(true);
+    const types = (await readEvents(runDir)).map((e) => e.type);
+    expect(types).not.toContain("orphan_process_group_reaped");
+    expect(types).not.toContain("owner_crash_adopted");
+    expect(await snapshot(runDir)).toEqual(before);
   });
 
   it("refuses a legacy owner id", async () => {
@@ -349,5 +368,20 @@ describe("resume adopts a killed run (spec 2026-10-02 crash-resume §4.3)", () =
 
     expect(refusal.message).toBe("run status succeeded is not resumable");
     expect((await readEvents(runDir)).filter((e) => e.type === "owner_crash_adopted")).toHaveLength(1);
+  });
+
+  // Task 6 fix round 1: once the transfer write has committed, a failure to record owner_crash_adopted is its own
+  // refusal, not a lock/CAS failure (which would claim no write happened).
+  it("reports an event failure after a committed adoption write as its own refusal", async () => {
+    const { runDir, contract } = await newRunDir();
+    await seedKilledRun(runDir, contract, { id: await deadOwnerId(), leaseAffirmedAt: expiredLease() });
+    await rm(join(runDir, "events.jsonl"));
+    await mkdir(join(runDir, "events.jsonl")); // appendFile on a directory fails with EISDIR
+
+    const result = await adoptCrashedRun(runDir, await readOwnerRecord(runDir), await readRunState(runDir), "owner pid 1 does not exist");
+
+    expect(result.ok).toBe(false);
+    expect((result as { reason: string }).reason.startsWith("adoption committed but its event could not be recorded: ")).toBe(true);
+    expect((await readJson(join(runDir, "owner-transfer.json"))).newOwnerEpoch).toBe(3);
   });
 });

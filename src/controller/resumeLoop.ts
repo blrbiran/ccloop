@@ -17,7 +17,7 @@ import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { RunState, RunStatus } from "../state/types.js";
 import type { RunLeaseLostError } from "../ownership/lease.js";
 import { reapRunProcesses } from "../ownership/reapRunProcesses.js";
-import { adoptCrashedRun, isOrcaControlRunDir } from "./adoptCrashedRun.js";
+import { adoptCrashedRun, confirmOwnerDead, isOrcaControlRunDir } from "./adoptCrashedRun.js";
 import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
 import {
@@ -259,13 +259,10 @@ export async function resumeLoop(
     // recovery, and everyone else reads what it published.
     ownerRecord = await readOwnerRecord(runDir);
 
-    // Spec 2026-10-02 crash-resume §4.3 step 4, on every path: a group a killed loop left running would race
-    // the attempt this resume starts. Any doubt refuses.
-    const reap = await reapRunProcesses(runDir).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
-    if (!reap.ok) throw new CrashAdoptionRefused(`orphan process groups not reaped: ${reap.reason}`);
-
-    // Step 6, if and only if there is no transfer record (ENOENT) and the run is resumable: adopt once the owner
-    // is confirmed dead. A run that already carries a transfer keeps the lease-only rule (controller ruling R1).
+    // Spec 2026-10-02 crash-resume §4.3 step 6, owner check: if and only if there is no transfer record (ENOENT)
+    // and the run is resumable, the owner must be confirmed dead, and this runs BEFORE reaping (controller ruling,
+    // Task 6 fix round 1): a resume that refuses because the owner may be alive must not have signalled its groups
+    // first. A run that already carries a transfer keeps the lease-only rule (controller ruling R1).
     const transferMissing = await readOwnerTransferRecord(runDir).then(
       () => false,
       (error: NodeJS.ErrnoException) => {
@@ -273,20 +270,33 @@ export async function resumeLoop(
         throw error;
       },
     );
+    let adoption: { state: RunState; ownerDeadReason: string } | null = null;
     if (transferMissing) {
       const stateNow = await readRunState(runDir);
       if (RESUMABLE_STATUSES.includes(stateNow.status)) {
-        let adopted;
-        try {
-          adopted = await adoptCrashedRun(runDir, ownerRecord, stateNow);
-        } catch (error) {
-          throw new CrashAdoptionRefused(lockOrCasDetail(error));
-        }
-        if (!adopted.ok) throw new CrashAdoptionRefused(adopted.reason);
-        // Spec §11 C3: the record read above is one epoch behind the transfer just written and would fail both
-        // the eligibility check and the claim CAS; transfer and reconciliation are (re-)read just below.
-        ownerRecord = await readOwnerRecord(runDir);
+        const owner = await confirmOwnerDead(ownerRecord);
+        if (!owner.ok) throw new CrashAdoptionRefused(owner.reason);
+        adoption = { state: stateNow, ownerDeadReason: owner.reason };
       }
+    }
+
+    // Step 4, on every path: a group a killed loop left running would race the attempt this resume starts. Any
+    // doubt refuses.
+    const reap = await reapRunProcesses(runDir).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
+    if (!reap.ok) throw new CrashAdoptionRefused(`orphan process groups not reaped: ${reap.reason}`);
+
+    // Step 6, adoption write.
+    if (adoption !== null) {
+      let adopted;
+      try {
+        adopted = await adoptCrashedRun(runDir, ownerRecord, adoption.state, adoption.ownerDeadReason);
+      } catch (error) {
+        throw new CrashAdoptionRefused(lockOrCasDetail(error));
+      }
+      if (!adopted.ok) throw new CrashAdoptionRefused(adopted.reason);
+      // Spec §11 C3: the record read above is one epoch behind the transfer just written and would fail both
+      // the eligibility check and the claim CAS; transfer and reconciliation are (re-)read just below.
+      ownerRecord = await readOwnerRecord(runDir);
     }
 
     [ownerTransfer, reconciliation, runState, contract] = await Promise.all([

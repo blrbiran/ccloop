@@ -17,25 +17,38 @@ export async function isOrcaControlRunDir(runDir: string): Promise<boolean> {
 }
 
 /**
- * Spec §4.3 step 6: the run has no owner-transfer.json (its loop was killed before publishing one). Adopt it only
- * when its owner process is confirmed dead; `alive` and `undetermined` both refuse. The write goes through the
- * existing transfer transaction with `ownerRecord` as the CAS expectation, so of two racing resumes exactly one
- * adopts; its lock and CAS errors are thrown for the caller to map.
+ * Spec §4.3 step 6, first half: the run has no owner-transfer.json (its loop was killed before publishing one), so
+ * it may be adopted only when its owner process is confirmed dead; `alive` and `undetermined` both refuse. Runs
+ * BEFORE any reaping (controller ruling, Task 6 fix round 1): a resume that is about to refuse because the owner may
+ * be alive must not first signal that owner's process groups.
+ */
+export async function confirmOwnerDead(
+  ownerRecord: OwnerRecord,
+  deps: { classify?: typeof classifyOwnerProcess } = {},
+): Promise<{ ok: true; reason: string } | { ok: false; reason: string }> {
+  const owner = await (deps.classify ?? classifyOwnerProcess)(ownerRecord);
+  if (owner.verdict !== "dead") return { ok: false, reason: `no owner transfer and the owner is ${owner.verdict}: ${owner.reason}` };
+  return { ok: true, reason: owner.reason };
+}
+
+/**
+ * Spec §4.3 step 6, second half, called only after confirmOwnerDead answered ok (its reason is `ownerDeadReason`)
+ * and the run's orphans were reaped. The write goes through the existing transfer transaction with `ownerRecord` as
+ * the CAS expectation, so of two racing resumes exactly one adopts; that write's lock and CAS errors are thrown for
+ * the caller to map. A failure to record the event after the write committed is returned as its own refusal.
  */
 export async function adoptCrashedRun(
   runDir: string,
   ownerRecord: OwnerRecord,
   runState: RunState,
-  deps: { classify?: typeof classifyOwnerProcess } = {},
+  ownerDeadReason: string,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const boundary = BOUNDARY[runState.status as keyof typeof BOUNDARY];
   if (boundary === undefined) return { ok: false, reason: `run status ${runState.status} is not resumable` };
-  const owner = await (deps.classify ?? classifyOwnerProcess)(ownerRecord);
-  if (owner.verdict !== "dead") return { ok: false, reason: `no owner transfer and the owner is ${owner.verdict}: ${owner.reason}` };
   const at = new Date().toISOString();
   const transfer = applyOwnerEpochTransfer(ownerRecord, buildProcessInstanceId(), at, CRASH_ADOPTION_REASON);
   const reconciliation: ReconciliationRecord = {
-    staleSuspicionBasis: [`lease not fresh (leaseAffirmedAt ${String(ownerRecord.leaseAffirmedAt ?? null)})`, owner.reason],
+    staleSuspicionBasis: [`lease not fresh (leaseAffirmedAt ${String(ownerRecord.leaseAffirmedAt ?? null)})`, ownerDeadReason],
     staleConfirmed: true,
     ownershipVerdict: "OWNER_LOST",
     lastTrustedBoundary: boundary,
@@ -49,10 +62,14 @@ export async function adoptCrashedRun(
   // this write replaces it, and the event says so.
   const replaced = await access(join(runDir, "reconciliation-record.json")).then(() => true, () => false);
   await writeOwnerTransferArtifacts(runDir, ownerRecord, transfer.nextOwnerRecord, transfer.transferRecord, reconciliation);
-  await appendEvent(runDir, {
-    type: "owner_crash_adopted",
-    at,
-    detail: `epoch ${transfer.transferRecord.priorOwnerEpoch} -> ${transfer.transferRecord.newOwnerEpoch}: ${ownerRecord.currentProcessInstanceId} confirmed dead (${owner.reason})${replaced ? "; replaced a reconciliation record that had no transfer" : ""}`,
-  });
+  try {
+    await appendEvent(runDir, {
+      type: "owner_crash_adopted",
+      at,
+      detail: `epoch ${transfer.transferRecord.priorOwnerEpoch} -> ${transfer.transferRecord.newOwnerEpoch}: ${ownerRecord.currentProcessInstanceId} confirmed dead (${ownerDeadReason})${replaced ? "; replaced a reconciliation record that had no transfer" : ""}`,
+    });
+  } catch (error) {
+    return { ok: false, reason: `adoption committed but its event could not be recorded: ${String(error)}` };
+  }
   return { ok: true };
 }
