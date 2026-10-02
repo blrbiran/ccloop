@@ -14,12 +14,19 @@ afterEach(() => {
   }
 });
 
-function spawnGroup(ignoreTerm: boolean): number {
-  const code = `${ignoreTerm ? "process.on('SIGTERM',()=>{});" : ""} setInterval(()=>{},1000)`;
+// Resolves only after the child has installed its SIGTERM disposition (it writes a marker),
+// otherwise a fast reap would hit it before the handler exists and the SIGKILL path would go untested.
+async function spawnGroup(ignoreTerm: boolean): Promise<number> {
+  const marker = join(await mkdtemp(join(tmpdir(), "reap-ready-")), "ready");
+  const code = `${ignoreTerm ? "process.on('SIGTERM',()=>{});" : ""} require('fs').writeFileSync(${JSON.stringify(marker)},'1'); setInterval(()=>{},1000)`;
   const child = spawn(process.execPath, ["-e", code], { detached: true, stdio: "ignore" });
   child.unref();
   pids.push(child.pid!);
-  return child.pid!;
+  for (let i = 0; i < 200; i++) {
+    if (await readFile(marker, "utf8").then(() => true, () => false)) return child.pid!;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error("test child never became ready");
 }
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
@@ -39,7 +46,7 @@ const newRun = () => mkdtemp(join(tmpdir(), "reap-"));
 describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse otherwise)", () => {
   it("reaps an unfinished call's live group with a matching lstart, TERM honoured", async () => {
     const run = await newRun();
-    const pid = spawnGroup(false);
+    const pid = await spawnGroup(false);
     await register(await callDir(run), pid);
     expect(await reapRunProcesses(run, { graceMs: 2000 })).toEqual({ ok: true, reaped: 1 });
     expect(alive(pid)).toBe(false);
@@ -51,7 +58,7 @@ describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse o
 
   it("falls through to SIGKILL when the group ignores SIGTERM", async () => {
     const run = await newRun();
-    const pid = spawnGroup(true);
+    const pid = await spawnGroup(true);
     await register(await callDir(run), pid);
     expect(await reapRunProcesses(run, { graceMs: 200 })).toEqual({ ok: true, reaped: 1 });
     expect(alive(pid)).toBe(false);
@@ -59,7 +66,7 @@ describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse o
 
   it("leaves a finished call (outcome.json present) alone", async () => {
     const run = await newRun();
-    const pid = spawnGroup(false);
+    const pid = await spawnGroup(false);
     const dir = await callDir(run);
     await register(dir, pid);
     await writeFile(join(dir, "outcome.json"), "{}");
@@ -70,7 +77,7 @@ describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse o
 
   it("refuses when the leader's lstart differs from the recorded one", async () => {
     const run = await newRun();
-    const pid = spawnGroup(false);
+    const pid = await spawnGroup(false);
     await register(await callDir(run), pid, "Thu Jan  1 00:00:00 1970");
     const r = await reapRunProcesses(run);
     expect(r.ok).toBe(false);
@@ -96,7 +103,7 @@ describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse o
 
   it("refuses when the group outlives the timeout", async () => {
     const run = await newRun();
-    const pid = spawnGroup(false);
+    const pid = await spawnGroup(false);
     await register(await callDir(run), pid);
     const r = await reapRunProcesses(run, { signalGroup: () => {}, graceMs: 50, timeoutMs: 300, pollMs: 20 });
     expect(r.ok).toBe(false);
@@ -121,7 +128,7 @@ describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse o
 
   it("ignores process.json under worktrees/", async () => {
     const run = await newRun();
-    const pid = spawnGroup(false);
+    const pid = await spawnGroup(false);
     await register(await callDir(run, "worktrees/w1/claude/1/execute/call-y"), pid);
     expect(await reapRunProcesses(run)).toEqual({ ok: true, reaped: 0 });
     expect(alive(pid)).toBe(true);
