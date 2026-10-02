@@ -1,4 +1,4 @@
-# ccloop Handoff — *** **⛔ 下一件事（人 2026-10-02 点名）：被直接杀掉的 run 能续跑 ＋ ccloop 死后留下的 runner 要收；现状、建议方向与一起看的 R-A／R-B 见文末「Orca 那条线」。** *** adapter／CLI 合并四步已做完（只剩 `ClaudeAgentAdapter`，CLI 只剩 `--agents` 入口，`resume`／`sweep` 能续跑 `run --agents` 起、且由 loop 写过移交记录的 run）。 更早各轮（`rejectOn` 改由 verifier 判断、⑤ 预估链、临时目录泄漏、`collect.progress`、git 依赖打包、#13(a)）都已落地、人已审；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
+# ccloop Handoff — *** **✅ 2026-10-02（Orca 会话 `ece96b67`）：被杀的 run 能续跑＋孤儿 runner 收＋R-A＋R-B 一轮做完，门绿、付费真 claude 跑通「杀掉再续跑」（n＝1）；下一件归人（审 pending 裁定、推送、选后续），见文末「Orca 那条线」。** *** 更早各轮（adapter／CLI 合并四步、`rejectOn` 改由 verifier 判断、⑤ 预估链、临时目录泄漏、`collect.progress`、git 依赖打包、#13(a)）都已落地、人已审；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -407,80 +407,63 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-02 第三十版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-02 第三十一版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
-## ⛔ 下一件事就在本仓库：被直接杀掉的 run 能续跑 ＋ ccloop 死后留下的 runner 要收
+## ✅ 刚做完（Orca 会话 `ece96b67`，2026-10-02）：被杀的 run 能续跑 ＋ 孤儿 runner 收 ＋ R-A ＋ R-B，一轮做完
 
-- **人已定要做**（2026-10-02：「我比较倾向于能续跑以及要清理」，并点名下一个 agent 做这件）。**动所有权逻辑 ⇒ 走 brainstorming → spec → 计划 → SDD 评审**，按本仓库 `CLAUDE.md` 的铁律。
-- **现状（付费真 claude 实测，台账 `.superpowers/sdd/2026-10-01-live-partial-and-resume/progress.md` R1／R2）**：
-  - `resume`／`sweep` 只认 loop 在 `stale_candidate` 边界写的 `owner-transfer.json`（runLoop.ts `persistOwnerTransfer`）。被 SIGKILL 的 run 一份都没有，租约过期后报 `cannot read run artifacts: ENOENT … owner-transfer.json`。README §3.2「接管一个被中断的 run」因此会误导。
-  - adapter 以 `detached` 起 runner。ccloop 被杀后，runner 与 claude 继续跑完、继续花钱。
-- **控制器建议的方向**（起点，不是裁定，人没逐条审）：做成一件事，清理是续跑的前提——
-  - runner 盯父进程：stdin 关闭即先停 claude、再退出；
-  - `resume` 接管前按 `process.json` 的 pid＋启动时间**核身份**，收掉仍活着的进程组；
-  - 租约过期、且登记的 owner 按身份核实已死时，由 `resume` 自己写移交记录；
-  - 判不清一律 fail closed。
-- Orca 这一轮**不要求**跟改（Orca 驱动走自己的恢复路径，不调 `ccloop resume`）。若 Orca 以后要用新行为，按下面的重钉规矩走。
+- 材料：spec `docs/superpowers/specs/2026-10-02-crash-resume-and-orphan-reaping-design.md`（**§2 人裁 H1–H8、§11 评审更正与控制器裁定 R1／R2、§4.4 前一段「实施期更正」、§12 实施期更正**，冲突以后者为准）；计划同名于 `docs/superpowers/plans/`；台账 `.superpowers/sdd/2026-10-02-crash-resume-and-orphan-reaping/progress.md`（已入库，含全部 `Ruling:`、每个 Task 的变异表、门、付费跑、容量数）。
+- 做成了什么：
+  - runner 经 fd 3 管道盯父进程：父进程一死（含 SIGKILL），先 SIGTERM claude，5 秒宽限后 SIGKILL 自己整个进程组；任何退出路径上都先杀组。只有 adapter 起的 runner 才会这样（环境变量 `CCLOOP_PARENT_WATCH_FD`，`claudeEnv()` 会剥掉）。**codex 没有这层**，它的残留只靠 resume 回收。
+  - R-A：claude 根本没起来（`error` 先于 `spawn`，或 `spawn()` 同步抛）⇒ runner 答 `{"claudeNeverStarted":true,"spawnError":…}`；`ENOENT` 在 runner 内重试，共 3 次、间隔 2 秒；adapter 抛 `ClaudeNeverStartedError`，`observedTokensOf` 对带 `neverStarted` 的错误答 **0**（已发布的「never 0」注释都追加了 ERRATUM）。run 仍判 `failed`。
+  - resume：Orca 控制 run（`<dir>/run` 旁有 `control/`）一律拒；**没有移交记录的被杀 run**：先按 pid＋启动时间核 owner 已死（判不清就拒，**且拒之前不杀任何进程**）→ 收本 run 未完成调用的进程组（只收 lstart 精确匹配的，判不清就拒）→ 自己写移交记录（事件 `owner_crash_adopted`）→ 走原来的资格检查与认领。**已有移交记录的 run 维持「租约过期即可续」**（R1），但也会先收进程组。
+  - sweep：多一类候选（没有移交记录、状态可续、租约时间戳已过期；`null` 租约不算，R2），横幅另起一行计数。
+  - R-B：模型自己报的 `partial`＋`error` 且有改动文件 ⇒ 不再直接 `failed`，照常走路径策略、预算检查、verify；runner 自建的 partial 带 `partialOrigin:"runner"`，维持原判。codex 的同类 partial 也进 verify。execute 提示词写明检查由 verifier 跑。
+  - README §3.2／§3.4 已按新行为改写。
+- 门（干净 clone，env 改道）：**1124 条、1123 过、只红 `stopProof`**；`check-known-reds` RC 0（名单仍 9 个名字）、`check-tmp-leak` RC 0、build／typecheck RC 0。
+- 付费真 claude（n＝1，台账末节）：SIGKILL ccloop 后 runner＋claude 约 2.5 秒内全部退出；等租约真过期后 `resume --agents` 不靠补文件就续跑到 `succeeded`。claude 自报花费 $0.2392012（被杀那次 execute 的花费拿不到）。**收进程、R-A、R-B 在真 claude 下都没跑过。**
+- 容量实测（真 claude、执行中途）：runner 组 = runner 10 fd ＋ claude 18 fd（另有验收专用的 tee）；每个在飞任务至少 3 个进程。按 `kern.maxprocperuid` 5,333 推算上限约 1,700，**这是推算不是实测**，且没算工具子进程。
 
-## 🆕 Orca N1 付费跑在本仓库这一侧暴露的两条（2026-10-02，Orca 会话 `b5e8d368`；**登记，未修，方向归人**）
+## ⛔ 下一件事（都归人，按人选）
 
-证据在 Orca 仓台账 `.superpowers/sdd/2026-10-02-requirement-to-split/progress.md` 末节「Paid run」。claude 2.1.287，n＝2，合计 $2.0521032（claude 自报）。
-- **R-A**：execute 时 `spawn …/bin/claude ENOENT`（本机 claude 安装包恰在那一两秒被重装，同版本）。runner 以 `claude-exit-error` 结束，用量为 null ⇒ Orca 记成未知用量，整个 group 永久停住。候选：runner 能证明从未起过 claude 进程时报用量 0。
-- **R-B**：`--permission-mode acceptEdits`（`agents detect` 起草的默认）下 executor 跑不了任何命令。任务目标写「测试要过」时，claude 答 `completionStatus: partial`＋`failureType: error`（「tests could not be run」），loop 剩 2 次尝试也直接 `failed`，而本仓库自己的 verify 会跑 requiredChecks。候选（设计题）：
-  - execute 提示词说明检查由 verifier 跑；
-  - 或放行本任务的检查命令；
-  - 或带改动文件的自报 `error` 先交 verify。
-- 这两条与上面那件事都碰 runner／adapter／loop 终态：**开 spec 时一起看，别各改各的**。
-
-## 最近做完的（**不要重做**）
-
-- **adapter／CLI 合并四步**（Orca 会话 `be653b22`）：只剩 `ClaudeAgentAdapter`；CLI 只剩 `--agents` 入口；`resume`／`sweep --agents` 用 `run --agents` 冻结的 `agent-selection.json` 续跑。四本台账 `.superpowers/sdd/2026-10-01-*`，人已审完全部 `Ruling:`。
-- **Orca 会话 `b5e8d368` 在本仓库的提交**（已由人推送）：
-  - `refactor(cli): refuse an unknown flag …`：不认的 `--` flag 一律报 `unknown flag <flag>`。
-  - `fix(claude): deliver an interrupted execute's partial whole instead of cut at 8192 bytes`：付费跑抓到的真 bug，改为等 write 回调。
-  - 两笔夹具 `test(fixtures): the fake claude answers single calls from a queue, …` 与 `… pin that a single-call entry beats a single-call-queue …`：Orca `requirementE2E` 要含它们的 checkout（`ORCA_CCLOOP_BIN`）。
+- **人审本轮**：控制器替人定的裁定在台账的 `Ruling:` 行（R1、R2、sweep 第二行横幅措辞、`tests/control/materialize.test.ts` 夹具补字段、本轮自写判据的收紧、codex partial 进 verify），标着 pending human ratification 的要人认可或回退。
+- 推送：以现跑 `ls-remote` 为准；本仓库先于 Orca。Orca 这一轮没有重钉（不依赖新行为）。
+- 候选的后续：收进程／R-A／R-B 的付费真 claude 验证；Orca「同时启动任务数上限」（要真 claude 下带工具调用的任务再量一次）；被杀调用永远没有 `outcome.json`，其 pgid 被无关进程复用时 resume 会一直拒（已登记，要改需动 spec §4.2）。
 
 ## 🔗 Orca 通过 git 依赖钉住本仓库
 
-- Orca `package.json`：`"ccloop": "github:blrbiran/ccloop#99054f2db619d45760825f1d4e6903a8dcc17a73"`（带 8192 字节修复；钉住的包不带测试夹具，Orca 生产代码也不依赖它们）。Orca 没设 `ORCA_CCLOOP_BIN` 时用这份；开发与门走 `ORCA_CCLOOP_BIN`（本仓库 clone 的 build）。
+- Orca `package.json`：`"ccloop": "github:blrbiran/ccloop#99054f2db619d45760825f1d4e6903a8dcc17a73"`（带 8192 字节修复，不含本轮）。Orca 没设 `ORCA_CCLOOP_BIN` 时用这份；开发与门走 `ORCA_CCLOOP_BIN`（本仓库 clone 的 build）。
 - **重钉规矩**：只有 Orca 依赖了本仓库的**新行为**才重钉。顺序：本仓库提交 → **人推本仓库** → Orca 的 agent 跑 `node scripts/pin-ccloop.mjs <SHA>` → 人推 Orca。只能钉 GitHub 上已有的 SHA。
-- Orca 的 `npm run verify` 有 `verify:ccloop-pin`（对装好的包跑 Orca 的 `ccloopDefaultE2E`）。⚠️ `files` 之外的运行时读取会让装好的包坏掉（`tests/packaging/gitDependency.test.ts` 会红）。
+- Orca 的 `npm run verify` 有 `verify:ccloop-pin`。⚠️ `files` 之外的运行时读取会让装好的包坏掉（`tests/packaging/gitDependency.test.ts` 会红）。
 
 ## Orca 对本仓库行为的依赖（**零改动，只是知情**）
 
 - loop 方案依赖：`requiredChecks` 在 worktree 里 `sh -lc` 真跑；路径约束只查 executor 自报的 `changedFiles`；`rejectOn` 只进 verifier prompt；`constraints` 不进 verifier、`nonGoals` 只进 planner。
 - Orca 方案 v2 默认值：`maxFilesTouched` `Number.MAX_SAFE_INTEGER`、`perAttemptTimeoutMs` 3 小时、`partialOutcomeRecoveryWindowMs` 60,000（`PARTIAL_FLUSH_MARGIN_MS` 在 Orca 手抄一份——改这个数要同时改 Orca）。
-- **Orca N1** 走本仓库的 `single-call`（protocol 3），一次调用一个 purpose（`estimate`／`clarify`／`split`）。真 claude 下已跑通（见上节）。Orca 的端到端判据用 fake claude 的 `single-call-queue` 按序回放（脚本 `{"single-call-queue":[{"match"?,"output","delayMs"?,"usageBeforeDelay"?}]}`；队列耗尽退 3；有 `single-call` 键时队列被忽略）。
-- fake codex 恒报改了 `answer.txt` ⇒ Orca 的 loop E2E 把它放进 `targetPaths`。
+- Orca N1 走 `single-call`（protocol 3）；fake claude 的 `single-call-queue` 按序回放。fake codex 恒报改了 `answer.txt`。
+- 本轮对 Orca 的影响（重钉之后才生效）：worker 起的 runner 也会随 worker 死；never-started 记 0；Orca 控制 run 被 `ccloop resume` 拒（Orca 本来就不调它）；codex `error` partial 进 verify。
 
 ## 🔴 挂着的
 
 - `stopProof` 根因、Linux：未变，要人先开口。
-- 两条负载型 flake，不在 `check-known-reds` 名单里（名单归人）：`agentsControl` "reads the table only for capabilities and accept…" 与 `evidence` "finalize-review CLI stores diagnosis null…"。看到红先单跑，别当回归。
-- 阶段超时直接进 `setTimeout`（大于 2,147,483,647 ms 时 Node 改成 1 ms；Orca 已截自己派生的值）：要不要在本仓库防，人未定。
-- 真 claude 下只有 fake 证据的：stdin 传 prompt、`progress`、子代理 stream 配对。付费跑每次都要人点头。
-- `agent-selection.json` 只冻结选择与 hash；claude 自动升级后旧 run 会被 `agent-version-drift` 拒绝续跑。`PhaseOutcome.abortedError` 有人写没人读。
+- 两条负载型 flake 不在名单里（名单归人）：`agentsControl` "reads the table only for capabilities and accept…"、`evidence` "finalize-review CLI stores diagnosis null…"。本轮新判据里有几条依赖时序（三次 spawn 的上下界、T5b、等 `request.json` 后中止），本轮门里都绿；红了先单跑。
+- 阶段超时直接进 `setTimeout`（> 2,147,483,647 ms 变 1 ms）：人未定。`agent-selection.json` 只冻结选择与 hash；claude 自动升级后旧 run 会被 `agent-version-drift` 拒绝续跑。
+- 本轮登记未修的小项都在台账 `minor (deferred)` 行，终审已逐条分诊（都不挡推送）。
 
 ## 环境事实（直接用，别再反推）
 
-- 已知红用 `node scripts/check-known-reds.mjs` 机械判（名单 9 个名字）；唯一稳定红是 `stopProof`。临时目录泄漏用 `node scripts/check-tmp-leak.mjs` 判。
-- 现行门（Orca 会话 `b5e8d368`，内容＝主题行 `test(fixtures): pin that a single-call entry beats a single-call-queue beside it …`）：1047 条、1046 过、只红 `stopProof`，两个检查脚本 RC 0。之后本仓库只多了 handoff 提交。
-- 副本：`git clone --local` 到会话 scratchpad，软链 `node_modules`，`npm run build`，`cd` 进 clone 再跑。主树不跑 build、不跑全量。HOME 与四个 XDG 根要改道；**TMPDIR 要短、要是真目录**（`mktemp -d /private/tmp/cl-XXXX`）。
-  - Orca 的闸门会拦 clone 里的 `git pull`／`git merge`：同步单个文件用 `cat 主树文件 > clone 文件`（`cp` 带 `-i`）。
-  - 被 Orca 当作 `ORCA_CCLOOP_BIN` 的 clone 不许同时拿来做变异。
-- ⚠️ 本地 `dist/` 里可能还留着已删的 `subprocessClaudeAdapter.js`（git 安装不受影响；从这棵树 `npm pack` 会带上）。
-- ⚠️ 测试文件别在收集期整文件跳过：改成 `beforeEach` 里 `ctx.skip()`。
-- 写文件工具可能把非 NFC 的字面量改掉 ⇒ 判据里有这类文本时，写完用 python 核字节。
+- 已知红用 `node scripts/check-known-reds.mjs` 机械判；唯一稳定红是 `stopProof`。临时目录泄漏用 `node scripts/check-tmp-leak.mjs` 判。
+- 副本：`git clone --local` 到会话 scratchpad，软链 `node_modules`，`npm run build`，`cd` 进 clone 再跑。主树不跑 build、不跑全量。HOME 与四个 XDG 根要改道；**TMPDIR 要短、要是真目录**（`mktemp -d /private/tmp/cl-XXXX`）。同步单个文件用 `cat 主树文件 > clone 文件`（`cp` 带 `-i`）。被当作 `ORCA_CCLOOP_BIN` 的 clone 不许同时拿来做变异。
+- 合约 `context.buildTestCommands` 至少要一项（付费跑脚本踩过，未调用 claude 就被拒）。
 - macOS 上子进程写管道是异步的：写完 stdout 再 `process.exit` 会丢数据，一律等 write 回调。
-- **本机 claude 会在任意时刻被重装（同版本也会）**，那一两秒 `bin/claude` 不存在（R-A 的触发）。nvm 和 homebrew 各装了一份。
-- 变异会留孤儿进程 ⇒ `pgrep -fl "ccloop-agents-version|worker.js|fake-claude-cli"`；杀进程要人授权。
-- 判 flake 要等负载降下来，并记 `uptime`。
+- **本机 claude 会在任意时刻被重装（同版本也会）**，那一两秒 `bin/claude` 不存在（R-A 的触发，本轮已加重试）。nvm 和 homebrew 各装了一份（homebrew 那份是 2.0.19，`agents detect` 默认选 nvm 的 2.1.287）。付费跑前后记安装目录 mtime。
+- 变异会留孤儿进程 ⇒ `pgrep -fl "fake-claude-cli|claude-phase-runner|runner-parent|setInterval"`；杀进程要人授权（只杀自己起的）。判 flake 要等负载降下来，并记 `uptime`。
+- 写文件工具可能把非 NFC 的字面量改掉 ⇒ 判据里有这类文本时，写完用 python 核字节。测试文件别在收集期整文件跳过：改成 `beforeEach` 里 `ctx.skip()`。
 
 ## awaitingHuman
 
 - 推送：以现跑 `ls-remote` 为准；本仓库先于 Orca。
-- R-A／R-B 的方向（可与续跑一轮一起开 spec）。
+- 本轮 pending human ratification 的裁定（见上「下一件事」第一条）。
 - 两条新 flake 进不进 `check-known-reds` 名单；`setTimeout` 溢出防护。
