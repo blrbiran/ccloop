@@ -196,6 +196,13 @@ export type ResumeLoopOptions = {
   // / affirmNow) would otherwise refund a run whose paid attempts had already happened. Called
   // before the heartbeat exists, so a callback that throws leaves nothing started to stop; it
   // does abort this resume after the adoption event, which is the caller's own risk to take.
+  // *** ERRATUM (crash resume, 2026-10-02, Orca session ece96b67) -- the two comments above count
+  // resume's refusals (the first names the lease gate, the eligibility gate and the claim CAS; the
+  // second says "all four"). Spec
+  // 2026-10-02 crash-resume §4.3 adds three more that also run before the loop exists and before
+  // `resume_adopted`: the Orca control-run guard, the orphan-group reap, and the crash-adoption
+  // owner check / transfer write. Both comments' conclusions are unchanged: a stop request still
+  // refuses nothing, and onAdopted still fires only once every refusal is behind us. ***
   onAdopted?: () => void;
 };
 
