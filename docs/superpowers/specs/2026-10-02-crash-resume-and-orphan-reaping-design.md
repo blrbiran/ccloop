@@ -173,6 +173,12 @@ loop to stop at its next phase boundary, after which the process releases the le
 exits at once (`exit 130`) without release. Either way, once the process is gone, `resume` adopts the run if its
 status is resumable.
 
+Implementation-time correction (Task 6 review, 2026-10-02, controller ruling under H8): on the adoption path the owner
+check of step 6 runs **before** the reap of step 4 — the transfer's absence and the status are read first, the owner is
+classified, `alive`/`undetermined` refuses without reaping anything, and only then are groups reaped and the transfer
+written. Otherwise a resume that ends up refusing "owner is alive" could already have killed that live owner's calls.
+Runs that carry a transfer keep the order above (reap, then today's path).
+
 ### 4.4 sweep
 
 - Candidates: (a) unchanged — `owner-transfer.json` observed with `eligibleForContinuation` literally true; (b) new —
