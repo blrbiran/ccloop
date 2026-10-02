@@ -138,13 +138,14 @@ New `src/ownership/reapRunProcesses.ts`, `reapRunProcesses(runDir)`:
 3. **Orca control run guard: if `basename(runDir) === "run"` and `dirname(runDir)/control` is a directory, refuse with
    `run directory belongs to an Orca control store; Orca recovers it`.** Orca's driver owns such runs' generation
    and budget.
-4. **`classifyOwnerProcess(ownerRecord)`: `alive` or `undetermined` ⇒ refuse naming the verdict and reason.**
-5. **`reapRunProcesses(runDir)`: any refusal ⇒ refuse.**
-6. Read `owner-transfer.json`, `reconciliation-record.json`, `loop-state.json`, `loop-contract.json` as today.
-   **If and only if `owner-transfer.json` is absent with ENOENT and the run status is resumable, adopt:**
+4. **`reapRunProcesses(runDir)`: any refusal ⇒ refuse.**
+5. Read `owner-transfer.json`, `reconciliation-record.json`, `loop-state.json`, `loop-contract.json` as today.
+6. **If and only if `owner-transfer.json` was absent with ENOENT and the run status is resumable:
+   `classifyOwnerProcess(ownerRecord)`; `alive` or `undetermined` ⇒ refuse naming the verdict and reason; `dead` ⇒
+   adopt:**
    - write through the existing `writeOwnerTransferArtifacts` with the step-2 record as the CAS expectation:
      transfer = `applyOwnerEpochTransfer(ownerRecord, buildProcessInstanceId(), now, "owner process confirmed dead by resume")`;
-     reconciliation: `staleSuspicionBasis` = [`lease not fresh (leaseAffirmedAt <value>)`, the step-4 reason],
+     reconciliation: `staleSuspicionBasis` = [`lease not fresh (leaseAffirmedAt <value>)`, the owner verdict's reason],
      `staleConfirmed: true`, `ownershipVerdict: "OWNER_LOST"`, `lastTrustedBoundary` from the status
      (`planning`/`executing`/`verifying` ⇒ `planning`/`execute`/`verify`), `conflictingEvidence: []`,
      `takeoverPermission: {allowed: true, reason: "owner process confirmed dead by resume"}`,
@@ -161,12 +162,11 @@ New `src/ownership/reapRunProcesses.ts`, `reapRunProcesses(runDir)`:
 
 The lease value is not used to tell a crash from a deliberate stop: `leaseAffirmedAt: null` is written in many
 states (the initial record, after any transfer, after a resume claim, and on a clean release). Owner death (step 4)
-is the proof; the lease gate (step 1) only refuses a fresh lease, as today.
+is the proof for adoption; the lease gate (step 1) only refuses a fresh lease, as today.
 
-Behaviour change on an existing path, stated: steps 3–5 also run for runs that already have a transfer record. Today
-those continue on lease expiry alone; after this change they also need the owner confirmed dead and every
-registered unfinished group reaped or quiet, and are refused when either cannot be determined, or when they are
-Orca control runs.
+Behaviour change on an existing path, stated: steps 3 and 4 also run for runs that already have a transfer record.
+Those still continue on lease expiry (the owner check of step 6 is not applied to them: controller ruling R1, §11),
+but now also need every registered unfinished group reaped or quiet, and Orca control runs are refused.
 
 README §3.2 states operator-visible consequences (`registerStopHandlers`, `src/cli.ts`): a single Ctrl-C asks the
 loop to stop at its next phase boundary, after which the process releases the lease and exits; a second Ctrl-C
@@ -245,7 +245,7 @@ new branch is paired with the mutation that deletes it, and the mutation must be
 | T8 | Unfinished call with mismatching `lstart`, leader absent, EPERM-like probe error, a group outliving `REAP_TIMEOUT_MS`, unparseable `process.json` with and without `request.json`: refuse ×5, skip ×1; nothing but events written | §4.2 |
 | T9 | Two resumes race on one killed run: exactly one adopts | §4.3 step 6 |
 | T9b | Reconciliation without transfer: adopted, event names the replacement | §4.3 step 6 |
-| T9c | A run with a loop-published transfer whose owner is alive: refused (stated behaviour change) | §4.3 |
+| T9c | A run with a loop-published transfer and a live unfinished registered group: the group is reaped, then the run resumes (stated behaviour change) | §4.3 step 4 |
 | T9d | Orca control run: refused by resume, not a sweep candidate | §4.3 step 3 |
 | T10 | sweep over (a), (b) and a refused (b) run: banner lines as §4.4; the refusal does not stop the rest | §4.4 |
 | T11 | claude's own `partial`+`error`+changed files: verify runs; checks pass ⇒ `succeeded`; a failing check ⇒ today's stop decision; no changed files ⇒ `failed`; a runner-built partial ⇒ today's path; budget exceeded ⇒ `exhausted` before verify | §5.1 |
@@ -341,5 +341,10 @@ read-only against the code. Accepted and folded in above:
   fall-through, honest wording (§5.1).
 - I9 reconciliation without transfer was undefined ⇒ replace with an event (§4.3 step 6).
 - I10 missing criteria ⇒ T2b, T5b, T6b, T9b–T9d, T7 timezone, T11 budget; T3's red is a plan obligation.
+- Controller ruling R1 (under H8, pending ratification): the owner check applies only to adoption (step 6), not to
+  runs that already carry a transfer. Measured reason: 111 fixture lines across 14 test files seed owner ids of the
+  legacy form `pid:<n>` (`grep -rn 'currentProcessInstanceId: "pid:' tests`), which the check classifies
+  `undetermined`; applying it to every path would rewrite those criteria, and the lease-only rule for
+  loop-published transfers is the established design. Reaping (step 4) still applies to every path.
 - Minor: `unknown` not `undetermined`; adapters' `ps` from PATH (the new code uses `/bin/ps`); sweep has no
   truncation; scanner rows always exist (`absent`); `observedAt`; `process.json` torn writes (§4.2 rule).
