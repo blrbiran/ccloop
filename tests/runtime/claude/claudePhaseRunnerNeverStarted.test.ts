@@ -57,13 +57,18 @@ describe("claude phase runner: claude never started (spec 2026-10-02 §3.2)", ()
     const worktree = await createWorktree();
     const missing = await missingCommand();
     const started = Date.now();
+    // Task 3 (folding in Task 1's review): the delay was 200 ms with only a lower bound, which a fourth spawn also met.
+    // At 700 ms, three spawns take two waits (>= 1400 ms) plus startup, and a fourth spawn adds a third wait (>= 2100 ms,
+    // timers never fire early), so an upper bound of 2050 ms tells them apart and leaves ~650 ms for startup under load.
     const { result } = spawnPhaseRunner(executeRequest(worktree), {
-      CCLOOP_CLAUDE_COMMAND: JSON.stringify([missing]), CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS: "200",
+      CCLOOP_CLAUDE_COMMAND: JSON.stringify([missing]), CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS: "700",
     });
     const r = await result;
+    const elapsed = Date.now() - started;
     expect(r.code).toBe(0);
     expect(JSON.parse(r.stdout)).toEqual({ claudeNeverStarted: true, spawnError: expect.stringMatching(/^ENOENT: /) });
-    expect(Date.now() - started).toBeGreaterThanOrEqual(400); // two waits of 200 ms => three spawns
+    expect(elapsed).toBeGreaterThanOrEqual(1400); // two waits => three spawns, not fewer
+    expect(elapsed).toBeLessThan(2050); // not a third wait => not four spawns
   });
 
   it("starts claude on the second spawn when the command appears during the retry wait", async () => {

@@ -105,8 +105,11 @@ if (NEW_WRITE_MODES.has(mode)) {
   // runner that opened a stream and then stopped receiving before the message closed or even started.
   if (stream) { await emitInit(); if (mode === "usage-then-hang") await emitClosedMessage(); else await emitStart(); }
   setInterval(() => {}, 1000);
-} else if (mode === "hang" || mode === "grandchild") {
-  if (mode === "grandchild") {
+} else if (mode === "hang" || mode === "grandchild" || mode === "grandchild-ignore-term") {
+  // Crash resume (2026-10-02), spec §3.1 criterion T2b: "grandchild-ignore-term" is "grandchild" whose own process also
+  // ignores SIGTERM, so a runner flushing an abort partial waits its whole recovery window before it SIGKILLs this one.
+  if (mode === "grandchild-ignore-term") process.on("SIGTERM", () => {});
+  if (mode === "grandchild" || mode === "grandchild-ignore-term") {
     const grandchild = spawn(process.execPath, ["-e", 'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'], { stdio: "ignore" });
     writeFileSync(`${marker}.grandchild`, String(grandchild.pid));
   }

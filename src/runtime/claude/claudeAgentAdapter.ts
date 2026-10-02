@@ -152,7 +152,12 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     };
     if (installation.configDir !== null) env.CLAUDE_CONFIG_DIR = installation.configDir;
     await new Promise<void>((resolve) => {
-      const child = spawn(process.execPath, [runner], { cwd: call.cwd, detached: true, stdio: ["pipe", "pipe", "pipe"], env });
+      const child = spawn(process.execPath, [runner], {
+        cwd: call.cwd, detached: true, stdio: ["pipe", "pipe", "pipe", "pipe"],
+        // Crash resume (2026-10-02), spec §3.1: fd 3 is a pipe this process never writes; its end closes only when this
+        // process dies (or finish() destroys it), which is how the runner learns that its parent is gone.
+        env: { ...env, CCLOOP_PARENT_WATCH_FD: "3" },
+      });
       const out = new StringDecoder("utf8"), err = new StringDecoder("utf8");
       let outBytes = 0, errBytes = 0, done = false, exited = false;
       let killTimer: NodeJS.Timeout | undefined, drainTimer: NodeJS.Timeout | undefined;
@@ -169,6 +174,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
         call.abortSignal?.removeEventListener("abort", abort);
         result.stdout += out.end(); stderr += err.end();
         child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
+        (child.stdio[3] as { destroy?: () => void } | null)?.destroy?.();
         resolve();
       };
       const stop = (reason: Outcome["reason"]) => {

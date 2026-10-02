@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { Socket } from "node:net";
 import { promisify } from "node:util";
 import { buildUsageEvidence, createLineSplitter, createUsageObserver, writeObservation } from "./claude-stream.mjs";
 
@@ -268,7 +269,7 @@ async function writeJsonToStdout(value) {
 let currentRequest = null;
 let currentClaudeProcess = null;
 let interruptHandled = false;
-// Crash resume (2026-10-02), spec §3.2: Task 3 sets parentGone; until then it only ever reads false.
+// Crash resume (2026-10-02), spec §3.1/§3.2: set by onParentGone below.
 let parentGone = false;
 let claudeEverStarted = false;
 let lastSpawnFailure = null; // "<code>: <message>" of the latest failed spawn in this call
@@ -360,7 +361,8 @@ function readArgvEnv(name, fallback, requireCommand) {
 // Orca claude stream usage (2026-09-27): so is the observation path the adapter hands this runner.
 function claudeEnv() {
   // Crash resume (2026-10-02): CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS is this runner's own input too.
-  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: _observedUsagePath, CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS: _spawnRetryDelay, ...env } = process.env;
+  // Crash resume (2026-10-02), spec §3.1: so are CCLOOP_PARENT_WATCH_FD and CCLOOP_PARENT_GONE_GRACE_MS.
+  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: _observedUsagePath, CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS: _spawnRetryDelay, CCLOOP_PARENT_WATCH_FD: _parentWatchFd, CCLOOP_PARENT_GONE_GRACE_MS: _parentGoneGrace, ...env } = process.env;
   return env;
 }
 
@@ -427,6 +429,34 @@ async function spawnClaude(command, args, options) {
       if (interruptHandled || parentGone) throw error;
     }
   }
+}
+
+const PARENT_GONE_GRACE_MS = readNonNegativeIntEnv("CCLOOP_PARENT_GONE_GRACE_MS", 5000);
+
+// Crash resume (2026-10-02), spec §3.1: once the parent is gone nobody reads this runner's output and nobody will stop
+// its group, so the runner stops it itself -- after a grace for claude's SIGTERM, and in any case on its own way out.
+function killOwnGroup() { try { process.kill(-process.pid, "SIGKILL"); } catch { /* already gone */ } }
+
+function onParentGone() {
+  if (parentGone) return;
+  parentGone = true;
+  process.stdout.on("error", () => {});
+  process.stderr.on("error", () => {});
+  process.on("exit", killOwnGroup);
+  try { currentClaudeProcess?.kill("SIGTERM"); } catch { /* exited */ }
+  setTimeout(killOwnGroup, PARENT_GONE_GRACE_MS);
+}
+
+// Only an adapter-spawned runner (always detached, so its group's leader) is handed fd 3 and this variable.
+function watchParent() {
+  if (process.env.CCLOOP_PARENT_WATCH_FD !== "3") return;
+  let watch;
+  try { watch = new Socket({ fd: 3, readable: true, writable: false }); } catch { onParentGone(); return; }
+  watch.on("end", onParentGone);
+  watch.on("close", onParentGone);
+  watch.on("error", onParentGone);
+  watch.resume();
+  watch.unref();
 }
 
 async function writeNeverStarted(spawnError) {
@@ -540,6 +570,7 @@ async function runClaude(request, claudeCommand, extraArgs) {
 }
 
 async function main() {
+  watchParent();
   let claudeCommand;
   let extraArgs;
   try {
@@ -551,7 +582,14 @@ async function main() {
     return;
   }
 
-  const request = await readStdin();
+  let request;
+  try {
+    request = await readStdin();
+  } catch (error) {
+    // Spec §3.1, Review Focus 4: a parent that died mid-request leaves a partial body; the exit hook kills the group.
+    if (parentGone) return;
+    throw error;
+  }
   currentRequest = request;
 
   try {

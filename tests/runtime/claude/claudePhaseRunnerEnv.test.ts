@@ -99,6 +99,37 @@ describe("claude phase runner command and extra arguments (Orca agent selection)
     expect(JSON.parse(await readFile(seen, "utf8"))).toEqual({ command: null, extraArgs: null, other: "passed" });
   });
 
+  // Crash resume (2026-10-02), spec §3.1 and §3.2: the parent-watch fd, its grace and the spawn retry delay are the
+  // runner's own input as well. claude, and any runner nested under it, must never see them -- a nested runner handed
+  // CCLOOP_PARENT_WATCH_FD=3 would watch whatever its fd 3 happens to be. The runner here gets a real fd-3 pipe, held
+  // open by this test, as the adapter gives it.
+  it("does not hand the parent-watch or spawn-retry variables on to the claude it runs", async () => {
+    const w = await world();
+    const probe = join(w.dir, "env-probe.mjs"), seen = join(w.dir, "env-seen.json");
+    await writeFile(probe, [
+      'import { writeFileSync } from "node:fs";',
+      `writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ watchFd: process.env.CCLOOP_PARENT_WATCH_FD ?? null, grace: process.env.CCLOOP_PARENT_GONE_GRACE_MS ?? null, retryDelay: process.env.CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS ?? null, other: process.env.CCLOOP_ENV_PROBE_OTHER ?? null }));`,
+      'process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, structured_output: { summary: "probe", primaryTargetPaths: ["x"] }, usage: { input_tokens: 1, output_tokens: 1 } }));',
+    ].join("\n"));
+    const result = await new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, [runner], {
+        cwd: w.dir, stdio: ["pipe", "pipe", "pipe", "pipe"],
+        env: {
+          ...process.env, CCLOOP_ENV_PROBE_OTHER: "passed", CCLOOP_CLAUDE_COMMAND: JSON.stringify([process.execPath, probe]),
+          CCLOOP_PARENT_WATCH_FD: "3", CCLOOP_PARENT_GONE_GRACE_MS: "5000", CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS: "200",
+        },
+      });
+      let stderr = "";
+      child.stdout!.resume();
+      child.stderr!.on("data", (chunk) => { stderr += String(chunk); });
+      child.on("error", reject);
+      child.on("close", (code) => resolve({ code, stderr }));
+      child.stdin!.end(JSON.stringify({ phase: "plan", prompt: "Plan one isolated L2 attempt for task t.", attempt: 1, runDir: w.dir, worktreePath: w.dir }));
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(await readFile(seen, "utf8"))).toEqual({ watchFd: null, grace: null, retryDelay: null, other: "passed" });
+  });
+
   it.each([
     ["CCLOOP_CLAUDE_COMMAND", "claude --flag"],
     ["CCLOOP_CLAUDE_COMMAND", "[]"],
