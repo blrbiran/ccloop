@@ -4,7 +4,7 @@
 // registered and SIGKILLed in afterEach, so a red test leaves nothing running.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const runnerParent = fileURLToPath(new URL("../../fixtures/runner-parent.mjs", import.meta.url));
 const fakeCli = fileURLToPath(new URL("../../fixtures/fake-claude-cli.mjs", import.meta.url));
+const adapterParent = fileURLToPath(new URL("../../fixtures/adapter-parent.ts", import.meta.url));
+const tsxLoader = fileURLToPath(new URL("../../../node_modules/tsx/dist/loader.mjs", import.meta.url));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const pids = new Set<number>();
@@ -130,6 +132,34 @@ describe("claude phase runner watches its parent over fd 3 (spec 2026-10-02 §3.
     // is inside the grace, so the timer cannot be what killed the group.
     expect(await waitGone([runner, claudePid, grandchild], 2500)).toBe(true);
   }, 20_000);
+
+  // The same as T1, with ClaudeAgentAdapter itself as the parent: pins the adapter's half (the fd-3 pipe and
+  // CCLOOP_PARENT_WATCH_FD=3), which the fixture parent above only imitates.
+  it("T1 through ClaudeAgentAdapter: runner and claude die after the adapter's process is SIGKILLed", async () => {
+    const child = spawn(process.execPath, ["--import", tsxLoader, adapterParent], {
+      stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, CCLOOP_PARENT_GONE_GRACE_MS: "500" },
+    });
+    parents.push(child);
+    if (child.pid !== undefined) pids.add(child.pid);
+    const { dir, marker, runDir } = await new Promise<{ dir: string; marker: string; runDir: string }>((resolve, reject) => {
+      let buffered = "";
+      child.stdout!.setEncoding("utf8");
+      child.stdout!.on("data", (chunk: string) => {
+        buffered += chunk;
+        const newline = buffered.indexOf("\n");
+        if (newline >= 0) resolve(JSON.parse(buffered.slice(0, newline)));
+      });
+      child.on("exit", () => reject(new Error("adapter-parent exited before it printed its paths")));
+    });
+    dirs.push(dir);
+    const claudePid = await waitForPidFile(marker, (raw) => (JSON.parse(raw) as { pid: number }).pid);
+    const callRoot = join(runDir, "claude", "1", "plan");
+    const [call] = await readdir(callRoot);
+    const runner = await waitForPidFile(join(callRoot, call!, "process.json"), (raw) => (JSON.parse(raw) as { pid: number }).pid);
+    expect(alive(runner)).toBe(true);
+    child.kill("SIGKILL");
+    expect(await waitGone([runner, claudePid], 500 + 3000)).toBe(true);
+  }, 30_000);
 
   it("RF4: parent gone before the request arrives -- runner exits, no claude spawned", async () => {
     const p = await startParent({ mode: "hang", graceMs: 500, noRequest: true });
