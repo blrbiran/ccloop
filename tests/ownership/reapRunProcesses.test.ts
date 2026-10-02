@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -88,7 +88,7 @@ describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse o
   it("refuses when the group is present but its leader is absent", async () => {
     const run = await newRun();
     await register(await callDir(run), 999999, "x");
-    const r = await reapRunProcesses(run, { probeGroup: () => "present", readStart: async () => null });
+    const r = await reapRunProcesses(run, { probeGroup: () => "present", readStart: async () => null, signalGroup: () => {}, sleep: async () => {} });
     expect(r.ok).toBe(false);
     expect(await events(run)).toBe("");
   });
@@ -96,7 +96,7 @@ describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse o
   it("refuses when the group probe errors (EPERM)", async () => {
     const run = await newRun();
     await register(await callDir(run), 999999, "x");
-    const r = await reapRunProcesses(run, { probeGroup: () => ({ error: "EPERM" }) });
+    const r = await reapRunProcesses(run, { probeGroup: () => ({ error: "EPERM" }), signalGroup: () => {}, sleep: async () => {} });
     expect(r.ok).toBe(false);
     expect(await events(run)).toBe("");
   });
@@ -132,5 +132,54 @@ describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse o
     await register(await callDir(run, "worktrees/w1/claude/1/execute/call-y"), pid);
     expect(await reapRunProcesses(run)).toEqual({ ok: true, reaped: 0 });
     expect(alive(pid)).toBe(true);
+  });
+
+  it("identifies every call before signalling any: one doubtful call spares the certain one", async () => {
+    const run = await newRun();
+    const pid = await spawnGroup(false);
+    await register(await callDir(run, "claude/1/execute/call-a"), pid);
+    const other = await spawnGroup(false);
+    await register(await callDir(run, "claude/1/execute/call-b"), other, "Thu Jan  1 00:00:00 1970");
+    expect((await reapRunProcesses(run, { graceMs: 2000 })).ok).toBe(false);
+    expect(alive(pid)).toBe(true);
+    expect(alive(other)).toBe(true);
+    expect(await events(run)).toBe("");
+  });
+
+  it("is idempotent: the second call finds nothing to reap and adds no event", async () => {
+    const run = await newRun();
+    const pid = await spawnGroup(false);
+    await register(await callDir(run), pid);
+    expect(await reapRunProcesses(run, { graceMs: 2000 })).toEqual({ ok: true, reaped: 1 });
+    expect(await reapRunProcesses(run, { graceMs: 2000 })).toEqual({ ok: true, reaped: 0 });
+    const lines = (await events(run)).trim().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]).type).toBe("orphan_process_group_reaped");
+  });
+
+  it("refuses when a directory cannot be read (fail closed), but a missing run dir is fine", async () => {
+    const run = await newRun();
+    const locked = await callDir(run, "claude/locked");
+    await chmod(locked, 0o000);
+    try {
+      const r = await reapRunProcesses(run);
+      expect(r.ok).toBe(false);
+      expect(r.ok === false && r.reason).toContain(locked);
+    } finally { await chmod(locked, 0o755); }
+    expect(await reapRunProcesses(join(run, "does-not-exist"))).toEqual({ ok: true, reaped: 0 });
+    expect(await events(run)).toBe("");
+  });
+
+  it("refuses without signalling when the leader's lstart changed after identification", async () => {
+    const run = await newRun();
+    const pid = await spawnGroup(false);
+    await register(await callDir(run), pid);
+    const real = (await readProcessStart(pid))!;
+    let calls = 0;
+    const r = await reapRunProcesses(run, { readStart: async () => (++calls === 1 ? real : "Thu Jan  1 00:00:00 1970") });
+    expect(r.ok).toBe(false);
+    expect(calls).toBe(2);
+    expect(alive(pid)).toBe(true);
+    expect(await events(run)).toBe("");
   });
 });

@@ -19,11 +19,18 @@ type Registered = { pid: number; pgid: number; startedAt: string; phase: string 
 
 const exists = (path: string) => access(path).then(() => true, () => false);
 
+class WalkError extends Error {}
+
 async function unfinishedCalls(runDir: string): Promise<string[]> {
   const found: string[] = [];
   async function walk(dir: string, top: boolean): Promise<void> {
     let entries;
-    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    try { entries = await readdir(dir, { withFileTypes: true }); }
+    catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return; // missing run dir, or a directory removed mid-walk
+      throw new WalkError(`${dir}: ${String(code)}`); // fail closed: an unreadable directory may hide a live group
+    }
     if (entries.some((e) => e.isFile() && e.name === "process.json") && !entries.some((e) => e.isFile() && e.name === "outcome.json")) found.push(dir);
     for (const e of entries) if (e.isDirectory() && !(top && e.name === "worktrees")) await walk(join(dir, e.name), false);
   }
@@ -52,7 +59,10 @@ export async function reapRunProcesses(runDir: string, deps: ReapDeps = {}): Pro
   const sleep = deps.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
   const graceMs = deps.graceMs ?? REAP_GRACE_MS, timeoutMs = deps.timeoutMs ?? REAP_TIMEOUT_MS, pollMs = deps.pollMs ?? 100;
   const targets: Registered[] = [];
-  for (const dir of await unfinishedCalls(runDir)) {
+  let dirs: string[];
+  try { dirs = await unfinishedCalls(runDir); }
+  catch (e) { if (e instanceof WalkError) return { ok: false, reason: e.message }; throw e; }
+  for (const dir of dirs) {
     const registered = parseRegistered(await readFile(join(dir, "process.json"), "utf8").catch(() => ""));
     if (registered === null) {
       if (!(await exists(join(dir, "request.json")))) continue; // the runner never received a prompt
@@ -71,6 +81,9 @@ export async function reapRunProcesses(runDir: string, deps: ReapDeps = {}): Pro
     return probe(pgid) === "gone";
   };
   for (const t of targets) {
+    // Re-verify right before signalling: the pid could have been recycled since identification.
+    const again = await readStart(t.pid);
+    if (again !== t.startedAt.trim()) return { ok: false, reason: `pid ${t.pid} changed identity before it was signalled (${again === null ? "gone" : again})` };
     signal(t.pgid, "SIGTERM");
     if (!(await waitGone(t.pgid, graceMs))) {
       signal(t.pgid, "SIGKILL");
