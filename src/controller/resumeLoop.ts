@@ -16,6 +16,8 @@ import type { OwnerRecord, OwnerTransferRecord, ReconciliationRecord, RuntimeAda
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { RunState, RunStatus } from "../state/types.js";
 import type { RunLeaseLostError } from "../ownership/lease.js";
+import { reapRunProcesses } from "../ownership/reapRunProcesses.js";
+import { adoptCrashedRun, isOrcaControlRunDir } from "./adoptCrashedRun.js";
 import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
 import {
@@ -88,6 +90,26 @@ async function claimOwnerRecordWithBoundedLockRetry(
         throw error;
       }
     }
+  }
+}
+
+// The claim step's error -> refusal-detail mapping (see the comments at its call site in resumeLoop), shared with
+// the crash-adoption write (spec 2026-10-02 crash-resume §4.3 step 6), which takes the same lock and CAS.
+function lockOrCasDetail(error: unknown): string {
+  return error instanceof OwnerTransferLockUnattributableError
+    ? `owner-transfer lock unattributable: ${String(error)}`
+    : error instanceof OwnerTransferLockBusyError
+      ? `owner-transfer lock busy: ${String(error)}`
+      : error instanceof OwnerTransferLockLivenessUndeterminedError
+        ? `owner-transfer lock liveness undetermined: ${String(error)}`
+        : `claim CAS failed: ${String(error)}`;
+}
+
+// Thrown inside resumeLoop's artifact-read block when reaping or crash adoption refuses, so its catch can record
+// that refusal's own detail instead of "cannot read run artifacts".
+class CrashAdoptionRefused extends Error {
+  constructor(readonly detail: string) {
+    super(detail);
   }
 }
 
@@ -199,6 +221,14 @@ export async function resumeLoop(
     throw error;
   }
 
+  // Spec 2026-10-02 crash-resume §4.3 step 3: Orca's driver owns a control run's generation and budget, so
+  // resume refuses it before touching anything in it (no recovery, no reaping, no adoption).
+  if (await isOrcaControlRunDir(runDir)) {
+    const detail = "run directory belongs to an Orca control store; Orca recovers it";
+    await appendEvent(runDir, { type: "resume_denied", at: new Date().toISOString(), detail });
+    throw new ResumeNotEligibleError(detail);
+  }
+
   let ownerRecord;
   let ownerTransfer;
   let reconciliation;
@@ -221,6 +251,37 @@ export async function resumeLoop(
     // with readOwnerRecordWithoutRecovery: the path that goes on to claim is the one that performs
     // recovery, and everyone else reads what it published.
     ownerRecord = await readOwnerRecord(runDir);
+
+    // Spec 2026-10-02 crash-resume §4.3 step 4, on every path: a group a killed loop left running would race
+    // the attempt this resume starts. Any doubt refuses.
+    const reap = await reapRunProcesses(runDir).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
+    if (!reap.ok) throw new CrashAdoptionRefused(`orphan process groups not reaped: ${reap.reason}`);
+
+    // Step 6, if and only if there is no transfer record (ENOENT) and the run is resumable: adopt once the owner
+    // is confirmed dead. A run that already carries a transfer keeps the lease-only rule (controller ruling R1).
+    const transferMissing = await readOwnerTransferRecord(runDir).then(
+      () => false,
+      (error: NodeJS.ErrnoException) => {
+        if (error?.code === "ENOENT") return true;
+        throw error;
+      },
+    );
+    if (transferMissing) {
+      const stateNow = await readRunState(runDir);
+      if (RESUMABLE_STATUSES.includes(stateNow.status)) {
+        let adopted;
+        try {
+          adopted = await adoptCrashedRun(runDir, ownerRecord, stateNow);
+        } catch (error) {
+          throw new CrashAdoptionRefused(lockOrCasDetail(error));
+        }
+        if (!adopted.ok) throw new CrashAdoptionRefused(adopted.reason);
+        // Spec §11 C3: the record read above is one epoch behind the transfer just written and would fail both
+        // the eligibility check and the claim CAS; transfer and reconciliation are (re-)read just below.
+        ownerRecord = await readOwnerRecord(runDir);
+      }
+    }
+
     [ownerTransfer, reconciliation, runState, contract] = await Promise.all([
       readOwnerTransferRecord(runDir),
       readReconciliationRecord(runDir),
@@ -228,6 +289,10 @@ export async function resumeLoop(
       loadContract(join(runDir, "loop-contract.json")),
     ]);
   } catch (error) {
+    if (error instanceof CrashAdoptionRefused) {
+      await appendEvent(runDir, { type: "resume_denied", at: new Date().toISOString(), detail: error.detail });
+      throw new ResumeNotEligibleError(error.detail);
+    }
     // Human ruling 111 (I-3(a)). "cannot read run artifacts" is true of an ENOENT or a bad parse.
     // It is false of an unattributable owner-transfer lock: every artifact here is readable, and
     // what failed is the recovery this read performs on the way -- blocked by a lock nothing will
@@ -277,13 +342,7 @@ export async function resumeLoop(
     // siblings of a third, and neither `instanceof` implies it either. Without its own branch an
     // undetermined-liveness lock fell through to "claim CAS failed" -- the same lie, for the same
     // reason: no CAS was evaluated for this class either. ***
-    const detail = error instanceof OwnerTransferLockUnattributableError
-      ? `owner-transfer lock unattributable: ${String(error)}`
-      : error instanceof OwnerTransferLockBusyError
-        ? `owner-transfer lock busy: ${String(error)}`
-        : error instanceof OwnerTransferLockLivenessUndeterminedError
-          ? `owner-transfer lock liveness undetermined: ${String(error)}`
-          : `claim CAS failed: ${String(error)}`;
+    const detail = lockOrCasDetail(error);
     await appendEvent(runDir, { type: "resume_denied", at: new Date().toISOString(), detail });
     throw new ResumeNotEligibleError(detail);
   }
