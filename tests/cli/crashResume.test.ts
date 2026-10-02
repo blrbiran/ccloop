@@ -60,24 +60,28 @@ describe("ccloop run --agents SIGKILLed mid-execute, then resume", () => {
 
     await until("execute_started", 20_000, async () => (await readFile(join(f.runDir, "events.jsonl"), "utf8")).includes('"execute_started"') ? true : undefined);
     const runnerPid = await until("the execute runner's process.json", 20_000, async () => {
-      for (const attempt of await readdir(join(f.runDir, "claude"))) {
-        const dir = join(f.runDir, "claude", attempt, "execute");
-        for (const call of await readdir(dir)) {
-          const reg = JSON.parse(await readFile(join(dir, call, "process.json"), "utf8")) as { pid: number };
-          if (Number.isSafeInteger(reg.pid)) return reg.pid;
-        }
+      const dir = join(f.runDir, "claude", "1", "execute");
+      for (const call of await readdir(dir)) {
+        const reg = await readFile(join(dir, call, "process.json"), "utf8").then((t) => JSON.parse(t) as { pid?: number }, () => undefined);
+        if (reg !== undefined && Number.isSafeInteger(reg.pid)) return reg.pid;
       }
       return undefined;
     });
     pids.add(runnerPid);
-    const fakePid = await until("fake claude in execute", 20_000, async () => (JSON.parse(await readFile(marker, "utf8")) as { pid?: number }).pid);
+    // The fake overwrites <marker> on every call, so the plan call's (already dead) pid may still be there: take the pid
+    // only once the marker holds the execute prompt, so the death check below cannot pass vacuously.
+    const fakePid = await until("the execute-phase fake claude", 20_000, async () => {
+      const m = JSON.parse(await readFile(marker, "utf8")) as { pid?: number; prompt?: string };
+      return m.prompt?.includes("Execute one isolated attempt") ? m.pid : undefined;
+    });
     pids.add(fakePid);
+    expect(alive(fakePid)).toBe(true);
     expect(alive(runnerPid)).toBe(true);
 
     ccloop.kill("SIGKILL");
     await until("ccloop to exit", 5_000, async () => (ccloop.exitCode !== null || ccloop.signalCode !== null ? true : undefined));
-    // PARENT_GONE_GRACE_MS (5 s) + 3 s.
-    await until("the runner to die with its parent", 8_000, async () => (alive(runnerPid) ? undefined : true));
+    // PARENT_GONE_GRACE_MS (5 s) plus margin.
+    await until("the runner to die with its parent", 12_000, async () => (alive(runnerPid) ? undefined : true));
     await until("fake claude to die", 3_000, async () => (alive(fakePid) ? undefined : true));
 
     // The kill above is real. Only the lease ageing is simulated: the owner record's lease is moved past its TTL.

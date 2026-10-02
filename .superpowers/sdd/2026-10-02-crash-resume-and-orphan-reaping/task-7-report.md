@@ -15,3 +15,8 @@ Status: DONE.
 - Test passed immediately in order (Task 6 landed), so red was shown via the pre-Task-6 resumeLoop as instructed. The runner-death assertion is not independently mutated here (Tasks 2/3 own that).
 - README says the single Ctrl-C releases the lease (from spec 4.3 / registerStopHandlers + loop behaviour; not re-verified by a new test here). Also states 8 eligibility checks per spec.
 - No existing criteria rewritten.
+
+## Fix round 1
+- Test now takes the fake's pid only once `<marker>` holds the execute prompt ("Execute one isolated attempt"), asserts it alive before the kill and dead after (no vacuous pass from the plan-phase pid). Post-kill wait widened to 12 s. process.json probe skips missing/unreadable entries. README 3.2 last paragraph reworded (runner exits ~5 s after parent death, codex has none, leftovers reaped by resume; single-Ctrl-C lease release not pinned by a test here).
+- Run on HEAD 532d3b9: 3 of 3 green, tsc clean, pgrep empty.
+- Mutation (clone t7/mut2): `watchParent` returns immediately => RC=1, "timed out waiting for the runner to die with its parent". Restore: the only diff before restore was the clone's older committed copy of the test file (which I had overwritten); `git diff -- scripts` 0 bytes, and after `git checkout -- .` `git diff | wc -c` = 0, `git diff --cached | wc -c` = 0.

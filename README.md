@@ -105,7 +105,7 @@ node dist/cli.js resume \
 - 没有 `owner-transfer.json` 的 run（进程被杀、没有人交接过）：只在 run 状态可续跑（planning / executing / verifying）、并且确认旧 owner 进程已经死亡时，resume 自己写下 owner-transfer 和 reconciliation 记录并接管（事件 `owner_crash_adopted`，随后是 `resume_adopted`）。owner 还活着，或者死活无法确定，一律拒绝。
 - 之后照旧：8 条续跑资格检查、认领、继续跑 loop。
 
-Ctrl-C 的后果：单次 Ctrl-C（或 SIGTERM）让 loop 在下一个 phase 边界停下，然后释放租约再退出；第二次 Ctrl-C 立即以退出码 130 退出，不释放租约。两种情况下，只要进程已经不在了，状态可续跑的 run 都能被 `resume` 接管（租约过期之后；`kill -9` 同理，claude 子进程会随父进程退出，不会留下孤儿）。
+Ctrl-C 的后果：单次 Ctrl-C（或 SIGTERM）让 loop 在下一个 phase 边界停下，然后释放租约再退出；第二次 Ctrl-C 立即以退出码 130 退出，不释放租约。两种情况下，只要进程已经不在了，状态可续跑的 run 都能被 `resume` 接管（租约过期之后；`kill -9` 同理）。claude 的 runner 在父进程死后约 5 秒内自行退出（codex 没有这层保护）；仍残留的进程组由 resume 回收。单次 Ctrl-C 释放租约这一点，这里没有单独的测试钉住。
 
 ### 3.3 `ls`
 
