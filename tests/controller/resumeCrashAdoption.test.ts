@@ -265,6 +265,8 @@ describe("resume adopts a killed run (spec 2026-10-02 crash-resume §4.3)", () =
     expect(await snapshot(runDir)).toEqual(before);
   });
 
+  // Measured (Task 6 fix round 1, mutation MF3): the loser has always lost on the transfer lock, so a write that
+  // bypassed its CAS expectation stays green here; the precondition itself rests on tests/persistence/fileStore.test.ts.
   it("T9: two concurrent resumes adopt exactly once", async () => {
     const { runDir, contract } = await newRunDir();
     await seedKilledRun(runDir, contract, { id: await deadOwnerId(), leaseAffirmedAt: expiredLease() });
