@@ -79,10 +79,13 @@ describe("ClaudeAgentAdapter does not leak descriptors across phases (spec 2026-
     const before = fdCount();
     const endings = [...await onePhaseOfEachEnding(), ...await onePhaseOfEachEnding()];
     await sleep(200);
-    expect(endings).toEqual([
-      "completed", "claude-timeout", "ClaudePhaseAborted", "claude-spawn-error", "claude-io-error",
-      "completed", "claude-timeout", "ClaudePhaseAborted", "claude-spawn-error", "claude-io-error",
-    ]);
-    expect(fdCount()).toBe(before);
+    // One comparison, so a wrong ending cannot hide the descriptor count (or the other way round).
+    expect({ endings, fdGrowth: fdCount() - before }).toEqual({
+      endings: [
+        "completed", "claude-timeout", "ClaudePhaseAborted", "claude-spawn-error", "claude-io-error",
+        "completed", "claude-timeout", "ClaudePhaseAborted", "claude-spawn-error", "claude-io-error",
+      ],
+      fdGrowth: 0,
+    });
   }, 60_000);
 });
