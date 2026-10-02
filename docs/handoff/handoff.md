@@ -1,4 +1,4 @@
-# ccloop Handoff — *** **✅ 2026-10-02（Orca 会话 `ece96b67`）：被杀的 run 能续跑＋孤儿 runner 收＋R-A＋R-B 一轮做完，门绿、付费真 claude 跑通「杀掉再续跑」（n＝1），pending 裁定人已全部追认；下一件归人（选后续），见文末「Orca 那条线」。** *** 更早各轮（adapter／CLI 合并四步、`rejectOn` 改由 verifier 判断、⑤ 预估链、临时目录泄漏、`collect.progress`、git 依赖打包、#13(a)）都已落地、人已审；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
+# ccloop Handoff — *** **✅ 2026-10-02（Orca 会话 `ece96b67`）：被杀的 run 能续跑＋孤儿 runner 收＋R-A＋R-B 一轮做完，门绿、付费真 claude 跑通「杀掉再续跑」（n＝1），pending 裁定人已全部追认；Orca 已重钉到这一轮（Orca 会话 `7fe6d61b`，同时做了第二次付费验收 R-A／R-B／收进程）；下一件归人（选后续），见文末「Orca 那条线」。** *** 更早各轮（adapter／CLI 合并四步、`rejectOn` 改由 verifier 判断、⑤ 预估链、临时目录泄漏、`collect.progress`、git 依赖打包、#13(a)）都已落地、人已审；G1 两缝与 Orca ④ 的 C1–C7 仍然成立
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -407,7 +407,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-02 第三十三版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-02 第三十四版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
@@ -430,7 +430,7 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 ## ⛔ 下一件事（都归人，按人选）
 
 - ✅ **人已追认本轮全部 pending 裁定**（2026-10-02，Orca 会话 `7fe6d61b`，「同意」）：记在 spec §13 与台账末节；原文的 pending 字样按铁律保留不改。本轮的 scratchpad 原始输出（`gate/`、`paid/`）已经人授权删除，台账里记下的数是唯一副本。
-- ✅ 推送：2026-10-02 现测三个仓远端＝本地（本会话之前的那些提交）；之后的以现跑 `ls-remote` 为准，本仓库先于 Orca。**Orca 已重钉到本轮（`ae2caa3`，Orca 会话 `7fe6d61b`）**，并加了一条判据钉住「没起来记 0 ⇒ group 的用量不会变 unknown」。
+- 推送：只以现跑 `ls-remote` 为准，本仓库先于 Orca。**Orca 已重钉到本轮（`ae2caa3`，Orca 会话 `7fe6d61b`）**，并加了一条判据钉住「没起来记 0 ⇒ group 的用量不会变 unknown」。
 - 候选的后续：§5.1 与「reaper 杀一个活的 claude」在真 claude 下仍未验（要构造得出来才值得花钱）；Orca「同时启动任务数上限」（要真 claude 下带工具调用的任务再量一次）；被杀调用永远没有 `outcome.json`，其 pgid 被无关进程复用时 resume 会一直拒（已登记，要改需动 spec §4.2）。
 
 ## 🔗 Orca 通过 git 依赖钉住本仓库
