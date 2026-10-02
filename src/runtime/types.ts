@@ -155,8 +155,14 @@ export function isPartialExecutionResult(result: ExecutionResult): result is Par
  * repository to check it against; Orca's final review of that round names this comment (finding M4 in Orca
  * .superpowers/sdd/2026-09-25-handoff-delivery/final-review.md). Read that sentence as unmeasured. What this function
  * answers -- a positive safe integer the adapter observed, otherwise null, never 0 -- is unchanged. ***
+ *
+ * *** ERRATUM (crash resume, 2026-10-02, Orca session ece96b67; ccloop spec
+ * 2026-10-02-crash-resume-and-orphan-reaping-design.md §3.2) -- "never 0" no longer holds for one case: an error
+ * carrying `neverStarted: true` answers 0. That 0 is observed, not assumed: the runner proved no claude process
+ * existed in the call, so nothing could have been spent. ***
  */
 export function observedTokensOf(error: unknown): number | null {
+  if (error !== null && typeof error === "object" && (error as { neverStarted?: unknown }).neverStarted === true) return 0;
   const value = error !== null && typeof error === "object" ? (error as { observedTokens?: unknown }).observedTokens : undefined;
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 }

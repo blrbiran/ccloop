@@ -43,6 +43,15 @@ export class ClaudePhaseAborted extends Error {
 
 const OBSERVED_USAGE_FILE = "observed-usage.json";
 
+/** Crash resume (2026-10-02), spec §3.2: the claude command never existed in this call, so nothing was spent. */
+export class ClaudeNeverStartedError extends Error {
+  readonly neverStarted = true;
+  constructor(readonly spawnError: string, readonly evidenceDir: string) {
+    super(`claude-never-started: ${spawnError} (${evidenceDir})`);
+    this.name = "ClaudeNeverStartedError";
+  }
+}
+
 /**
  * Consolidation step 1 (2026-10-01, ccloop spec 2026-10-01-claude-adapter-consolidation-step1-design.md §5.3): on execute
  * the group gets this long past the recovery window before SIGKILL, so the runner can stop claude, read git and print
@@ -54,6 +63,21 @@ export const PARTIAL_FLUSH_MARGIN_MS = 5_000;
 const parseObject = (text: string): object | undefined => {
   try { const v: unknown = JSON.parse(text); return v !== null && typeof v === "object" && !Array.isArray(v) ? v : undefined; } catch { return undefined; }
 };
+
+// Spec §3.2: the runner's dedicated answer when claude never existed in this call. Checked before every other reading of
+// stdout, because the after-stop branch below returns any JSON object printed with exit 0 as the phase's result.
+function neverStartedOf(outcome: Outcome): string | null {
+  if (outcome.code !== 0 || outcome.signal !== null) return null;
+  const written = parseObject(outcome.stdout) as { claudeNeverStarted?: unknown; spawnError?: unknown } | undefined;
+  return written?.claudeNeverStarted === true && typeof written.spawnError === "string" ? written.spawnError : null;
+}
+
+function throwIfNeverStarted(outcome: Outcome): void {
+  const spawnError = neverStartedOf(outcome);
+  if (spawnError === null) return;
+  if (outcome.reason === "aborted") throw Object.assign(new ClaudePhaseAborted(outcome.evidenceDir, null), { neverStarted: true as const });
+  throw new ClaudeNeverStartedError(spawnError, outcome.evidenceDir);
+}
 
 /** The runner's observation, or null when there is none it can vouch for (missing, corrupt, foreign, not > 0). */
 export async function readObservedTokens(path: string): Promise<number | null> {
@@ -199,6 +223,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
 
   private async phase<T>(request: ClaudePhaseRequest, context: AttemptContext, afterStop?: { stopGraceMs: number }): Promise<T> {
     const outcome = await this.run(request, { ...this.call(context), ...(afterStop ? { stopGraceMs: afterStop.stopGraceMs } : {}) });
+    throwIfNeverStarted(outcome);
     // Consolidation step 1 (spec §5.1, §5.2): after a stop, an execute runner that exited cleanly and printed a JSON object
     // printed the phase's result (its post-SIGTERM partial, or a complete answer it already had). A result without
     // tokenUsage carries the usage observed before the stop; no observation leaves it absent, never 0.
@@ -278,6 +303,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       { phase: "single-call", prompt: request.prompt, attempt: 1, runDir: request.runDir, cwd: request.cwd, schema: request.responseSchema, maxOutputTokens: request.maxOutputTokens },
       { runDir: request.runDir, attempt: 1, cwd: request.cwd, timeLimitMs: request.timeoutMs, abortSignal: request.signal, onProcessRegistered: request.onProcessRegistered },
     );
+    throwIfNeverStarted(outcome);
     if (outcome.reason === "aborted") throw new ClaudePhaseAborted(outcome.evidenceDir, await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)));
     if (outcome.reason !== "completed") {
       // Final review of the single-call estimate (2026-09-28): a call that timed out or failed still spent what claude
