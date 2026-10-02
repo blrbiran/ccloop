@@ -359,3 +359,17 @@ read-only against the code. Accepted and folded in above:
   candidates.
 - Minor: `unknown` not `undetermined`; adapters' `ps` from PATH (the new code uses `/bin/ps`); sweep has no
   truncation; scanner rows always exist (`absent`); `observedAt`; `process.json` torn writes (§4.2 rule).
+
+## 12. Implementation-time corrections (SDD round, 2026-10-02, Orca session ece96b67)
+
+- Controller ruling (under H8, pending ratification): §5.1's rule also covers codex. A codex `error` partial with changed
+  files goes to verify, because codex partials are always the model's own answer (no runner builds them, and the codex
+  protocol schema is strict, so `partialOrigin` can never appear there). This changes Orca codex workers too.
+- §3.1: a runner given `CCLOOP_PARENT_WATCH_FD=3` whose fd 3 is unusable treats that as "parent gone" — deliberate.
+- §3.2: the runner also refuses to make its first claude spawn once the parent is gone, and returns right after
+  reading the request when the parent died meanwhile (Task 3 review), so no claude is spent after the parent's death.
+- §4.2: refusal reasons name the call directory they concern (final review M4). A crash-killed call never gets an
+  `outcome.json`; if its pgid is later reused by an unrelated group leader, resume refuses until that process exits.
+  Registered, not solved (a tombstone would need the reaper to write more than events).
+- §6 T3 guards "no per-phase fd growth", not the fd-3 destroy in `finish()`, which Node closes at child exit anyway
+  (the destroy mutation is invisible, measured).
