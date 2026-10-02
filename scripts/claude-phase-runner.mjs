@@ -268,6 +268,10 @@ async function writeJsonToStdout(value) {
 let currentRequest = null;
 let currentClaudeProcess = null;
 let interruptHandled = false;
+// Crash resume (2026-10-02), spec §3.2: Task 3 sets parentGone; until then it only ever reads false.
+let parentGone = false;
+let claudeEverStarted = false;
+let lastSpawnFailure = null; // "<code>: <message>" of the latest failed spawn in this call
 
 async function handleInterrupt(signal) {
   if (interruptHandled) {
@@ -275,6 +279,15 @@ async function handleInterrupt(signal) {
   }
 
   interruptHandled = true;
+  // Spec §3.2: interrupted while waiting to retry a failed spawn -- no claude ever ran in this call, so the answer is
+  // "never started", not a timeout partial. Main sees interruptHandled and writes nothing.
+  if (!claudeEverStarted && lastSpawnFailure !== null) {
+    if (!parentGone) {
+      try { await writeNeverStarted(lastSpawnFailure); } catch { process.exit(1); }
+    }
+    process.exit(0);
+    return;
+  }
   const child = currentClaudeProcess;
   const childHadExited = child !== null && (child.exitCode !== null || child.signalCode !== null);
   await terminateClaudeProcess(getPartialOutcomeRecoveryWindowMs(currentRequest));
@@ -346,8 +359,78 @@ function readArgvEnv(name, fallback, requireCommand) {
 // under it resolves its own `claude` instead of inheriting the outer installation.
 // Orca claude stream usage (2026-09-27): so is the observation path the adapter hands this runner.
 function claudeEnv() {
-  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: _observedUsagePath, ...env } = process.env;
+  // Crash resume (2026-10-02): CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS is this runner's own input too.
+  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: _observedUsagePath, CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS: _spawnRetryDelay, ...env } = process.env;
   return env;
+}
+
+// Crash resume (2026-10-02), spec §3.2 (R-A): "never started" is Node's own verdict -- spawn() threw, or `error` came
+// before `spawn`. Only a missing binary (a reinstall takes one to two seconds) is retried.
+const CLAUDE_SPAWN_ATTEMPTS = 3;
+
+function readNonNegativeIntEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || !/^\d+$/.test(raw)) return fallback;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : fallback;
+}
+
+const CLAUDE_SPAWN_RETRY_DELAY_MS = readNonNegativeIntEnv("CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS", 2000);
+
+class ClaudeNeverStarted extends Error {
+  constructor(spawnError, code) {
+    super(`claude never started: ${spawnError}`);
+    this.spawnError = spawnError;
+    this.code = code;
+  }
+}
+
+function describeSpawnError(error) {
+  const code = error && typeof error === "object" && typeof error.code === "string" ? error.code : "ESPAWN";
+  return `${code}: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+// The listeners go on before any stdio stream is touched: for EMFILE/ENFILE Node returns before creating the streams.
+function spawnClaudeOnce(command, args, options) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(command, args, options);
+    } catch (error) {
+      reject(new ClaudeNeverStarted(describeSpawnError(error), error?.code));
+      return;
+    }
+    const onError = (error) => {
+      child.off("spawn", onSpawn);
+      reject(new ClaudeNeverStarted(describeSpawnError(error), error?.code));
+    };
+    const onSpawn = () => {
+      child.off("error", onError);
+      resolve(child);
+    };
+    child.once("error", onError);
+    child.once("spawn", onSpawn);
+  });
+}
+
+async function spawnClaude(command, args, options) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const child = await spawnClaudeOnce(command, args, options);
+      claudeEverStarted = true;
+      return child;
+    } catch (error) {
+      if (error instanceof ClaudeNeverStarted) lastSpawnFailure = error.spawnError;
+      const retry = error instanceof ClaudeNeverStarted && error.code === "ENOENT" && attempt < CLAUDE_SPAWN_ATTEMPTS && !interruptHandled && !parentGone;
+      if (!retry) throw error;
+      await new Promise((resolve) => setTimeout(resolve, CLAUDE_SPAWN_RETRY_DELAY_MS));
+      if (interruptHandled || parentGone) throw error;
+    }
+  }
+}
+
+async function writeNeverStarted(spawnError) {
+  await writeJsonToStdout({ claudeNeverStarted: true, spawnError });
 }
 
 // Orca paid claude round (2026-09-27): with `-p --output-format json` claude reports an API error in the envelope on
@@ -386,7 +469,7 @@ async function runClaude(request, claudeCommand, extraArgs) {
   // size of the json envelope and echoes tool results (spec §2.2 item 8), so the old 10 MiB buffer could fail a long
   // execute. Kept: the result line, the observation, and the last FAILURE_OUTPUT_TAIL characters for failures (B2).
   const promptOnStdin = Buffer.byteLength(request.prompt, "utf8") > PROMPT_ARGV_MAX_BYTES;
-  const child = spawn(
+  const child = await spawnClaude(
     claudeCommand[0],
     [...claudeCommand.slice(1), "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", JSON.stringify(schema), ...(singleCall ? ["--tools", ""] : []), ...extraArgs, ...(promptOnStdin ? [] : [request.prompt])],
     {
@@ -507,6 +590,12 @@ async function main() {
     await writeJsonToStdout(response);
   } catch (error) {
     if (interruptHandled) {
+      return;
+    }
+
+    // Spec §3.2: before the execute partial branch -- nothing ran, so there is nothing to recover.
+    if (error instanceof ClaudeNeverStarted) {
+      if (!parentGone) await writeNeverStarted(error.spawnError);
       return;
     }
 
