@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { assertContextOption, type MaterializedAgentConfigV1 } from "../../agents/types.js";
 import { claudeDescriptor, claudeModelArgument } from "../../agents/claude.js";
-import { SingleCallOutputInvalid, type AttemptContext, type AttemptPlan, type ExecutePhaseResult, type ExecutionResult, type RuntimeAdapter, type SingleCallRequest, type SingleCallResult, type VerificationResult } from "../types.js";
+import { observedTokensOf, SingleCallOutputInvalid, type AttemptContext, type AttemptPlan, type ExecutePhaseResult, type ExecutionResult, type RuntimeAdapter, type SingleCallRequest, type SingleCallResult, type VerificationResult } from "../types.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./prompts.js";
 import type { ClaudePhaseRequest } from "./types.js";
 
@@ -69,7 +69,8 @@ const parseObject = (text: string): object | undefined => {
 function neverStartedOf(outcome: Outcome): string | null {
   if (outcome.code !== 0 || outcome.signal !== null) return null;
   const written = parseObject(outcome.stdout) as { claudeNeverStarted?: unknown; spawnError?: unknown } | undefined;
-  return written?.claudeNeverStarted === true && typeof written.spawnError === "string" ? written.spawnError : null;
+  // Exactly the two keys: the success path prints claude's structured output merged with usageEvidence, never this shape.
+  return written !== undefined && Object.keys(written).length === 2 && written.claudeNeverStarted === true && typeof written.spawnError === "string" ? written.spawnError : null;
 }
 
 function throwIfNeverStarted(outcome: Outcome): void {
@@ -284,7 +285,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     } catch (error) {
       // As CodexAdapter (Orca claude stream usage, 2026-09-27): an aborted execute that was observed spending tokens
       // throws, so runLoop can settle that usage; one that was not keeps answering null exactly as before.
-      if (context.abortSignal?.aborted && !(error instanceof ClaudePhaseAborted && error.observedTokens !== null)) return null;
+      if (context.abortSignal?.aborted && !(error instanceof ClaudePhaseAborted && (error.observedTokens !== null || observedTokensOf(error) === 0))) return null;
       throw error;
     }
   }

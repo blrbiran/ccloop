@@ -1,8 +1,7 @@
 // Crash resume (2026-10-02), spec §3.2 (R-A), adapter end: the runner's never-started answer becomes ClaudeNeverStartedError
 // (or ClaudePhaseAborted when the call was aborted), both observed as 0 spent; runLoop books that 0. A claude that
 // started and then failed keeps today's usage (null without observation), never a forced 0.
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -38,6 +37,18 @@ const exitsOne = async (dir: string): Promise<[string, ...string[]]> => {
   await writeFile(script, "process.exit(1);\n");
   return [process.execPath, script];
 };
+// The call's request.json is written right before the runner reads stdin and spawns claude; waiting for it and a
+// little more means the first ENOENT has happened, so the abort lands inside the retry wait, not before the first spawn.
+async function abortInsideRetryWait(runDir: string, controller: AbortController): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  const requestWritten = async () => (await readdir(join(runDir, "claude"), { recursive: true }).catch(() => [] as string[])).some((name) => String(name).endsWith("request.json"));
+  while (!(await requestWritten())) {
+    if (Date.now() > deadline) throw new Error("request.json never appeared");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  controller.abort();
+}
 const rejection = (promise: Promise<unknown>) => promise.then(() => { throw new Error("resolved"); }, (e: unknown) => e);
 const singleCallRequest = (f: { dir: string; runDir: string; repo: string }, extra: Partial<SingleCallRequest> = {}): SingleCallRequest =>
   ({ prompt: "p", responseSchema: { type: "object" }, maxOutputTokens: 100, cwd: f.repo, runDir: f.runDir, timeoutMs: 20_000, ...extra });
@@ -73,22 +84,48 @@ describe("claude never started books 0 (spec 2026-10-02 §3.2)", () => {
     const f = await world(missing);
     const controller = new AbortController();
     const started = Date.now();
-    // The runner has its first ENOENT within a fraction of a second and is then waiting 5 s; abort inside that wait.
-    setTimeout(() => controller.abort(), 1500);
+    void abortInsideRetryWait(f.runDir, controller);
     const error = await rejection(f.adapter.plan({ ...f.context, abortSignal: controller.signal }));
     expect(error).toBeInstanceOf(ClaudePhaseAborted);
     expect(Date.now() - started).toBeLessThan(4500);
     expect(observedTokensOf(error)).toBe(0);
   }, 30_000);
 
-  // execute() keeps its existing abort contract (an aborted execute with no observed usage answers null; spec §3.2 leaves it
-  // unchanged), so this is where the after-stop branch would otherwise return the never-started answer as the phase's result.
-  it("an abort during the retry wait of execute answers null, not the never-started JSON as a result", async () => {
+  // Spec 3.2 / T5b: execute()'s abort swallow (null when nothing was observed) must not eat a never-started abort.
+  it("an abort during the retry wait of execute rejects with ClaudePhaseAborted observed as 0", async () => {
     process.env[DELAY] = "5000";
     const f = await world(missing);
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 1500);
-    expect(await f.adapter.execute({ ...f.context, abortSignal: controller.signal })).toBeNull();
+    void abortInsideRetryWait(f.runDir, controller);
+    const error = await rejection(f.adapter.execute({ ...f.context, abortSignal: controller.signal }));
+    expect(error).toBeInstanceOf(ClaudePhaseAborted);
+    expect(observedTokensOf(error)).toBe(0);
+  }, 30_000);
+
+  it("runLoop books 0 when a handoff aborts a never-started execute during the retry wait", async () => {
+    process.env[DELAY] = "5000";
+    const f = await world(missing);
+    const controller = new AbortController();
+    void abortInsideRetryWait(f.runDir, controller);
+    const adapter: RuntimeAdapter = {
+      plan: async () => ({ summary: "plan", primaryTargetPaths: ["answer.txt"], tokenUsage: 1 }),
+      execute: (context) => f.adapter.execute(context),
+      verify: async () => { throw new Error("verify must not run"); },
+    };
+    const observed: Observation[] = [];
+    await runLoop(f.contract, f.runDir, adapter, { phaseSignal: controller.signal, onPhaseSettled: async (value) => { observed.push(value); } });
+    expect(observed.find((o) => o.phase === "execute")).toMatchObject({ tokenUsage: 0, completedWithResult: false });
+  }, 30_000);
+
+  it("an exit-0 object with the never-started keys plus usageEvidence is a result, not never-started", async () => {
+    const f = await world(async (dir) => {
+      const script = join(dir, "lookalike.mjs");
+      await writeFile(script, 'process.stdout.write(JSON.stringify({ structured_output: { claudeNeverStarted: true, spawnError: "ENOENT: x" }, usage: { input_tokens: 1, output_tokens: 1 } }));\n');
+      return [process.execPath, script];
+    });
+    // The runner merges claude's structured output with tokenUsage/usageEvidence, so the lookalike has more than two keys.
+    const plan = await f.adapter.plan(f.context);
+    expect(plan).toMatchObject({ claudeNeverStarted: true, spawnError: "ENOENT: x", tokenUsage: 2 });
   }, 30_000);
 
   it("runLoop books 0 for a never-started execute and ends failed (T5)", async () => {
