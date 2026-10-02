@@ -70,7 +70,7 @@ npm test              # vitest run
 | `run` | 从契约开一个新循环 | `0` succeeded / `2` 其他终态 / `1` 参数或加载失败 |
 | `resume` | 接管一个被中断的 run，从落盘状态续跑 | 同上 |
 | `ls` | 扫描一个根目录下所有 run，报告**观测到的**字段 | `0` / `1`（根目录本身读不了） |
-| `sweep` | 批量续跑：扫描 + 挑出 `eligibleForContinuation=true` 的 run，逐个 adopt | `0` / `1` |
+| `sweep` | 批量续跑：扫描 + 挑出 `eligibleForContinuation=true` 的 run，以及被直接杀掉的 run（无 `owner-transfer.json`、状态可续跑、租约已过期，见 §3.4），逐个 adopt | `0` / `1` |
 | `unlock` | 处理卡住的 owner-transfer 锁 | `0` 锁已不在 / `1` 任何拒绝 |
 
 ### 3.1 `run`
@@ -101,8 +101,9 @@ node dist/cli.js resume \
 
 - 租约还新鲜（owner 还在续约）⇒ 拒绝。
 - run 目录是 Orca control store 里的 control run（`<dir>/run`，同级有 `control/` 目录）⇒ 拒绝，那类 run 由 Orca 自己恢复。
-- run 里登记过、还没结束的 claude / codex 进程组：先回收（终止），回收不了或无法确认身份就拒绝。每个被回收的进程组记一条 `orphan_process_group_reaped` 事件。
-- 没有 `owner-transfer.json` 的 run（进程被杀、没有人交接过）：只在 run 状态可续跑（planning / executing / verifying）、并且确认旧 owner 进程已经死亡时，resume 自己写下 owner-transfer 和 reconciliation 记录并接管（事件 `owner_crash_adopted`，随后是 `resume_adopted`）。owner 还活着，或者死活无法确定，一律拒绝。
+- 没有 `owner-transfer.json` 的 run（进程被杀、没有人交接过）且状态可续跑（planning / executing / verifying）：**先**确认旧 owner 进程已经死亡。owner 还活着，或者死活无法确定，一律拒绝，而且此时**还没有回收任何进程组**。
+- run 里登记过、还没结束的 claude / codex 进程组（有没有 transfer 两条路径都做）：回收（终止），回收不了或无法确认身份就拒绝，拒绝原因以出问题的 call 目录开头。每个被回收的进程组记一条 `orphan_process_group_reaped` 事件。
+- 回收成功之后，没有 transfer 的 run 由 resume 自己写下 owner-transfer 和 reconciliation 记录并接管（事件 `owner_crash_adopted`，随后是 `resume_adopted`）。已经带 transfer 的 run 没有这一步，也没有 owner 死活检查，只看租约。
 - 之后照旧：8 条续跑资格检查、认领、继续跑 loop。
 
 Ctrl-C 的后果：单次 Ctrl-C（或 SIGTERM）让 loop 在下一个 phase 边界停下，然后释放租约再退出；第二次 Ctrl-C 立即以退出码 130 退出，不释放租约。两种情况下，只要进程已经不在了，状态可续跑的 run 都能被 `resume` 接管（租约过期之后；`kill -9` 同理）。claude 的 runner 在父进程死后约 5 秒内自行退出（codex 没有这层保护）；仍残留的进程组由 resume 回收。单次 Ctrl-C 释放租约这一点，这里没有单独的测试钉住。

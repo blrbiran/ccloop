@@ -251,6 +251,9 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       // Orca ruling 26 (Orca ledger 2026-09-27-single-call-estimate §3.21; session c85d2c4e, 2026-09-28): a phase that
       // timed out or failed still spent what claude streamed before it ended, as singleCall already reports; the error
       // carries that observation (observedTokensOf) so runLoop books it, null when there is none -- never 0.
+      // *** ERRATUM (crash resume, 2026-10-02, Orca session ece96b67; ccloop spec 2026-10-02-crash-resume-and-orphan-reaping-design.md
+      // §3.2) -- "never 0" no longer holds for the never-started answer: throwIfNeverStarted above raises an error carrying
+      // neverStarted, which observedTokensOf answers 0 for. This error (timed out / failed after claude started) is unchanged. ***
       throw Object.assign(new Error(`claude-${outcome.reason}: ${outcome.evidenceDir}`), {
         observedTokens: await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)),
       });
@@ -291,7 +294,9 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     } catch (error) {
       // As CodexAdapter (Orca claude stream usage, 2026-09-27): an aborted execute that was observed spending tokens
       // throws, so runLoop can settle that usage; one that was not keeps answering null exactly as before.
-      if (context.abortSignal?.aborted && !(error instanceof ClaudePhaseAborted && (error.observedTokens !== null || observedTokensOf(error) === 0))) return null;
+      // The test is the observation itself, not the error's class: an abort racing the runner's own never-started answer
+      // surfaces as ClaudeNeverStartedError (observed 0), which must reach runLoop like an aborted phase that spent tokens.
+      if (context.abortSignal?.aborted && observedTokensOf(error) === null) return null;
       throw error;
     }
   }

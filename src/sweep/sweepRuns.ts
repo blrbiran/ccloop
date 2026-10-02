@@ -217,6 +217,12 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
   // prints. A candidate holding the same lock is already loud, as a `refused` report line below.
   // Reporting is a property of what is on disk; candidacy is a different question.
   //
+  // *** ERRATUM (crash resume, 2026-10-02, Orca session ece96b67; ccloop spec 2026-10-02-crash-resume-and-orphan-reaping-design.md
+  // §4.4) -- "a run whose owner-transfer.json never landed is not a candidate, is not counted in the banner" no longer holds
+  // for every such run: class (b) runs (no transfer, a resumable status, an expired lease timestamp, not an Orca control
+  // run) ARE candidates and are counted on the second banner line above. A run with no transfer that is not class (b) is
+  // still neither. ***
+  //
   // Sorted for the same reason the candidate list is: scanRuns contains no sort, so row order is
   // whatever readdir returned, and an operator diffing two sweeps of an unchanged tree would see
   // the lines move. The probe runs after the sort so the calls are ordered too.

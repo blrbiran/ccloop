@@ -91,6 +91,22 @@ describe("claude never started books 0 (spec 2026-10-02 §3.2)", () => {
     expect(observedTokensOf(error)).toBe(0);
   }, 30_000);
 
+  // Final review M2: an abort that lands after the runner already answered never-started (the outcome is "completed", so the
+  // adapter raises ClaudeNeverStartedError, not ClaudePhaseAborted) must not be swallowed to null either: the test is the
+  // observation (0), not the error's class.
+  it("execute with the signal already aborted and the runner's own never-started answer rejects, observed as 0", async () => {
+    const f = await world(missing);
+    const controller = new AbortController();
+    controller.abort();
+    (f.adapter as unknown as { run: () => Promise<unknown> }).run = async () => ({
+      reason: "completed", code: 0, signal: null, evidenceDir: f.runDir,
+      stdout: JSON.stringify({ claudeNeverStarted: true, spawnError: "ENOENT: spawn claude ENOENT" }),
+    });
+    const error = await rejection(f.adapter.execute({ ...f.context, abortSignal: controller.signal }));
+    expect(error).toBeInstanceOf(ClaudeNeverStartedError);
+    expect(observedTokensOf(error)).toBe(0);
+  });
+
   // Spec 3.2 / T5b: execute()'s abort swallow (null when nothing was observed) must not eat a never-started abort.
   it("an abort during the retry wait of execute rejects with ClaudePhaseAborted observed as 0", async () => {
     process.env[DELAY] = "5000";

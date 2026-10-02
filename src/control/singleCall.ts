@@ -104,6 +104,9 @@ export async function runSingleCall(
       completedWithResult = true;
     } else if (hooks.signal.aborted) {
       // Spec §5.2 item 4: what the agent was observed spending before the stop, or null -- never 0.
+      // *** ERRATUM (crash resume, 2026-10-02, Orca session ece96b67; ccloop spec 2026-10-02-crash-resume-and-orphan-reaping-design.md
+      // §3.2) -- "never 0" no longer holds for one case: an aborted single call whose error carries neverStarted books 0
+      // (observedTokensOf answers 0 for it). Every other aborted call is unchanged: observed tokens, or null. ***
       outcome = "aborted";
       tokens = observedTokensOf(error);
     } else {

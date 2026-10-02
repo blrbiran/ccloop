@@ -102,6 +102,9 @@ export const OWNER_TRANSFER_LOCK_RETRY_DELAY_MS = 50;
 class PhaseExecutionError extends Error {
   readonly elapsedMs: number;
   // Orca handoff delivery C-3: tokens the failed phase was observed spending, or null (never 0).
+  // *** ERRATUM (crash resume, 2026-10-02, Orca session ece96b67; ccloop spec 2026-10-02-crash-resume-and-orphan-reaping-design.md
+  // §3.2) -- "never 0" no longer holds for one case: an error carrying neverStarted books 0 (the runner proved no claude
+  // process existed in the call). Every other error is unchanged: observed tokens, or null. ***
   readonly tokenUsage: number | null;
 
   constructor(elapsedMs: number, error: unknown) {

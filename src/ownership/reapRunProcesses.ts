@@ -16,6 +16,7 @@ export type ReapDeps = {
   pollMs?: number;
 };
 type Registered = { pid: number; pgid: number; startedAt: string; phase: string };
+type Target = Registered & { dir: string };
 
 const exists = (path: string) => access(path).then(() => true, () => false);
 
@@ -51,14 +52,14 @@ function defaultProbe(pgid: number): "gone" | "present" | { error: string } {
   catch (e) { const code = (e as NodeJS.ErrnoException).code; return code === "ESRCH" ? "gone" : { error: String(code) }; }
 }
 
-/** Spec §4.2. Only calls the adapter never finished (no outcome.json); reaps only an exact lstart match; refuses when unsure. */
+/** Spec §4.2. Only calls the adapter never finished (no outcome.json); reaps only an exact lstart match; refuses when unsure; every refusal reason leads with the call directory it concerns. */
 export async function reapRunProcesses(runDir: string, deps: ReapDeps = {}): Promise<ReapResult> {
   const probe = deps.probeGroup ?? defaultProbe;
   const readStart = deps.readStart ?? readProcessStart;
   const signal = deps.signalGroup ?? ((pgid, sig) => { try { process.kill(-pgid, sig); } catch { /* raced to exit */ } });
   const sleep = deps.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
   const graceMs = deps.graceMs ?? REAP_GRACE_MS, timeoutMs = deps.timeoutMs ?? REAP_TIMEOUT_MS, pollMs = deps.pollMs ?? 100;
-  const targets: Registered[] = [];
+  const targets: Target[] = [];
   let dirs: string[];
   try { dirs = await unfinishedCalls(runDir); }
   catch (e) { if (e instanceof WalkError) return { ok: false, reason: e.message }; throw e; }
@@ -66,15 +67,15 @@ export async function reapRunProcesses(runDir: string, deps: ReapDeps = {}): Pro
     const registered = parseRegistered(await readFile(join(dir, "process.json"), "utf8").catch(() => ""));
     if (registered === null) {
       if (!(await exists(join(dir, "request.json")))) continue; // the runner never received a prompt
-      return { ok: false, reason: `${join(dir, "process.json")} is unreadable and the call had a request` };
+      return { ok: false, reason: `${dir}: ${join(dir, "process.json")} is unreadable and the call had a request` };
     }
     const state = probe(registered.pgid);
     if (state === "gone") continue;
-    if (typeof state === "object") return { ok: false, reason: `process group ${registered.pgid}: ${state.error}` };
+    if (typeof state === "object") return { ok: false, reason: `${dir}: process group ${registered.pgid}: ${state.error}` };
     const lstart = await readStart(registered.pid);
-    if (lstart === null) return { ok: false, reason: `process group ${registered.pgid} is alive but its leader ${registered.pid} is gone` };
-    if (lstart !== registered.startedAt.trim()) return { ok: false, reason: `pid ${registered.pid} started ${lstart}, not ${registered.startedAt}` };
-    targets.push(registered);
+    if (lstart === null) return { ok: false, reason: `${dir}: process group ${registered.pgid} is alive but its leader ${registered.pid} is gone` };
+    if (lstart !== registered.startedAt.trim()) return { ok: false, reason: `${dir}: pid ${registered.pid} started ${lstart}, not ${registered.startedAt}` };
+    targets.push({ ...registered, dir });
   }
   const waitGone = async (pgid: number, ms: number) => {
     for (let waited = 0; waited <= ms; waited += pollMs) { if (probe(pgid) === "gone") return true; await sleep(pollMs); }
@@ -83,11 +84,11 @@ export async function reapRunProcesses(runDir: string, deps: ReapDeps = {}): Pro
   for (const t of targets) {
     // Re-verify right before signalling: the pid could have been recycled since identification.
     const again = await readStart(t.pid);
-    if (again !== t.startedAt.trim()) return { ok: false, reason: `pid ${t.pid} changed identity before it was signalled (${again === null ? "gone" : again})` };
+    if (again !== t.startedAt.trim()) return { ok: false, reason: `${t.dir}: pid ${t.pid} changed identity before it was signalled (${again === null ? "gone" : again})` };
     signal(t.pgid, "SIGTERM");
     if (!(await waitGone(t.pgid, graceMs))) {
       signal(t.pgid, "SIGKILL");
-      if (!(await waitGone(t.pgid, timeoutMs))) return { ok: false, reason: `process group ${t.pgid} survived SIGKILL for ${timeoutMs}ms` };
+      if (!(await waitGone(t.pgid, timeoutMs))) return { ok: false, reason: `${t.dir}: process group ${t.pgid} survived SIGKILL for ${timeoutMs}ms` };
     }
     await appendEvent(runDir, { type: "orphan_process_group_reaped", at: new Date().toISOString(), detail: `pid ${t.pid} pgid ${t.pgid} phase ${t.phase}` });
   }

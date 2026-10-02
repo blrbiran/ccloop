@@ -16,9 +16,12 @@ afterEach(() => {
 
 // Resolves only after the child has installed its SIGTERM disposition (it writes a marker),
 // otherwise a fast reap would hit it before the handler exists and the SIGKILL path would go untested.
-async function spawnGroup(ignoreTerm: boolean): Promise<number> {
+// termMarker: the child writes this file in its SIGTERM handler before exiting, so a test can tell "TERM was sent and honoured"
+// from "the group was SIGKILLed after the grace".
+async function spawnGroup(ignoreTerm: boolean, termMarker?: string): Promise<number> {
   const marker = join(await mkdtemp(join(tmpdir(), "reap-ready-")), "ready");
-  const code = `${ignoreTerm ? "process.on('SIGTERM',()=>{});" : ""} require('fs').writeFileSync(${JSON.stringify(marker)},'1'); setInterval(()=>{},1000)`;
+  const onTerm = ignoreTerm ? "process.on('SIGTERM',()=>{});" : termMarker !== undefined ? `process.on('SIGTERM',()=>{require('fs').writeFileSync(${JSON.stringify(termMarker)},'1');process.exit(0)});` : "";
+  const code = `${onTerm} require('fs').writeFileSync(${JSON.stringify(marker)},'1'); setInterval(()=>{},1000)`;
   const child = spawn(process.execPath, ["-e", code], { detached: true, stdio: "ignore" });
   child.unref();
   pids.push(child.pid!);
@@ -46,10 +49,13 @@ const newRun = () => mkdtemp(join(tmpdir(), "reap-"));
 describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse otherwise)", () => {
   it("reaps an unfinished call's live group with a matching lstart, TERM honoured", async () => {
     const run = await newRun();
-    const pid = await spawnGroup(false);
+    const termMarker = join(await mkdtemp(join(tmpdir(), "reap-term-")), "got-sigterm");
+    const pid = await spawnGroup(false, termMarker);
     await register(await callDir(run), pid);
     expect(await reapRunProcesses(run, { graceMs: 2000 })).toEqual({ ok: true, reaped: 1 });
     expect(alive(pid)).toBe(false);
+    // Only a SIGTERM can write this; a group that was SIGKILLed after the grace would leave it absent.
+    expect(await readFile(termMarker, "utf8")).toBe("1");
     const lines = (await events(run)).trim().split("\n").map((l) => JSON.parse(l));
     expect(lines).toHaveLength(1);
     expect(lines[0].type).toBe("orphan_process_group_reaped");
@@ -78,35 +84,40 @@ describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse o
   it("refuses when the leader's lstart differs from the recorded one", async () => {
     const run = await newRun();
     const pid = await spawnGroup(false);
-    await register(await callDir(run), pid, "Thu Jan  1 00:00:00 1970");
+    const dir = await callDir(run);
+    await register(dir, pid, "Thu Jan  1 00:00:00 1970");
     const r = await reapRunProcesses(run);
     expect(r.ok).toBe(false);
+    expect(r.ok === false && r.reason).toContain(`${dir}: pid ${pid} started`);
     expect(alive(pid)).toBe(true);
     expect(await events(run)).toBe("");
   });
 
   it("refuses when the group is present but its leader is absent", async () => {
     const run = await newRun();
-    await register(await callDir(run), 999999, "x");
+    const dir = await callDir(run);
+    await register(dir, 999999, "x");
     const r = await reapRunProcesses(run, { probeGroup: () => "present", readStart: async () => null, signalGroup: () => {}, sleep: async () => {} });
-    expect(r.ok === false && r.reason).toContain("its leader 999999 is gone");
+    expect(r.ok === false && r.reason).toContain(`${dir}: process group 999999 is alive but its leader 999999 is gone`);
     expect(await events(run)).toBe("");
   });
 
   it("refuses when the group probe errors (EPERM)", async () => {
     const run = await newRun();
-    await register(await callDir(run), 999999, "x");
+    const dir = await callDir(run);
+    await register(dir, 999999, "x");
     const r = await reapRunProcesses(run, { probeGroup: () => ({ error: "EPERM" }), signalGroup: () => {}, sleep: async () => {} });
-    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.reason).toContain(`${dir}: process group 999999: EPERM`);
     expect(await events(run)).toBe("");
   });
 
   it("refuses when the group outlives the timeout", async () => {
     const run = await newRun();
     const pid = await spawnGroup(false);
-    await register(await callDir(run), pid);
+    const dir = await callDir(run);
+    await register(dir, pid);
     const r = await reapRunProcesses(run, { signalGroup: () => {}, graceMs: 50, timeoutMs: 300, pollMs: 20 });
-    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.reason).toContain(`${dir}: process group ${pid} survived SIGKILL`);
     expect(await events(run)).toBe("");
   });
 
@@ -115,7 +126,8 @@ describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse o
     const dir = await callDir(run);
     await writeFile(join(dir, "process.json"), "{not json");
     await writeFile(join(dir, "request.json"), "{}");
-    expect((await reapRunProcesses(run)).ok).toBe(false);
+    const r = await reapRunProcesses(run);
+    expect(r.ok === false && r.reason).toContain(`${dir}: `);
     expect(await events(run)).toBe("");
   });
 
@@ -173,11 +185,12 @@ describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse o
   it("refuses without signalling when the leader's lstart changed after identification", async () => {
     const run = await newRun();
     const pid = await spawnGroup(false);
-    await register(await callDir(run), pid);
+    const dir = await callDir(run);
+    await register(dir, pid);
     const real = (await readProcessStart(pid))!;
     let calls = 0;
     const r = await reapRunProcesses(run, { readStart: async () => (++calls === 1 ? real : "Thu Jan  1 00:00:00 1970") });
-    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.reason).toContain(`${dir}: pid ${pid} changed identity before it was signalled`);
     expect(calls).toBe(2);
     expect(alive(pid)).toBe(true);
     expect(await events(run)).toBe("");
