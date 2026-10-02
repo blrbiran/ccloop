@@ -1,4 +1,7 @@
 // Spec 2026-10-02 crash-resume §4.4 / T10: sweep's second candidate class, chosen from observed fields only.
+import { mkdtempSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { sweepRuns } from "../../src/sweep/sweepRuns.js";
 import type { SweepDeps, SweepOptions } from "../../src/sweep/sweepRuns.js";
@@ -67,5 +70,16 @@ describe("sweep class (b): killed runs from observed fields", () => {
     const { err } = await run([A, C, D, E]);
     expect(err.filter((l) => l.startsWith("sweep:"))).toHaveLength(1);
     expect(err.some((l) => l.includes("no owner-transfer.json"))).toBe(false);
+  });
+
+  it("leaves an Orca control run (basename run with a sibling control/) to Orca, and does not count it", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "sweep-ctl-"));
+    mkdirSync(join(tmp, "x", "run"), { recursive: true });
+    mkdirSync(join(tmp, "x", "control"));
+    mkdirSync(join(tmp, "y", "run"), { recursive: true });
+    const shape = { transfer: ABSENT, status: "executing", lease: lease(91_000) };
+    const { calls, err } = await run([row(join(tmp, "x", "run"), shape), row(join(tmp, "y", "run"), shape)]);
+    expect(calls).toEqual([join(tmp, "y", "run")]);
+    expect(err[1]).toBe(BANNER_B(1));
   });
 });

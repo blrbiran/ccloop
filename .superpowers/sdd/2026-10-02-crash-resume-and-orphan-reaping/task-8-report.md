@@ -8,3 +8,6 @@ Status: DONE. Files: src/sweep/sweepRuns.ts, tests/sweep/sweepCrashCandidates.te
 - Existing criteria rewritten: none.
 - Decisions: class (b) rows that are Orca control run dirs are excluded via isOrcaControlRunDir (spec §4.4); existing banner now counts `eligible.length` (class a) with unchanged text. Comment cites spec §4.4 and that wording is pending human ratification (H8). Existing long comments untouched.
 - Note: test D (null lease) also proves R2; rows' fixture paths are not named "run" so the control-dir exclusion is not exercised in the new test (covered by Task 6's own tests of isOrcaControlRunDir).
+
+## Fix round 1
+Review gap: nothing pinned the Orca control-run exclusion. Added a test in tests/sweep/sweepCrashCandidates.test.ts with real tmp dirs (`x/run` + sibling `x/control/`, and `y/run`); asserts only `y/run` is resumed and the second banner counts 1. M8d (delete the exclusion) seen red in clone t8-mut ("expected [ ...(2) ] to deeply equal [ Array(1) ]"); restore diff/cached 0/0. After the fix: sweepCrashCandidates 3/3, sweepRuns 19/19, tsc clean.
