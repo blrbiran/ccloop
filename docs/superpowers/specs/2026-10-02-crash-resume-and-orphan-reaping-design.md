@@ -177,13 +177,13 @@ status is resumable.
 
 - Candidates: (a) unchanged — `owner-transfer.json` observed with `eligibleForContinuation` literally true; (b) new —
   `owner-transfer.json` observed `absent`, `loop-state.json` `status` observed as `planning`, `executing` or
-  `verifying`, `owner-record.json` `leaseAffirmedAt` observed as `null` or as a timestamp older than `LEASE_TTL_MS`
-  before the row's `observedAt`, and the run is not an Orca control run (§4.3 step 3). Both classes sorted together
+  `verifying`, `owner-record.json` `leaseAffirmedAt` observed as a timestamp older than `LEASE_TTL_MS` before the
+  row's `observedAt` (a `null` lease is not a sweep candidate: controller ruling R2, §11), and the run is not an Orca control run (§4.3 step 3). Both classes sorted together
   by path, as today; `--max-runs` is counted at adoption, as today.
 - Banner: the existing line is kept byte for byte. When class (b) is non-empty one more line follows:
 
   ```
-  sweep: <K> run(s) under <root> have no owner-transfer.json, a resumable status and a lease that is not fresh (observed fields; each is resumed only if its owner is confirmed dead)
+  sweep: <K> run(s) under <root> have no owner-transfer.json, a resumable status and an expired lease (observed fields; each is resumed only if its owner is confirmed dead)
   ```
 
   Wording decided by the controller under H8, reported for ratification. With K = 0 nothing is added.
@@ -346,5 +346,10 @@ read-only against the code. Accepted and folded in above:
   legacy form `pid:<n>` (`grep -rn 'currentProcessInstanceId: "pid:' tests`), which the check classifies
   `undetermined`; applying it to every path would rewrite those criteria, and the lease-only rule for
   loop-published transfers is the established design. Reaping (step 4) still applies to every path.
+- Controller ruling R2 (under H8, pending ratification): sweep's class (b) needs an expired lease timestamp; a `null`
+  lease is resumed only by an explicit `resume`. Reasons: `null` also covers a single Ctrl-C (a deliberate stop), which
+  a one-line batch approval should not revive; and `tests/sweep/sweepRuns.test.ts`'s `runRow` fixture seeds
+  non-eligible rows with status `executing` and `leaseAffirmedAt: null`, which existing criteria expect not to be
+  candidates.
 - Minor: `unknown` not `undetermined`; adapters' `ps` from PATH (the new code uses `/bin/ps`); sweep has no
   truncation; scanner rows always exist (`absent`); `observedAt`; `process.json` torn writes (§4.2 rule).
