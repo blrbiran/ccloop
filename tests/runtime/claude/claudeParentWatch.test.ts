@@ -95,6 +95,31 @@ describe("claude phase runner watches its parent over fd 3 (spec 2026-10-02 §3.
     expect(await waitGone([runner, claudePid], 500 + 3000)).toBe(true);
   }, 20_000);
 
+  // Spec §3.1 step 3: claude gets SIGTERM as soon as the parent is gone, not at the end of the grace. With a 3000 ms
+  // grace, a claude gone within 1500 ms can only have been stopped by that SIGTERM.
+  it("stops claude with SIGTERM at once, before the grace runs out", async () => {
+    const p = await startParent({ mode: "hang", graceMs: 3000 });
+    const { runner } = await p.ready;
+    const claudePid = await p.claudePid();
+    p.child.kill("SIGKILL");
+    expect(await waitGone([claudePid], 1500)).toBe(true);
+    expect(await waitGone([runner], 3000 + 3000)).toBe(true); // the runner itself waits out the grace timer
+  }, 20_000);
+
+  // Spec §3.1 step 4: a claude that ignores SIGTERM keeps the runner waiting on it; only the grace timer's group
+  // SIGKILL ends them. The runner is still there halfway through the grace (the grace is honoured), and gone after it.
+  it("kills its group at the end of the grace when claude ignores SIGTERM", async () => {
+    const graceMs = 1500;
+    const p = await startParent({ mode: "grandchild-ignore-term", graceMs });
+    const { runner } = await p.ready;
+    const claudePid = await p.claudePid();
+    const grandchild = await waitForPidFile(`${p.marker}.grandchild`, Number);
+    p.child.kill("SIGKILL");
+    await sleep(graceMs / 2);
+    expect(alive(runner) && alive(claudePid)).toBe(true);
+    expect(await waitGone([runner, claudePid, grandchild], graceMs / 2 + 3000)).toBe(true);
+  }, 20_000);
+
   it("T2: same while an unrelated child of the dead parent still lives", async () => {
     const p = await startParent({ mode: "hang", graceMs: 500, lingerChild: true });
     const { runner, linger } = await p.ready;
