@@ -45,7 +45,7 @@ async function waitForPidFile(path: string, read: (raw: string) => number): Prom
   throw new Error(`no pid in ${path}`);
 }
 
-type ParentOptions = { mode: string; graceMs: number; lingerChild?: boolean; noRequest?: boolean; phase?: "plan" | "execute"; recoveryWindowMs?: number };
+type ParentOptions = { mode: string; graceMs: number; lingerChild?: boolean; noRequest?: boolean; closeWatchFirstMs?: number; phase?: "plan" | "execute"; recoveryWindowMs?: number };
 
 async function startParent(options: ParentOptions) {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "claude-parent-watch-")));
@@ -55,7 +55,7 @@ async function startParent(options: ParentOptions) {
     phase: options.phase ?? "plan", prompt: "Plan one isolated L2 attempt for task t.", attempt: 1, runDir: dir, worktreePath: dir,
     ...(options.recoveryWindowMs === undefined ? {} : { partialOutcomeRecoveryWindowMs: options.recoveryWindowMs }),
   };
-  const config = { command: [process.execPath, fakeCli, options.mode, marker], graceMs: options.graceMs, cwd: dir, request, lingerChild: options.lingerChild, noRequest: options.noRequest };
+  const config = { command: [process.execPath, fakeCli, options.mode, marker], graceMs: options.graceMs, cwd: dir, request, lingerChild: options.lingerChild, noRequest: options.noRequest, closeWatchFirstMs: options.closeWatchFirstMs };
   const child = spawn(process.execPath, [runnerParent, JSON.stringify(config)], { stdio: ["ignore", "pipe", "inherit"] });
   parents.push(child);
   if (child.pid !== undefined) pids.add(child.pid);
@@ -191,6 +191,16 @@ describe("claude phase runner watches its parent over fd 3 (spec 2026-10-02 §3.
     const { runner } = await p.ready;
     p.child.kill("SIGKILL");
     expect(await waitGone([runner], 3500)).toBe(true);
+    expect(existsSync(`${p.marker}.argv`)).toBe(false);
+  }, 20_000);
+
+  // Task 3 review, deferred into Task 9: the parent is gone after the runner could still read a whole request but before
+  // claude was spawned. The fixture closes fd 3 at once (the runner sees its parent gone) and writes the request 400 ms
+  // later, inside the 3000 ms grace. Before the guard the runner spawned claude anyway, spending until the grace kill.
+  it("parent gone after the request is read but before the first spawn -- no claude spawned", async () => {
+    const p = await startParent({ mode: "hang", graceMs: 3000, closeWatchFirstMs: 400 });
+    const { runner } = await p.ready;
+    expect(await waitGone([runner], 3000 + 3000)).toBe(true);
     expect(existsSync(`${p.marker}.argv`)).toBe(false);
   }, 20_000);
 });

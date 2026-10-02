@@ -252,6 +252,9 @@ async function buildPartialExecutionOutcome(request, failureType, failureMessage
     diffPatch,
     commandOutputs,
     stdoutStderrLog,
+    // Crash resume (2026-10-02), spec §5.1 (R-B): this partial is the runner's own, not claude's answer; runLoop
+    // keeps today's terminal decision for it instead of sending it to verify.
+    partialOrigin: "runner",
   };
 }
 
@@ -416,6 +419,9 @@ function spawnClaudeOnce(command, args, options) {
 }
 
 async function spawnClaude(command, args, options) {
+  // Task 3 review, deferred into Task 9: nobody reads the answer of a runner whose parent is gone, so the first spawn is
+  // refused too, not only the retries below. Main writes nothing for it (parentGone).
+  if (parentGone) throw new ClaudeNeverStarted("EPARENTGONE: parent gone before claude was spawned", "EPARENTGONE");
   for (let attempt = 1; ; attempt += 1) {
     try {
       const child = await spawnClaudeOnce(command, args, options);
@@ -590,6 +596,9 @@ async function main() {
     if (parentGone) return;
     throw error;
   }
+  // Task 3 review, deferred into Task 9: the parent can be gone with a whole request already read; spawning claude then
+  // would spend until the grace kill. The exit hook kills the group.
+  if (parentGone) return;
   currentRequest = request;
 
   try {
@@ -616,6 +625,8 @@ async function main() {
     if (!structured || typeof structured !== "object") {
       throw new Error("Claude CLI did not return structured_output");
     }
+    // Crash resume (2026-10-02), spec §5.1: only the runner may say a partial is its own.
+    if (request.phase === "execute" && Object.prototype.hasOwnProperty.call(structured, "partialOrigin")) delete structured.partialOrigin;
     const broken = request.phase === "execute" ? partialExecutionRuleBroken(structured) : null;
     if (broken !== null) {
       throw new Error(`claude-execute-partial-incomplete: ${broken}`);

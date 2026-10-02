@@ -33,6 +33,11 @@ export function buildExecutorPrompt(context: AttemptContext): string {
     `Execute one isolated attempt for task ${contract.objective.taskId}.`,
     `Goal: ${contract.objective.goal}`,
     `Success condition: ${contract.objective.successCondition}`,
+    // Crash resume (2026-10-02), spec §5.2 (R-B): an executor that could not run a check reported partial/error, and the
+    // run ended without the verify phase that would have run it.
+    "Required checks (run by the verifier in this worktree after you finish):",
+    formatList(contract.verification.requiredChecks),
+    "If you cannot run a command (for example it needs approval), do not report partial or error for that reason; deliver your changes and say in stdoutStderrLog which commands you could not run.",
     "Never declare final success; only report what changed in this attempt.",
     "Allowed target paths:",
     formatList(contract.context.targetPaths),

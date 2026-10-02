@@ -189,6 +189,9 @@ describe("committed continuation materialization", { timeout: 30_000 }, () => {
       objective: { taskId: "resume", goal: "continue", successCondition: "done", nonGoals: [] },
       context: { repoPath: h.targetRepo, targetPaths: ["tracked.txt"], relevantDocs: [], buildTestCommands: ["true"], constraints: [] },
       executionPolicy: { partialOutcomeRecoveryWindowMs: 0 },
+      // Crash resume (2026-10-02), spec §5.2: the executor prompt now lists contract.verification.requiredChecks, a field
+      // every real contract has (schema: required, min 1); this partial fixture gains it. Expectations unchanged.
+      verification: { requiredChecks: ["true"] },
     } as unknown as LoopContract;
     const prepared = await prepareContinuationContract(contract, h.runDir, h.input);
     const prompts = [buildPlannerPrompt(prepared), buildExecutorPrompt({ contract: prepared, plan: null } as unknown as AttemptContext)];

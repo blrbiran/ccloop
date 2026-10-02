@@ -1552,22 +1552,37 @@ export async function runLoopFromState(
           return state;
         }
 
-        state = await persistTerminalState(
-          runDir,
-          writeOwnedRunState,
-          state,
-          completedExecution.failureType === "timeout" ? "exhausted" : "failed",
-          completedExecution.failureMessage,
-        );
+        // Spec 2026-10-02 crash-resume §5.1 (R-B): claude's own `error` partial that changed files is judged by verify,
+        // not thrown away -- the verify phase runs requiredChecks in this worktree. Falls through to the path a complete
+        // execution takes, budget check included. Runner-built partials (partialOrigin) and `timeout` keep today's
+        // terminal decision.
+        const sendToVerify = completedExecution.failureType === "error"
+          && completedExecution.partialOrigin === undefined
+          && completedExecution.changedFiles.length > 0;
+        if (sendToVerify) {
+          await appendEvent(runDir, {
+            type: "partial_execute_sent_to_verify",
+            at: new Date().toISOString(),
+            detail: `failureType error, ${completedExecution.changedFiles.length} changed file(s): ${completedExecution.failureMessage}`,
+          });
+        } else {
+          state = await persistTerminalState(
+            runDir,
+            writeOwnedRunState,
+            state,
+            completedExecution.failureType === "timeout" ? "exhausted" : "failed",
+            completedExecution.failureMessage,
+          );
 
-        await heartbeat.assertHeld();
-        await cleanupAttemptWorkspaceBestEffort(
-          contract.context.repoPath,
-          worktreePath,
-          runDir,
-          `cleanup after partial execute ${completedExecution.failureType}`,
-        );
-        return state;
+          await heartbeat.assertHeld();
+          await cleanupAttemptWorkspaceBestEffort(
+            contract.context.repoPath,
+            worktreePath,
+            runDir,
+            `cleanup after partial execute ${completedExecution.failureType}`,
+          );
+          return state;
+        }
       }
 
       const pathPolicy = evaluatePathPolicy({

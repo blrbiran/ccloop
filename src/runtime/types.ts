@@ -67,6 +67,8 @@ export type PartialExecutionResult = ExecutionArtifacts & {
   completionStatus: "partial";
   failureType: "timeout" | "error";
   failureMessage: string;
+  /** Crash resume (2026-10-02), spec §5.1: set only on a partial the claude phase runner built itself, never by claude. */
+  partialOrigin?: "runner";
 };
 
 export type ExecutionResult = CompleteExecutionResult | PartialExecutionResult;

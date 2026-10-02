@@ -7,6 +7,8 @@
 //   graceMs      CCLOOP_PARENT_GONE_GRACE_MS
 //   request      the phase request written on the runner's stdin (skipped with noRequest: Review Focus 4)
 //   lingerChild  also start an unrelated long-lived child of this process (not detached, stdio "ignore"): criterion T2
+//   closeWatchFirstMs  close this end of fd 3 at once and write the request only this many ms later, so the runner reads
+//                      a whole request after it already saw its parent gone (Task 3 review item, folded into Task 9)
 // Prints one JSON line {"runner": <pid>, "linger": <pid|null>} on its stdout, then idles until killed.
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -28,7 +30,10 @@ const runner = spawn(process.execPath, [runnerPath], {
 runner.stdout.resume();
 runner.stderr.resume();
 runner.stdin.on("error", () => {});
-if (config.noRequest !== true) runner.stdin.end(JSON.stringify(config.request));
+if (typeof config.closeWatchFirstMs === "number") {
+  runner.stdio[3].destroy();
+  setTimeout(() => runner.stdin.end(JSON.stringify(config.request)), config.closeWatchFirstMs);
+} else if (config.noRequest !== true) runner.stdin.end(JSON.stringify(config.request));
 const linger = config.lingerChild === true ? spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" }) : null;
 process.stdout.write(`${JSON.stringify({ runner: runner.pid, linger: linger?.pid ?? null })}\n`);
 setInterval(() => {}, 1000);
