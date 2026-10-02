@@ -89,7 +89,7 @@ describe("reapRunProcesses (spec 4.2: reap only what is certainly ours, refuse o
     const run = await newRun();
     await register(await callDir(run), 999999, "x");
     const r = await reapRunProcesses(run, { probeGroup: () => "present", readStart: async () => null, signalGroup: () => {}, sleep: async () => {} });
-    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.reason).toContain("its leader 999999 is gone");
     expect(await events(run)).toBe("");
   });
 
