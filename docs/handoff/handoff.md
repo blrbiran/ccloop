@@ -407,7 +407,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-02 第三十二版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-02 第三十三版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
@@ -423,18 +423,19 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
   - R-B：模型自己报的 `partial`＋`error` 且有改动文件 ⇒ 不再直接 `failed`，照常走路径策略、预算检查、verify；runner 自建的 partial 带 `partialOrigin:"runner"`，维持原判。codex 的同类 partial 也进 verify。execute 提示词写明检查由 verifier 跑。
   - README §3.2／§3.4 已按新行为改写。
 - 门（干净 clone，env 改道）：**1124 条、1123 过、只红 `stopProof`**；`check-known-reds` RC 0（名单仍 9 个名字）、`check-tmp-leak` RC 0、build／typecheck RC 0。
-- 付费真 claude（n＝1，台账末节）：SIGKILL ccloop 后 runner＋claude 约 2.5 秒内全部退出；等租约真过期后 `resume --agents` 不靠补文件就续跑到 `succeeded`。claude 自报花费 $0.2392012（被杀那次 execute 的花费拿不到）。**收进程、R-A、R-B 在真 claude 下都没跑过。**
+- 付费真 claude（n＝1，台账末节）：SIGKILL ccloop 后 runner＋claude 约 2.5 秒内全部退出；等租约真过期后 `resume --agents` 不靠补文件就续跑到 `succeeded`。claude 自报花费 $0.2392012（被杀那次 execute 的花费拿不到）。
+- 第二次付费验收（Orca 会话 `7fe6d61b`，台账末节，各 n＝1）：**R-A** 真 claude 下 execute 找不到可执行文件 ⇒ runner 答 `claudeNeverStarted`、这一相记 0、run 判 `failed`；**R-B** 同样的 acceptEdits 现场这次跑到 `succeeded`，但走的是 §5.2（提示词说检查由 verifier 跑，claude 报了 complete），**§5.1「自报 partial＋error 进 verify」在真 claude 下仍没走过**；**收进程**：冻住 runner、杀 ccloop 后 resume 按 `lstart` 认出并收掉了组，但 claude 在等租约的 95 秒里已经自己做完退出，**reaper 没赶上杀一个活的 claude**。claude 自报合计 $0.3782952（R-A 的 plan 那次拿不到）。
 - 容量实测（真 claude、执行中途）：runner 组 = runner 10 fd ＋ claude 18 fd（另有验收专用的 tee）；每个在飞任务至少 3 个进程。按 `kern.maxprocperuid` 5,333 推算上限约 1,700，**这是推算不是实测**，且没算工具子进程。
 
 ## ⛔ 下一件事（都归人，按人选）
 
 - ✅ **人已追认本轮全部 pending 裁定**（2026-10-02，Orca 会话 `7fe6d61b`，「同意」）：记在 spec §13 与台账末节；原文的 pending 字样按铁律保留不改。本轮的 scratchpad 原始输出（`gate/`、`paid/`）已经人授权删除，台账里记下的数是唯一副本。
-- ✅ 推送：2026-10-02 现测三个仓远端＝本地（本会话之前的那些提交）；之后的以现跑 `ls-remote` 为准，本仓库先于 Orca。Orca 这一轮没有重钉。
-- 候选的后续：收进程／R-A／R-B 的付费真 claude 验证；Orca「同时启动任务数上限」（要真 claude 下带工具调用的任务再量一次）；被杀调用永远没有 `outcome.json`，其 pgid 被无关进程复用时 resume 会一直拒（已登记，要改需动 spec §4.2）。
+- ✅ 推送：2026-10-02 现测三个仓远端＝本地（本会话之前的那些提交）；之后的以现跑 `ls-remote` 为准，本仓库先于 Orca。**Orca 已重钉到本轮（`ae2caa3`，Orca 会话 `7fe6d61b`）**，并加了一条判据钉住「没起来记 0 ⇒ group 的用量不会变 unknown」。
+- 候选的后续：§5.1 与「reaper 杀一个活的 claude」在真 claude 下仍未验（要构造得出来才值得花钱）；Orca「同时启动任务数上限」（要真 claude 下带工具调用的任务再量一次）；被杀调用永远没有 `outcome.json`，其 pgid 被无关进程复用时 resume 会一直拒（已登记，要改需动 spec §4.2）。
 
 ## 🔗 Orca 通过 git 依赖钉住本仓库
 
-- Orca `package.json`：`"ccloop": "github:blrbiran/ccloop#99054f2db619d45760825f1d4e6903a8dcc17a73"`（带 8192 字节修复，不含本轮）。Orca 没设 `ORCA_CCLOOP_BIN` 时用这份；开发与门走 `ORCA_CCLOOP_BIN`（本仓库 clone 的 build）。
+- Orca `package.json`：`"ccloop": "github:blrbiran/ccloop#ae2caa3b483735c706e9914bb977c3ddbc33432b"`（含崩溃续跑＋孤儿 runner 收＋R-A＋R-B 这一轮；2026-10-02 由 99054f2 重钉）。Orca 没设 `ORCA_CCLOOP_BIN` 时用这份；开发与门走 `ORCA_CCLOOP_BIN`（本仓库 clone 的 build）。
 - **重钉规矩**：只有 Orca 依赖了本仓库的**新行为**才重钉。顺序：本仓库提交 → **人推本仓库** → Orca 的 agent 跑 `node scripts/pin-ccloop.mjs <SHA>` → 人推 Orca。只能钉 GitHub 上已有的 SHA。
 - Orca 的 `npm run verify` 有 `verify:ccloop-pin`。⚠️ `files` 之外的运行时读取会让装好的包坏掉（`tests/packaging/gitDependency.test.ts` 会红）。
 
@@ -443,7 +444,7 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 - loop 方案依赖：`requiredChecks` 在 worktree 里 `sh -lc` 真跑；路径约束只查 executor 自报的 `changedFiles`；`rejectOn` 只进 verifier prompt；`constraints` 不进 verifier、`nonGoals` 只进 planner。
 - Orca 方案 v2 默认值：`maxFilesTouched` `Number.MAX_SAFE_INTEGER`、`perAttemptTimeoutMs` 3 小时、`partialOutcomeRecoveryWindowMs` 60,000（`PARTIAL_FLUSH_MARGIN_MS` 在 Orca 手抄一份——改这个数要同时改 Orca）。
 - Orca N1 走 `single-call`（protocol 3）；fake claude 的 `single-call-queue` 按序回放。fake codex 恒报改了 `answer.txt`。
-- 本轮对 Orca 的影响（重钉之后才生效）：worker 起的 runner 也会随 worker 死；never-started 记 0；Orca 控制 run 被 `ccloop resume` 拒（Orca 本来就不调它）；codex `error` partial 进 verify。
+- 本轮对 Orca 的影响（**已随 2026-10-02 的重钉生效**）：worker 起的 runner 也会随 worker 死；never-started 记 0；Orca 控制 run 被 `ccloop resume` 拒（Orca 本来就不调它）；codex `error` partial 进 verify。
 
 ## 🔴 挂着的
 
