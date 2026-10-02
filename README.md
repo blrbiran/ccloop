@@ -133,6 +133,7 @@ node dist/cli.js sweep \
 
 - `--max-runs` 必须是**字面上的正整数**（`1e3`、`2abc` 一律拒绝，不做容错解析）。它是人批准这次 sweep 的上限。
 - 它 bound 的是**进入的 run 数**，不是 attempt 总数——每个 run 各自还有自己契约里的 `maxAttempts`。
+- 候选有两类。(a) `owner-transfer.json` 里 `eligibleForContinuation` 观测为 `true`，banner 照旧只数这一类；(b) 被直接杀掉的 run：没有 `owner-transfer.json`、状态是 `planning`/`executing`/`verifying`、`leaseAffirmedAt` 是比 `LEASE_TTL_MS` 更早的时间戳（`null` 不算；Orca 控制 run 不算），仅在 K > 0 时多打一行 `sweep: <K> run(s) under <root> have no owner-transfer.json, a resumable status and an expired lease (observed fields; each is resumed only if its owner is confirmed dead)`。(b) 只是观测字段的筛选，owner 是否真的死了由 resume 判定，没死就拒绝。
 - 顺序是硬的：先读 agents 表（读不了就 exit 1，一个 run 都不扫），再扫描，再打 banner，最后才逐个 run 构造 adapter（某个 run 的 adapter 建不起来，那一个 run 报 `refused`）。
 
 ### 3.5 `unlock`

@@ -17,7 +17,8 @@ import type { RunObservation } from "../registry/observeRun.js";
 import { ResumeNotEligibleError, resumeLoop } from "../controller/resumeLoop.js";
 import type { ResumeLoopOptions } from "../controller/resumeLoop.js";
 import type { StopRequestSignal } from "../controller/runLoop.js";
-import { RunLeaseHeldError } from "../ownership/lease.js";
+import { isOrcaControlRunDir } from "../controller/adoptCrashedRun.js";
+import { LEASE_TTL_MS, RunLeaseHeldError } from "../ownership/lease.js";
 import type { RuntimeAdapter } from "../runtime/types.js";
 import type { RunState, RunStatus } from "../state/types.js";
 
@@ -123,6 +124,28 @@ function isObservedEligible(row: ScanRow): row is RunObservation {
   return observation?.kind === "present" && observation.value === true;
 }
 
+const RESUMABLE = new Set(["planning", "executing", "verifying"]);
+
+function present(row: RunObservation, file: string, field: string): unknown {
+  const observation = row.files.find((f) => f.file === file)?.fields[field];
+  return observation?.kind === "present" ? observation.value : undefined;
+}
+
+// Spec 2026-10-02 crash-resume §4.4 class (b): observed fields only -- the transfer file absent, a resumable status, and
+// a lease timestamp older than LEASE_TTL_MS at the row's observedAt. A null lease is not a candidate (controller ruling
+// R2). Whether the owner is really dead is resumeLoop's question, not this filter's.
+function isObservedCrashed(row: ScanRow): row is RunObservation {
+  if (row.kind !== "run") return false;
+  const transfer = row.files.find((f) => f.file === "owner-transfer.json")?.fields["eligibleForContinuation"];
+  if (transfer?.kind !== "absent") return false;
+  if (!RESUMABLE.has(present(row, "loop-state.json", "status") as string)) return false;
+  const lease = present(row, "owner-record.json", "leaseAffirmedAt");
+  if (typeof lease !== "string") return false;
+  const leaseMs = Date.parse(lease);
+  const observedMs = Date.parse(row.observedAt);
+  return !Number.isNaN(leaseMs) && !Number.isNaN(observedMs) && observedMs - leaseMs >= LEASE_TTL_MS;
+}
+
 export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promise<number> {
   const scan = deps?.scan ?? defaultScan;
   const scanDeps = deps?.scanDeps ?? defaultScanDeps;
@@ -142,8 +165,12 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
   // Sorting is not cosmetic: scanRuns contains no sort at all, so row order is whatever readdir
   // returned. "Which N runs does --max-runs pick" is only well-defined once the order is, and
   // the truncation below therefore has to come AFTER the sort, never after the filter.
-  const candidates = rows
-    .filter(isObservedEligible)
+  const eligible = rows.filter(isObservedEligible);
+  const crashed: RunObservation[] = [];
+  for (const row of rows.filter(isObservedCrashed)) {
+    if (!(await isOrcaControlRunDir(row.path))) crashed.push(row);
+  }
+  const candidates = [...eligible, ...crashed]
     .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
 
   // §8/§12: banner first, adapter second. N bounds the number of runs ENTERED, not the number of
@@ -171,10 +198,18 @@ export async function sweepRuns(options: SweepOptions, deps?: SweepDeps): Promis
   // takes `--adapter` at all (ccloop spec 2026-10-01-retire-old-cli-entry-design.md): a sweep from the CLI is approved
   // with `sweep --agents <table>`, and each run's agent is the one that run froze. ***
   options.stderr(
-    `sweep: ${candidates.length} run(s) under ${options.root} observed eligibleForContinuation=true ` +
+    `sweep: ${eligible.length} run(s) under ${options.root} observed eligibleForContinuation=true ` +
       `(an observed field, not a decision that the run may be resumed), ` +
       `will attempt at most ${options.maxRuns}, adapter=${options.adapterName}`,
   );
+  // Spec 2026-10-02 crash-resume §4.4: class (b) gets its own line so the line above keeps counting class (a) only.
+  // The wording is pending human ratification (H8).
+  if (crashed.length > 0) {
+    options.stderr(
+      `sweep: ${crashed.length} run(s) under ${options.root} have no owner-transfer.json, a resumable status and an expired lease ` +
+        `(observed fields; each is resumed only if its owner is confirmed dead)`,
+    );
+  }
 
   // Human ruling 70, board C-b. Over `rows`, NOT `candidates`, and the difference is the whole
   // point: a run whose owner-transfer.json never landed is not a candidate, is not counted in the
