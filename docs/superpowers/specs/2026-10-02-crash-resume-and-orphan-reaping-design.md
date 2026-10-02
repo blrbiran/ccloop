@@ -373,3 +373,11 @@ read-only against the code. Accepted and folded in above:
   Registered, not solved (a tombstone would need the reaper to write more than events).
 - §6 T3 guards "no per-phase fd growth", not the fd-3 destroy in `finish()`, which Node closes at child exit anyway
   (the destroy mutation is invisible, measured).
+
+## 13. Human ratification (2026-10-02, Orca session 7fe6d61b)
+
+The human answered "同意" to every ruling marked "pending ratification" in §4.4, §11 and §12. Ratified, unchanged:
+R1 (§11), R2 (§11), the sweep second banner line wording (§4.4), and codex `error` partials with changed files going
+to verify (§12). The two existing-criterion rulings recorded only in the ledger (Task 3 three-spawns bounds, Task 9
+`materialize.test.ts` fixture field) are ratified in the same answer. The "pending ratification" wording above is left
+as written; this section supersedes it.
