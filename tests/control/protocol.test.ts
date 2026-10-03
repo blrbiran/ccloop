@@ -336,10 +336,16 @@ describe("control protocol v1", () => {
 describe("loop work skillPluginDir (Orca syncskill integration)", () => {
   // The envelope's identity is its canonical hash; an envelope that does not carry the field must hash as it did before
   // the field existed. GOLDEN: computed at ccloop 85a9564 (before the schema change) from this fixed envelope.
+  // Rewritten (Orca syncskill final review, item T1): the hash is taken of what the schema hands back, which is what
+  // acceptStart hashes and stores; hashing the raw fixture could not go red when the schema added or changed a key.
+  // The temp paths are pinned to fixed strings only after the parse (accept and inspect both require sourceDir to exist).
   it("leaves the canonical hash of an envelope without the field unchanged", async () => {
     const { envelope } = await fixture();
-    const fixed = { ...envelope, work: { ...envelope.work, targetRepo: "/fixed/repo", sourceDir: "/fixed/source", contract: { ...(envelope.work as { contract: object }).contract, context: { ...(envelope.work as { contract: { context: object } }).contract.context, repoPath: "/fixed/repo" } } } };
-    expect(canonicalHash(fixed)).toBe("032325fb451b1403ba45b211630306a2c8c961e707d872f48989c9893b71bf80");
+    const pin = (parsed: LoopStartEnvelope) => ({ ...parsed, work: { ...parsed.work, targetRepo: "/fixed/repo", sourceDir: "/fixed/source", contract: { ...parsed.work.contract, context: { ...parsed.work.contract.context, repoPath: "/fixed/repo" } } } });
+    for (const method of ["accept", "inspect"] as const) {
+      const parsed = parseControlRequest(method, envelope) as LoopStartEnvelope;
+      expect(canonicalHash(pin(parsed))).toBe("032325fb451b1403ba45b211630306a2c8c961e707d872f48989c9893b71bf80");
+    }
   });
 
   it("parses an existing canonical directory and keeps the field", async () => {
