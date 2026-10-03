@@ -61,6 +61,8 @@ export interface LoopWork {
   targetRepo: string;
   base: string;
   sourceDir: string;
+  /** Orca syncskill integration (2026-10-03), spec §10.7: absolute; claude loads it with --plugin-dir. */
+  skillPluginDir?: string;
 }
 
 /**
@@ -186,6 +188,9 @@ const loopWorkSchema = z
     targetRepo: z.string().min(1),
     base: z.string().min(1),
     sourceDir: z.string().min(1),
+    // Orca syncskill integration (2026-10-03), spec §10.7: where Orca's per-run skill snapshot lives (outside any git tree);
+    // claude loads it with --plugin-dir. Optional so an envelope without it parses and hashes exactly as before.
+    skillPluginDir: z.string().min(1).optional(),
   })
   .strict();
 // Orca single-call estimate (2026-09-27), spec §4.1: the claude API takes the schema as a tool's input_schema, whose top
@@ -265,12 +270,18 @@ function validateCanonicalDirectory(path: string): string {
   }
 }
 
-function validateEnvelopePaths(envelope: StartEnvelopeV3): void {
+function validateEnvelopePaths(envelope: StartEnvelopeV3, method: ControlMethodV1): void {
   const sourceDir = validateCanonicalDirectory(envelope.work.sourceDir);
   // Orca single-call estimate (2026-09-27), spec §5.1: a single call names no repository and takes no input
   // checkpoint (its schema holds that to null), so its sourceDir is all there is to check.
   if (!isLoopEnvelope(envelope)) return;
   if (!isAbsolute(envelope.work.targetRepo)) throw new ControlProtocolError("control-request-invalid");
+  // Orca syncskill integration (2026-10-03), spec §10.7: the snapshot directory is removed with the workspace after
+  // landing and inspect/handoff/collect/read-evidence may come later, so only accept demands that it exists.
+  if (envelope.work.skillPluginDir !== undefined) {
+    if (!isAbsolute(envelope.work.skillPluginDir)) throw new ControlProtocolError("control-request-invalid");
+    if (method === "accept") validateCanonicalDirectory(envelope.work.skillPluginDir);
+  }
   if (envelope.inputCheckpoint === null) return;
   const bundle = validateCanonicalDirectory(envelope.inputCheckpoint.bundlePath);
   const inputRoot = resolve(sourceDir, "input");
@@ -309,9 +320,9 @@ export function parseControlRequest(method: ControlMethodV1, raw: unknown): Cont
   }
   try {
     const payload = payloadSchemas[method].parse(raw) as ControlPayloadV1;
-    if (method === "accept" || method === "inspect") validateEnvelopePaths(payload as StartEnvelopeV3);
+    if (method === "accept" || method === "inspect") validateEnvelopePaths(payload as StartEnvelopeV3, method);
     if (method === "handoff" || method === "collect" || method === "read-evidence") {
-      validateEnvelopePaths((payload as { input: StartEnvelopeV3 }).input);
+      validateEnvelopePaths((payload as { input: StartEnvelopeV3 }).input, method);
     }
     return payload;
   } catch (error) {

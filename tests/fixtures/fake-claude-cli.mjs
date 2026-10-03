@@ -38,7 +38,10 @@ let print = false, outputFormat, schemaText, model = null, prompt, tools;
 for (let index = 0; index < args.length; index += 1) {
   const arg = args[index];
   if (arg === "-p") { print = true; continue; }
-  if (arg === "--verbose" || arg === "--include-partial-messages") continue;
+  // Orca syncskill integration (2026-10-03), spec 10.7: the installation's real command carries --disable-slash-commands,
+  // and a run with a skill plugin adds --plugin-dir <dir>; the fake accepts both and records them in argv.
+  if (arg === "--verbose" || arg === "--include-partial-messages" || arg === "--disable-slash-commands" || arg === "--strict-mcp-config") continue;
+  if (arg === "--plugin-dir") { if (args[index + 1] === undefined) fail("missing value for --plugin-dir"); index += 1; continue; }
   if (arg === "--output-format" || arg === "--json-schema" || arg === "--model" || arg === "--tools") {
     const value = args[index + 1];
     if (value === undefined) fail(`missing value for ${arg}`);

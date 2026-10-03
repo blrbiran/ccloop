@@ -27,6 +27,8 @@ Exit codes are:
 
 Every object is strict: unknown fields are refused. IDs match `[A-Za-z0-9][A-Za-z0-9_.-]*`, hashes are lowercase SHA-256 hex, counters are safe integers, and timestamps require an offset. `sourceDir` is an existing canonical absolute directory with no symlink spelling. A continuation bundle must be an existing canonical directory strictly below `sourceDir/input/`.
 
+A loop work may carry `skillPluginDir` (Orca syncskill integration, 2026-10-03), an absolute path to a directory outside any git tree that claude loads as a plugin: the claude adapter adds `--plugin-dir <dir>` and drops `--disable-slash-commands` from the installation command for plan, execute and verify. Only `accept` (and the worker, which re-parses its sealed envelope as an accept) requires it to be an existing canonical directory; `inspect`, `handoff`, `collect` and `read-evidence` check only that it is absolute, because the directory goes away with the workspace after landing. `accept` refuses the field for any agent that is not claude with the named refusal `skills-unsupported-agent` (exit `2`), before anything is persisted. An envelope without the field is unchanged in every way, including its canonical hash.
+
 `StartEnvelopeV1` contains protocol `1`, the complete claim and grant, a contract hash, an optional input checkpoint, and the work contract/target/base/source directory. `HandoffRequestV1` binds request ID, run ID, generation, reason, and deadline. The canonical TypeScript definitions and producer-side schemas live in `src/control/protocol.ts`.
 
 ## Responses

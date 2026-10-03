@@ -110,14 +110,21 @@ type ClaudeCall = {
 
 export class ClaudeAgentAdapter implements RuntimeAdapter {
   private readonly extraArgs: string[];
+  /** The installation's command; with a skill plugin dir it loses --disable-slash-commands, which would hide the plugin's skills. */
+  private readonly command: string[];
 
-  constructor(private readonly config: MaterializedAgentConfigV1) {
+  // Orca syncskill integration (2026-10-03), spec §10.7 and §4.4: `skillPluginDir` adds `--plugin-dir <dir>` and removes
+  // `--disable-slash-commands` from the installation command; without it nothing here changes.
+  constructor(private readonly config: MaterializedAgentConfigV1, options: { skillPluginDir?: string } = {}) {
     // §12 I11 (P19): reuses T1's own validation and 1M-suffix spelling (src/agents/claude.ts) rather than
     // re-deriving them here, so there is exactly one place that knows claude's context options and exactly
     // one place that spells the [1m] suffix. Kept here too (not only in the descriptor's validateSelection)
     // so a directly constructed adapter still fails closed on an unexpressable context window (spec W2-9).
     assertContextOption(claudeDescriptor.contextOptions, config.selection);
-    this.extraArgs = ["--model", claudeModelArgument(config.selection)];
+    this.extraArgs = ["--model", claudeModelArgument(config.selection),
+      ...(options.skillPluginDir === undefined ? [] : ["--plugin-dir", options.skillPluginDir])];
+    this.command = options.skillPluginDir === undefined ? config.installation.command
+      : config.installation.command.filter((arg) => arg !== "--disable-slash-commands");
   }
 
   private async run(request: ClaudePhaseRequest, call: ClaudeCall): Promise<Outcome> {
@@ -133,7 +140,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     const persist = async (): Promise<Outcome> => {
       await save("outcome.json", JSON.stringify({
         reason: result.reason, code: result.code, signal: result.signal, evidenceDir,
-        runner, claudeCommand: installation.command, extraArgs: this.extraArgs, configDir: installation.configDir,
+        runner, claudeCommand: this.command, extraArgs: this.extraArgs, configDir: installation.configDir,
         ioError, stdoutTruncated, stderrTruncated, observedUsagePath: join(evidenceDir, OBSERVED_USAGE_FILE),
       }, null, 2));
       return result;
@@ -146,7 +153,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     // The environment is not recorded in request.json (spec M6); outcome.json names the command and arguments.
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      CCLOOP_CLAUDE_COMMAND: JSON.stringify(installation.command),
+      CCLOOP_CLAUDE_COMMAND: JSON.stringify(this.command),
       CCLOOP_CLAUDE_EXTRA_ARGS: JSON.stringify(this.extraArgs),
       CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: join(evidenceDir, OBSERVED_USAGE_FILE),
     };

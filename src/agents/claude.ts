@@ -74,7 +74,7 @@ export const claudeDescriptor: AgentDescriptor = {
   singleCallExecution() {
     return "v1";
   },
-  createAdapter(config) {
-    return new ClaudeAgentAdapter(config);
+  createAdapter(config, options) {
+    return new ClaudeAgentAdapter(config, options);
   },
 };

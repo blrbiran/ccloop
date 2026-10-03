@@ -86,6 +86,11 @@ export async function acceptStart(
   if (input.work.kind === "single-call" && getDescriptor(config.kind).singleCallExecution(config) === null) {
     throw new ControlProtocolError("single-call-unsupported");
   }
+  // Orca syncskill integration (2026-10-03), spec §10.7: only claude has a verified way to load a skill plugin directory
+  // (--plugin-dir); refused here, before anything is persisted, even when Orca's preflight let it through.
+  if (input.work.kind === "loop" && input.work.skillPluginDir !== undefined && config.kind !== "claude") {
+    throw new ControlProtocolError("skills-unsupported-agent");
+  }
 
   const proposed: AcceptedRecordV1 = {
     protocol: 1,

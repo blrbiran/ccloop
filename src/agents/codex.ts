@@ -54,7 +54,7 @@ export const codexDescriptor: AgentDescriptor = {
   singleCallExecution() {
     return null;
   },
-  createAdapter(config) {
+  createAdapter(config, _options) {
     const { configDir } = config.installation;
     return new CodexAdapter(toCodexConfig(config), configDir === null ? undefined : { CODEX_HOME: configDir });
   },

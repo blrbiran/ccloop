@@ -331,3 +331,56 @@ describe("control protocol v1", () => {
     expect(() => parseControlRequest("accept", { ...single, work: { ...single.work, sourceDir: "relative" } })).toThrow("control-request-invalid");
   });
 });
+
+// Orca syncskill integration (2026-10-03), spec 10.7 and 4.4: `work.skillPluginDir` on the loop work. Additive only.
+describe("loop work skillPluginDir (Orca syncskill integration)", () => {
+  // The envelope's identity is its canonical hash; an envelope that does not carry the field must hash as it did before
+  // the field existed. GOLDEN: computed at ccloop 85a9564 (before the schema change) from this fixed envelope.
+  it("leaves the canonical hash of an envelope without the field unchanged", async () => {
+    const { envelope } = await fixture();
+    const fixed = { ...envelope, work: { ...envelope.work, targetRepo: "/fixed/repo", sourceDir: "/fixed/source", contract: { ...(envelope.work as { contract: object }).contract, context: { ...(envelope.work as { contract: { context: object } }).contract.context, repoPath: "/fixed/repo" } } } };
+    expect(canonicalHash(fixed)).toBe("032325fb451b1403ba45b211630306a2c8c961e707d872f48989c9893b71bf80");
+  });
+
+  it("parses an existing canonical directory and keeps the field", async () => {
+    const { root, envelope } = await fixture();
+    const dir = join(root, "skill-plugin");
+    await mkdir(dir);
+    const withDir = { ...envelope, work: { ...envelope.work, skillPluginDir: dir } };
+    expect(parseControlRequest("accept", withDir)).toEqual(withDir);
+  });
+
+  it("refuses a relative path for every method that carries the envelope", async () => {
+    const { envelope } = await fixture();
+    const bad = { ...envelope, work: { ...envelope.work, skillPluginDir: "relative/dir" } };
+    const request = { protocol: 1 as const, requestId: "r", runId: "run-1", generation: 1, reason: "budget" as const, deadlineAt: "2026-09-19T10:00:00+08:00" };
+    expect(() => parseControlRequest("accept", bad)).toThrow("control-request-invalid");
+    expect(() => parseControlRequest("inspect", bad)).toThrow("control-request-invalid");
+    expect(() => parseControlRequest("handoff", { input: bad, request })).toThrow("control-request-invalid");
+    expect(() => parseControlRequest("collect", { input: bad, afterSeq: 0 })).toThrow("control-request-invalid");
+    expect(() => parseControlRequest("read-evidence", { input: bad, ref: { artifactId: "a", hash: "c".repeat(64) } })).toThrow("control-request-invalid");
+  });
+
+  it("requires an existing canonical directory for accept only", async () => {
+    const { root, envelope } = await fixture();
+    const real = join(root, "real-plugin");
+    await mkdir(real);
+    const link = join(root, "link-plugin");
+    await symlink(real, link);
+    const gone = join(root, "removed-plugin");
+    const at = (skillPluginDir: string) => ({ ...envelope, work: { ...envelope.work, skillPluginDir } });
+    expect(() => parseControlRequest("accept", at(gone))).toThrow("control-request-invalid");
+    expect(() => parseControlRequest("accept", at(link))).toThrow("control-request-invalid");
+    // The directory goes away with the workspace after landing; later calls must still parse the same envelope.
+    expect(parseControlRequest("inspect", at(gone))).toEqual(at(gone));
+    expect(parseControlRequest("handoff", { input: at(gone), request: { protocol: 1, requestId: "r", runId: "run-1", generation: 1, reason: "budget", deadlineAt: "2026-09-19T10:00:00+08:00" } }).input).toEqual(at(gone));
+    expect(parseControlRequest("collect", { input: at(gone), afterSeq: 0 }).input).toEqual(at(gone));
+    expect(parseControlRequest("read-evidence", { input: at(gone), ref: { artifactId: "a", hash: "c".repeat(64) } }).input).toEqual(at(gone));
+  });
+
+  it("does not take the field on a single-call work", async () => {
+    const { root, envelope } = await fixture();
+    const call = singleCallOf(root, envelope);
+    expect(() => parseControlRequest("accept", { ...call, work: { ...call.work, skillPluginDir: root } })).toThrow("control-request-invalid");
+  });
+});
