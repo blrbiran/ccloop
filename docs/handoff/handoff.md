@@ -407,19 +407,18 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-03 第四十二版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-04 第四十三版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
-## 最近一轮（Orca 会话 `9d95e6c8`，2026-10-03）：本仓库零改动；Orca 已重钉到 `2b380ea`，并在真 claude 下付费跑通一次带 skills 的任务
+## 最近一轮（Orca 会话 `08011394`，2026-10-04）：本仓库零改动，Orca 仍钉 `2b380ea`
 
-- Orca 接下来排的几件（面板的项目切换、Task control 页不停刷新、README 已改为面向 Web 面板）都只在 Orca 仓，不需要本仓库新行为。
+- Orca 只改了自己的面板：Task control 页每 2 秒清一次缓存的循环（修了）、读视图按 `localeCompare` 排序导致的 423／500（修了）、全局项目切换（做了）。都不需要本仓库的新行为。
+- 门里本仓库只作为 `ORCA_CCLOOP_BIN`（`2b380ea` 的干净 clone build）被调用，没有在它上面做变异。
+- 再往前一轮（Orca 会话 `9d95e6c8`）的结论仍成立：Orca 在 confirm／set-task-loop 用本仓库 `listAgents` 答的 kind 拒掉「带 skills 但不是 claude」的任务，本仓库 `acceptStart` 的 `skills-unsupported-agent` 是兜底；真 claude 下带 skills 的付费跑（n＝1）细节在 Orca spec `docs/superpowers/specs/2026-10-03-syncskill-integration-design.md` §12.3。
 
-- Orca 现在在 confirm／set-task-loop 就用本仓库 `listAgents` 答的 kind 拒掉「带 skills 但不是 claude」的任务；本仓库 `acceptStart` 的 `skills-unsupported-agent` 仍是兜底（确认后安装表被改的情况）。
-- 付费跑（n＝1，claude 2.1.288、claude-opus-5-5）：standard 方案一个任务，plan＋execute 两次调用都带 `--plugin-dir`、都没有 `--disable-slash-commands`；execute 调了 `Skill orca-run-skills:orca-live-marker` 并写出 skill 里才有的口令；claude 自报 $0.3157524，本仓库报 106,008 token。细节在 Orca spec `docs/superpowers/specs/2026-10-03-syncskill-integration-design.md` §12.3。
-
-## 上一轮（Orca 会话 `08b1007d`，2026-10-03）：Orca 接 syncskill，本仓库三笔（人已推）
+## 本仓库被 Orca 用上的 syncskill 一轮（Orca 会话 `08b1007d`，2026-10-03）：本仓库三笔（人已推）
 
 - 三笔（按主题行找）：`feat(control): carry a skill plugin dir on the loop work and load it into claude (Orca syncskill integration)`；`test(control): retry the temp-dir removal in the skillPluginDir accept test …`；`test(control): hash the schema's output in the skillPluginDir envelope-hash golden`。
 - 行为：protocol 3 的 loop work 多一个可选字段 `skillPluginDir`（绝对路径）。`accept` 时它必须是已存在的规范目录；`inspect`／`handoff`／`collect`／`read-evidence` 只查是否绝对路径（目录会随 Orca 的工作区一起删）。非 claude 的安装 ⇒ `acceptStart` 在落盘前拒 `skills-unsupported-agent`（退 2）。claude adapter 对这种 run 的三个 phase 都加 `--plugin-dir <dir>`、并从安装命令里去掉 `--disable-slash-commands`；不带这个字段时 argv 与信封哈希逐字节同前。字段不进 `MaterializedAgentConfigV1`（那是封存并核哈希的），worker 从 `envelope.json` 读，再作为单独选项交给 adapter。
@@ -464,5 +463,5 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
 ## awaitingHuman
 
-- **推送**：本仓库只有本节的文档笔；Orca 那边有重钉与跟进几笔，由人推。以现跑 `ls-remote` 为准。
+- **推送**：本仓库远端之后只有本节的文档笔（Orca 那条线的几版）；Orca 那边有会话 `08011394` 的修复与项目切换几笔，由人推。两仓推送没有先后约束（Orca 钉的 `2b380ea` 远端已有）。以现跑 `ls-remote` 为准。
 - 下一件由人选（Orca handoff §4.0）。与本仓库有关的候选：codex 的 skill 支持（H6）；§5.1 与「reaper 杀活 claude」的真 claude 验收；`setTimeout` 溢出防护；两条新 flake 进不进 `check-known-reds` 名单。
