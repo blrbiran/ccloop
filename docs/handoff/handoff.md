@@ -407,15 +407,15 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-03 第三十八版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-03 第三十九版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
-## 最近几轮（Orca 会话 `184d0372`、`6a4dd7f3`，2026-10-03）：N5 记忆区及其三条小尾巴、看板的依赖关系图与 Git 区，**本仓库零改动**
+## 最近几轮（Orca 会话 `16ab00f2`，2026-10-03）：面板 HTTP 在真 claude 下跑通一次、syncskill 补三件，**本仓库零改动**
 
-记忆区只读 ccmem，看板只读 Orca 自己的控制面，都不经过 ccloop。本仓库这几轮只多了本节的文档提交。Orca 仍钉 `ae2caa3`，没有重钉。Orca 夹具里那次 `estimateE2E` 撕裂读已在 Orca 侧修掉（与本仓库无关）。
-⚠️ **人已排定 Orca 的下一个会话**：其中一件是「面板 HTTP 这条路在真 agent 下跑一次」，会经过本仓库（`ae2caa3`）起真 claude／codex；另一件是 syncskill 补三件，不碰本仓库。
+- **面板 HTTP 真 agent 验收经过了本仓库**：Orca 的 `scripts/live-panel-http-acceptance.ts` 起真 `orca panel`，全程经 HTTP 派一个任务；`ORCA_CCLOOP_BIN` 指向本仓库一份 `git clone --local` 在 `ae2caa3`（Orca 钉的那个 SHA）上的 build。真 claude 2.1.288 下 plan／execute／verify 三次调用都有用量，Orca 账本与本仓库报的 token 数相等（165,610），任务落地，面板 SIGTERM 后无残留进程组；claude 自报 $0.545137，n＝1。台账在 Orca 仓 `.superpowers/sdd/2026-10-03-panel-http-live/progress.md`。
+- syncskill 那一轮只改 syncskill 仓，不经过本仓库。Orca 仍钉 `ae2caa3`，没有重钉。
 
 ## 本仓库最近被 Orca 用上的一轮：被杀的 run 能续跑 ＋ 孤儿 runner 收 ＋ R-A ＋ R-B（Orca 会话 `ece96b67`，2026-10-02）
 
@@ -459,4 +459,4 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 ## awaitingHuman
 
 - 推送：以现跑 `ls-remote` 为准；本仓库先于 Orca。
-- 下一件由人选（Orca handoff §4.0 第 2 条）。与本仓库有关的候选：§5.1 与「reaper 杀活 claude」的真 claude 验收；`setTimeout` 溢出防护；两条新 flake 进不进 `check-known-reds` 名单。
+- 下一件由人选（Orca handoff §4.0）。与本仓库有关的候选（未变）：§5.1 与「reaper 杀活 claude」的真 claude 验收；`setTimeout` 溢出防护；两条新 flake 进不进 `check-known-reds` 名单。
