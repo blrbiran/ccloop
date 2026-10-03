@@ -407,12 +407,14 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-03 第四十一版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-03 第四十二版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
 ## 最近一轮（Orca 会话 `9d95e6c8`，2026-10-03）：本仓库零改动；Orca 已重钉到 `2b380ea`，并在真 claude 下付费跑通一次带 skills 的任务
+
+- Orca 接下来排的几件（面板的项目切换、Task control 页不停刷新、README 已改为面向 Web 面板）都只在 Orca 仓，不需要本仓库新行为。
 
 - Orca 现在在 confirm／set-task-loop 就用本仓库 `listAgents` 答的 kind 拒掉「带 skills 但不是 claude」的任务；本仓库 `acceptStart` 的 `skills-unsupported-agent` 仍是兜底（确认后安装表被改的情况）。
 - 付费跑（n＝1，claude 2.1.288、claude-opus-5-5）：standard 方案一个任务，plan＋execute 两次调用都带 `--plugin-dir`、都没有 `--disable-slash-commands`；execute 调了 `Skill orca-run-skills:orca-live-marker` 并写出 skill 里才有的口令；claude 自报 $0.3157524，本仓库报 106,008 token。细节在 Orca spec `docs/superpowers/specs/2026-10-03-syncskill-integration-design.md` §12.3。
@@ -462,5 +464,5 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
 ## awaitingHuman
 
-- **推送**：本仓库只有本节这一笔文档；Orca 那边有重钉与跟进几笔，由人推。以现跑 `ls-remote` 为准。
+- **推送**：本仓库只有本节的文档笔；Orca 那边有重钉与跟进几笔，由人推。以现跑 `ls-remote` 为准。
 - 下一件由人选（Orca handoff §4.0）。与本仓库有关的候选：codex 的 skill 支持（H6）；§5.1 与「reaper 杀活 claude」的真 claude 验收；`setTimeout` 溢出防护；两条新 flake 进不进 `check-known-reds` 名单。
