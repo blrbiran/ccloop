@@ -407,12 +407,17 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-03 第四十版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-03 第四十一版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
-## 最近一轮（Orca 会话 `08b1007d`，2026-10-03）：Orca 接 syncskill，**本仓库有三笔，都只在本地，等人推**
+## 最近一轮（Orca 会话 `9d95e6c8`，2026-10-03）：本仓库零改动；Orca 已重钉到 `2b380ea`，并在真 claude 下付费跑通一次带 skills 的任务
+
+- Orca 现在在 confirm／set-task-loop 就用本仓库 `listAgents` 答的 kind 拒掉「带 skills 但不是 claude」的任务；本仓库 `acceptStart` 的 `skills-unsupported-agent` 仍是兜底（确认后安装表被改的情况）。
+- 付费跑（n＝1，claude 2.1.288、claude-opus-5-5）：standard 方案一个任务，plan＋execute 两次调用都带 `--plugin-dir`、都没有 `--disable-slash-commands`；execute 调了 `Skill orca-run-skills:orca-live-marker` 并写出 skill 里才有的口令；claude 自报 $0.3157524，本仓库报 106,008 token。细节在 Orca spec `docs/superpowers/specs/2026-10-03-syncskill-integration-design.md` §12.3。
+
+## 上一轮（Orca 会话 `08b1007d`，2026-10-03）：Orca 接 syncskill，本仓库三笔（人已推）
 
 - 三笔（按主题行找）：`feat(control): carry a skill plugin dir on the loop work and load it into claude (Orca syncskill integration)`；`test(control): retry the temp-dir removal in the skillPluginDir accept test …`；`test(control): hash the schema's output in the skillPluginDir envelope-hash golden`。
 - 行为：protocol 3 的 loop work 多一个可选字段 `skillPluginDir`（绝对路径）。`accept` 时它必须是已存在的规范目录；`inspect`／`handoff`／`collect`／`read-evidence` 只查是否绝对路径（目录会随 Orca 的工作区一起删）。非 claude 的安装 ⇒ `acceptStart` 在落盘前拒 `skills-unsupported-agent`（退 2）。claude adapter 对这种 run 的三个 phase 都加 `--plugin-dir <dir>`、并从安装命令里去掉 `--disable-slash-commands`；不带这个字段时 argv 与信封哈希逐字节同前。字段不进 `MaterializedAgentConfigV1`（那是封存并核哈希的），worker 从 `envelope.json` 读，再作为单独选项交给 adapter。
@@ -422,7 +427,7 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
 ## 🔗 Orca 通过 git 依赖钉住本仓库
 
-- Orca `package.json` 仍是：`"ccloop": "github:blrbiran/ccloop#ae2caa3b483735c706e9914bb977c3ddbc33432b"`。**上面三笔需要先由人推本仓库，Orca 的 agent 再重钉**（`node scripts/pin-ccloop.mjs <SHA>`，只能钉 GitHub 上已有的 SHA）。重钉之前，Orca 带 skills 的 run 用钉住的旧 ccloop 会被拒（strict schema 不认这个字段），这是有意的大声失败；开发与门走 `ORCA_CCLOOP_BIN`。
+- Orca `package.json` 现在是：`"ccloop": "github:blrbiran/ccloop#2b380ea5b59056e37e5148ebb7af1d7ed9e4d826"`（Orca 会话 `9d95e6c8` 重钉，`pin-ccloop.mjs` 七项全 ok）。下次本仓库有 Orca 要用的新行为：人先推本仓库，Orca 的 agent 再 `node scripts/pin-ccloop.mjs <SHA>`；开发与门走 `ORCA_CCLOOP_BIN`。
 - Orca 的 `npm run verify` 有 `verify:ccloop-pin`。⚠️ `files` 之外的运行时读取会让装好的包坏掉（`tests/packaging/gitDependency.test.ts` 会红）。
 
 ## Orca 对本仓库行为的依赖（**零改动，只是知情**）
@@ -431,7 +436,7 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 - Orca 方案 v2 默认值：`maxFilesTouched` `Number.MAX_SAFE_INTEGER`、`perAttemptTimeoutMs` 3 小时、`partialOutcomeRecoveryWindowMs` 60,000（`PARTIAL_FLUSH_MARGIN_MS` 在 Orca 手抄一份——改这个数要同时改 Orca）。
 - Orca N1 走 `single-call`（protocol 3）；fake claude 的 `single-call-queue` 按序回放。fake codex 恒报改了 `answer.txt`；Orca 的门里夹具表 fake codex 用 `integration` 模式。
 - worker 起的 runner 随 worker 死；never-started 记 0；Orca 控制 run 被 `ccloop resume` 拒；codex `error` partial 进 verify。
-- Orca 只认安装 id，不读安装表、不冻结 kind ⇒ **「这个 agent 是不是 claude」只有本仓库的 `acceptStart` 能判**。改这条要同时改 Orca。
+- Orca 只认安装 id、不读安装表文件；kind 取自本仓库 `listAgents` 的应答（Orca 会话 `9d95e6c8` 起，confirm／set-task-loop 用它拒带 skills 的非 claude 任务）。`listAgents` 应答里的 `kind` 字段若改名或改值，要同时改 Orca。
 
 ## 本仓库较早被 Orca 用上的一轮：被杀的 run 能续跑 ＋ 孤儿 runner 收 ＋ R-A ＋ R-B（Orca 会话 `ece96b67`，2026-10-02）
 
@@ -457,5 +462,5 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
 ## awaitingHuman
 
-- **推送**：本仓库上面三笔先推，Orca 再推；推完本仓库后 Orca 的 agent 重钉。以现跑 `ls-remote` 为准。
+- **推送**：本仓库只有本节这一笔文档；Orca 那边有重钉与跟进几笔，由人推。以现跑 `ls-remote` 为准。
 - 下一件由人选（Orca handoff §4.0）。与本仓库有关的候选：codex 的 skill 支持（H6）；§5.1 与「reaper 杀活 claude」的真 claude 验收；`setTimeout` 溢出防护；两条新 flake 进不进 `check-known-reds` 名单。
