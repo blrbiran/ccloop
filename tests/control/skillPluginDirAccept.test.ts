@@ -20,7 +20,7 @@ afterEach(async () => {
     for (const deadline = Date.now() + 10_000; pid !== undefined && Date.now() < deadline; await new Promise((r) => setTimeout(r, 20))) {
       try { process.kill(pid, 0); } catch { break; }
     }
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });
 
