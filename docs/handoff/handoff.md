@@ -407,14 +407,15 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-03 第三十七版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-03 第三十八版**；整节替换上一版，**不追加子会话日志**）
 
 ⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
-## 最近两轮（Orca 会话 `184d0372`、`6a4dd7f3`，2026-10-03）：Orca 做了 N5 记忆区及其三条小尾巴，**本仓库零改动**
+## 最近几轮（Orca 会话 `184d0372`、`6a4dd7f3`，2026-10-03）：N5 记忆区及其三条小尾巴、看板的依赖关系图与 Git 区，**本仓库零改动**
 
-记忆区只读 ccmem，不经过 ccloop。本仓库这两轮只多了本节的文档提交。Orca 仍钉 `ae2caa3`，没有重钉。`6a4dd7f3` 的门用的是 `ae2caa3` 的 clone build，全量里多红一次 Orca 自己夹具的撕裂读（`estimateE2E`，与本仓库无关，见 Orca handoff §三）。
+记忆区只读 ccmem，看板只读 Orca 自己的控制面，都不经过 ccloop。本仓库这几轮只多了本节的文档提交。Orca 仍钉 `ae2caa3`，没有重钉。Orca 夹具里那次 `estimateE2E` 撕裂读已在 Orca 侧修掉（与本仓库无关）。
+⚠️ **人已排定 Orca 的下一个会话**：其中一件是「面板 HTTP 这条路在真 agent 下跑一次」，会经过本仓库（`ae2caa3`）起真 claude／codex；另一件是 syncskill 补三件，不碰本仓库。
 
 ## 本仓库最近被 Orca 用上的一轮：被杀的 run 能续跑 ＋ 孤儿 runner 收 ＋ R-A ＋ R-B（Orca 会话 `ece96b67`，2026-10-02）
 
