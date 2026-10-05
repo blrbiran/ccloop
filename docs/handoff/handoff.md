@@ -414,12 +414,13 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
 ## 最近一轮（Orca H6 Codex skills，会话 `01a10a08`，2026-10-05）：本地实现，未重钉
 
-- 只在 `/private/tmp/orca-h6-ccloop` 的 `codex/codex-skill-support` 分支工作；原 ccloop checkout 未改。主题行：`feat(control): accept Codex skill snapshot path for protocol 3`；`feat(codex): own temporary skill links through phase cleanup`；`fix(codex): contain interrupted skill cleanup in result publication`。
+- 只在 `/private/tmp/orca-h6-ccloop` 的 `codex/codex-skill-support` 分支工作；原 ccloop checkout 未改。主题行：`feat(control): accept Codex skill snapshot path for protocol 3`；`feat(codex): own temporary skill links through phase cleanup`；`fix(codex): contain interrupted skill cleanup in result publication`；`fix(codex): finish skill cleanup before timeout and handoff classification`；`test(codex): cover snapshot containment and parent replacement`。
 - protocol 3 增加 `work.codexSkillsDir`，与 Claude 的 `skillPluginDir` 互斥并按 kind 配对。每个 Codex phase 临时添加 `.agents/skills/<name>` 链接；原有内容不变，同名冲突／非真实父目录拒绝。只清理精确 owned／same-run stale 链接，等 child close 后清理；清理失败／中断由 sibling pending 标记挡住 git add。失败物化只复制 base，让 Orca 收到稳定 `codex-skills-*` 原因。
 - 实际 codex-cli 0.160.0 离线 exec RC 0：localhost `/v1/responses` 两次请求，后续请求带 skill marker；无关旧 skill 字节相同。材料／命令 `/private/tmp/orca-h6-probe/`。没有访问真实 Codex home／凭据或付费外部模型。
-- 干净验证 clone `/private/tmp/orca-h6-verify-ccloop`：`npm run build`、`npm run typecheck` RC 0；focused 19 files／153 passed／0 skipped。`npm run verify:control` RC 1，46 files／458 passed／1 failed／0 skipped；唯一失败仍为已登记 `quiet execution proof > does not treat leader exit as group quiet and proves only after the full tree is gone`（stopProof 超时），没有改其判据。观测命令、提交与完整日志在 Orca H6 ledger，不能报全绿。
-- Orca fake E2E 4/4、0 skipped，三阶段读取／legacy 保留／冲突拒绝／清理失败不发布。resume 覆盖共同清理助手，未做真模型被杀验收。最终 Orca 闸门和 review 以 Orca handoff §4.0.q 为准。
-- 人先核对／推送本地 ccloop 提交，再授权 Orca 重钉精确 SHA；Orca 当前 pin 仍 `2b380ea`，旧版不会接受新字段。本轮没有 push、没有重启人的面板；远端发布状态未在本轮核实。
+- 最终干净验证 clone `/private/tmp/orca-h6-final2-ccloop`：`npm run build`、`npm run typecheck` RC0；全量 118 files／1186 passed／2 failed／0 skipped、RC1。两红均在既有 known-red roster：`quiet execution proof > does not treat leader exit as group quiet and proves only after the full tree is gone`、`matches historical double-space start identities on single-digit days`；检查器 RC0、unexpected 0。没有改既有判据，不能报全绿。初次 focused 19 files／153 passed／0 skipped，初次 control 46 files／458 passed／1 failed／0 skipped；完整命令与观测提交在 Orca H6 ledger。 最终 focused 21 files／169 passed／0 skipped、RC0。
+- 唯一 fresh 终审提出两项 Important：plan／verify 外层 timeout 未等 close；execute timeout／handoff 覆盖 skills 异常。已在一次修复中处理，新增真实 controller／worker 判据 13/13 先 RED 后 GREEN、0 skipped；无 actionable Minor。27 个具名删除变异抓红；补充 containment／规范目录尾斜杠／替换父目录三条判据，helper 17/17。临时残留检查 helper/controller/worker 30 条全过，内层 Vitest RC0，0 残留。原始证据、所有执行者裁定与边界仍在 Orca H6 ledger。
+- Orca fake E2E 4/4、0 skipped，三阶段读取／legacy 保留／冲突拒绝／清理失败不发布。resume 覆盖共同清理助手，未做真模型被杀验收。Orca 全量 2796 passed／6 skipped／0 failed；修复后 control 1315 passed／4 skipped／0 failed。最终完整闸门和 review 以 Orca handoff §4.0.q 为准。
+- 人先核对／推送本地 ccloop 提交，再授权 Orca 重钉精确 SHA；Orca 当前 pin 仍 `2b380ea`，旧版不会接受新字段。本轮没有 push、没有重启人的面板；远端发布状态未在本轮核实。 clone origin 为本地原仓路径，原仓配置远端 https://github.com/blrbiran/ccloop.git；人应核对后决定如何发布。Orca H6 ledger 目录保存本轮 ccloop Git bundle 作为恢复材料。
 
 ## 前一轮（Orca 项目注册表，2026-10-05）：本仓库零改动，依赖仍钉 `2b380ea`
 
