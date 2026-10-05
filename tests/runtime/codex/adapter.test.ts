@@ -1,4 +1,5 @@
-import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { CodexAdapter } from "../../../src/runtime/codex/codexAdapter.js";
 import { codexFixture } from "./fixture.js";
@@ -19,4 +20,11 @@ describe("Codex runtime adapter",()=>{
   it("preserves partial execution without synthesizing completion",async()=>{
     const f=await fixture("partial");expect(await new CodexAdapter(f.config).execute(f.context)).toMatchObject({completionStatus:"partial",failureType:"error",failureMessage:"fixture partial",tokenUsage:15});
   });
+});
+
+it("does not hide cleanup failure behind an aborted execute result",async()=>{
+ const f=await fixture("ignore-term");const skills=join(f.dir,"snapshot","skills");await mkdir(join(skills,"selected"),{recursive:true});await writeFile(join(skills,"selected/SKILL.md"),"unique");
+ const a=new AbortController();const adapter=new CodexAdapter(f.config,{FAKE_CODEX_SKILL_PATH:".agents/skills/selected/SKILL.md",FAKE_CODEX_REPLACE_SKILL:"1"},skills);
+ const p=adapter.execute({...f.context,abortSignal:a.signal});const assertion=expect(p).rejects.toThrow("codex-skills-cleanup-failed:");
+ await expect.poll(()=>readFile(f.marker+".skills","utf8").catch(()=>null)).toBe("unique");a.abort();await assertion;
 });

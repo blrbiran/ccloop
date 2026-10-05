@@ -4,19 +4,20 @@ import { mkdir, mkdtemp, open, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
+import { withCodexSkillLinks } from "./codexSkills.js";
 import type { AttemptContext } from "../types.js";
 import { observedTurnUsage, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
 
 export type PhaseRequest = {phase:CodexPhase;prompt:string;context:AttemptContext};
 export type PhaseOutcome = {
-  reason:"completed"|"aborted"|"timeout"|"spawn-error"|"exit-error"|"output-limit"|"io-error";
+  reason:"completed"|"aborted"|"timeout"|"spawn-error"|"exit-error"|"output-limit"|"io-error"|`codex-skills-${string}`;
   code:number|null;signal:NodeJS.Signals|null;events:string;final:string|null;evidenceDir:string;
   // Orca handoff delivery C-3: usage observed in the stdout of a phase that did not complete; null otherwise.
   observedTokens:number|null;
 };
 const LIMIT=16*1024*1024;
 const execFileAsync=promisify(execFile);
-export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, extraEnv?:Record<string,string>):Promise<PhaseOutcome> {
+export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, extraEnv?:Record<string,string>, codexSkillsDir?:string):Promise<PhaseOutcome> {
   const {context,phase}=request;
   const root=join(context.runDir,"codex",String(context.attempt),phase);
   await mkdir(root,{recursive:true,mode:0o700});
@@ -43,7 +44,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   await save("schema.json",JSON.stringify(wireSchema));
   // Pre-create files with private permissions before handing paths to the CLI.
   await save("final.json","");await save("events.jsonl","");await save("stderr.log","");logsCreated=true;
-  await new Promise<void>(resolve=>{
+  const runChild = async () => new Promise<void>(resolve=>{
     const child=spawn(config.command[0],args,{cwd:context.worktreePath,detached:true,stdio:["pipe","pipe","pipe"],env:{...process.env,...extraEnv}});
     const out=new StringDecoder("utf8"),err=new StringDecoder("utf8");
     let outBytes=0,errBytes=0,done=false,exited=false;
@@ -56,7 +57,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       context.abortSignal?.removeEventListener("abort",abort);
       result.events+=out.end();stderr+=err.end();
       child.stdin.destroy();child.stdout.destroy();child.stderr.destroy();
-      resolve();
+      // close resolves the phase only after pipes and the child have settled.
     };
     const stop=(reason:PhaseOutcome["reason"])=>{
       if(done||killTimer)return;
@@ -83,7 +84,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       if(result.reason==="completed"&&(code!==0||signal!==null))result.reason="exit-error";
       if(!done)drainTimer=setTimeout(finish,1000);
     });
-    child.on("close",finish);
+    child.on("close",()=>{finish();resolve();});
     context.abortSignal?.addEventListener("abort",abort,{once:true});
     if(context.abortSignal?.aborted)abort();
     child.once("spawn",()=>{
@@ -99,6 +100,14 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       })();
     });
   });
+  try {
+    if (codexSkillsDir === undefined) await runChild();
+    else await withCodexSkillLinks(context.worktreePath,codexSkillsDir,runChild);
+  } catch (error) {
+    const reason = (error as Error).message;
+    if (!reason.startsWith("codex-skills-")) throw error;
+    result.reason = reason as `codex-skills-${string}`;
+  }
   if(result.reason==="completed") {
     try {
       const file=await open(finalPath,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);

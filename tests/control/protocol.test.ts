@@ -390,3 +390,59 @@ describe("loop work skillPluginDir (Orca syncskill integration)", () => {
     expect(() => parseControlRequest("accept", { ...call, work: { ...call.work, skillPluginDir: root } })).toThrow("control-request-invalid");
   });
 });
+
+describe("loop work codexSkillsDir (Orca H6 Codex skill support)", () => {
+  it("parses and retains a canonical skills directory, without changing the absent-field hash", async () => {
+    const { root, envelope } = await fixture();
+    const dir = join(root, "frozen-skills", "skills");
+    await mkdir(dir, { recursive: true });
+    const withDir = { ...envelope, work: { ...envelope.work, codexSkillsDir: dir } };
+    expect(parseControlRequest("accept", withDir)).toEqual(withDir);
+    expect(parseControlRequest("inspect", withDir)).toEqual(withDir);
+    const parsed = parseControlRequest("accept", envelope) as LoopStartEnvelope;
+    const pin = (value: LoopStartEnvelope) => ({
+      ...value,
+      work: {
+        ...value.work,
+        targetRepo: "/fixed/repo",
+        sourceDir: "/fixed/source",
+        contract: { ...value.work.contract, context: { ...value.work.contract.context, repoPath: "/fixed/repo" } },
+      },
+    });
+    expect(canonicalHash(pin(parsed))).toBe("032325fb451b1403ba45b211630306a2c8c961e707d872f48989c9893b71bf80");
+  });
+
+  it("requires an absolute path on every method and an existing canonical directory at accept", async () => {
+    const { root, envelope } = await fixture();
+    const real = join(root, "real-skills");
+    await mkdir(real);
+    const link = join(root, "linked-skills");
+    await symlink(real, link);
+    const missing = join(root, "missing-skills");
+    const at = (codexSkillsDir: string) => ({ ...envelope, work: { ...envelope.work, codexSkillsDir } });
+    const request = { protocol: 1 as const, requestId: "r", runId: "run-1", generation: 1, reason: "budget" as const, deadlineAt: "2026-09-19T10:00:00+08:00" };
+    for (const raw of [at("relative/skills"), at(missing), at(link)]) {
+      expect(() => parseControlRequest("accept", raw)).toThrow("control-request-invalid");
+    }
+    expect(() => parseControlRequest("inspect", at("relative/skills"))).toThrow("control-request-invalid");
+    expect(() => parseControlRequest("handoff", { input: at("relative/skills"), request })).toThrow("control-request-invalid");
+    expect(() => parseControlRequest("collect", { input: at("relative/skills"), afterSeq: 0 })).toThrow("control-request-invalid");
+    expect(() => parseControlRequest("read-evidence", { input: at("relative/skills"), ref: { artifactId: "a", hash: "c".repeat(64) } })).toThrow("control-request-invalid");
+    expect(parseControlRequest("inspect", at(missing))).toEqual(at(missing));
+    expect(parseControlRequest("handoff", { input: at(missing), request }).input).toEqual(at(missing));
+    expect(parseControlRequest("collect", { input: at(missing), afterSeq: 0 }).input).toEqual(at(missing));
+    expect(parseControlRequest("read-evidence", { input: at(missing), ref: { artifactId: "a", hash: "c".repeat(64) } }).input).toEqual(at(missing));
+  });
+
+  it("refuses the Codex-only field on single-call work and refuses both skill paths together", async () => {
+    const { root, envelope } = await fixture();
+    const dir = join(root, "frozen-skills");
+    const pluginDir = join(root, "skill-plugin");
+    await mkdir(dir);
+    await mkdir(pluginDir);
+    const both = { ...envelope, work: { ...envelope.work, skillPluginDir: pluginDir, codexSkillsDir: dir } };
+    expect(() => parseControlRequest("accept", both)).toThrow("control-request-invalid");
+    const single = singleCallOf(root, envelope);
+    expect(() => parseControlRequest("accept", { ...single, work: { ...single.work, codexSkillsDir: dir } })).toThrow("control-request-invalid");
+  });
+});

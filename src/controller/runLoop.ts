@@ -466,6 +466,11 @@ function getPhaseTimeoutMs(contract: LoopContract, state: RunState): number {
   return Math.min(contract.executionPolicy.perAttemptTimeoutMs, state.budgetSnapshot.timeRemainingMs);
 }
 
+function isCodexSkillFailure(error: unknown): boolean {
+  // PhaseExecutionError retains String(originalError), including its "Error: " prefix.
+  return error instanceof Error && /^(?:Error: )?codex-skills-/.test(error.message);
+}
+
 async function runPhaseWithTimeout<T>(
   timeoutMs: number,
   operation: (abortSignal: AbortSignal) => Promise<T>,
@@ -530,6 +535,8 @@ async function runPhaseWithTimeout<T>(
         const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, timeoutMs);
         return { timedOut: true, elapsedMs: timedOutElapsedMs, result };
       } catch (error) {
+        // H6 cleanup/setup failure is a failed phase, even when timeout initiated the abort.
+        if (isCodexSkillFailure(error)) throw error;
         const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, timeoutMs);
         return { timedOut: true, elapsedMs: timedOutElapsedMs, abortedError: error };
       }
@@ -1374,6 +1381,7 @@ export async function runLoopFromState(
       activePhase = "plan";
       const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal) =>
         attemptAdapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options)),
+        { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true },
       );
 
       if (handoffAborted()) {
@@ -1637,6 +1645,7 @@ export async function runLoopFromState(
           plan,
           completedExecution,
         ),
+        { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true },
       );
 
       if (handoffAborted()) {
@@ -1870,7 +1879,7 @@ export async function runLoopFromState(
           await settlePhase(activePhase, attempt, error.elapsedMs, error.tokenUsage === null ? undefined : { tokenUsage: error.tokenUsage }, true);
         }
 
-        if (handoffAborted() || handoffRequested()) {
+        if (!isCodexSkillFailure(error) && (handoffAborted() || handoffRequested())) {
           await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
           const interrupted = handoffAborted();
           return await persistHandoffBoundary(
@@ -1879,7 +1888,7 @@ export async function runLoopFromState(
           );
         }
 
-        if (execution !== null && isPartialExecutionResult(execution)) {
+        if (!isCodexSkillFailure(error) && execution !== null && isPartialExecutionResult(execution)) {
           await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
           const partialPathPolicy = evaluatePathPolicy({
             changedFiles: execution.changedFiles,

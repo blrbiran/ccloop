@@ -210,6 +210,8 @@ export type VerificationResult = {
 };
 
 export interface RuntimeAdapter {
+  /** H6: a phase owns filesystem cleanup that must finish before controller timeout cleanup. */
+  readonly awaitAbortedPhaseCleanup?: boolean;
   plan(context: AttemptContext): Promise<AttemptPlan>;
   execute(context: AttemptContext): Promise<ExecutePhaseResult>;
   verify(context: AttemptContext): Promise<VerificationResult>;

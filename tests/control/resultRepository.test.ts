@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile, symlink, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -71,4 +71,10 @@ describe("the result repository a control run materializes (Orca execution drive
     expect((await stat(join(destination, object))).nlink).toBeGreaterThanOrEqual(2);
     expect((await stat(join(destination, object))).ino).toBe((await stat(join(f.repo, object))).ino);
   });
+});
+
+it("materializes only base after interrupted skill cleanup, including a partly removed worktree",async()=>{
+ const f=await fixture();const attempt=join(f.runDir,"worktrees/attempt-1");await mkdir(join(attempt,".agents/skills"),{recursive:true});await writeFile(attempt+".codex-skills-pending","snapshot");await symlink(f.repo,join(attempt,".agents/skills/selected"));
+ const destination=await materializeResultRepository(f.envelope,f.runDir,1);
+ expect(await git(destination,"rev-parse","HEAD")).toBe(f.envelope.work.base);await expect(lstat(join(destination,".agents/skills/selected"))).rejects.toMatchObject({code:"ENOENT"});expect((await lstat(join(attempt,".agents/skills/selected"))).isSymbolicLink()).toBe(true);
 });

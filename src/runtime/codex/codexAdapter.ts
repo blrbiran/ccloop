@@ -17,15 +17,17 @@ export class CodexPhaseAborted extends Error {
 export class CodexAdapter implements RuntimeAdapter {
   private readonly config: CodexConfig;
   // Agent selection (2026-09-26): extraEnv carries the installation's config directory (CODEX_HOME) to the CLI.
-  constructor(rawConfig: unknown, private readonly extraEnv?: Record<string, string>) { this.config = parseCodexConfig(rawConfig); }
+  constructor(rawConfig: unknown, private readonly extraEnv?: Record<string, string>, private readonly codexSkillsDir?: string) { this.config = parseCodexConfig(rawConfig); }
+
+  get awaitAbortedPhaseCleanup(): boolean { return this.codexSkillsDir !== undefined; }
 
   private async phase<P extends CodexPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
-    const outcome = await runCodexPhase(this.config, { phase, prompt, context }, this.extraEnv);
+    const outcome = await runCodexPhase(this.config, { phase, prompt, context }, this.extraEnv, this.codexSkillsDir);
     if (outcome.reason === "aborted") throw new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens);
     if (outcome.reason !== "completed" || outcome.final === null) {
       // Orca ruling 26 (session c85d2c4e, 2026-09-28): as the aborted path, a phase that timed out or failed carries the
       // turn usage its stdout showed (runCodexPhase observes it for every outcome but completed), null when none.
-      throw Object.assign(new Error(`codex-${outcome.reason}: ${outcome.evidenceDir}`), { observedTokens: outcome.observedTokens });
+      throw Object.assign(new Error(`${outcome.reason.startsWith("codex-skills-") ? outcome.reason : `codex-${outcome.reason}`}: ${outcome.evidenceDir}`), { observedTokens: outcome.observedTokens });
     }
     try {
       const result = decodeCodexResult(phase, outcome.events, phase === "execute" ? JSON.stringify(z.object({result:z.unknown()}).strict().parse(JSON.parse(outcome.final)).result) : outcome.final);
@@ -43,6 +45,7 @@ export class CodexAdapter implements RuntimeAdapter {
     catch (error) {
       // An aborted execute that was observed spending tokens throws, so runLoop can settle that usage;
       // one that was not keeps answering null exactly as before.
+      if (error instanceof Error && error.message.startsWith("codex-skills-")) throw error;
       if (context.abortSignal?.aborted && !(error instanceof CodexPhaseAborted && error.observedTokens !== null)) return null;
       throw error;
     }
