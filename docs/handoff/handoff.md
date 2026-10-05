@@ -412,11 +412,20 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 ⚠️ 本节不写任何当前 HEAD 哈希（钉版本那一个除外，它是固定依赖）、不记无法核实的发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
-## 最近一轮（Orca 项目注册表，2026-10-05）：本仓库零改动，依赖仍钉 `2b380ea`
+## 最近一轮（Orca H6 Codex skills，会话 `01a10a08`，2026-10-05）：本地实现，未重钉
+
+- 只在 `/private/tmp/orca-h6-ccloop` 的 `codex/codex-skill-support` 分支工作；原 ccloop checkout 未改。主题行：`feat(control): accept Codex skill snapshot path for protocol 3`；`feat(codex): own temporary skill links through phase cleanup`；`fix(codex): contain interrupted skill cleanup in result publication`。
+- protocol 3 增加 `work.codexSkillsDir`，与 Claude 的 `skillPluginDir` 互斥并按 kind 配对。每个 Codex phase 临时添加 `.agents/skills/<name>` 链接；原有内容不变，同名冲突／非真实父目录拒绝。只清理精确 owned／same-run stale 链接，等 child close 后清理；清理失败／中断由 sibling pending 标记挡住 git add。失败物化只复制 base，让 Orca 收到稳定 `codex-skills-*` 原因。
+- 实际 codex-cli 0.160.0 离线 exec RC 0：localhost `/v1/responses` 两次请求，后续请求带 skill marker；无关旧 skill 字节相同。材料／命令 `/private/tmp/orca-h6-probe/`。没有访问真实 Codex home／凭据或付费外部模型。
+- 干净验证 clone `/private/tmp/orca-h6-verify-ccloop`：`npm run build`、`npm run typecheck` RC 0；focused 19 files／153 passed／0 skipped。`npm run verify:control` RC 1，46 files／458 passed／1 failed／0 skipped；唯一失败仍为已登记 `quiet execution proof > does not treat leader exit as group quiet and proves only after the full tree is gone`（stopProof 超时），没有改其判据。观测命令、提交与完整日志在 Orca H6 ledger，不能报全绿。
+- Orca fake E2E 4/4、0 skipped，三阶段读取／legacy 保留／冲突拒绝／清理失败不发布。resume 覆盖共同清理助手，未做真模型被杀验收。最终 Orca 闸门和 review 以 Orca handoff §4.0.q 为准。
+- 人先核对／推送本地 ccloop 提交，再授权 Orca 重钉精确 SHA；Orca 当前 pin 仍 `2b380ea`，旧版不会接受新字段。本轮没有 push、没有重启人的面板；远端发布状态未在本轮核实。
+
+## 前一轮（Orca 项目注册表，2026-10-05）：本仓库零改动，依赖仍钉 `2b380ea`
 
 - Orca 实现了 `~/.orca/projects.json` 项目注册表、侧栏新增／改名与全局选择；ccloop 协议与本仓库代码无改动。
 - 隔离 clone 使用 pinned ccloop build 和 fake codex integration 表；ccloop build、Orca `verify:ccloop-pin` 通过。全量 Vitest 有独立超时／ccmem errno 失败；未运行真 Claude 验收。
-- 更早一轮（Orca 会话 `9d95e6c8`）仍有效：Orca 在 confirm／set-task-loop 用 `listAgents` 的 kind 拒掉「带 skills 但不是 claude」的任务，`acceptStart` 的 `skills-unsupported-agent` 是兜底；带 skills 的真 Claude 付费跑（n＝1）见 Orca spec `docs/superpowers/specs/2026-10-03-syncskill-integration-design.md` §12.3。
+- 更早一轮（Orca 会话 `9d95e6c8`）的 Claude 验收仍有效：带 skills 的真 Claude 付费跑（n＝1）见 Orca spec `docs/superpowers/specs/2026-10-03-syncskill-integration-design.md` §12.3。旧版只允许 Claude 的 kind 限制由 H6 本地实现扩展为 Claude／Codex，尚待人推送／重钉。
 
 ## 本仓库被 Orca 用上的 syncskill 一轮（Orca 会话 `08b1007d`，2026-10-03）：本仓库三笔（人已推）
 
@@ -437,7 +446,7 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 - Orca 方案 v2 默认值：`maxFilesTouched` `Number.MAX_SAFE_INTEGER`、`perAttemptTimeoutMs` 3 小时、`partialOutcomeRecoveryWindowMs` 60,000（`PARTIAL_FLUSH_MARGIN_MS` 在 Orca 手抄一份——改这个数要同时改 Orca）。
 - Orca N1 走 `single-call`（protocol 3）；fake claude 的 `single-call-queue` 按序回放。fake codex 恒报改了 `answer.txt`；Orca 的门里夹具表 fake codex 用 `integration` 模式。
 - worker 起的 runner 随 worker 死；never-started 记 0；Orca 控制 run 被 `ccloop resume` 拒；codex `error` partial 进 verify。
-- Orca 只认安装 id、不读安装表文件；kind 取自本仓库 `listAgents` 的应答（Orca 会话 `9d95e6c8` 起，confirm／set-task-loop 用它拒带 skills 的非 claude 任务）。`listAgents` 应答里的 `kind` 字段若改名或改值，要同时改 Orca。
+- Orca 只认安装 id、不读安装表文件；kind 取自本仓库 `listAgents` 的应答（H6 本地实现接受带 skills 的 Claude／Codex，其余拒绝）。`listAgents` 应答里的 `kind` 字段若改名或改值，要同时改 Orca。
 
 ## 本仓库较早被 Orca 用上的一轮：被杀的 run 能续跑 ＋ 孤儿 runner 收 ＋ R-A ＋ R-B（Orca 会话 `ece96b67`，2026-10-02）
 
@@ -451,7 +460,7 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 - 两条负载型 flake 不在名单里（名单归人）：`agentsControl` "reads the table only for capabilities and accept…"、`evidence` "finalize-review CLI stores diagnosis null…"。
 - 阶段超时直接进 `setTimeout`（> 2,147,483,647 ms 变 1 ms）：人未定。claude 自动升级后旧 run 会被 `agent-version-drift` 拒绝续跑。
 - 被杀调用永远没有 `outcome.json`，其 pgid 被无关进程复用时 resume 会一直拒（要改需动那份 spec §4.2）。
-- **新**：codex 的 skill 支持（Orca H6，下一轮）。codex 0.155.1 实测会读 `$CODEX_HOME/skills`、cwd 的 `.codex/skills`、`.agents/skills`，`-c skills.config=[{path=…}]` 加不进新目录。今天的 codex run 本来就能看到用户 `~/.codex/skills` 与目标仓库自己的 skill（已有的隔离缺口，不是本轮引入）。
+- **H6 待启用**：本地实现／离线证据见本节开头，人需先推送再重钉。Codex 原有全局／仓库 skill 可见性未改；本轮只加冻结快照链接。
 
 ## 环境事实（直接用，别再反推）
 
@@ -464,4 +473,4 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 ## awaitingHuman
 
 - **推送**：只由人推，本轮没有 push。收尾时 ccloop／Orca／ccmem／syncskill 的 `ls-remote` 都因 DNS 无法解析 `github.com` 失败，远端状态未知；网络恢复后由人重新核对。
-- 下一件由人选（Orca handoff §4.0）。与本仓库有关的候选：codex 的 skill 支持（H6）；§5.1 与「reaper 杀活 claude」的真 claude 验收；`setTimeout` 溢出防护；两条新 flake 进不进 `check-known-reds` 名单。
+- 下一件由人选（Orca handoff §4.0）。与本仓库有关的候选：H6 的推送／Orca 重钉；§5.1 与「reaper 杀活 claude」的真 claude 验收；`setTimeout` 溢出防护；两条新 flake 进不进 `check-known-reds` 名单。
