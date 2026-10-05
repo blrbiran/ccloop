@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, readFile, readlink, lstat, realpath, rm, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readlink, lstat, realpath, rename, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -55,3 +55,21 @@ it("reports cleanup failure and preserves a replaced foreign entry",async()=>{
 });
 
 it("leaves syncskill lock metadata external while loading selected directories",async()=>{const f=await fixture();await writeFile(join(f.source,"syncskill-lock.json"),'{"skills":[]}');await withCodexSkillLinks(f.work,f.source,async()=>{expect(await readFile(join(f.links,"a/SKILL.md"),"utf8")).toBe("selected");await expect(lstat(join(f.links,"syncskill-lock.json"))).rejects.toMatchObject({code:"ENOENT"});});expect(await readFile(join(f.source,"syncskill-lock.json"),"utf8")).toBe('{"skills":[]}');});
+
+it("refuses a snapshot inside the worktree before creating project links",async()=>{
+ const f=await fixture(),inside=join(f.work,"snapshot","skills");await mkdir(join(inside,"a"),{recursive:true});await writeFile(join(inside,"a","SKILL.md"),"inside");
+ await expect(withCodexSkillLinks(f.work,inside,async()=>{throw new Error("spawned");})).rejects.toThrow("codex-skills-source-invalid:inside-worktree");
+ await expect(lstat(join(f.work,".agents"))).rejects.toMatchObject({code:"ENOENT"});expect(await readFile(join(inside,"a","SKILL.md"),"utf8")).toBe("inside");
+});
+it("refuses a noncanonical trailing separator on a real snapshot directory",async()=>{
+ const f=await fixture();await expect(withCodexSkillLinks(f.work,f.source+"/",async()=>{throw new Error("spawned");})).rejects.toThrow("codex-skills-source-invalid:root");
+ await expect(lstat(join(f.work,".agents"))).rejects.toMatchObject({code:"ENOENT"});
+});
+it("preserves a replacement parent even when its leaf has the same target",async()=>{
+ const f=await fixture(),moved=join(f.root,"moved-agents");
+ await expect(withCodexSkillLinks(f.work,f.source,async()=>{
+  await rename(join(f.work,".agents"),moved);await mkdir(f.links,{recursive:true});await symlink(join(f.source,"a"),join(f.links,"a"));
+ })).rejects.toThrow("codex-skills-cleanup-failed:parent-changed");
+ expect(await readlink(join(f.links,"a"))).toBe(join(f.source,"a"));expect(await readlink(join(moved,"skills","a"))).toBe(join(f.source,"a"));
+ expect((await lstat(f.work+".codex-skills-pending")).isFile()).toBe(true);
+});
