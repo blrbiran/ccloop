@@ -407,16 +407,16 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-04 第四十三版**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-05 第四十四版**；整节替换上一版，**不追加子会话日志**）
 
-⚠️ 本节不写任何哈希（钉版本那一个除外，它是被钉的固定值）、不记发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
+⚠️ 本节不写任何当前 HEAD 哈希（钉版本那一个除外，它是固定依赖）、不记无法核实的发布状态。指代某一笔引**提交主题行**；判断发布只跑 `/usr/bin/git ls-remote origin refs/heads/main`，与本地比。
 Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
-## 最近一轮（Orca 会话 `08011394`，2026-10-04）：本仓库零改动，Orca 仍钉 `2b380ea`
+## 最近一轮（Orca 项目注册表，2026-10-05）：本仓库零改动，依赖仍钉 `2b380ea`
 
-- Orca 只改了自己的面板：Task control 页每 2 秒清一次缓存的循环（修了）、读视图按 `localeCompare` 排序导致的 423／500（修了）、全局项目切换（做了）。都不需要本仓库的新行为。
-- 门里本仓库只作为 `ORCA_CCLOOP_BIN`（`2b380ea` 的干净 clone build）被调用，没有在它上面做变异。
-- 再往前一轮（Orca 会话 `9d95e6c8`）的结论仍成立：Orca 在 confirm／set-task-loop 用本仓库 `listAgents` 答的 kind 拒掉「带 skills 但不是 claude」的任务，本仓库 `acceptStart` 的 `skills-unsupported-agent` 是兜底；真 claude 下带 skills 的付费跑（n＝1）细节在 Orca spec `docs/superpowers/specs/2026-10-03-syncskill-integration-design.md` §12.3。
+- Orca 实现了 `~/.orca/projects.json` 项目注册表、侧栏新增／改名与全局选择；ccloop 协议与本仓库代码无改动。
+- 隔离 clone 使用 pinned ccloop build 和 fake codex integration 表；ccloop build、Orca `verify:ccloop-pin` 通过。全量 Vitest 有独立超时／ccmem errno 失败；未运行真 Claude 验收。
+- 更早一轮（Orca 会话 `9d95e6c8`）仍有效：Orca 在 confirm／set-task-loop 用 `listAgents` 的 kind 拒掉「带 skills 但不是 claude」的任务，`acceptStart` 的 `skills-unsupported-agent` 是兜底；带 skills 的真 Claude 付费跑（n＝1）见 Orca spec `docs/superpowers/specs/2026-10-03-syncskill-integration-design.md` §12.3。
 
 ## 本仓库被 Orca 用上的 syncskill 一轮（Orca 会话 `08b1007d`，2026-10-03）：本仓库三笔（人已推）
 
@@ -463,5 +463,5 @@ Orca 侧的进度以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。
 
 ## awaitingHuman
 
-- **推送**：本仓库远端之后只有本节的文档笔（Orca 那条线的几版）；Orca 那边有会话 `08011394` 的修复与项目切换几笔，由人推。两仓推送没有先后约束（Orca 钉的 `2b380ea` 远端已有）。以现跑 `ls-remote` 为准。
+- **推送**：只由人推，本轮没有 push。收尾时 ccloop／Orca／ccmem／syncskill 的 `ls-remote` 都因 DNS 无法解析 `github.com` 失败，远端状态未知；网络恢复后由人重新核对。
 - 下一件由人选（Orca handoff §4.0）。与本仓库有关的候选：codex 的 skill 支持（H6）；§5.1 与「reaper 杀活 claude」的真 claude 验收；`setTimeout` 溢出防护；两条新 flake 进不进 `check-known-reds` 名单。
