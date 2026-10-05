@@ -63,6 +63,8 @@ export interface LoopWork {
   sourceDir: string;
   /** Orca syncskill integration (2026-10-03), spec §10.7: absolute; claude loads it with --plugin-dir. */
   skillPluginDir?: string;
+  /** Orca H6 Codex skills (2026-10-05): canonical absolute per-run snapshot `skills` directory, Codex-only. */
+  codexSkillsDir?: string;
 }
 
 /**
@@ -191,8 +193,13 @@ const loopWorkSchema = z
     // Orca syncskill integration (2026-10-03), spec §10.7: where Orca's per-run skill snapshot lives (outside any git tree);
     // claude loads it with --plugin-dir. Optional so an envelope without it parses and hashes exactly as before.
     skillPluginDir: z.string().min(1).optional(),
+    codexSkillsDir: z.string().min(1).optional(),
   })
-  .strict();
+  .strict()
+  .refine((work) => !(work.skillPluginDir !== undefined && work.codexSkillsDir !== undefined), {
+    path: ["codexSkillsDir"],
+    message: "skill directory fields are mutually exclusive",
+  });
 // Orca single-call estimate (2026-09-27), spec §4.1: the claude API takes the schema as a tool's input_schema, whose top
 // level must be `type: "object"` (scripts/claude-phase-runner.mjs records the 400 it answers otherwise).
 const singleCallWorkSchema = z
@@ -281,6 +288,10 @@ function validateEnvelopePaths(envelope: StartEnvelopeV3, method: ControlMethodV
   if (envelope.work.skillPluginDir !== undefined) {
     if (!isAbsolute(envelope.work.skillPluginDir)) throw new ControlProtocolError("control-request-invalid");
     if (method === "accept") validateCanonicalDirectory(envelope.work.skillPluginDir);
+  }
+  if (envelope.work.codexSkillsDir !== undefined) {
+    if (!isAbsolute(envelope.work.codexSkillsDir)) throw new ControlProtocolError("control-request-invalid");
+    if (method === "accept") validateCanonicalDirectory(envelope.work.codexSkillsDir);
   }
   if (envelope.inputCheckpoint === null) return;
   const bundle = validateCanonicalDirectory(envelope.inputCheckpoint.bundlePath);

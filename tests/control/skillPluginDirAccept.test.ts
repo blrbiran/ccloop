@@ -37,10 +37,12 @@ async function setup(agent: "claude" | "codex") {
   await mkdir(sourceDir);
   const skillPluginDir = join(dir, "skill-plugin");
   await mkdir(skillPluginDir);
+  const codexSkillsDir = join(dir, "frozen-skills", "skills");
+  await mkdir(codexSkillsDir, { recursive: true });
   const { resolution } = await resolveAgent(table, { agent });
   const base = startEnvelope({ sourceDir, targetRepo: dir, contract: controlContract(dir), agent: resolution.selection, configHash: resolution.configHash });
   const envelope = { ...base, work: { ...base.work, skillPluginDir } };
-  return { path, sourceDir, envelope };
+  return { path, sourceDir, envelope, codexSkillsDir };
 }
 
 describe("skillPluginDir at accept (Orca syncskill integration)", { timeout: 30_000 }, () => {
@@ -71,5 +73,30 @@ describe("skillPluginDir at accept (Orca syncskill integration)", { timeout: 30_
       receiptTimeoutMs: 2_000,
     });
     expect(status.kind).toBe("accepted");
+  });
+
+  it("admits a codex run with codexSkillsDir and seals that field", async () => {
+    const f = await setup("codex");
+    const { skillPluginDir: _dropped, ...work } = f.envelope.work;
+    const envelope = { ...f.envelope, work: { ...work, codexSkillsDir: f.codexSkillsDir } };
+    const status = await acceptStart(envelope, {
+      agentsTablePath: f.path,
+      workerCommand: [resolve("node_modules/.bin/tsx"), resolve("tests/fixtures/control-worker.mjs")],
+      receiptTimeoutMs: 2_000,
+    });
+    expect(status.kind).toBe("accepted");
+    expect(JSON.parse(await readFile(join(f.sourceDir, "control", "envelope.json"), "utf8"))).toEqual(envelope);
+  });
+
+  it("refuses codexSkillsDir for a claude installation before anything is persisted", async () => {
+    const f = await setup("claude");
+    const { skillPluginDir: _dropped, ...work } = f.envelope.work;
+    const envelope = { ...f.envelope, work: { ...work, codexSkillsDir: f.codexSkillsDir } };
+    expect(await runControlCommand(["accept", "--agents", f.path], JSON.stringify(envelope))).toEqual({
+      code: 2,
+      stdout: "",
+      stderr: "skills-unsupported-agent\n",
+    });
+    expect(await readdir(f.sourceDir)).toEqual([]);
   });
 });
