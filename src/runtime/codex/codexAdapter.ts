@@ -19,6 +19,8 @@ export class CodexAdapter implements RuntimeAdapter {
   // Agent selection (2026-09-26): extraEnv carries the installation's config directory (CODEX_HOME) to the CLI.
   constructor(rawConfig: unknown, private readonly extraEnv?: Record<string, string>, private readonly codexSkillsDir?: string) { this.config = parseCodexConfig(rawConfig); }
 
+  get awaitAbortedPhaseCleanup(): boolean { return this.codexSkillsDir !== undefined; }
+
   private async phase<P extends CodexPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
     const outcome = await runCodexPhase(this.config, { phase, prompt, context }, this.extraEnv, this.codexSkillsDir);
     if (outcome.reason === "aborted") throw new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens);
