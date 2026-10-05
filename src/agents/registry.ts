@@ -36,7 +36,7 @@ export interface AgentDescriptor {
    */
   singleCallExecution(config: MaterializedAgentConfigV1): "v1" | null;
   /** Orca syncskill integration (2026-10-03), spec §10.7: `skillPluginDir` is honoured by claude only (accept refuses it for any other agent). */
-  createAdapter(config: MaterializedAgentConfigV1, options?: { skillPluginDir?: string }): RuntimeAdapter;
+  createAdapter(config: MaterializedAgentConfigV1, options?: { skillPluginDir?: string; codexSkillsDir?: string }): RuntimeAdapter;
 }
 
 const DESCRIPTORS: readonly AgentDescriptor[] = [claudeDescriptor, codexDescriptor];

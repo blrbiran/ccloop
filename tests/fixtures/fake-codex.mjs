@@ -18,6 +18,13 @@ process.stdin.on("data",c=>{prompt+=c;});
 process.stdin.on("end",()=>{
   writeFileSync(marker,JSON.stringify({args,cwd:process.cwd(),prompt,pid:process.pid}));
   process.stderr.write("fixture stderr 中文\n");
+  if(mode==="skill-integration") appendFileSync(marker+".skills",readFileSync(".agents/skills/selected/SKILL.md","utf8")+"\n");
+  if(process.env.FAKE_CODEX_SKILL_PATH) {
+    appendFileSync(marker+".skills",readFileSync(process.env.FAKE_CODEX_SKILL_PATH,"utf8"));
+    if(process.env.FAKE_CODEX_REPLACE_SKILL==="1") {
+      const leaf=process.env.FAKE_CODEX_SKILL_PATH.replace(/\/SKILL\.md$/,"");unlinkSync(leaf);writeFileSync(leaf,"foreign");
+    }
+  }
   if(mode==="hang" || mode==="ignore-term") {
     if(mode==="ignore-term") process.on("SIGTERM",()=>appendFileSync(marker+".term","TERM\n"));
     setInterval(()=>{},1000); return;
@@ -58,7 +65,7 @@ process.stdin.on("end",()=>{
   }
   const respond=()=>{
   if(mode==="script" && phase==="execute") for(const [path,content] of Object.entries(entry.files)) writeFileSync(path,content);
-  if(phase==="execute" && ["integration","write-hang","no-usage","false-answer","high-usage"].includes(mode)) writeFileSync("answer.txt","42\n");
+  if(phase==="execute" && ["skill-integration","integration","write-hang","no-usage","false-answer","high-usage"].includes(mode)) writeFileSync("answer.txt","42\n");
   if(phase==="verify" && mode==="false-answer") writeFileSync("answer.txt","0\n");
   if(mode==="quota") {process.stdout.write(JSON.stringify({type:"turn.failed",error:{message:"quota exhausted"}})+"\n");return;}
   if(phase==="execute" && mode==="write-hang") {setInterval(()=>{},1000);return;}

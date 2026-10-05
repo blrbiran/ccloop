@@ -1,7 +1,9 @@
 import { execFile } from "node:child_process";
-import { access, mkdir } from "node:fs/promises";
+import { access, lstat, mkdir } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
+
+import { codexSkillsPendingPath } from "../runtime/codex/codexSkills.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -95,6 +97,11 @@ export function namespacedAttemptRefName(worktreePath: string, namespace: string
  * indistinguishable downstream from an attempt that changed nothing.
  */
 export async function publishAttemptCommit(worktreePath: string): Promise<AttemptCommit> {
+  // Durable across worker death/resume; inspect before staging any attempt bytes.
+  try {
+    await lstat(codexSkillsPendingPath(worktreePath));
+    throw new Error("codex-skills-cleanup-failed:pending");
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   const ref = attemptRefName(worktreePath);
 
   const { stdout: baseOut } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath });

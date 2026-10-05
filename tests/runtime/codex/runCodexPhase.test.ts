@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, stat, mkdir, writeFile, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -106,4 +106,29 @@ describe("Codex phase process",()=>{
     finally {clearTimeout(timer);a.abort();await p;}
   },10000);
 
+});
+
+describe("Codex skill phase lifetime",()=>{
+ it.each(["plan","execute","verify"] as const)("loads and cleans snapshot skills in %s",async(phase)=>{
+  const f=await fixture();const skills=join(f.dir,"snapshot","skills");await mkdir(join(skills,"selected"),{recursive:true});await writeFile(join(skills,"selected","SKILL.md"),"unique skill");
+  const work=join(f.dir,"work");await mkdir(work);f.context.worktreePath=work;
+  const r=await runCodexPhase(f.config,{phase,prompt:"p",context:f.context},{FAKE_CODEX_SKILL_PATH:".agents/skills/selected/SKILL.md"},skills);
+  expect(r.reason).toBe("completed");expect(await read(f.marker+".skills")).toBe("unique skill");await expect(lstat(join(work,".agents"))).rejects.toMatchObject({code:"ENOENT"});
+ });
+ it.each(["nonzero","hang","ignore-term"])("keeps links during %s and cleans after child closes",async(mode)=>{
+  const f=await fixture(mode);const skills=join(f.dir,"snapshot","skills");await mkdir(join(skills,"selected"),{recursive:true});await writeFile(join(skills,"selected","SKILL.md"),"unique skill");const work=join(f.dir,"work");await mkdir(work);f.context.worktreePath=work;f.config.timeoutMs=500;
+  const a=new AbortController();const p=runCodexPhase(f.config,{phase:"execute",prompt:"p",context:{...f.context,abortSignal:a.signal}},{FAKE_CODEX_SKILL_PATH:".agents/skills/selected/SKILL.md"},skills);
+  if(mode!=="nonzero") {await expect.poll(()=>read(f.marker+".skills").catch(()=>null)).toBe("unique skill");expect(await read(join(work,".agents/skills/selected/SKILL.md"))).toBe("unique skill");if(mode==="ignore-term")a.abort();}
+  const r=await p;expect(r.reason).toBe(mode==="nonzero"?"exit-error":mode==="hang"?"timeout":"aborted");const {pid}=JSON.parse(await read(f.marker));expect(await alive(pid)).toBe(false);await expect(lstat(join(work,".agents"))).rejects.toMatchObject({code:"ENOENT"});
+ });
+ it("records a setup collision before spawning",async()=>{
+  const f=await fixture();const skills=join(f.dir,"snapshot","skills");await mkdir(join(skills,"selected"),{recursive:true});const work=join(f.dir,"work");await mkdir(join(work,".agents/skills/selected"),{recursive:true});f.context.worktreePath=work;
+  const r=await runCodexPhase(f.config,{phase:"plan",prompt:"p",context:f.context},undefined,skills);
+  expect(r.reason).toBe("codex-skills-path-conflict:selected");expect(await read(join(r.evidenceDir,"outcome.json"))).toContain("codex-skills-path-conflict:selected");await expect(read(f.marker+".argv")).rejects.toThrow();
+ });
+ it("records cleanup failure and retains the publication blocker",async()=>{
+  const f=await fixture();const skills=join(f.dir,"snapshot","skills");await mkdir(join(skills,"selected"),{recursive:true});await writeFile(join(skills,"selected","SKILL.md"),"unique skill");const work=join(f.dir,"work");await mkdir(work);f.context.worktreePath=work;
+  const r=await runCodexPhase(f.config,{phase:"plan",prompt:"p",context:f.context},{FAKE_CODEX_SKILL_PATH:".agents/skills/selected/SKILL.md",FAKE_CODEX_REPLACE_SKILL:"1"},skills);
+  expect(r.reason).toMatch(/^codex-skills-cleanup-failed:/);expect(await read(join(r.evidenceDir,"outcome.json"))).toContain("codex-skills-cleanup-failed:");expect(await read(work+".codex-skills-pending")).toBe(skills);
+ });
 });

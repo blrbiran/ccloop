@@ -207,3 +207,12 @@ describe("publishAttemptCommit failure surface", () => {
     await expect(publishAttemptCommit(worktreePath)).rejects.toThrow();
   });
 });
+
+it("refuses publication of an interrupted Codex skills setup before git add",async()=>{
+ const {repoDir,worktreePath}=await seedRepoAndWorktree(true);
+ await writeFile(worktreePath+".codex-skills-pending","snapshot");await writeFile(join(worktreePath,"unpublished.txt"),"agent change");
+ await expect(publishAttemptCommit(worktreePath)).rejects.toThrow("codex-skills-cleanup-failed:pending");
+ const {stdout}=await execFileAsync("git",["diff","--cached","--name-only"],{cwd:worktreePath});expect(stdout).toBe("");
+ const {stdout:refs}=await execFileAsync("git",["for-each-ref","refs/ccloop/"],{cwd:repoDir});expect(refs).toBe("");
+ await cleanupAttemptWorkspace(repoDir,worktreePath);
+});

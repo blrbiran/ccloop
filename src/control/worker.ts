@@ -194,7 +194,8 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       ? envelope.work.contract
       : await prepareContinuationContract(envelope.work.contract, runDir, envelope.inputCheckpoint);
     const adapterOptions = envelope.work.kind === "loop" && envelope.work.skillPluginDir !== undefined
-      ? { skillPluginDir: envelope.work.skillPluginDir } : undefined;
+      ? { skillPluginDir: envelope.work.skillPluginDir }
+      : envelope.work.codexSkillsDir !== undefined ? { codexSkillsDir: envelope.work.codexSkillsDir } : undefined;
     await runLoop(contract, runDir, () => getDescriptor(config.kind).createAdapter(config, adapterOptions), {
       firstWorkspaceInput: envelope.inputCheckpoint ?? undefined,
       stopRequested,
