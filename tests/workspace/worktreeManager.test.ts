@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { cleanupAttemptWorkspaceBestEffort } from "../../src/controller/runLoop.js";
+import { mkdtemp, readFile, writeFile, mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -215,4 +216,10 @@ it("refuses publication of an interrupted Codex skills setup before git add",asy
  const {stdout}=await execFileAsync("git",["diff","--cached","--name-only"],{cwd:worktreePath});expect(stdout).toBe("");
  const {stdout:refs}=await execFileAsync("git",["for-each-ref","refs/ccloop/"],{cwd:repoDir});expect(refs).toBe("");
  await cleanupAttemptWorkspace(repoDir,worktreePath);
+});
+
+it("resume residual cleanup cannot publish an interrupted skill link",async()=>{
+ const {repoDir,worktreePath}=await seedRepoAndWorktree(true);const runDir=worktreePath.slice(0,worktreePath.lastIndexOf("/worktrees/"));await mkdir(join(worktreePath,".agents/skills"),{recursive:true});await symlink(repoDir,join(worktreePath,".agents/skills/selected"));await writeFile(worktreePath+".codex-skills-pending","snapshot");
+ await cleanupAttemptWorkspaceBestEffort(repoDir,worktreePath,runDir,"best-effort cleanup of residual worktree before resume");
+ const {stdout}=await execFileAsync("git",["for-each-ref","refs/ccloop/"],{cwd:repoDir});expect(stdout).toBe("");expect(await readFile(join(runDir,"events.jsonl"),"utf8")).toContain("codex-skills-cleanup-failed:pending");expect(await readFile(join(repoDir,"README.md"),"utf8")).toBe("hello\n");
 });

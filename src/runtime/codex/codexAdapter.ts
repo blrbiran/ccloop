@@ -43,6 +43,7 @@ export class CodexAdapter implements RuntimeAdapter {
     catch (error) {
       // An aborted execute that was observed spending tokens throws, so runLoop can settle that usage;
       // one that was not keeps answering null exactly as before.
+      if (error instanceof Error && error.message.startsWith("codex-skills-")) throw error;
       if (context.abortSignal?.aborted && !(error instanceof CodexPhaseAborted && error.observedTokens !== null)) return null;
       throw error;
     }

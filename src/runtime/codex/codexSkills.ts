@@ -56,7 +56,7 @@ export async function withCodexSkillLinks<T>(worktreePath: string, skillsRoot: s
     try {
       for (const path of parents) {
         let stat = await optionalStat(path);
-        if (stat === null) { await mkdir(path); created.push(path); stat = await lstat(path); }
+        if (stat === null) { await mkdir(path,{mode:0o700}); created.push(path); stat = await lstat(path); }
         if (!stat.isDirectory()) throw failure("codex-skills-path-conflict",relative(worktreePath,path));
         identities.set(path,{dev:stat.dev,ino:stat.ino});
       }

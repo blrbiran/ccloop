@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { access, cp, copyFile, lstat, mkdir, readdir, realpath, rm } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { codexSkillsPendingPath } from "../runtime/codex/codexSkills.js";
 import { namespacedAttemptRefName } from "../workspace/worktreeManager.js";
 import type { LoopStartEnvelope } from "./protocol.js";
 
@@ -68,6 +69,13 @@ export async function materializeResultRepository(
   await mkdir(envelope.work.sourceDir, { recursive: true, mode: 0o700 });
   if (currentAttempt > 0) {
     const attempt = join(runDir, "worktrees", `attempt-${currentAttempt}`);
+    // A failed/interrupted skill cleanup may leave a partly removed worktree. Retain raw
+    // phase evidence and expose only the base repository, never copy pending links.
+    try {
+      await lstat(codexSkillsPendingPath(attempt));
+      await cloneAt(envelope.work.targetRepo,destination,envelope.work.base);
+      return destination;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     if (await exists(attempt)) {
       await copyLiveWorkspace(attempt, destination);
       return destination;
