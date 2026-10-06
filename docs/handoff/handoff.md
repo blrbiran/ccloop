@@ -1,4 +1,4 @@
-# ccloop Handoff — 2026-10-05：Orca H6 Codex skills 本地实现完成；产品代码保留在隔离 clone／bundle，原仓只更新 handoff，未 push／未重钉，全量仍有已登记红项。详见文末「Orca 那条线」。
+# ccloop Handoff — 2026-10-06：Orca H6 已合并默认 main 并完成依赖重钉；全量已登记两红未关闭。Orca 下一项是项目过滤＋全部项目视图，修正版 spec 待人审。详见文末「Orca 那条线」。
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -407,22 +407,17 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-05，会话 `01a10a08`**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-06，会话 `01a10aca`**；整节替换上一版，**不追加子会话日志**）
 
 本节以 Orca 仓 `docs/handoff/handoff.md` §4.0.q 及 `.superpowers/sdd/2026-10-05-codex-skill-support/progress.md` 为准；命令、观测提交、原始门输出及裁定都在该 ledger。只引用提交主题行和固定依赖 pin，不将当前 HEAD 写成接手条件；远端发布需另行核对，不能由本地提交推断。
 
-## 最近一轮：H6 Codex skills 本地实现完成，未重钉／未启用
+## 当前关联状态：H6 默认 main／重钉完成；Orca 新 spec 待人审
 
-- **落点**：H6 产品代码／新增判据只在 `/private/tmp/orca-h6-ccloop` 的 `codex/codex-skill-support` 分支；人的 ccloop 原仓本轮只更新本文，按人追加要求收录到 `docs(handoff): record completed local Codex skills support` 本地提交。Orca 源码／判据／plan／handoff 一起收录到 `feat(control): support frozen Codex skills and preserve phase refusals` 本地提交；ccmem 本轮只有 handoff 关联说明，产品代码未变。
-- 本仓库实现提交主题行：`feat(control): accept Codex skill snapshot path for protocol 3`；`feat(codex): own temporary skill links through phase cleanup`；`fix(codex): contain interrupted skill cleanup in result publication`；`fix(codex): finish skill cleanup before timeout and handoff classification`；`test(codex): cover snapshot containment and parent replacement`。Orca 对应 `feat(control): support frozen Codex skills and preserve phase refusals`。
-- protocol 3 新增 `work.codexSkillsDir`，与 Claude 的 `skillPluginDir` 互斥、按安装表 kind 配对。accept 校验现存规范绝对路径，后续读协议只要求绝对路径。worker 重启仍按 accept 重验，Orca 必须保留快照到工作区清理。
-- Codex 每个 plan／execute／verify phase 临时在 `.agents/skills/<name>` 链接外部只读快照；保留原有目录、legacy skill 与无关文件；同名或不安全父路径在 spawn 前拒绝。仅清理本次拥有／同 run 精确残留链接，只删本次创建且空的父目录，等 child close 后才清理。
-- durable sibling pending 标记使 worker 死亡／resume 后仍能挡住 publication；清理失败在 git add 前拒绝，只物化安全 base、保留原始证据。skills 错误优先于 timeout／handoff，Orca blocked reason 保留 `codex-skills-*`。共用 resume 清理助手已覆盖，**真模型被杀后的 H6 续跑未验收**。
-- 实际 codex-cli **0.160.0** 的离线 `codex exec` RC0：localhost recorder 收到两次请求，第二次含 skill 唯一 marker；原有无关 skill 字节不变。临时 HOME／CODEX_HOME、无真实凭据、无付费／外部模型请求。兼容证据只覆盖此版本；用户与仓库全局 skills 的既有可见性保留，不承诺隔离。前轮 codex 0.155.1 读 `$CODEX_HOME/skills`、cwd `.codex/skills`／`.agents/skills` 的观察仍保留；`-c skills.config=[{path=…}]` 不能添加新目录，H6 因而采用临时链接。
-- 唯一 fresh 终审两项 Important 已修（plan／verify 外层 timeout 提前删 worktree、timeout／handoff 覆盖清理失败），13 条先 RED 后 GREEN；无 actionable Minor，未再次评审。27 个具名删除变异均有绿基线并抓红；变异只在独立 clone，恢复 diff／cached diff 都为 0 字节。
-- **最终本仓库门**：build／typecheck RC0；focused 21 files／169 passed／0 skipped／RC0；全量 118 files／1186 passed／2 failed／0 skipped／RC1。两红：`stopProof` 的「leader exit 不等于 group quiet」超时、`codexWatchdog` 的「historical double-space start identities」轮询超时；known-reds RC0、unexpected 0。没有改既有判据凑绿，不能报告全绿或进入合并。helper/controller/worker 临时残留检查 30 条、内层 RC0、0 残留。
-- Orca 全量 304 files／2796 passed／6 skipped／0 failed／RC0；修复后 control 127 files／1315 passed／4 skipped／RC0，skills E2E 4/4、0 skipped；typecheck、web build、workspace、scheduler、panel、ccloop-pin RC0。全量用修复前 ccloop，修复后重跑 control／E2E；真 ccmem／syncskill 仍 skipped，完整范围见 Orca ledger。
-- **可恢复材料**：Orca ledger 中 `ccloop-codex-skill-support.bundle` 保留本轮提交（依赖原 ccloop 基线）；临时 clone origin 是本地原仓路径，不代表已发布 GitHub。人核对基线与远端后决定导入／发布；不依赖临时目录永久存在。
+- **落点更正依据**：主题行 `Merge Codex frozen skill support into main`、Orca `build(deps): pin published ccloop Codex skill support` 取代前版 clone-only／未重钉结论。H6 产品／判据已合并本默认目录 main，保留最新 handoff，源码字节与隔离实现匹配；人通知 push 后三仓远端main经只读核对。这里不固定当前HEAD，后续发布现查 `ls-remote`。原clone／bundle仍为恢复材料，不能依赖临时目录永久存在。
+- **H6 契约**：protocol3 `work.codexSkillsDir` 与Claude `skillPluginDir`互斥、按kind配对；accept校验规范现存绝对路径，后续读只要求绝对路径。每phase临时 `.agents/skills/<name>` 链接外部只读快照，保留legacy／无关内容，同名／不安全父路径拒绝。只清理owned／same-run精确残留，等child close；pending标记挡git add，失败只物化安全base，skills错误优先timeout／handoff。worker重验accept，快照保留到工作区清理。
+- **历史证据边界**：Codex0.160.0 localhost离线exec marker证据，不是付费真模型或被杀续跑验收；原全局skills可见性未变。两项Important修复13条先RED后GREEN，27删除变异抓红，临时helper/controller/worker30条RC0／0残留。原全量1186passed／2failed／0skipped，RC1；stopProof与codexWatchdog historical double-space均登记，known-reds RC0／unexpected0。两红未关闭，不能报全绿；人在知情后授权本轮合并，不把授权当全量绿。
+- **重钉验证**：新合并树build／typecheck及focused169/169RC0；Orca默认包12/12、typecheck／web build／npm ci复现、控制81/81、临时同提交fake夹具补入后的skills E2E4/4。发布包本来不含test fixtures，补夹具不改runtime。原Orca全量2796passed／6skipped／0failed是历史门，真实ccmem／syncskill仍跳过；本轮文档同步没跑新产品门。命令／观测提交见Orca `.superpowers/sdd/2026-10-05-codex-skill-repin/progress.md`，原轮在H6 ledger。
+- **Orca下一项**：`docs/superpowers/specs/2026-10-06-panel-project-filtering-design.md`，先读§11 R1–R3；主题行 `docs(spec): bind recovery, drafts and decision results to their owners`。人已同意项目过滤＋全部项目→N2→真实集成／known reds诊断顺序；修正版written spec尚待批准，无实施plan、无产品改动。本设计新增的repoId是**Orca面板GroupSummary**，不是ccloop protocol字段，本仓无需同步产品。R1目标组revision、R2按身份保留草稿、R3决策POST／retry原请求归属均是Orca客户端约束。
 
 ## 已落地的前轮结论（保留结论，过程见各自 ledger）
 
@@ -434,8 +429,8 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 
 ## 固定依赖与跨仓行为约束
 
-- Orca 仍钉 `github:blrbiran/ccloop#2b380ea5b59056e37e5148ebb7af1d7ed9e4d826`。**旧版拒绝 `codexSkillsDir`，H6 尚未上线**；须人核对并推送本轮 ccloop，再授权 Orca 用精确 SHA 重钉。开发／门用 `ORCA_CCLOOP_BIN`；`verify:ccloop-pin` 及 `tests/packaging/gitDependency.test.ts` 挡住未打包运行时文件。
-- Orca 用 `listAgents` 的 kind 作唯一权威；本地 H6 已把 confirm／set-task-loop 的 skills 准入从仅 Claude 扩为 Claude／Codex。人的旧 pin 仍只有 Claude 路径，勿混淆；`listAgents.kind` 改名或改值必须同步 Orca。
+- Orca 固定pin为 `github:blrbiran/ccloop#c3af4d6bdfbe8e9f57e9d2a953cdc610098e781b`，H6依赖已重钉／默认安装刷新；不是本仓当前HEAD条件。运行中的人的面板未重启，不声称已加载新包。开发／门用 `ORCA_CCLOOP_BIN`；default pin门核已安装包，test fixtures不属于发布包。
+- Orca 用 `listAgents` 的kind作唯一权威，H6默认main支持Claude／Codex skills；`listAgents.kind`改名／改值仍必须同步Orca。
 - loop 的 `requiredChecks` 在 worktree 里真跑 `sh -lc`；路径约束只查 executor 自报 `changedFiles`；`rejectOn` 只进 verifier prompt，`constraints` 不进 verifier、`nonGoals` 只进 planner。
 - Orca v2 默认 `maxFilesTouched` 为 `Number.MAX_SAFE_INTEGER`、单 attempt 3 小时、partial recovery 60,000 ms；`PARTIAL_FLUSH_MARGIN_MS` Orca 手抄一份，改须同步。N1 是 protocol 3 `single-call`；fake claude 的 `single-call-queue` 顺序回放，fake codex 恒改 `answer.txt`，Orca 门用 `integration`。
 - runner 随 worker 死；never-started 记 0；Orca 控制 run 被 `ccloop resume` 拒；codex `error` partial 进 verify。被杀调用没有 `outcome.json`、pgid 被复用会一直拒 resume，变更须先处理原 spec §4.2。
@@ -450,5 +445,5 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 
 ## awaitingHuman
 
-- 本轮未 push、未访问真实 `~/.orca/*`、未重启人的面板，未跑 live／付费验收。此前四仓远端查询 DNS 失败，状态未知，网络恢复后由人核对；三仓 handoff 按人追加要求分别收录为本地提交，以主题行定位。
-- 审阅 H6 ledger 的执行者裁定、两项 Important 修复和验收限制；再决定 ccloop 发布／Orca 重钉。其他候选仍是 §5.1／reaper 真 Claude 验收、timeout 溢出防护、flake 名单；本轮不替人选新事项。
+- Orca项目过滤＋全部项目的修正版written spec待人审核；之后才写plan／选执行方式。H6发布／重钉已做完，不重复登记成待办。ccloop产品本次handoff同步零改动；无executor push、真实数据访问、面板重启或付费验收。
+- 已知红项不能由实施者改判据凑绿；后续诊断必须先复现、分清进程权限／负载差异。§5.1／reaper真Claude验收、timeout溢出、flake名单等原挂账仍有效，人没有授权付费验收。
