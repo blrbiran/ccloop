@@ -1,4 +1,4 @@
-# ccloop Handoff — 2026-10-06：Orca H6 已合并默认 main 并完成依赖重钉；全量已登记两红未关闭。Orca 下一项是项目过滤＋全部项目视图，修正版 spec 待人审。详见文末「Orca 那条线」。
+# ccloop Handoff — 2026-10-07：本仓零改动；Orca 做完 N2 agent 入口（面板控制 socket＋`orca control`＋skill＋`orca mcp serve`，等人审）。Orca 下一项是隔离根的真实 ccmem／syncskill 验收和本仓两红（`stopProof`／`codexWatchdog`）的诊断。详见文末「Orca 那条线」。
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -407,15 +407,15 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-06，会话 `32306496`**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-07，会话 `6cc0c1e9`**；整节替换上一版，**不追加子会话日志**）
 
-以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。只引主题行与固定 pin，不写当前 HEAD；远端状态现查 `ls-remote`。上一版（会话 `01a10aca`）说「Orca 项目过滤 spec 待人审、无 plan、无产品改动」，已被 Orca 主题行 `docs(plan): implement project filtering and the all-projects view` 及其后的实施提交取代。
+以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。只引主题行与固定 pin，不写当前 HEAD；远端状态现查 `ls-remote`。上一版（会话 `32306496`）说「Orca 下一项 N2，未开始」，已被 Orca 主题行 `docs(sdd): close the N2 agent entry round in its ledger` 及之前的实施提交取代。
 
 ## 当前关联状态
 
-- **本仓本轮零改动。** Orca 2026-10-06 在 main 上做完「面板项目过滤＋全部项目视图」（等人审）：新增的 `repoId` 在 **Orca 面板的 `GroupSummaryV1`**，不是 ccloop protocol 字段；R1 recovery 目标组 revision、R2 按 owner 保存草稿、R3 决策请求记录都是 Orca 客户端约束。本仓无需同步。
-- Orca 本轮门（台账 `.superpowers/sdd/2026-10-06-panel-project-filtering/progress.md` Final gates）用的 `ORCA_CCLOOP_BIN` 是本仓固定 pin 的 clone build；全量只红 Orca 已登记的三条负载 flake，与本仓无关。本仓 known reds 本轮没跑。
-- **Orca 下一项**：N2 agent 入口（CLI `--json`→skill→MCP 薄壳），再做隔离根的真实 ccmem／syncskill 验收与 **本仓已知红 `stopProof`／`codexWatchdog` 的诊断**（未开始；诊断须先复现、分清权限／负载）。
+- **本仓本轮零改动，ccloop protocol 无变化。** Orca 2026-10-07 在 main 上做完 N2 agent 入口（等人审）。新增的面板 unix socket、`orca control`、`orca mcp serve` 都只是 Orca 面板 `/api/control` 的客户端，不经过、也不调用 ccloop；`commands.client` 归属列在 Orca 控制 store 里。
+- Orca 本轮的门（台账 `.superpowers/sdd/2026-10-07-agent-entry/progress.md` Task 9）用的 `ORCA_CCLOOP_BIN` 是本仓固定 pin 的 clone build：`verify:control` 129 文件全过；全量只红 Orca 已登记的两条负载 flake，与本仓无关。本仓 known reds 本轮没跑。
+- **Orca 下一项**：隔离根的真实 ccmem／syncskill 验收，以及 **本仓已知红 `stopProof`／`codexWatchdog` 的诊断**。都未开始；诊断须先复现，分清权限原因和负载原因；改既有判据要人点名。
 
 ## 固定依赖与跨仓约束（仍成立）
 
