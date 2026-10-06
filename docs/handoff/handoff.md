@@ -407,43 +407,29 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-06，会话 `01a10aca`**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-06，会话 `32306496`**；整节替换上一版，**不追加子会话日志**）
 
-本节以 Orca 仓 `docs/handoff/handoff.md` §4.0.q 及 `.superpowers/sdd/2026-10-05-codex-skill-support/progress.md` 为准；命令、观测提交、原始门输出及裁定都在该 ledger。只引用提交主题行和固定依赖 pin，不将当前 HEAD 写成接手条件；远端发布需另行核对，不能由本地提交推断。
+以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。只引主题行与固定 pin，不写当前 HEAD；远端状态现查 `ls-remote`。上一版（会话 `01a10aca`）说「Orca 项目过滤 spec 待人审、无 plan、无产品改动」，已被 Orca 主题行 `docs(plan): implement project filtering and the all-projects view` 及其后的实施提交取代。
 
-## 当前关联状态：H6 默认 main／重钉完成；Orca 新 spec 待人审
+## 当前关联状态
 
-- **落点更正依据**：主题行 `Merge Codex frozen skill support into main`、Orca `build(deps): pin published ccloop Codex skill support` 取代前版 clone-only／未重钉结论。H6 产品／判据已合并本默认目录 main，保留最新 handoff，源码字节与隔离实现匹配；人通知 push 后三仓远端main经只读核对。这里不固定当前HEAD，后续发布现查 `ls-remote`。原clone／bundle仍为恢复材料，不能依赖临时目录永久存在。
-- **H6 契约**：protocol3 `work.codexSkillsDir` 与Claude `skillPluginDir`互斥、按kind配对；accept校验规范现存绝对路径，后续读只要求绝对路径。每phase临时 `.agents/skills/<name>` 链接外部只读快照，保留legacy／无关内容，同名／不安全父路径拒绝。只清理owned／same-run精确残留，等child close；pending标记挡git add，失败只物化安全base，skills错误优先timeout／handoff。worker重验accept，快照保留到工作区清理。
-- **历史证据边界**：Codex0.160.0 localhost离线exec marker证据，不是付费真模型或被杀续跑验收；原全局skills可见性未变。两项Important修复13条先RED后GREEN，27删除变异抓红，临时helper/controller/worker30条RC0／0残留。原全量1186passed／2failed／0skipped，RC1；stopProof与codexWatchdog historical double-space均登记，known-reds RC0／unexpected0。两红未关闭，不能报全绿；人在知情后授权本轮合并，不把授权当全量绿。
-- **重钉验证**：新合并树build／typecheck及focused169/169RC0；Orca默认包12/12、typecheck／web build／npm ci复现、控制81/81、临时同提交fake夹具补入后的skills E2E4/4。发布包本来不含test fixtures，补夹具不改runtime。原Orca全量2796passed／6skipped／0failed是历史门，真实ccmem／syncskill仍跳过；本轮文档同步没跑新产品门。命令／观测提交见Orca `.superpowers/sdd/2026-10-05-codex-skill-repin/progress.md`，原轮在H6 ledger。
-- **Orca下一项**：`docs/superpowers/specs/2026-10-06-panel-project-filtering-design.md`，先读§11 R1–R3；主题行 `docs(spec): bind recovery, drafts and decision results to their owners`。人已同意项目过滤＋全部项目→N2→真实集成／known reds诊断顺序；修正版written spec尚待批准，无实施plan、无产品改动。本设计新增的repoId是**Orca面板GroupSummary**，不是ccloop protocol字段，本仓无需同步产品。R1目标组revision、R2按身份保留草稿、R3决策POST／retry原请求归属均是Orca客户端约束。
+- **本仓本轮零改动。** Orca 2026-10-06 在 main 上做完「面板项目过滤＋全部项目视图」（等人审）：新增的 `repoId` 在 **Orca 面板的 `GroupSummaryV1`**，不是 ccloop protocol 字段；R1 recovery 目标组 revision、R2 按 owner 保存草稿、R3 决策请求记录都是 Orca 客户端约束。本仓无需同步。
+- Orca 本轮门（台账 `.superpowers/sdd/2026-10-06-panel-project-filtering/progress.md` Final gates）用的 `ORCA_CCLOOP_BIN` 是本仓固定 pin 的 clone build；全量只红 Orca 已登记的三条负载 flake，与本仓无关。本仓 known reds 本轮没跑。
+- **Orca 下一项**：N2 agent 入口（CLI `--json`→skill→MCP 薄壳），再做隔离根的真实 ccmem／syncskill 验收与 **本仓已知红 `stopProof`／`codexWatchdog` 的诊断**（未开始；诊断须先复现、分清权限／负载）。
 
-## 已落地的前轮结论（保留结论，过程见各自 ledger）
+## 固定依赖与跨仓约束（仍成立）
 
-- Orca 项目注册表已实现默认 `~/.orca/projects.json`、侧栏新增／改名和持久选择；这一功能未改 ccloop 协议。旧项目注册表全量的独立超时／ccmem errno 红项保留在 Orca §4.0；H6 本次未复现不等于关闭。
-- syncskill Claude 路径仍有效。三笔主题行：`feat(control): carry a skill plugin dir on the loop work and load it into claude (Orca syncskill integration)`；`test(control): retry the temp-dir removal in the skillPluginDir accept test …`；`test(control): hash the schema's output in the skillPluginDir envelope-hash golden`。三 phase 加 `--plugin-dir`、去掉安装命令中的 `--disable-slash-commands`；无字段时 argv／信封哈希不变，字段不进封存的 `MaterializedAgentConfigV1`，worker 从信封独立传 adapter。
-- 前轮 syncskill 门 1140 条、仅 `stopProof` 红，known-reds／temp-leak／typecheck／build RC0；证据在 Orca `.superpowers/sdd/2026-10-03-syncskill-integration/progress.md`。离线 claude 2.1.288 实测：`--disable-slash-commands` 阻止所有 skill 发给模型；去掉且用 `--setting-sources project,local` 时，cwd 与 plugin 的 skill 发出，home skill 不发，plugin skill 名为 `<plugin名>:<skill>`。真 Claude skills 付费 n＝1 在 Orca syncskill spec §12.3；本轮未复跑。
-- G1 两缝、Orca ④ C1–C7、adapter／CLI 合并、verifier 判断 rejectOn、预算链、临时泄漏护栏、collect.progress、依赖打包和 #13(a) 的前轮完成／人审结论仍有效，细节保留在前文／原 ledger。
-- 被杀 run／孤儿 runner 收／R-A／R-B 的前轮结论及人追认仍有效；真 Claude「杀掉再续跑」n＝1，Orca 已重钉该前轮并做第二次 R-A／R-B／收进程验收。材料为本仓库 `docs/superpowers/specs/2026-10-02-crash-resume-and-orphan-reaping-design.md`（§11／§12／实施期更正优先，§13 人追认）与同名 plan／ledger。真 Claude 的 §5.1「partial＋error 进 verify」和 reaper 杀活 claude 仍未验收；runner 10 fd、claude 18 fd、至少 3 进程／任务是前轮测量，约 1,700 容量只是推算。
-
-## 固定依赖与跨仓行为约束
-
-- Orca 固定pin为 `github:blrbiran/ccloop#c3af4d6bdfbe8e9f57e9d2a953cdc610098e781b`，H6依赖已重钉／默认安装刷新；不是本仓当前HEAD条件。运行中的人的面板未重启，不声称已加载新包。开发／门用 `ORCA_CCLOOP_BIN`；default pin门核已安装包，test fixtures不属于发布包。
-- Orca 用 `listAgents` 的kind作唯一权威，H6默认main支持Claude／Codex skills；`listAgents.kind`改名／改值仍必须同步Orca。
+- Orca pin `github:blrbiran/ccloop#c3af4d6bdfbe8e9f57e9d2a953cdc610098e781b`（H6 Codex skills 已合并本仓 main 并重钉，主题行 `Merge Codex frozen skill support into main`、Orca `build(deps): pin published ccloop Codex skill support`）。人的面板未重启。发布包不含 test fixtures。
+- Orca 以 `listAgents` 的 kind 为唯一权威；`listAgents.kind` 改名／改值、`PARTIAL_FLUSH_MARGIN_MS`（Orca 手抄）、protocol 3 的 `skillPluginDir`／`codexSkillsDir` 互斥都必须同步 Orca。
+- Orca v2 默认：`maxFilesTouched`＝`Number.MAX_SAFE_INTEGER`、单 attempt 3 小时、partial recovery 60,000 ms；Orca 门的 fake codex 用 `integration`。Orca 控制 run 被 `ccloop resume` 拒。
 - loop 的 `requiredChecks` 在 worktree 里真跑 `sh -lc`；路径约束只查 executor 自报 `changedFiles`；`rejectOn` 只进 verifier prompt，`constraints` 不进 verifier、`nonGoals` 只进 planner。
-- Orca v2 默认 `maxFilesTouched` 为 `Number.MAX_SAFE_INTEGER`、单 attempt 3 小时、partial recovery 60,000 ms；`PARTIAL_FLUSH_MARGIN_MS` Orca 手抄一份，改须同步。N1 是 protocol 3 `single-call`；fake claude 的 `single-call-queue` 顺序回放，fake codex 恒改 `answer.txt`，Orca 门用 `integration`。
-- runner 随 worker 死；never-started 记 0；Orca 控制 run 被 `ccloop resume` 拒；codex `error` partial 进 verify。被杀调用没有 `outcome.json`、pgid 被复用会一直拒 resume，变更须先处理原 spec §4.2。
+- runner 随 worker 死；never-started 记 0；codex `error` partial 进 verify。被杀调用没有 `outcome.json`、pgid 被复用会一直拒 resume，变更须先处理被杀续跑 spec §4.2。
+- syncskill Claude 路径：三 phase 加 `--plugin-dir`、去掉 `--disable-slash-commands`（它会挡住所有 skill）；无字段时 argv／信封哈希不变。runner 10 fd、claude 18 fd、至少 3 进程／任务是前轮测量，约 1,700 容量只是推算。
+- 前轮结论（G1、④、adapter／CLI 合并、预算链、被杀 run 续跑／孤儿收／R-A／R-B、H6 契约）仍有效，细节在前文与各自 ledger（H6：Orca `.superpowers/sdd/2026-10-05-codex-skill-support/progress.md`）。
 
-## 挂账与执行纪律
+## 挂账与 awaitingHuman
 
-- `stopProof` 根因／Linux、两条未入名单的负载 flake（`agentsControl`「reads the table only for capabilities and accept…」、`evidence`「finalize-review CLI stores diagnosis null…」）、阶段 `setTimeout` 超过 2,147,483,647 ms 会变 1 ms，仍未处理；名单与既有判据不能由实施者自改。Claude 升级会触发旧 run `agent-version-drift`。
-- known reds 用 `node scripts/check-known-reds.mjs`、泄漏用 `node scripts/check-tmp-leak.mjs`；不能把「唯一稳定红 stopProof」读成其他登记红不可能出现，本轮 watchdog 已实际红。
-- 只在独立 local clone build／验证，主树不跑全量；HOME、四 XDG 根改道，TMPDIR 短且真目录。用作 `ORCA_CCLOOP_BIN` 的 clone 不做变异。`cp`／`rm` 带 `-i`，同步用 `cat`；不用交互别名覆盖文件。
-- 本机 Claude 会被同版本重装，nvm／homebrew 各一份；付费跑前后记安装目录 mtime，成本套 Orca `scripts/claude-tee.mjs`。变异留孤儿进程时只处理自己起的，遵守人授权；负载 flake 等降载并记 `uptime`。
-- 写文件工具可能改非 NFC／Unicode 转义，相关样本用 python 按字节核；测试不要收集期整文件 skip，用 `beforeEach` 的 `ctx.skip()`。
-
-## awaitingHuman
-
-- Orca项目过滤＋全部项目的修正版written spec待人审核；之后才写plan／选执行方式。H6发布／重钉已做完，不重复登记成待办。ccloop产品本次handoff同步零改动；无executor push、真实数据访问、面板重启或付费验收。
-- 已知红项不能由实施者改判据凑绿；后续诊断必须先复现、分清进程权限／负载差异。§5.1／reaper真Claude验收、timeout溢出、flake名单等原挂账仍有效，人没有授权付费验收。
+- 全量已知红 `stopProof`（稳定红，根因未查）与 `codexWatchdog`（historical double-space）未关闭，不能报全绿；两条未入名单的负载 flake（`agentsControl`、`evidence`）与阶段 `setTimeout` 超 2,147,483,647 ms 变 1 ms 仍未处理。名单与既有判据不能由实施者自改。
+- 真 Claude §5.1「partial＋error 进 verify」与 reaper 杀活 claude 未验收；没有付费验收授权。
+- Claude 升级会触发旧 run `agent-version-drift`；本机 Claude 会被同版本重装（nvm／homebrew 各一份），付费跑前后记安装目录 mtime，成本套 Orca `scripts/claude-tee.mjs`。
+- 纪律：known reds 用 `node scripts/check-known-reds.mjs`、泄漏用 `node scripts/check-tmp-leak.mjs`；`stopProof` 之外的登记红也会实际出现。写文件工具可能改非 NFC／Unicode 转义，相关样本按字节核；测试不在收集期整文件 skip，用 `beforeEach` 的 `ctx.skip()`。`cp`／`rm` 带 `-i`。只在 `git clone --local` 副本 build／验证；HOME＋四 XDG 改道、TMPDIR 短且真；用作 `ORCA_CCLOOP_BIN` 的 clone 不做变异；输出重定向到文件再完整读回。
