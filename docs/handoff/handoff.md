@@ -1,4 +1,4 @@
-# ccloop Handoff — 2026-10-07：本仓只有人裁 139 改了三条判据与已知红名单（`src/**` 零改动）；Orca 做完 N2 agent 入口（面板控制 socket＋`orca control`＋skill＋`orca mcp serve`，等人审）。Orca 下一项是隔离根的真实 ccmem／syncskill 验收；本仓两红（`stopProof`／`codexWatchdog` 两条）已改写转绿并出名单。详见文末「Orca 那条线」。
+# ccloop Handoff — 2026-10-07：本仓只有人裁 139 改了三条判据与已知红名单（`src/**` 零改动，`stopProof`／`codexWatchdog` 已转绿出名单）。Orca 下一轮的已批计划 Part B 会给用量事件加可选 `byModel`（worktree 分支，只加不改判据）。详见文末「Orca 那条线」。
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -407,20 +407,19 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-07，会话 `6cc0c1e9`；人裁 139 相关几条由 Orca 会话 `9a20ac38` 同日改**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-07，会话 `9a20ac38`**；整节替换上一版，**不追加子会话日志**）
 
-以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。只引主题行与固定 pin，不写当前 HEAD；远端状态现查 `ls-remote`。上一版（会话 `32306496`）说「Orca 下一项 N2，未开始」，已被 Orca 主题行 `docs(sdd): close the N2 agent entry round in its ledger` 及之前的实施提交取代。
+以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。只引主题行与固定 pin，不写当前 HEAD；远端状态现查 `ls-remote`。上一版（会话 `6cc0c1e9`，N2 等人审、下一项是隔离验收）已过期：人已审完 N2，隔离验收与本仓两红诊断都在会话 `9a20ac38` 做完。
 
 ## 当前关联状态
 
-- **本仓本轮零改动，ccloop protocol 无变化。** Orca 2026-10-07 在 main 上做完 N2 agent 入口（等人审）。新增的面板 unix socket、`orca control`、`orca mcp serve` 都只是 Orca 面板 `/api/control` 的客户端，不经过、也不调用 ccloop；`commands.client` 归属列在 Orca 控制 store 里。
-- Orca 本轮的门（台账 `.superpowers/sdd/2026-10-07-agent-entry/progress.md` Task 9）用的 `ORCA_CCLOOP_BIN` 是本仓固定 pin 的 clone build：`verify:control` 129 文件全过；全量只红 Orca 已登记的两条负载 flake，与本仓无关。本仓 known reds 本轮没跑。
-- **Orca 下一项**：隔离根的真实 ccmem／syncskill 验收。
-- **人裁 139（2026-10-07，Orca 会话 `9a20ac38`）已做完**：人点名 `stopProof` 那条与 `codexWatchdog` 两条按人裁 88 改写并出名单。`stopProof` 是 `exit` 监听挂晚了（必然超时，非负载）；`codexWatchdog` 是负载下 1.5 s 轮询太紧，外加 rm→mkdir 与 watchdog 100 ms tick 的竞态（与 double-space 无关）。断言一条未改；变异表、三次全量、5× 单跑见台账 `.superpowers/sdd/2026-10-02-crash-resume-and-orphan-reaping/progress.md`「Human ruling 139」节。代价：两条 `codexWatchdog` 现在各跑约 7–8 s。
+- **人裁 139（2026-10-07）已在本仓落地（本地提交）**：`stopProof` 那条与 `codexWatchdog` 两条按人裁 88 改写并出已知红名单，断言未改。`stopProof` 是 `exit` 监听挂晚了的确定性竞态（非负载、非权限）；`codexWatchdog` 是负载下 1.5 s 轮询太紧加 rm→mkdir 与 100 ms tick 的竞态（与 double-space 无关）。代价：两条 `codexWatchdog` 各跑约 7–8 s。证据在台账 `.superpowers/sdd/2026-10-02-crash-resume-and-orphan-reaping/progress.md`「Human ruling 139」节。
+- **Orca 下一项会改本仓**：Orca 已获人批准的计划 `docs/superpowers/plans/2026-10-07-accounts-and-spend-caps.md` 的 **Part B** 给 collect 用量事件加可选字段 `byModel`（每模型 input／output／cacheRead／cacheWrite，累计值；claude 取结果的 `modelUsage`，codex 报单一模型；不知道就不给，不编造），在本仓 worktree 分支 `orca/usage-by-model` 上做，**只加不改既有判据**；既有判据若变红就停下报人。可选的能力标志 `usageBreakdown` 会改 `singleCallCapability` C1，需人按人裁 88 点名（计划 B4）。人合并并推送后 Orca 才重钉（会一并带入 `c3af4d6` 之后的本仓提交，包括人裁 139）。
+- 未变：Orca 面板 socket／`orca control`／`orca mcp serve` 不经过 ccloop。
 
 ## 固定依赖与跨仓约束（仍成立）
 
-- Orca pin `github:blrbiran/ccloop#c3af4d6bdfbe8e9f57e9d2a953cdc610098e781b`（H6 Codex skills 已合并本仓 main 并重钉，主题行 `Merge Codex frozen skill support into main`、Orca `build(deps): pin published ccloop Codex skill support`）。人的面板未重启。发布包不含 test fixtures。
+- Orca pin `github:blrbiran/ccloop#c3af4d6bdfbe8e9f57e9d2a953cdc610098e781b`（H6 Codex skills 已合并本仓 main 并重钉，主题行 `Merge Codex frozen skill support into main`、Orca `build(deps): pin published ccloop Codex skill support`）。发布包不含 test fixtures。Orca 门的 `ORCA_CCLOOP_BIN` 一律用 pin 的 clone build。2026-10-07 观测：拿本仓 main 的 `dist` 当 `ORCA_CCLOOP_BIN` 时，Orca `skillsE2E` 4 条以 `accept-refused:2:control-request-invalid` 红（Orca 新旧两棵树同样红），原因未查。
 - Orca 以 `listAgents` 的 kind 为唯一权威；`listAgents.kind` 改名／改值、`PARTIAL_FLUSH_MARGIN_MS`（Orca 手抄）、protocol 3 的 `skillPluginDir`／`codexSkillsDir` 互斥都必须同步 Orca。
 - Orca v2 默认：`maxFilesTouched`＝`Number.MAX_SAFE_INTEGER`、单 attempt 3 小时、partial recovery 60,000 ms；Orca 门的 fake codex 用 `integration`。Orca 控制 run 被 `ccloop resume` 拒。
 - loop 的 `requiredChecks` 在 worktree 里真跑 `sh -lc`；路径约束只查 executor 自报 `changedFiles`；`rejectOn` 只进 verifier prompt，`constraints` 不进 verifier、`nonGoals` 只进 planner。
