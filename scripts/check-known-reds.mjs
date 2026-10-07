@@ -38,11 +38,20 @@
 // the second paragraph above is no longer current: the load timeout "run-scenario CLI > records claudeChildExited as
 // NOT_OBSERVABLE when no adapter descendant was tracked" joined it (see the entry's own comment below and the Orca
 // ledger .superpowers/sdd/2026-09-26-agent-selection/progress.md sections 11 and 13). ***
+//
+// *** ERRATUM (HUMAN RULING 139, 2026-10-07: "ccloop 那三条测试点名同意") -- the human named three criteria for
+// rewrite under ruling 88 and approved taking them off this roster, so these names are no longer in it:
+// "tests/control/stopProof.test.ts > quiet execution proof > does not treat leader exit as group quiet and proves only
+// after the full tree is gone" (its root cause is now known: an `exit` listener attached after the leader had already
+// exited), "matches historical double-space start identities on single-digit days" and "still reaps registered groups
+// when the observation file becomes unwritable" (a timing budget too tight under load, plus an rm -> mkdir race with
+// the watchdog's tick). The roster sizes stated above are history; the set below is the roster. See the ledger
+// .superpowers/sdd/2026-10-02-crash-resume-and-orphan-reaping/progress.md, section "Human ruling 139". ***
 import { readFileSync } from "node:fs";
 
 const KNOWN_REDS = new Set([
   // Stable red (non-flake), root cause unexamined, nobody authorized touching it.
-  "tests/control/stopProof.test.ts > quiet execution proof > does not treat leader exit as group quiet and proves only after the full tree is gone",
+  // *** ERRATUM (HUMAN RULING 139): the entry this line described is removed; see the header ERRATUM. ***
   // Load flakes (all "Test timed out in 5000ms"), §9 of the design spec.
   // Consolidation step 1 (2026-10-01): two names renamed with their criteria; five run-scenario names removed with theirs.
   "runLoop > persists phase usage evidence from the claude agent adapter without recomputing controller totals",
@@ -50,10 +59,9 @@ const KNOWN_REDS = new Set([
   "claude phase runner > waits for close before interrupting a close-pending successful execute",
   "Codex phase process > kills a TERM-ignoring process before returning abort",
   // Added in §11.1, measured after Task 2 (5 more names + one codexWatchdog pair = 6 more names).
+  // *** ERRATUM (HUMAN RULING 139): the codexWatchdog pair is removed; see the header ERRATUM. ***
   "isolated Codex acceptance harness > succeeds only with real controller, three phases and published answer",
   "accepts the controller's zero-clamped soft budget and records the overrun",
-  "matches historical double-space start identities on single-digit days",
-  "still reaps registered groups when the observation file becomes unwritable",
 ]);
 
 const reportPath = process.argv[2];

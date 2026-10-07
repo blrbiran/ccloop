@@ -62,15 +62,22 @@ afterEach(() => {
 });
 
 describe("quiet execution proof", () => {
+  // HUMAN RULING 139 (2026-10-07, named this criterion for rewrite under ruling 88): this encodes that a registered
+  // group whose leader has exited while its descendants still live is NOT quiet (no proof), and that a proof appears
+  // only once the whole group is gone. The rewrite only moves the wait for the leader's exit: the promise is created
+  // right after spawn. The fixture leader exits ~150 ms after it starts, before the three marker rows exist (10 of 10
+  // probed runs), and an `exit` listener attached after that never fires -- the earlier shape timed out every run.
+  // Assertions unchanged.
   it("does not treat leader exit as group quiet and proves only after the full tree is gone", async () => {
     const f = await stoppedFixture();
     const marker = join(f.sourceDir, "tree.jsonl");
     const leader = spawn(process.execPath, [fixturePath, "leader", marker], { detached: true, stdio: "ignore" });
+    const leaderExited = new Promise<void>((resolveExit) => leader.once("exit", () => resolveExit()));
     const pgid = leader.pid!;
     groups.add(pgid);
     const { stdout } = await execFileAsync("/bin/ps", ["-o", "lstart=", "-p", String(pgid)], { encoding: "utf8", env: { ...process.env, TZ: "UTC", LC_ALL: "C" } });
     await waitForRows(marker, 3);
-    await new Promise<void>((resolveExit) => leader.once("exit", () => resolveExit()));
+    await leaderExited;
     await writeFile(join(f.sourceDir, "control", "processes.json"), JSON.stringify([{ pid: pgid, pgid, startedAt: stdout.trim(), phase: "execute", registeredAt: new Date().toISOString() }]));
 
     expect(await proveStopped(f.record, { graceMs: 20 })).toBeNull();
