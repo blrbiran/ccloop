@@ -17,6 +17,7 @@ import { acceptStart } from "./accept.js";
 import { collectExecution, inspectExecution } from "./collect.js";
 import { MAX_CONTROL_BYTES, readEvidence } from "./evidence.js";
 import { requestHandoff } from "./handoff.js";
+import { byModelSchema } from "./usage.js";
 
 export interface ControlCommandResult {
   code: number;
@@ -116,13 +117,14 @@ const evidenceSchema = z
   .strict();
 const safeInteger = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const amountSchema = z.object({ tokens: safeInteger, activeMs: safeInteger, attempts: safeInteger, sessions: safeInteger }).strict();
-const usageEventSchema = z.object({
+export const usageEventSchema = z.object({
   runId: z.string().min(1),
   generation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   eventSeq: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   bucket: z.enum(["work", "handoff"]),
   cumulative: amountSchema.nullable(),
   source: artifactRefSchema,
+  byModel: byModelSchema.optional(),
 }).strict();
 const terminalSchema = z.object({
   status: z.enum(["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"]),

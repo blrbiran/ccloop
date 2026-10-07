@@ -12,6 +12,15 @@ import {
 import { atomicReplacePrivateFile, ensurePrivateDirectory, readPrivateFile } from "./paths.js";
 import { writeEvidence } from "./evidence.js";
 
+/** Per-model token usage; `input` is non-cached input. Arrays are sorted by `model`, unique. */
+export interface ModelUsageV1 {
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
 export interface UsageEventV1 {
   runId: string;
   generation: number;
@@ -19,6 +28,7 @@ export interface UsageEventV1 {
   bucket: "work" | "handoff";
   cumulative: AmountV1 | null;
   source: ArtifactRefV1;
+  byModel?: ModelUsageV1[];
 }
 
 export interface UsageObservationInput {
@@ -31,6 +41,7 @@ export interface UsageObservationInput {
   attempts: number;
   sessions: number;
   evidence: unknown;
+  byModel?: ModelUsageV1[];
 }
 
 interface UsageStateV1 {
@@ -47,6 +58,12 @@ const id = z.string().min(1).max(200).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const amount = z.object({ tokens: safe, activeMs: safe, attempts: safe, sessions: safe }).strict();
 const artifact = z.object({ artifactId: id, hash }).strict();
+export const modelUsageSchema = z
+  .object({ model: z.string().min(1).max(200), input: safe, output: safe, cacheRead: safe, cacheWrite: safe })
+  .strict();
+export const byModelSchema = z
+  .array(modelUsageSchema)
+  .refine((entries) => entries.every((entry, index) => index === 0 || entries[index - 1]!.model < entry.model));
 const eventSchema = z
   .object({
     runId: id,
@@ -55,6 +72,7 @@ const eventSchema = z
     bucket: z.enum(["work", "handoff"]),
     cumulative: amount.nullable(),
     source: artifact,
+    byModel: byModelSchema.optional(),
   })
   .strict();
 const stateSchema = z
@@ -77,6 +95,7 @@ const inputSchema = z
     attempts: safe,
     sessions: safe,
     evidence: z.unknown(),
+    byModel: byModelSchema.optional(),
   })
   .strict();
 
@@ -177,6 +196,7 @@ export async function appendUsageObservation(
       bucket: input.bucket,
       cumulative: input.threadTotalTokens === null ? null : totals,
       source,
+      ...(input.byModel === undefined ? {} : { byModel: input.byModel }),
     };
     const next: UsageStateV1 = {
       ...state,
