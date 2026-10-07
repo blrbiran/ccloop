@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
 import type { AttemptContext, RuntimeAdapter } from "../types.js";
-import { decodeCodexResult, parseCodexConfig, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
+import { codexModelUsage, decodeCodexResult, parseCodexConfig, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
 import { runCodexPhase } from "./runCodexPhase.js";
 
 /** Orca handoff delivery C-3: an aborted phase, carrying the usage its stdout showed before the kill (or null). */
@@ -32,7 +32,9 @@ export class CodexAdapter implements RuntimeAdapter {
     try {
       const result = decodeCodexResult(phase, outcome.events, phase === "execute" ? JSON.stringify(z.object({result:z.unknown()}).strict().parse(JSON.parse(outcome.final)).result) : outcome.final);
       await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(result.usageEvidence, null, 2), { mode: 0o600 });
-      return result;
+      // Orca accounts plan B3: codex runs one model, so the whole usage belongs to it.
+      const modelUsage = codexModelUsage(outcome.events, this.config.model);
+      return modelUsage === null ? result : { ...result, modelUsage };
     } catch (error) {
       await writeFile(join(outcome.evidenceDir, "decode-error.txt"), String(error), { mode: 0o600 });
       throw new Error(`${String(error)}: ${outcome.evidenceDir}`);

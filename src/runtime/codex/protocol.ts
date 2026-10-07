@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import { z } from "zod";
+import type { ModelUsageV1 } from "../../control/usage.js";
 import type { AttemptPlan, ExecutionResult, UsageEvidence, VerificationResult } from "../types.js";
 
 export type CodexPhase = "plan" | "execute" | "verify";
@@ -101,4 +102,24 @@ export function decodeCodexResult<P extends CodexPhase>(phase:P, events:string, 
   };
   // Validation above selects the phase schema; the generic preserves that selection for callers.
   return {...parsed.data, tokenUsage, usageEvidence} as PhaseResults[P];
+}
+
+/**
+ * Orca accounts plan B3 (2026-10-07): the usage of the run's single model, re-read from the `turn.completed` row that
+ * decodeCodexResult validated (call it on events that decoded). `input` is the non-cached input, so the entry adds up to
+ * input_tokens + output_tokens, the tokenUsage decodeCodexResult reports. Null when there is no usable completion or the
+ * model name is one the usage schema refuses (empty, over 200 chars): absent, never a guess.
+ */
+export function codexModelUsage(events: string, model: string): ModelUsageV1[] | null {
+  if (model.length < 1 || model.length > 200) return null;
+  let usage: Record<string, unknown> | undefined;
+  for (const line of events.split("\n")) {
+    let row: unknown;
+    try { row = JSON.parse(line); } catch { continue; }
+    if (record(row) && row.type === "turn.completed" && record(row.usage)) usage = row.usage;
+  }
+  if (!usage) return null;
+  const { input_tokens: total, output_tokens: output, cached_input_tokens: cached = 0 } = usage;
+  if (!integer(total) || !integer(output) || !integer(cached) || cached > total) return null;
+  return [{ model, input: total - cached, output, cacheRead: cached, cacheWrite: 0 }];
 }
