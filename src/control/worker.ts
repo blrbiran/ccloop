@@ -37,7 +37,8 @@ interface ManagedProcessV1 {
  * Orca accounts plan B2 (2026-10-07): the run's per-model breakdown, kept beside the worker's cumulative tokens. Called
  * for each settled phase whose tokenUsage is known; answers the breakdown to put on that phase's event, or undefined.
  * A phase that spent tokens without a breakdown makes it unknown for the rest of the run: that share cannot be
- * recovered, so no later breakdown is trusted, even one whose totals happen to agree.
+ * recovered, so no later breakdown is trusted, even one whose totals happen to agree. So does a phase whose breakdown
+ * does not add up to its own tokenUsage.
  */
 export function createByModelAccumulator(): {
   settle(tokenUsage: number, modelUsage: ModelUsageV1[] | undefined, cumulativeTokens: number): ModelUsageV1[] | undefined;
@@ -48,6 +49,10 @@ export function createByModelAccumulator(): {
       if (byModel === null) return undefined;
       if (modelUsage === undefined) {
         if (tokenUsage > 0) byModel = null;
+      } else if (reconciledByModel(modelUsage, tokenUsage) === undefined) {
+        // Final fix wave (partB-final-review Minor 1): this phase's split is wrong; a later opposite error could make the
+        // run total agree again, so the breakdown stops here as for a phase with no breakdown.
+        byModel = null;
       } else {
         for (const entry of modelUsage) {
           const prior = byModel.get(entry.model);

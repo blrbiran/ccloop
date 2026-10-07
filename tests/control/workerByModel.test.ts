@@ -146,6 +146,18 @@ describe("the worker's per-model breakdown (Orca accounts plan B2)", { timeout: 
     expect(events.filter((event) => Object.hasOwn(event, "byModel"))).toEqual([]);
   });
 
+  // Final fix wave (partB-final-review Minor 1, 2026-10-07): a phase whose models do not add up to its own tokens has a
+  // wrong split; a later opposite error could make the run total agree again, so the breakdown stops for good there.
+  it("stops the breakdown for good at a phase whose models do not add up to its own tokens, even when a later error cancels it", async () => {
+    const events = await runWorkBucket([
+      { tokens: 60, modelUsage: [entry("claude-opus-5-5", 50, 15)] },
+      { tokens: 30, modelUsage: [entry("claude-haiku-4-5", 20, 5)] },
+      { tokens: 10, modelUsage: [entry("claude-haiku-4-5", 6, 4)] },
+    ]);
+    expect(events.map((event) => event.cumulative?.tokens)).toEqual([60, 90, 100]);
+    expect(events.filter((event) => Object.hasOwn(event, "byModel"))).toEqual([]);
+  });
+
   it("does not let a later breakdown vouch for a share spent unseen, even when the totals happen to agree", () => {
     const accumulator = createByModelAccumulator();
     expect(accumulator.settle(65, [entry("claude-opus-5-5", 50, 15)], 65)).toEqual([entry("claude-opus-5-5", 50, 15)]);
