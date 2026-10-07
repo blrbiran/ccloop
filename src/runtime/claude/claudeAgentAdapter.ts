@@ -347,7 +347,8 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       throw new SingleCallOutputInvalid(outcome.evidenceDir, tokenUsage, usageEvidence);
     }
     // Orca accounts plan B2 (2026-10-07): the runner's per-model breakdown, only when it printed one (buildModelUsage);
-    // the usage event's schema checks it again before it is booked.
+    // the usage event's schema checks it again before it is booked: a malformed one is refused there (control-usage-invalid)
+    // and the run fails rather than booking it.
     return { output, tokenUsage, usageEvidence, ...(Array.isArray(answer.modelUsage) ? { modelUsage: answer.modelUsage as ModelUsageV1[] } : {}) };
   }
 }

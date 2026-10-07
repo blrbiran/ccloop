@@ -635,6 +635,9 @@ async function main() {
     }
     // Crash resume (2026-10-02), spec §5.1: only the runner may say a partial is its own.
     if (request.phase === "execute" && Object.prototype.hasOwnProperty.call(structured, "partialOrigin")) delete structured.partialOrigin;
+    // Orca accounts plan B2 fix round 1 (2026-10-07): only the envelope says what each model spent; a modelUsage the model
+    // wrote into its own answer is never the breakdown it is charged by.
+    if (Object.prototype.hasOwnProperty.call(structured, "modelUsage")) delete structured.modelUsage;
     const broken = request.phase === "execute" ? partialExecutionRuleBroken(structured) : null;
     if (broken !== null) {
       throw new Error(`claude-execute-partial-incomplete: ${broken}`);

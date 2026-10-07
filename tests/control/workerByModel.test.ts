@@ -12,7 +12,7 @@ import { writeAccepted } from "../../src/control/store.js";
 import { appendUsageObservation, byModelSchema, readUsageEvents, type ModelUsageV1, type UsageEventV1 } from "../../src/control/usage.js";
 import { createByModelAccumulator, runControlWorker } from "../../src/control/worker.js";
 import type { RuntimeAdapter } from "../../src/runtime/types.js";
-import { claudeInstallation, sealClaude, singleCallEnvelope } from "./agentsFixture.js";
+import { claudeInstallation, sealClaude, singleCallEnvelope, startEnvelope } from "./agentsFixture.js";
 
 // Orca accounts plan, Part B Task B2 (2026-10-07): the control worker adds each phase's per-model breakdown into a
 // run-wide one beside its cumulative token count, and puts it on the usage event only while it is known to be whole:
@@ -204,5 +204,82 @@ describe("a single call's per-model breakdown through the control worker (Orca a
     const [work] = await readUsageEvents(world.sourceDir);
     expect(work!.cumulative!.tokens).toBe(65);
     expect(Object.hasOwn(work!, "byModel")).toBe(false);
+  });
+});
+
+// Fix round 1 of B2 (2026-10-07, review Important 2): the loop path through the real runControlWorker, so the worker's
+// own onPhaseSettled -- not a copy of it -- is what puts byModel on the events.
+const PHASE_USAGE = {
+  plan: { usage: { input_tokens: 40, output_tokens: 15, cache_read_input_tokens: 8, cache_creation_input_tokens: 2 }, modelUsage: {
+    "claude-opus-5-5": { inputTokens: 30, outputTokens: 10, cacheReadInputTokens: 8, cacheCreationInputTokens: 2 },
+    "claude-haiku-4-5": { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+  } },
+  execute: { usage: { input_tokens: 20, output_tokens: 6, cache_read_input_tokens: 4, cache_creation_input_tokens: 0 }, modelUsage: {
+    "claude-opus-5-5": { inputTokens: 20, outputTokens: 6, cacheReadInputTokens: 4, cacheCreationInputTokens: 0 },
+  } },
+  verify: { usage: { input_tokens: 15, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, modelUsage: {
+    "claude-haiku-4-5": { inputTokens: 15, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+  } },
+};
+
+/** A claude stand-in for a loop run: answers --version; else tells the phase by its --json-schema, as the shared fake does. */
+async function loopWorld(): Promise<{ sourceDir: string; worker: Promise<void> }> {
+  const root = await temp("ccloop-worker-by-model-loop-");
+  const repo = join(root, "target"), sourceDir = join(root, "source"), probe = join(root, "claude.mjs");
+  await mkdir(repo);
+  await mkdir(join(sourceDir, "input"), { recursive: true });
+  for (const args of [["init", "-q", "-b", "main"], ["config", "user.name", "Test"], ["config", "user.email", "test@example.invalid"]]) await execFileAsync("git", args, { cwd: repo });
+  await writeFile(join(repo, "answer.txt"), "0\n");
+  await execFileAsync("git", ["add", "."], { cwd: repo });
+  await execFileAsync("git", ["commit", "-qm", "base"], { cwd: repo });
+  await writeFile(probe, `import { writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args.includes("--version")) { process.stdout.write("9.9.9-probe\\n"); process.exit(0); }
+const schema = JSON.parse(args[args.indexOf("--json-schema") + 1]);
+const phase = schema.properties?.changedFiles ? "execute" : schema.properties?.approved ? "verify" : "plan";
+const usage = ${JSON.stringify(PHASE_USAGE)}[phase];
+const body = {
+  plan: { summary: "set answer", primaryTargetPaths: ["answer.txt"] },
+  execute: { changedFiles: ["answer.txt"], diffPatch: "", commandOutputs: [], stdoutStderrLog: "" },
+  verify: { approved: true, rejectCategory: "", primaryTargetPaths: ["answer.txt"], failingCommand: null, safeToRetry: false, evidence: [], pauseSignals: [], stopSignals: [] },
+}[phase];
+if (phase === "execute") writeFileSync("answer.txt", "42\\n");
+process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, structured_output: body, ...usage }) + "\\n");
+`);
+  const sealed = await sealClaude(await claudeInstallation([process.execPath, probe], { timeoutMs: 20_000, killGraceMs: 300 }));
+  const contract: LoopContract = {
+    objective: { taskId: "task-1", goal: "Set answer.txt to 42", successCondition: "answer is 42", nonGoals: [] },
+    context: { repoPath: repo, targetPaths: ["answer.txt"], relevantDocs: [], buildTestCommands: ["true"], constraints: [] },
+    executionPolicy: { autonomyLevel: "L2", maxAttempts: 1, perAttemptTimeoutMs: 20_000, totalRuntimeBudgetMs: 60_000, tokenBudget: 1_000, worktreeRequired: true, partialOutcomeRecoveryWindowMs: 100 },
+    safetyPolicy: { allowlistPaths: ["answer.txt"], denylistPaths: [], maxFilesTouched: 2, humanGateConditions: [] },
+    verification: { verifierType: "agent", requiredChecks: ["true"], rejectOn: ["failure"], evidenceRequired: [] },
+    escalationAndExit: { escalationTargets: [], pauseOn: [], stopOn: [], terminalStates: ["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"] },
+  };
+  const envelope = startEnvelope({ sourceDir, targetRepo: repo, contract, agent: sealed.selection, configHash: sealed.configHash });
+  const controlDir = join(sourceDir, "control");
+  await ensurePrivateDirectory(sourceDir, controlDir);
+  await atomicReplacePrivateFile(sourceDir, join(controlDir, "config.json"), Buffer.from(canonicalJson(sealed.config)));
+  await atomicReplacePrivateFile(sourceDir, join(controlDir, "envelope.json"), Buffer.from(canonicalJson(envelope)));
+  await writeAccepted(sourceDir, {
+    protocol: 1, envelopeHash: canonicalHash(envelope), executionId: "execution-1", configHash: envelope.claim.configHash,
+    generation: 1, acceptedAt: new Date().toISOString(), launch: "intended", worker: null,
+  });
+  return { sourceDir, worker: runControlWorker(["--source-dir", sourceDir, "--execution-id", "execution-1", "--nonce", "nonce-1"]) };
+}
+
+describe("a loop run's per-model breakdown through the control worker (Orca accounts plan B2, fix round 1)", { timeout: 60_000 }, () => {
+  it("puts the summed breakdown on each work event, reconciled to its cumulative tokens", async () => {
+    const world = await loopWorld();
+    await world.worker;
+    const events = await readUsageEvents(world.sourceDir);
+    const work = events.filter((event) => event.bucket === "work");
+    expect(work.map((event) => event.cumulative?.tokens)).toEqual([65, 95, 115]);
+    expect(work.map((event) => event.byModel)).toEqual([
+      [entry("claude-haiku-4-5", 10, 5), entry("claude-opus-5-5", 30, 10, 8, 2)],
+      [entry("claude-haiku-4-5", 10, 5), entry("claude-opus-5-5", 50, 16, 12, 2)],
+      [entry("claude-haiku-4-5", 25, 10), entry("claude-opus-5-5", 50, 16, 12, 2)],
+    ]);
+    expectReconciled(events);
+    expect(events.filter((event) => event.bucket === "handoff").every((event) => !Object.hasOwn(event, "byModel"))).toBe(true);
   });
 });

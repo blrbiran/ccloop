@@ -37,6 +37,15 @@ describe("buildModelUsage (Orca accounts plan B2)", () => {
     expect(buildModelUsage({ modelUsage: { ...MODEL_USAGE, "claude-sonnet-4-6": { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0 } } })).toBeNull();
   });
 
+  // Fix round 1 (review Minor 4): a model name the usage event's schema refuses (1..200 characters) would fail the run
+  // when booked, so the breakdown is unknown instead.
+  it("answers null for a model name the usage event cannot carry: empty, or longer than 200 characters", () => {
+    const one = MODEL_USAGE["claude-haiku-4-5"];
+    expect(buildModelUsage({ modelUsage: { ...MODEL_USAGE, "": one } })).toBeNull();
+    expect(buildModelUsage({ modelUsage: { ...MODEL_USAGE, ["x".repeat(201)]: one } })).toBeNull();
+    expect(buildModelUsage({ modelUsage: { ["x".repeat(200)]: one } })).toEqual([{ model: "x".repeat(200), input: 10, output: 5, cacheRead: 0, cacheWrite: 0 }]);
+  });
+
   it("answers null when there is no map, or an empty one: absent means unknown, never an empty breakdown", () => {
     expect(buildModelUsage({ type: "result", usage: USAGE })).toBeNull();
     expect(buildModelUsage({ modelUsage: {} })).toBeNull();
@@ -97,6 +106,19 @@ describe("the claude phase runner reports modelUsage (Orca accounts plan B2)", {
     const outcome = await runnerWith(plan(await work()), result({}));
     expect(outcome.code, outcome.stderr).toBe(0);
     expect(Object.hasOwn(JSON.parse(outcome.stdout), "modelUsage")).toBe(false);
+  });
+
+  // Fix round 1 (review Important 1): the breakdown prices the run, so only claude's envelope may give it; a modelUsage the
+  // model wrote into its own structured output is dropped.
+  it("never takes a breakdown from the model's own structured output", async () => {
+    const forged = [{ model: "claude-haiku-4-5", input: 65, output: 0, cacheRead: 0, cacheWrite: 0 }];
+    const structured = { summary: "s", primaryTargetPaths: ["a.txt"], modelUsage: forged };
+    const without = await runnerWith(plan(await work()), result({ structured_output: structured }));
+    expect(without.code, without.stderr).toBe(0);
+    expect(Object.hasOwn(JSON.parse(without.stdout), "modelUsage")).toBe(false);
+    const withEnvelope = await runnerWith(plan(await work()), result({ structured_output: structured, modelUsage: MODEL_USAGE }));
+    expect(withEnvelope.code, withEnvelope.stderr).toBe(0);
+    expect(JSON.parse(withEnvelope.stdout).modelUsage).toEqual(EXPECTED);
   });
 
   it("carries modelUsage on a single call's answer too", async () => {
