@@ -1,4 +1,4 @@
-# ccloop Handoff — 2026-10-07：本仓零改动；Orca 做完 N2 agent 入口（面板控制 socket＋`orca control`＋skill＋`orca mcp serve`，等人审）。Orca 下一项是隔离根的真实 ccmem／syncskill 验收和本仓两红（`stopProof`／`codexWatchdog`）的诊断。详见文末「Orca 那条线」。
+# ccloop Handoff — 2026-10-07：本仓只有人裁 139 改了三条判据与已知红名单（`src/**` 零改动）；Orca 做完 N2 agent 入口（面板控制 socket＋`orca control`＋skill＋`orca mcp serve`，等人审）。Orca 下一项是隔离根的真实 ccmem／syncskill 验收；本仓两红（`stopProof`／`codexWatchdog` 两条）已改写转绿并出名单。详见文末「Orca 那条线」。
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -35,9 +35,10 @@ rtk proxy npm run typecheck; rtk proxy npm run build
   ⇒ **不要再靠肉眼核名单**：跑 `node scripts/check-known-reds.mjs <vitest --reporter=json 的输出>`，
   它按**全名**做子集判定，RC 0 才算绿。**该脚本两个方向都验过**（名单内退 0、名单外退 1、
   以及「名字是某条名单项的裸后缀」这种伪装也退 1）。
-- ⚠️ *** **那条稳定红仍然红着**：`tests/control/stopProof.test.ts > quiet execution proof >
-  does not treat leader exit as group quiet and proves only after the full tree is gone`。
-  根因未查，无人授权动它。** ***
+- ✅ **那条稳定红（`tests/control/stopProof.test.ts > quiet execution proof > does not treat leader exit as group quiet
+  and proves only after the full tree is gone`）已按人裁 139（2026-10-07）改写转绿并出名单**：根因是 `exit` 监听挂在
+  leader 已退出之后，必然超时。细节见台账 `.superpowers/sdd/2026-10-02-crash-resume-and-orphan-reaping/progress.md`
+  的「Human ruling 139」一节。
 - ⚠️ *** **`git clone --local` 副本必须先 `npm run build`** *** —— `dist/` 被 gitignore，
   不 build 会让 `tests/control/endToEnd.test.ts` 的 6 条以 `ENOENT … dist/cli.js` **假红**。
   ⚠️ **副本一律建在会话 scratchpad 目录下，不要建在仓库旁边**（人裁 137）。
@@ -224,7 +225,6 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 
 | 挂账 | 现场 |
 |---|---|
-| **`stopProof` 那条稳定红** | 根因未查，**要人先开口**。判别过程：副本单跑 3/3 红、主树也红、单跑 5.37s（远低于 flake 画像 25–29s） |
 | **Linux** | 整套在 Linux 上本来就红 5 条（先于点 B 的包级缺口）；本机 OrbStack daemon 实测未起。**要人自己开** |
 | **M3（本轮登记，未修）** | 一把锁若**同时**是 liveness-undetermined 且带 transaction marker，会记**两条** `owner_transfer_contended`，而所有判据都断言一条。**形状是既有的**（unattributable 那支一模一样），但新错误类让它从一个**平常得多**的起因就能到达 |
 | **M4（本轮登记，未修）** | `tests/registry/zeroWrite.test.ts` 的 `snapshotTree` **不记录扫描根自身的 mtime** ⇒ 探测若 touch 了根目录仍然隐形 |
@@ -407,7 +407,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-07，会话 `6cc0c1e9`**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-07，会话 `6cc0c1e9`；人裁 139 相关几条由 Orca 会话 `9a20ac38` 同日改**；整节替换上一版，**不追加子会话日志**）
 
 以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。只引主题行与固定 pin，不写当前 HEAD；远端状态现查 `ls-remote`。上一版（会话 `32306496`）说「Orca 下一项 N2，未开始」，已被 Orca 主题行 `docs(sdd): close the N2 agent entry round in its ledger` 及之前的实施提交取代。
 
@@ -415,7 +415,8 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 
 - **本仓本轮零改动，ccloop protocol 无变化。** Orca 2026-10-07 在 main 上做完 N2 agent 入口（等人审）。新增的面板 unix socket、`orca control`、`orca mcp serve` 都只是 Orca 面板 `/api/control` 的客户端，不经过、也不调用 ccloop；`commands.client` 归属列在 Orca 控制 store 里。
 - Orca 本轮的门（台账 `.superpowers/sdd/2026-10-07-agent-entry/progress.md` Task 9）用的 `ORCA_CCLOOP_BIN` 是本仓固定 pin 的 clone build：`verify:control` 129 文件全过；全量只红 Orca 已登记的两条负载 flake，与本仓无关。本仓 known reds 本轮没跑。
-- **Orca 下一项**：隔离根的真实 ccmem／syncskill 验收，以及 **本仓已知红 `stopProof`／`codexWatchdog` 的诊断**。都未开始；诊断须先复现，分清权限原因和负载原因；改既有判据要人点名。
+- **Orca 下一项**：隔离根的真实 ccmem／syncskill 验收。
+- **人裁 139（2026-10-07，Orca 会话 `9a20ac38`）已做完**：人点名 `stopProof` 那条与 `codexWatchdog` 两条按人裁 88 改写并出名单。`stopProof` 是 `exit` 监听挂晚了（必然超时，非负载）；`codexWatchdog` 是负载下 1.5 s 轮询太紧，外加 rm→mkdir 与 watchdog 100 ms tick 的竞态（与 double-space 无关）。断言一条未改；变异表、三次全量、5× 单跑见台账 `.superpowers/sdd/2026-10-02-crash-resume-and-orphan-reaping/progress.md`「Human ruling 139」节。代价：两条 `codexWatchdog` 现在各跑约 7–8 s。
 
 ## 固定依赖与跨仓约束（仍成立）
 
@@ -429,7 +430,7 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 
 ## 挂账与 awaitingHuman
 
-- 全量已知红 `stopProof`（稳定红，根因未查）与 `codexWatchdog`（historical double-space）未关闭，不能报全绿；两条未入名单的负载 flake（`agentsControl`、`evidence`）与阶段 `setTimeout` 超 2,147,483,647 ms 变 1 ms 仍未处理。名单与既有判据不能由实施者自改。
+- `stopProof`／`codexWatchdog` 已出名单（人裁 139）；名单里剩下的都是负载 flake，负载不高时全量可以全绿（2026-10-07 三次全量里两次 1188/1188），负载高时仍会红。未入名单的负载 flake 除旧有的 `agentsControl`、`evidence` 外，人裁 139 那轮又在 load 15–35 下看到：`endToEnd` 的 `candidate-fsynced`、`claudeAgentAdapter` 的 `a complete answer written after a stop is returned for execute`、`runCodexPhase` 的 `refuses output-limit output`／`labels truncated evidence explicitly`、`skillsController` 的三条 `handoff-abort`（名字全文见台账）。阶段 `setTimeout` 超 2,147,483,647 ms 变 1 ms 仍未处理。名单与既有判据不能由实施者自改，入名单要人点头。
 - 真 Claude §5.1「partial＋error 进 verify」与 reaper 杀活 claude 未验收；没有付费验收授权。
 - Claude 升级会触发旧 run `agent-version-drift`；本机 Claude 会被同版本重装（nvm／homebrew 各一份），付费跑前后记安装目录 mtime，成本套 Orca `scripts/claude-tee.mjs`。
-- 纪律：known reds 用 `node scripts/check-known-reds.mjs`、泄漏用 `node scripts/check-tmp-leak.mjs`；`stopProof` 之外的登记红也会实际出现。写文件工具可能改非 NFC／Unicode 转义，相关样本按字节核；测试不在收集期整文件 skip，用 `beforeEach` 的 `ctx.skip()`。`cp`／`rm` 带 `-i`。只在 `git clone --local` 副本 build／验证；HOME＋四 XDG 改道、TMPDIR 短且真；用作 `ORCA_CCLOOP_BIN` 的 clone 不做变异；输出重定向到文件再完整读回。
+- 纪律：known reds 用 `node scripts/check-known-reds.mjs`、泄漏用 `node scripts/check-tmp-leak.mjs`；名单上的负载红在高负载下会实际出现。写文件工具可能改非 NFC／Unicode 转义，相关样本按字节核；测试不在收集期整文件 skip，用 `beforeEach` 的 `ctx.skip()`。`cp`／`rm` 带 `-i`。只在 `git clone --local` 副本 build／验证；HOME＋四 XDG 改道、TMPDIR 短且真；用作 `ORCA_CCLOOP_BIN` 的 clone 不做变异；输出重定向到文件再完整读回。
