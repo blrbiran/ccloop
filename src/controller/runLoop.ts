@@ -48,6 +48,7 @@ import type { FailureFingerprint, LastTrustedBoundary, RunState, StopDecision } 
 import { cleanupAttemptWorkspace, createAttemptWorkspace, publishAttemptCommit } from "../workspace/worktreeManager.js";
 import { materializeFirstWorkspace } from "../control/materialize.js";
 import type { InputCheckpointV1 } from "../control/protocol.js";
+import type { ModelUsageV1 } from "../control/usage.js";
 
 export type { AttemptContext } from "../runtime/types.js";
 
@@ -1202,6 +1203,8 @@ export interface RunControlHooks {
     elapsedMs: number;
     tokenUsage: number | null;
     usageEvidence: UsageEvidence | undefined;
+    /** Orca accounts plan B2 (2026-10-07): the phase result's per-model breakdown; the key is absent when it had none. */
+    modelUsage?: ModelUsageV1[];
     // Agent selection (2026-09-26) §4.7b: true only when the phase returned its result; a phase settled
     // with no result, or only with usage observed before an abort, is false.
     completedWithResult: boolean;
@@ -1239,7 +1242,7 @@ export async function runLoopFromState(
     phase: PhaseName,
     attempt: number,
     elapsedMs: number,
-    result?: { tokenUsage?: number; usageEvidence?: UsageEvidence } | null,
+    result?: { tokenUsage?: number; usageEvidence?: UsageEvidence; modelUsage?: ModelUsageV1[] } | null,
     usageOnly = false,
   ): Promise<void> => {
     const key = `${attempt}:${phase}`;
@@ -1253,6 +1256,7 @@ export async function runLoopFromState(
       elapsedMs,
       tokenUsage: result?.tokenUsage ?? null,
       usageEvidence: result?.usageEvidence,
+      ...(result?.modelUsage === undefined ? {} : { modelUsage: result.modelUsage }),
       completedWithResult: !usageOnly && result !== undefined && result !== null,
     });
   };

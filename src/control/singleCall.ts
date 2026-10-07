@@ -9,7 +9,7 @@ import { atomicReplacePrivateFile, ensurePrivateDirectory } from "./paths.js";
 import { canonicalHash, canonicalJson, type ArtifactRefV1, type HandoffRequestV1, type SingleCallStartEnvelope } from "./protocol.js";
 import { recordCompletedPhase } from "./stopProof.js";
 import { testCrashPoint } from "./testCrashPoint.js";
-import { appendUsageObservation } from "./usage.js";
+import { appendUsageObservation, reconciledByModel, type ModelUsageV1 } from "./usage.js";
 
 // Orca single-call estimate (2026-09-27), spec docs/superpowers/specs/2026-09-27-single-call-estimate-design.md §5.2 in
 // the Orca repository: single-call work is one read-only structured call. It never touches git (no attempt ref, no
@@ -73,6 +73,7 @@ export async function runSingleCall(
   let outcome: SingleCallRecordV1["outcome"];
   let output: unknown = null;
   let tokens: number | null = null;
+  let modelUsage: ModelUsageV1[] | undefined;
   let usageEvidence: unknown = null;
   let errorCode: string | null = null;
   let completedWithResult = false;
@@ -90,6 +91,7 @@ export async function runSingleCall(
     outcome = "complete";
     output = result.output;
     tokens = result.tokenUsage;
+    modelUsage = result.modelUsage;
     usageEvidence = result.usageEvidence;
     completedWithResult = true;
   } catch (error) {
@@ -120,6 +122,8 @@ export async function runSingleCall(
 
   if (completedWithResult) await recordCompletedPhase(sourceDir);
   const outputRef = outcome === "complete" ? await writeEvidence(sourceDir, Buffer.from(canonicalJson(output))) : null;
+  // Orca accounts plan B2 (2026-10-07): the call's per-model breakdown, only when it adds up to the tokens booked.
+  const byModel = reconciledByModel(modelUsage, tokens);
   await appendUsageObservation(sourceDir, {
     runId: claim.runId,
     generation: claim.generation,
@@ -130,6 +134,7 @@ export async function runSingleCall(
     attempts: 1,
     sessions: 1,
     evidence: { phase: "single-call", outcome, errorCode, elapsedMs, tokenUsage: tokens, usageEvidence },
+    ...(byModel === undefined ? {} : { byModel }),
   });
 
   const request = await hooks.settleRequest();

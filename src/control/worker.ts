@@ -6,7 +6,7 @@ import { AgentError } from "../agents/types.js";
 import { createStopRequestSignal, runLoop } from "../controller/runLoop.js";
 import { isTerminalRunStatus } from "../state/stateMachine.js";
 import { atomicReplacePrivateFile, readPrivateFile } from "./paths.js";
-import { appendUsageObservation, readUsageEvents } from "./usage.js";
+import { appendUsageObservation, readUsageEvents, reconciledByModel, type ModelUsageV1 } from "./usage.js";
 import { canonicalJson, isLoopEnvelope, parseControlRequest, type StartEnvelopeV3 } from "./protocol.js";
 import { prepareContinuationContract } from "./materialize.js";
 import {
@@ -31,6 +31,40 @@ interface ManagedProcessV1 {
   startedAt: string;
   phase: string;
   registeredAt: string;
+}
+
+/**
+ * Orca accounts plan B2 (2026-10-07): the run's per-model breakdown, kept beside the worker's cumulative tokens. Called
+ * for each settled phase whose tokenUsage is known; answers the breakdown to put on that phase's event, or undefined.
+ * A phase that spent tokens without a breakdown makes it unknown for the rest of the run: that share cannot be
+ * recovered, so no later breakdown is trusted, even one whose totals happen to agree.
+ */
+export function createByModelAccumulator(): {
+  settle(tokenUsage: number, modelUsage: ModelUsageV1[] | undefined, cumulativeTokens: number): ModelUsageV1[] | undefined;
+} {
+  let byModel: Map<string, ModelUsageV1> | null = new Map();
+  return {
+    settle(tokenUsage, modelUsage, cumulativeTokens) {
+      if (byModel === null) return undefined;
+      if (modelUsage === undefined) {
+        if (tokenUsage > 0) byModel = null;
+      } else {
+        for (const entry of modelUsage) {
+          const prior = byModel.get(entry.model);
+          byModel.set(entry.model, prior === undefined ? { ...entry } : {
+            model: entry.model,
+            input: prior.input + entry.input,
+            output: prior.output + entry.output,
+            cacheRead: prior.cacheRead + entry.cacheRead,
+            cacheWrite: prior.cacheWrite + entry.cacheWrite,
+          });
+        }
+      }
+      if (byModel === null) return undefined;
+      const entries = [...byModel.values()].sort((left, right) => (left.model < right.model ? -1 : left.model > right.model ? 1 : 0));
+      return reconciledByModel(entries, cumulativeTokens);
+    },
+  };
 }
 
 function flag(argv: string[], name: string): string {
@@ -118,6 +152,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
     }));
     await initializeProcessRegistry(sourceDir);
     let cumulativeTokens = 0;
+    const byModelAccumulator = createByModelAccumulator();
     const stopRequested = createStopRequestSignal();
     const phaseAbort = new AbortController();
     let watcherStopped = false;
@@ -203,10 +238,12 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       onProcessRegistered,
       onPhaseSettled: async (observation) => {
         if (observation.completedWithResult) await recordCompletedPhase(sourceDir);
+        let byModel: ModelUsageV1[] | undefined;
         if (observation.tokenUsage !== null) {
           const next = cumulativeTokens + observation.tokenUsage;
           if (!Number.isSafeInteger(next)) throw new Error("control-usage-overflow");
           cumulativeTokens = next;
+          byModel = byModelAccumulator.settle(observation.tokenUsage, observation.modelUsage, cumulativeTokens);
         }
         await appendUsageObservation(sourceDir, {
           runId: envelope.claim.runId,
@@ -218,6 +255,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
           attempts: observation.attempt,
           sessions: 1,
           evidence: observation,
+          ...(byModel === undefined ? {} : { byModel }),
         });
         const request = await readHandoffRequestOptional(sourceDir);
         if (request !== null) armRequest(request);

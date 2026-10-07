@@ -160,3 +160,36 @@ export function writeObservation(path, snapshot) {
   writeFileSync(temporary, JSON.stringify({ schema: OBSERVED_USAGE_SCHEMA, total: snapshot.total, messages: snapshot.messages, source: "stream-before-abort", lowerBound: true, openMessage: snapshot.openMessage }), { mode: 0o600 });
   renameSync(temporary, path);
 }
+
+const MODEL_USAGE_FIELDS = [
+  ["input", "inputTokens"],
+  ["output", "outputTokens"],
+  ["cacheRead", "cacheReadInputTokens"],
+  ["cacheWrite", "cacheCreationInputTokens"],
+];
+
+/**
+ * Orca accounts plan, Part B Task B2 (2026-10-07): claude's result envelope keys `modelUsage` by model. Each value's four
+ * counts become one entry, sorted by model (JS code-unit order, as ccloop's byModelSchema checks it); `input` is
+ * claude's non-cached input. A breakdown read only in part would under-report some model, so any value that is not an
+ * object of four non-negative safe integers, or a model name the usage event cannot carry, makes the whole of it null;
+ * so does a map that is absent or empty. Anything else in a value (costUSD, ...) is never copied.
+ */
+export function buildModelUsage(envelope) {
+  const map = envelope && typeof envelope === "object" ? envelope.modelUsage : undefined;
+  if (map === null || typeof map !== "object" || Array.isArray(map)) return null;
+  const entries = [];
+  for (const [model, value] of Object.entries(map)) {
+    if (model.length === 0 || model.length > 200) return null;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+    const entry = { model };
+    for (const [name, field] of MODEL_USAGE_FIELDS) {
+      const count = value[field];
+      if (!Number.isSafeInteger(count) || count < 0) return null;
+      entry[name] = count;
+    }
+    entries.push(entry);
+  }
+  if (entries.length === 0) return null;
+  return entries.sort((left, right) => (left.model < right.model ? -1 : left.model > right.model ? 1 : 0));
+}

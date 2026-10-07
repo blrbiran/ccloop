@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { Socket } from "node:net";
 import { promisify } from "node:util";
-import { buildUsageEvidence, createLineSplitter, createUsageObserver, writeObservation } from "./claude-stream.mjs";
+import { buildModelUsage, buildUsageEvidence, createLineSplitter, createUsageObserver, writeObservation } from "./claude-stream.mjs";
 
 const execFileAsync = promisify(execFile);
 const CLAUDE_TERMINATION_GRACE_MS = 250;
@@ -494,6 +494,13 @@ function failureMessage(code, stdout, stderr) {
 // a smaller one stays the argument it has always been, the form the paid runs used.
 const PROMPT_ARGV_MAX_BYTES = 100 * 1024;
 
+// Orca accounts plan, Part B Task B2 (2026-10-07): an answer carries claude's per-model breakdown only when the envelope
+// has one buildModelUsage can read whole; otherwise the key is absent, so an answer without one is unchanged.
+function withModelUsage(envelope) {
+  const modelUsage = envelope === null ? null : buildModelUsage(envelope);
+  return modelUsage === null ? {} : { modelUsage };
+}
+
 async function runClaude(request, claudeCommand, extraArgs) {
   // Orca single-call estimate (2026-09-27), spec §5.4 and Task 0 item 1 (claude 2.1.283, static): a single call answers
   // the caller's schema with every tool off (`--tools ""`; claude --help: 'Use "" to disable all tools') and its output
@@ -616,6 +623,7 @@ async function main() {
         outputError: valid ? null : "single-call-output-invalid",
         usageEvidence,
         tokenUsage: usageEvidence === null ? null : usageEvidence.normalizedTotal,
+        ...withModelUsage(envelope),
       });
       return;
     }
@@ -634,8 +642,8 @@ async function main() {
 
     const usageEvidence = buildUsageEvidence(envelope);
     const response = usageEvidence.normalizedTotal === null
-      ? { ...structured, usageEvidence }
-      : { ...structured, usageEvidence, tokenUsage: usageEvidence.normalizedTotal };
+      ? { ...structured, usageEvidence, ...withModelUsage(envelope) }
+      : { ...structured, usageEvidence, tokenUsage: usageEvidence.normalizedTotal, ...withModelUsage(envelope) };
     await writeJsonToStdout(response);
   } catch (error) {
     if (interruptHandled) {

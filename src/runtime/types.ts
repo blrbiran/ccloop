@@ -1,5 +1,6 @@
 import type { LoopContract } from "../contract/schema.js";
 import type { OwnerStatus, RunState } from "../state/types.js";
+import type { ModelUsageV1 } from "../control/usage.js";
 
 export type AttemptContext = {
   contract: LoopContract;
@@ -50,6 +51,8 @@ export type AttemptPlan = {
   primaryTargetPaths: string[];
   tokenUsage?: number;
   usageEvidence?: UsageEvidence;
+  /** Orca accounts plan B2 (2026-10-07): claude's per-model breakdown of tokenUsage, absent when not known. */
+  modelUsage?: ModelUsageV1[];
 };
 
 type ExecutionArtifacts = {
@@ -59,6 +62,8 @@ type ExecutionArtifacts = {
   stdoutStderrLog: string;
   tokenUsage?: number;
   usageEvidence?: UsageEvidence;
+  /** Orca accounts plan B2 (2026-10-07): claude's per-model breakdown of tokenUsage, absent when not known. */
+  modelUsage?: ModelUsageV1[];
 };
 
 export type CompleteExecutionResult = ExecutionArtifacts;
@@ -185,7 +190,7 @@ export type SingleCallRequest = {
   onProcessRegistered?: AttemptContext["onProcessRegistered"];
 };
 
-export type SingleCallResult = { output: unknown; tokenUsage: number | null; usageEvidence: unknown };
+export type SingleCallResult = { output: unknown; tokenUsage: number | null; usageEvidence: unknown; modelUsage?: ModelUsageV1[] };
 
 /** Spec §5.2 item 8: the call ended but gave no structured object. The usage it spent is still carried, never 0 for null. */
 export class SingleCallOutputInvalid extends Error {
@@ -207,6 +212,8 @@ export type VerificationResult = {
   stopSignals: string[];
   tokenUsage?: number;
   usageEvidence?: UsageEvidence;
+  /** Orca accounts plan B2 (2026-10-07): claude's per-model breakdown of tokenUsage, absent when not known. */
+  modelUsage?: ModelUsageV1[];
 };
 
 export interface RuntimeAdapter {

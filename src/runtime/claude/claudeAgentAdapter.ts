@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { assertContextOption, type MaterializedAgentConfigV1 } from "../../agents/types.js";
 import { claudeDescriptor, claudeModelArgument } from "../../agents/claude.js";
 import { observedTokensOf, SingleCallOutputInvalid, type AttemptContext, type AttemptPlan, type ExecutePhaseResult, type ExecutionResult, type RuntimeAdapter, type SingleCallRequest, type SingleCallResult, type VerificationResult } from "../types.js";
+import type { ModelUsageV1 } from "../../control/usage.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./prompts.js";
 import type { ClaudePhaseRequest } from "./types.js";
 
@@ -337,7 +338,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       await writeFile(join(outcome.evidenceDir, "decode-error.txt"), "runner stdout is not a JSON object", { mode: 0o600 });
       throw new Error(`claude-result-invalid: ${outcome.evidenceDir}`);
     }
-    const answer = parsed as { output?: unknown; outputError?: unknown; usageEvidence?: unknown; tokenUsage?: unknown };
+    const answer = parsed as { output?: unknown; outputError?: unknown; usageEvidence?: unknown; tokenUsage?: unknown; modelUsage?: unknown };
     const usageEvidence = answer.usageEvidence ?? null;
     if (usageEvidence !== null) await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(usageEvidence, null, 2), { mode: 0o600 });
     const tokenUsage = typeof answer.tokenUsage === "number" && Number.isSafeInteger(answer.tokenUsage) && answer.tokenUsage >= 0 ? answer.tokenUsage : null;
@@ -345,6 +346,8 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     if (answer.outputError !== null || output === null || typeof output !== "object" || Array.isArray(output)) {
       throw new SingleCallOutputInvalid(outcome.evidenceDir, tokenUsage, usageEvidence);
     }
-    return { output, tokenUsage, usageEvidence };
+    // Orca accounts plan B2 (2026-10-07): the runner's per-model breakdown, only when it printed one (buildModelUsage);
+    // the usage event's schema checks it again before it is booked.
+    return { output, tokenUsage, usageEvidence, ...(Array.isArray(answer.modelUsage) ? { modelUsage: answer.modelUsage as ModelUsageV1[] } : {}) };
   }
 }

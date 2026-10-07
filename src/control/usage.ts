@@ -61,9 +61,21 @@ const artifact = z.object({ artifactId: id, hash }).strict();
 export const modelUsageSchema = z
   .object({ model: z.string().min(1).max(200), input: safe, output: safe, cacheRead: safe, cacheWrite: safe })
   .strict();
+// Orca accounts plan B2 (2026-10-07), controller ruling: an empty breakdown is not a way to write "unknown"; absent is.
 export const byModelSchema = z
   .array(modelUsageSchema)
+  .min(1)
   .refine((entries) => entries.every((entry, index) => index === 0 || entries[index - 1]!.model < entry.model));
+/**
+ * Orca accounts plan B2 (2026-10-07): the breakdown, when it has entries and they add up to exactly `tokens`; otherwise
+ * undefined. ccloop never puts on an event a breakdown it knows does not reconcile (Orca still checks).
+ */
+export function reconciledByModel(entries: ModelUsageV1[] | undefined, tokens: number | null): ModelUsageV1[] | undefined {
+  if (entries === undefined || entries.length === 0 || tokens === null) return undefined;
+  const sum = entries.reduce((total, entry) => total + entry.input + entry.output + entry.cacheRead + entry.cacheWrite, 0);
+  return sum === tokens ? entries : undefined;
+}
+
 const eventSchema = z
   .object({
     runId: id,
