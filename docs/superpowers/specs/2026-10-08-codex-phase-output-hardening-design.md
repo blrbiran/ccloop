@@ -210,3 +210,7 @@ Independent review (subagent, 2026-10-08, same session) of the first version of 
   owner): fail closed on an unclosed brace or an unparseable top-level span, walk nested objects, and sort keys before
   dedupe (§3.2 step 2 amended in place; unpublished). Cost: answers that put stray braces in prose are refused as
   today.
+- K1 fix round 1 (2026-10-08): once spans fail closed, a parseable fenced object is always also a top-level span, so
+  separate fence collection is dead code. Ruled: candidates are the top-level balanced object spans only; fences need no
+  separate handling (the brace pass scans their text). Mutation M2 is dropped. §3.2's fence bullet is superseded by this
+  note (unpublished; recorded here rather than rewritten so the review trail stays readable).
