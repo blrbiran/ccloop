@@ -65,11 +65,39 @@ describe("extractFinalObject (codex phase output hardening)", () => {
     expect(extractPlan(text)).toEqual({ method: "none", candidates, valid });
   });
 
-  // K4 mutation M7f (2026-10-08): fail closed when a parsed span cannot be serialised for dedupe (JSON.parse is iterative,
-  // the key-sorting JSON.stringify is not): the unread tree could hold another answer, so the plan found before it is refused.
-  it("refuses a plan followed by an object too deep to serialise", () => {
-    const deep = `${'{"a":'.repeat(100_000)}1${"}".repeat(100_000)}`;
-    expect(extractPlan(`Plan: ${P}\nTrace: ${deep}`)).toEqual({ method: "none", candidates: 1, valid: 1 });
+  // Spec §7 rule 3 (final-review fix, 2026-10-08; replaces K4's stack-size-dependent "too deep to serialise" test): the walk
+  // is bounded by an explicit depth (1 000) and node count (100 000). Past either limit the unread rest could hold another
+  // answer, so the plan found before it is refused; at the limit it is still read.
+  const nested = (n: number) => `${'{"a":'.repeat(n - 1)}{}${"}".repeat(n - 1)}`;
+  const wide = (n: number) => `{"k":[${Array(n).fill("{}").join(",")}]}`;
+  it("reads a plan next to an object nested exactly 1 000 deep", () => {
+    expect(extractPlan(`Plan: ${P}\nTrace: ${nested(1_000)}`)).toEqual({ method: "candidate", value: plan, candidates: 2, valid: 1 });
+  });
+  it("refuses a plan next to an object nested 1 001 deep (depth limit)", () => {
+    expect(extractPlan(`Plan: ${P}\nTrace: ${nested(1_001)}`)).toEqual({ method: "none", candidates: 1, valid: 1 });
+  });
+  it("reads a plan next to objects that bring the message to exactly 100 000 object nodes", () => {
+    // 1 plan + 1 wrapper + 99 998 empty objects.
+    expect(extractPlan(`Plan: ${P}\nTrace: ${wide(99_998)}`)).toEqual({ method: "candidate", value: plan, candidates: 2, valid: 1 });
+  });
+  it("refuses a plan next to objects that bring the message past 100 000 object nodes (node limit)", () => {
+    expect(extractPlan(`Plan: ${P}\nTrace: ${wide(99_999)}`)).toEqual({ method: "none", candidates: 1, valid: 1 });
+  });
+
+  // Spec §7 rule 1: an answer-shaped node (one carrying the phase's discriminating key) counts whether or not it is valid, so
+  // a schema-valid example can never stand in for an off-schema real answer.
+  it("refuses a schema-invalid real plan next to a valid example plan", () => {
+    const text = `Example:\n${fence("json", O)}\nMy plan: ${JSON.stringify({ ...plan, risk: "low" })}`;
+    expect(extractPlan(text)).toEqual({ method: "none", candidates: 2, valid: 1 });
+  });
+  // Spec §7 rule 3: the acceptance test (zod) runs only on answer-shaped nodes, so a message of many other objects costs no
+  // schema work. Measured directly: the number of acceptance calls.
+  it("runs the acceptance test only on answer-shaped nodes", () => {
+    let calls = 0;
+    const counting = Object.assign((value: unknown) => { calls++; return acceptsPlan(value); }, { keys: acceptsPlan.keys });
+    const text = `${Array.from({ length: 1_000 }, (_, i) => `{"a":${i},"b":{"c":[{}]}}`).join("\n")}\n${P}`;
+    expect(extractFinalObject(text, counting)).toEqual({ method: "candidate", value: plan, candidates: 1_001, valid: 1 });
+    expect(calls).toBe(1);
   });
 
   describe("verify safety", () => {
@@ -87,7 +115,7 @@ describe("extractFinalObject (codex phase output hardening)", () => {
     });
     it("sees a rejection nested inside another object, so a fenced approval template cannot win", () => {
       const text = `${hiddenTemplate}Actual: ${JSON.stringify({ note: rejection })}`;
-      expect(extractFinalObject(text, acceptsVerify)).toEqual({ method: "none", candidates: 2, valid: 2 });
+      expect(extractFinalObject(text, acceptsVerify)).toEqual({ method: "none", candidates: 2, valid: 1 });
     });
     it("accepts a rejection nested inside another object when nothing else is valid", () => {
       expect(extractFinalObject(`Actual: ${JSON.stringify({ note: rejection })}`, acceptsVerify)).toEqual({ method: "candidate", value: rejection, candidates: 1, valid: 1 });
@@ -96,14 +124,39 @@ describe("extractFinalObject (codex phase output hardening)", () => {
       const reordered = Object.fromEntries(Object.entries(rejection).reverse());
       expect(extractFinalObject(`${JSON.stringify(rejection)} again ${JSON.stringify(reordered)}`, acceptsVerify)).toEqual({ method: "candidate", value: rejection, candidates: 1, valid: 1 });
     });
-    it("accepts the rejection after a fenced example that is not a verification", () => {
+    // Spec §7 rule 1 reverses K1's "accepts the rejection after a fenced example that is not a verification": the example
+    // carries `approved`, so it is answer-shaped and counts although it is invalid; two answer-shaped nodes are refused.
+    it("refuses the rejection after a fenced answer-shaped example that is not a valid verification", () => {
       const text = `Example:\n${fence("json", '{"approved": "yes"}')}\nResult: ${JSON.stringify(rejection)}`;
-      expect(extractFinalObject(text, acceptsVerify)).toEqual({ method: "candidate", value: rejection, candidates: 2, valid: 1 });
+      expect(extractFinalObject(text, acceptsVerify)).toEqual({ method: "none", candidates: 2, valid: 1 });
+    });
+    it("accepts a decorated rejection", () => {
+      const result = extractFinalObject(`Verdict:\n${fence("json", JSON.stringify(rejection, null, 2))}\nDone.`, acceptsVerify);
+      expect(result).toEqual({ method: "candidate", value: rejection, candidates: 1, valid: 1 });
+      expect(result.method === "candidate" ? (result.value as { approved: unknown }).approved : undefined).toBe(false);
+    });
+    // Spec §7 rule 2: extraction only ever makes verify stricter. A decorated approval is not extracted; it fails as today.
+    it("refuses a decorated approval", () => {
+      expect(extractFinalObject(`Verdict: ${JSON.stringify(approval)}`, acceptsVerify)).toEqual({ method: "none", candidates: 1, valid: 0 });
+      expect(extractFinalObject(`Verdict:\n${fence("json", JSON.stringify(approval))}`, acceptsVerify)).toEqual({ method: "none", candidates: 1, valid: 0 });
+    });
+    it("refuses a rejection with an extra key on its own (answer-shaped but invalid)", () => {
+      expect(extractFinalObject(`Verdict: ${JSON.stringify({ ...rejection, reason: "tests fail" })}`, acceptsVerify)).toEqual({ method: "none", candidates: 1, valid: 0 });
+    });
+    // The final review's flip probes (scratchpad ccloop-final/flip.mjs): an off-schema real rejection next to a fenced,
+    // schema-valid approval template was accepted as approval. Each must now be refused.
+    const flipTemplate = (pretty: boolean) => `Expected format:\n${fence("json", pretty ? JSON.stringify(approval, null, 2) : JSON.stringify(approval))}\n`;
+    for (const { name, text } of [
+      { name: "a rejection with an extra key", text: `${flipTemplate(true)}My verdict: ${JSON.stringify({ ...rejection, reason: "tests fail" })}` },
+      { name: "a rejection whose approved is the string \"false\"", text: `${flipTemplate(false)}My verdict: ${JSON.stringify({ ...rejection, approved: "false" })}` },
+      { name: "a rejection missing keys", text: `${flipTemplate(false)}Verdict: ${JSON.stringify({ approved: false, evidence: ["test fails"] })}` },
+    ]) it(`never accepts the approval template next to ${name}`, () => {
+      expect(extractFinalObject(text, acceptsVerify)).toEqual({ method: "none", candidates: 2, valid: 0 });
     });
     it("never turns a rejection into approval because a schema-valid approval template is also present", () => {
       const template = `Template:\n${fence("json", JSON.stringify(approval, null, 2))}`, actual = `Actual: ${JSON.stringify(rejection)}`;
-      expect(extractFinalObject(`${template}\n${actual}`, acceptsVerify)).toEqual({ method: "none", candidates: 2, valid: 2 });
-      expect(extractFinalObject(`${actual}\n${template}`, acceptsVerify)).toEqual({ method: "none", candidates: 2, valid: 2 });
+      expect(extractFinalObject(`${template}\n${actual}`, acceptsVerify)).toEqual({ method: "none", candidates: 2, valid: 1 });
+      expect(extractFinalObject(`${actual}\n${template}`, acceptsVerify)).toEqual({ method: "none", candidates: 2, valid: 1 });
     });
   });
 
@@ -148,6 +201,15 @@ describe("extractFinalObject (codex phase output hardening)", () => {
       const result = extractPlan(`${Array.from({ length: 50_000 }, (_, i) => `{"a":${i}}`).join("\n")}\n${P}`);
       expect(performance.now() - started).toBeLessThan(2000);
       expect(result).toEqual({ method: "candidate", value: plan, candidates: 50_001, valid: 1 });
+    });
+    // The final review's perf2 probe (scratchpad ccloop-final/perf2.mjs): one 16 MiB span holding millions of empty objects
+    // took 76 s (execute) and 9.6 s (plan) when every node was serialised and schema-checked. The node limit refuses it fast.
+    const wideText = `x{"k":[${Array(Math.floor((16 * 1024 * 1024) / 3)).fill("{}").join(",")}]}`;
+    for (const phase of ["plan", "execute"] as const) it(`refuses a 16 MiB span of millions of empty objects in under 3 s (${phase})`, () => {
+      const started = performance.now();
+      const result = extractFinalObject(wideText, phaseFinalAccepts(phase));
+      expect(performance.now() - started).toBeLessThan(3000);
+      expect(result).toEqual({ method: "none", candidates: 0, valid: 0 });
     });
   });
 });

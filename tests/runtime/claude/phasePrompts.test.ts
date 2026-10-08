@@ -9,7 +9,7 @@ import type { AttemptContext } from "../../../src/runtime/types.js";
 // fake CLIs find the phase and task on the second line, so new text goes after it or at the end.
 const READ_ONLY = "This is the planning phase only. The workspace is read-only: do not create, edit or delete files, do not run apply_patch, and do not carry out the task. A later execute phase does the work this plan describes.";
 const PLAN_CONSTRAINTS = "Constraints (they bind the execute phase; plan for them, do not act on them now):";
-const VERIFY_NO_EDIT = "This is the verify phase. Do not create, edit or delete files; run commands only to check the attempt.";
+const VERIFY_NO_EDIT = "This is the verify phase. Do not change the attempt's files; run commands only to check the attempt.";
 const FINAL_MESSAGE = "Your final message must be exactly one JSON object: no Markdown code fence, no text before or after it.";
 // The Orca investigate constraint that, read at plan time, told the planner to write the report now (spec §1, R1).
 const INVESTIGATE = "Investigate only; write the findings to the report file and change nothing else.";

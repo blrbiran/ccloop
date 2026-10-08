@@ -47,7 +47,7 @@ describe("Codex adapter final-message extraction (codex phase output hardening)"
     expect(await f.adapter.plan(f.context)).toMatchObject({ ...plan, tokenUsage: 15 });
     const call = await f.call();
     expect(await readFile(join(call, "final.json"), "utf8")).toBe(text); // the fake wrote the message verbatim
-    expect(await readJson(join(call, "final-extraction.json"))).toEqual({ method: "candidate", candidates: 1, valid: 1, originalBytes: Buffer.byteLength(text, "utf8") });
+    expect(await readJson(join(call, "final-extraction.json"))).toEqual({ method: "candidate", candidates: 1, valid: 1, hidden: false, originalBytes: Buffer.byteLength(text, "utf8") });
     expect((await stat(join(call, "final-extraction.json"))).mode & 0o777).toBe(0o600);
     expect(await exists(join(call, "decode-error.txt"))).toBe(false);
   });
@@ -65,7 +65,7 @@ describe("Codex adapter final-message extraction (codex phase output hardening)"
     const call = await f.call();
     expect(message).toBe(`Error: codex-result-invalid: ${call}`);
     expect(await readFile(join(call, "decode-error.txt"), "utf8")).toBe("Error: codex-result-invalid");
-    expect(await readJson(join(call, "final-extraction.json"))).toEqual({ method: "none", candidates: 1, valid: 0, originalBytes: Buffer.byteLength(text, "utf8") });
+    expect(await readJson(join(call, "final-extraction.json"))).toEqual({ method: "none", candidates: 1, valid: 0, hidden: false, originalBytes: Buffer.byteLength(text, "utf8") });
   });
 
   it("writes no extraction evidence when no candidate parses", async () => {
@@ -91,20 +91,62 @@ describe("Codex adapter final-message extraction (codex phase output hardening)"
     const message = await failure(f.adapter.verify(f.context));
     const call = await f.call();
     expect(message).toBe(`Error: codex-result-invalid: ${call}`);
-    expect(await readJson(join(call, "final-extraction.json"))).toEqual({ method: "none", candidates: 2, valid: 2, originalBytes: Buffer.byteLength(text, "utf8") });
+    expect(await readJson(join(call, "final-extraction.json"))).toEqual({ method: "none", candidates: 2, valid: 1, hidden: false, originalBytes: Buffer.byteLength(text, "utf8") });
   });
 
-  it("accepts a verify rejection after a fenced example that is not a verification", async () => {
+  // Spec §7 rule 1 reverses K2's "accepts a verify rejection after a fenced example that is not a verification": the
+  // example carries `approved`, so it is answer-shaped and counts although invalid; two answer-shaped nodes are refused.
+  it("refuses a verify rejection after a fenced answer-shaped example that is not a valid verification", async () => {
     const text = `Example:\n${fenced({ approved: "yes" })}\nResult: ${JSON.stringify(rejection)}`;
     const f = await withFinal("verify", text);
+    const message = await failure(f.adapter.verify(f.context));
+    const call = await f.call();
+    expect(message).toBe(`Error: codex-result-invalid: ${call}`);
+    expect(await readJson(join(call, "final-extraction.json"))).toEqual({ method: "none", candidates: 2, valid: 1, hidden: false, originalBytes: Buffer.byteLength(text, "utf8") });
+  });
+
+  it("accepts a decorated verify rejection", async () => {
+    const text = `Verdict:\n${fenced(rejection)}\nDone.`;
+    const f = await withFinal("verify", text);
     expect(await f.adapter.verify(f.context)).toMatchObject({ ...rejection, tokenUsage: 15 });
+    expect(await readJson(join(await f.call(), "final-extraction.json"))).toEqual({ method: "candidate", candidates: 1, valid: 1, hidden: false, originalBytes: Buffer.byteLength(text, "utf8") });
+  });
+
+  // Spec §7 rule 2: extraction never yields approval. A decorated approval fails exactly as today.
+  it("refuses a decorated verify approval with today's error text", async () => {
+    const text = `Verdict:\n${fenced(approvalTemplate)}`;
+    const f = await withFinal("verify", text);
+    const message = await failure(f.adapter.verify(f.context));
+    const call = await f.call();
+    expect(message).toBe(`Error: codex-result-invalid: ${call}`);
+    expect(await readFile(join(call, "decode-error.txt"), "utf8")).toBe("Error: codex-result-invalid");
+    expect(await readJson(join(call, "final-extraction.json"))).toEqual({ method: "none", candidates: 1, valid: 0, hidden: false, originalBytes: Buffer.byteLength(text, "utf8") });
+  });
+
+  // The final review's flip probe through the adapter: an off-schema rejection next to a valid approval template.
+  it("refuses a verify rejection with an extra key next to a fenced approval template", async () => {
+    const text = `Expected format:\n${fenced(approvalTemplate)}\nMy verdict: ${JSON.stringify({ ...rejection, reason: "tests fail" })}`;
+    const f = await withFinal("verify", text);
+    const message = await failure(f.adapter.verify(f.context));
+    expect(message).toBe(`Error: codex-result-invalid: ${await f.call()}`);
+  });
+
+  // Spec §7 rule 4: text the matcher could not read is recorded even when nothing parsed.
+  it("records hidden text with zero candidates", async () => {
+    const text = `Use { for maps. ${JSON.stringify(plan)}`;
+    const f = await withFinal("plan", text);
+    const message = await failure(f.adapter.plan(f.context));
+    const call = await f.call();
+    expect(message).toBe(`Error: codex-result-invalid: ${call}`);
+    expect(await readJson(join(call, "final-extraction.json"))).toEqual({ method: "none", candidates: 0, valid: 0, hidden: true, originalBytes: Buffer.byteLength(text, "utf8") });
+    expect((await stat(join(call, "final-extraction.json"))).mode & 0o777).toBe(0o600);
   });
 
   for (const { name, body } of [{ name: "complete", body: complete }, { name: "partial", body: partial }]) it(`extracts a ${name} execution envelope from prose`, async () => {
     const text = `Done. Result:\n${JSON.stringify({ result: body })}`;
     const f = await withFinal("execute", text);
     expect(await f.adapter.execute(f.context)).toMatchObject({ ...body, tokenUsage: 15 });
-    expect(await readJson(join(await f.call(), "final-extraction.json"))).toEqual({ method: "candidate", candidates: 1, valid: 1, originalBytes: Buffer.byteLength(text, "utf8") });
+    expect(await readJson(join(await f.call(), "final-extraction.json"))).toEqual({ method: "candidate", candidates: 1, valid: 1, hidden: false, originalBytes: Buffer.byteLength(text, "utf8") });
   });
 
   for (const { name, text } of [

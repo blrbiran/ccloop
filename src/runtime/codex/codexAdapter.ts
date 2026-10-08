@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
 import type { AttemptContext, RuntimeAdapter } from "../types.js";
-import { codexModelUsage, decodeCodexResult, extractFinalObject, parseCodexConfig, phaseFinalAccepts, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
+import { codexModelUsage, decodeCodexResult, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
 import { runCodexPhase } from "./runCodexPhase.js";
 
 /** Orca handoff delivery C-3: an aborted phase, carrying the usage its stdout showed before the kill (or null). */
@@ -32,9 +32,10 @@ export class CodexAdapter implements RuntimeAdapter {
     try {
       // Codex phase output hardening (2026-10-08), spec §3.2: a decorated final message yields its one schema-valid object;
       // a whole-JSON answer, and one without exactly one valid object, take today's path with the original text unchanged.
-      const extraction = extractFinalObject(outcome.final, phaseFinalAccepts(phase));
-      if (extraction.method === "candidate" || (extraction.method === "none" && extraction.candidates > 0)) {
-        await writeFile(join(outcome.evidenceDir, "final-extraction.json"), JSON.stringify({ method: extraction.method, candidates: extraction.candidates, valid: extraction.valid, originalBytes: Buffer.byteLength(outcome.final, "utf8") }), { mode: 0o600 });
+      // Spec §7 rule 4: the evidence also records hidden text, and is written for it even when nothing parsed.
+      const { extraction, hidden } = scanFinalMessage(outcome.final, phaseFinalAccepts(phase));
+      if (extraction.method === "candidate" || (extraction.method === "none" && (extraction.candidates > 0 || hidden))) {
+        await writeFile(join(outcome.evidenceDir, "final-extraction.json"), JSON.stringify({ method: extraction.method, candidates: extraction.candidates, valid: extraction.valid, hidden, originalBytes: Buffer.byteLength(outcome.final, "utf8") }), { mode: 0o600 });
       }
       const final = extraction.method === "candidate" ? JSON.stringify(extraction.value) : outcome.final;
       const result = decodeCodexResult(phase, outcome.events, phase === "execute" ? JSON.stringify(z.object({result:z.unknown()}).strict().parse(JSON.parse(final)).result) : final);

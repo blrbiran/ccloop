@@ -65,7 +65,7 @@ export function buildVerifierPrompt(context: AttemptContext): string {
   return [
     "Return JSON only.",
     `Verify task ${contract.objective.taskId}.`,
-    "This is the verify phase. Do not create, edit or delete files; run commands only to check the attempt.",
+    "This is the verify phase. Do not change the attempt's files; run commands only to check the attempt.",
     `Goal: ${contract.objective.goal}`,
     `Success condition: ${contract.objective.successCondition}`,
     "Required checks:",
