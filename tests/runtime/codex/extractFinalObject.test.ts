@@ -58,8 +58,8 @@ describe("extractFinalObject (codex phase output hardening)", () => {
     { name: "an unclosed brace followed by text", text: 'Plan: {"summary":"s","primaryTargetPaths":[] and then I stopped', candidates: 0, valid: 0 },
     { name: "a plan with an extra key", text: `Plan: ${JSON.stringify({ ...plan, extra: 1 })}`, candidates: 1, valid: 0 },
     // Fail closed on hidden text (spec 3.2, amended after the K1 review): text the brace matcher cannot read could hold another answer.
-    { name: "a fence after prose with an unclosed brace", text: `Use { for maps.\n${fence("json", P)}\nDone`, candidates: 1, valid: 1 },
-    { name: "a fence inside a brace-wrapped note that is not JSON", text: `{ note:\n${fence("", P)}\n}`, candidates: 1, valid: 1 },
+    { name: "a fence after prose with an unclosed brace", text: `Use { for maps.\n${fence("json", P)}\nDone`, candidates: 0, valid: 0 },
+    { name: "a fence inside a brace-wrapped note that is not JSON", text: `{ note:\n${fence("", P)}\n}`, candidates: 0, valid: 0 },
     { name: "a valid answer of another phase", text: `Verdict: ${JSON.stringify(rejection)}`, candidates: 1, valid: 0 },
   ]) it(`refuses ${name}`, () => {
     expect(extractPlan(text)).toEqual({ method: "none", candidates, valid });
@@ -122,7 +122,7 @@ describe("extractFinalObject (codex phase output hardening)", () => {
       const started = performance.now();
       const result = extractPlan(`${noise}\n${fence("json", P)}\n`);
       expect(performance.now() - started).toBeLessThan(2000);
-      expect(result).toEqual({ method: "none", candidates: 1, valid: 1 });
+      expect(result).toEqual({ method: "none", candidates: 0, valid: 0 });
     });
     it("answers none for a bare plan after the same noise in under 2 s", () => {
       const started = performance.now();

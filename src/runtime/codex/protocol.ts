@@ -141,28 +141,16 @@ export type FinalExtraction =
 /**
  * Codex phase output hardening (2026-10-08), spec §3.2: find the phase answer in a final message a provider let the model
  * decorate. A final message that is whole JSON is returned as is (acceptance is then decided exactly as before).
- * Otherwise every fenced block and every top-level balanced {…} span is a candidate; every object node of every parsed
- * candidate (root and nested) is offered to `accepts`, deduplicated by key-sorted JSON, and the answer is the one distinct
+ * Otherwise every top-level balanced {…} span is a candidate (a fence needs no separate handling: the brace pass scans
+ * its text); every object node of every parsed candidate (root and nested) is offered to `accepts`, deduplicated by key-sorted JSON, and the answer is the one distinct
  * object `accepts` takes. Zero, or two or more different accepted objects, is `none`: decoration may never change which
  * answer is accepted (a fenced approval template next to the real rejection is refused, not guessed). Fail closed on
  * hidden text: an unclosed `{`, or a top-level span that is not JSON, could hide another answer, so the result is `none`.
- * `candidates` counts distinct parsed candidate texts, `valid` distinct accepted objects. One linear pass for fences,
- * one for spans, one parse per candidate.
+ * `candidates` counts distinct parsed spans, `valid` distinct accepted objects. One linear pass, one parse per span.
  */
 export function extractFinalObject(final: string, accepts: (value: unknown) => boolean): FinalExtraction {
   try { return { method: "whole", value: JSON.parse(final) }; } catch { /* not whole JSON: look for candidates */ }
-  const fences: string[] = [], spans: string[] = [];
-  // A line starting with ``` opens a block and the next line starting with ``` closes it; an unclosed fence is no block.
-  let body = -1;
-  for (let start = 0; ;) {
-    const newline = final.indexOf("\n", start);
-    if (final.startsWith("```", start)) {
-      if (body === -1) body = newline === -1 ? final.length : newline + 1;
-      else { fences.push(final.slice(body, start)); body = -1; }
-    }
-    if (newline === -1) break;
-    start = newline + 1;
-  }
+  const spans: string[] = [];
   // Brace spans: string state only inside an object (depth >= 1), so a stray quote in prose cannot hide one; a `}` at
   // depth 0 is ignored; an unclosed `{` never closes (its text is hidden from the matcher, handled below).
   let depth = 0, spanStart = 0, inString = false, escaped = false;
@@ -183,9 +171,9 @@ export function extractFinalObject(final: string, accepts: (value: unknown) => b
   const sortKeys = (_key: string, v: unknown) => record(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : v;
   const roots = new Set<string>(), found = new Map<string, unknown>();
   try {
-    for (const [text, isSpan] of [...fences.map((t) => [t, false] as const), ...spans.map((t) => [t, true] as const)]) {
+    for (const text of spans) {
       let value: unknown;
-      try { value = JSON.parse(text); } catch { if (isSpan) hidden = true; continue; }
+      try { value = JSON.parse(text); } catch { hidden = true; continue; }
       if (!record(value)) continue;
       const rootKey = JSON.stringify(value, sortKeys);
       if (roots.has(rootKey)) continue;
