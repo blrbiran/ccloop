@@ -72,42 +72,73 @@ All three builders, appended as the last line:
 Your final message must be exactly one JSON object: no Markdown code fence, no text before or after it.
 ```
 
-The executor keeps `Constraints:` unchanged (they are its own constraints).
+The executor keeps `Constraints:` unchanged (they are its own constraints). For codex, `CodexAdapter.execute` appends
+its existing "Wrap the complete or partial result in a single object with the sole key result…" line after the
+builder's output, so that line, not the final-message line, is last; the two do not conflict (the envelope is the one
+JSON object).
 
-### 3.2 Tolerant extraction of the final object (R2)
+### 3.2 Schema-aware extraction of the final object (R2)
+
+Extraction must never let decoration change **which** answer is accepted. In particular a verify answer must never
+flip from rejection to approval because the model also printed a template or example. So extraction is driven by the
+phase schema and accepts only an **unambiguous** schema-valid object.
 
 New pure function in `src/runtime/codex/protocol.ts`:
 
 ```ts
-export type FinalExtraction = { text: string; method: "whole" | "fenced" | "last-object" | "none" };
-export function extractFinalObject(final: string): FinalExtraction;
+export type FinalExtraction =
+  | { method: "whole"; value: unknown }
+  | { method: "candidate"; value: unknown; candidates: number; valid: number }
+  | { method: "none"; candidates: number; valid: number };
+export function extractFinalObject(final: string, accepts: (value: unknown) => boolean): FinalExtraction;
 ```
 
-Rules, first match wins:
+`accepts` is the phase's strict acceptance test: for plan and verify, `schemas[phase].safeParse(v).success`; for
+execute, the strict `{result: …}` envelope **and** the execution union on its `result`.
 
-1. `whole` — `final.trim()` parses as a JSON **object** (not array, not null). Return the trimmed text.
-2. `fenced` — the text contains **exactly one** fenced block (```` ```json ```` or bare ```` ``` ````) whose body
-   parses as a JSON object. Return that body. Two or more fenced object blocks ⇒ ambiguous ⇒ fall through to rule 4
-   (never pick one of several fences).
-3. `last-object` — scan the text with a string-aware brace matcher (respects `"…"` and `\"` escapes) for top-level
-   balanced `{…}` spans; take the **last** span that parses as a JSON object. The last span is chosen because models
-   end with the answer after prose that may quote example objects.
-4. `none` — return `final` unchanged, so the existing `JSON.parse` fails exactly as today with
-   `codex-result-invalid`.
+Algorithm:
 
-`extractFinalObject` only chooses **which text** to parse; the strict zod schema of the phase still decides
-acceptance. An extracted object with an extra key, a missing key or a wrong type is refused as today.
+1. **whole** — if `JSON.parse(final)` succeeds (no trimming beyond what `JSON.parse` already tolerates), return
+   `{method:"whole", value}` whatever the value is. Acceptance is then decided exactly as today (a non-object or
+   schema-invalid whole answer still fails with today's error), so every answer accepted today is accepted identically.
+2. **candidates** — otherwise collect candidate texts in one left-to-right pass:
+   - every fenced block: a line starting with three backticks, optional info string, up to the next line starting with
+     three backticks; the body is a candidate whatever the info string (`json`, `JSON`, `jsonc`, none, `bash`…). An
+     unclosed fence is not a block (its text is still scanned for spans);
+   - every top-level balanced object span, found by a brace matcher over the whole text: depth counts `{` and `}`;
+     string state (`"…"` with `\` escapes) is tracked **only while depth ≥ 1**, so a stray quote in prose cannot hide
+     an object; a `}` at depth 0 is ignored; a span opens at a `{` at depth 0 and closes when depth returns to 0. An
+     unclosed `{` ends the scan of spans (no span from it). An object nested in an array (`[{…}]`) has brace depth 0 at
+     its `{` and is a candidate; the array itself is not.
+   Each candidate text is `JSON.parse`d once; parse failures and non-objects are dropped. Distinct values are compared by
+   canonical `JSON.stringify` of the parsed value, so the same object repeated (a fence and its own span) counts once.
+3. Keep the candidates that `accepts`. If **exactly one distinct** value remains, return
+   `{method:"candidate", value, …}`; otherwise (zero, or two or more different schema-valid objects) return
+   `{method:"none", …}`.
+4. The adapter decodes `none` exactly as today: plan and verify pass the original `final` to `decodeCodexResult`
+   (`codex-result-invalid`); execute passes the original `final` to today's envelope parse (today's error). So `none`
+   changes no error text.
 
-Call sites (both in `CodexAdapter.phase`, `src/runtime/codex/codexAdapter.ts`):
+Two schema-valid answers in one message are refused rather than guessed. A prose example that is not schema-valid
+(`{"a":1}`, a partial template) is ignored, so "prose with an example, then the real answer" is accepted.
 
-- plan / verify: `decodeCodexResult(phase, events, extractFinalObject(outcome.final).text)`;
-- execute: the `{result: …}` envelope is parsed from `extractFinalObject(outcome.final).text` before the existing
-  `.strict()` unwrap.
+**Complexity:** one linear pass for fences and spans (no restart from every `{`); each candidate parsed once; total
+parse work is bounded by the text length times nesting of fences (a fence's span is also scanned once by the brace
+pass). `final` is capped at 16 MiB by `runCodexPhase`. A criterion runs a several-megabyte adversarial input
+(many unbalanced `{` and quotes) under a time bound.
 
-**Fail loud, not silent:** when `method` is not `whole`, the adapter writes `final-extraction.json`
-(`{"method": …, "originalBytes": <n>, "extractedBytes": <n>}`, mode 0600) into the phase evidence directory. A
-tolerated answer is therefore always visible in evidence; an untouched answer leaves no new file (existing evidence
-layouts stay byte-identical for compliant models).
+**Call sites** (both in `CodexAdapter.phase`, `src/runtime/codex/codexAdapter.ts`): extraction runs first; for
+`whole` and `none` the original text goes to today's code path unchanged; for `candidate` the adapter passes
+`JSON.stringify(value)` (plan/verify) or the envelope's `result` (execute) into the same decode as today, which still
+applies the strict schema and the usage checks.
+
+**Evidence (fail loud):** for `candidate` and for `none` with at least one candidate, the adapter writes
+`final-extraction.json` into the phase evidence directory **before** decoding:
+`{"method", "candidates", "valid", "originalBytes"}`, where `originalBytes` is the UTF-8 byte length of `final`
+(mode 0600). For `whole`, and for `none` with zero candidates, no file is written, so evidence for a compliant model
+is byte-identical to today. A write failure is treated like any other decode failure (it is inside the existing
+`try`, so it produces `decode-error.txt` and rethrows). A tolerated answer that the decode then refuses leaves both
+files.
 
 ### 3.3 What stays the same
 
@@ -117,22 +148,32 @@ layouts stay byte-identical for compliant models).
 
 ## 4. Testing
 
-Every new branch gets a mutation that deletes **it** and is seen red (CLAUDE.md Rule 9 of Orca; ccloop iron rule 2).
+No existing criterion changes (ccloop Rule 15): the existing refusals in `tests/runtime/codex/protocol.test.ts` stay
+as written and must stay green. New criteria only.
 
-| Criterion | Must accept | Must reject (stays `codex-result-invalid` or schema error) |
+| Criterion | Must accept (the single schema-valid object) | Must reject (`none`, today's error) |
 |---|---|---|
-| `extractFinalObject` | whole object; object with surrounding whitespace; one ```` ```json ```` fence after prose; prose + object at the end; prose quoting `{"a":1}` then the real object last; object whose string value contains `}` and `\"` | `oops`; `[]`; `null`; two fenced objects with no trailing object; unbalanced braces only; extracted object with an extra key (schema refuses) |
-| adapter evidence | `final-extraction.json` written for `fenced` and `last-object` | not written for `whole` |
-| prompts | planner contains the read-only line, the re-labelled constraints heading and the final-message line; verifier contains its no-edit line; executor still contains bare `Constraints:` | the first two lines of each prompt are unchanged (fake-anchor guard) |
+| plan extraction | whole object; one ```` ```json ```` fence after prose; one ```` ```JSON ```` fence; prose + object at end; prose quoting `{"a":1}` then the real object; object with `}` and `\"` inside a string; prose with a stray `"` before the object; `[{…valid…}]` | `oops`; `[]`; `null` (whole, not an object); two **different** valid plans (fenced or bare, either order); only an unclosed `{` then text; a valid plan with an extra key |
+| verify safety | rejection answer after a fenced non-schema example | a fenced **schema-valid approval template** plus the real rejection ⇒ `none` (never approval) |
+| execute | prose + `{"result": complete}`; prose + `{"result": partial}` | two different envelopes; envelope with an extra key |
+| evidence | `final-extraction.json` for `candidate` and for `none` with candidates; `originalBytes` counts UTF-8 bytes of a non-ASCII answer | no file for `whole`; no file for `none` with zero candidates |
+| performance | 4 MiB of `{"` noise followed by a valid plan completes under 2 s | — |
+| prompts | planner has the read-only line, the relabelled heading, the final-message line; verifier has its no-edit line and the final-message line; executor keeps bare `Constraints:` and has the final-message line | first two lines of each prompt unchanged |
 
-Mutations to run (in a `git clone --local` copy under the session scratchpad, after `npm run build`):
+Mutations (each deletes one new branch and must be seen red; run in a `git clone --local` copy under the session
+scratchpad after `npm run build`):
 
-- M1: rule 2 deleted ⇒ a fenced-only sample now fails.
-- M2: rule 3 picks the first span instead of the last ⇒ the "quoted example then real object" sample fails.
-- M3: string-awareness removed from the brace matcher ⇒ the `}`-in-string sample fails.
-- M4: the evidence write removed ⇒ the evidence criterion fails.
-- M5: the planner read-only line removed ⇒ the prompt criterion fails.
-- M6: `extractFinalObject` bypassed in the execute path ⇒ an execute sample wrapped in prose fails.
+- M1 whole branch removed (every answer goes through candidates) ⇒ the "no file for `whole`" row red.
+- M2 fence collection removed ⇒ the fenced-only samples red.
+- M3 ambiguity check removed (take the last valid) ⇒ the two-valid-plans and approval-template rows red.
+- M4 string state removed from the brace matcher ⇒ the `}`-in-string row red.
+- M5 `\"` escape handling removed ⇒ the escaped-quote row red.
+- M6 string state tracked at depth 0 ⇒ the stray-quote row red.
+- M7 schema filter removed (accept any parsed object) ⇒ the `{"a":1}`-then-real row red (two candidates).
+- M8 evidence write removed ⇒ evidence-present rows red; M9 evidence written unconditionally ⇒ evidence-absent rows red.
+- M10 extraction bypassed in execute ⇒ the execute rows red.
+- M11–M14 each new prompt line / heading removed in turn ⇒ the matching prompt row red; M15 a new line inserted
+  before line 2 ⇒ the first-two-lines guard red.
 
 Gate: `vitest run` through `scripts/check-known-reds.mjs` RC 0, `npm run typecheck` RC 0, `npm run build` RC 0.
 
@@ -141,3 +182,20 @@ Gate: `vitest run` through `scripts/check-known-reds.mjs` RC 0, `npm run typeche
 After the human pushes this change, Orca re-pins ccloop (`npm install github:blrbiran/ccloop#<sha>`,
 `node scripts/pin-ccloop.mjs` checks). Orca's own handling of `codex-result-invalid` (a human-readable failure
 explanation and the `retry-task` button) is in Orca's spec `2026-10-08-issue-fixes-design.md`.
+
+## 6. Review record
+
+Independent review (subagent, 2026-10-08, same session) of the first version of this spec. Changes made in place
+(the spec was unpublished):
+- C1 (accepted): rule order "one fence, else last bare object" could pick a schema-valid template over the real answer,
+  turning a verify rejection into approval ⇒ §3.2 replaced by schema-aware unique-candidate extraction.
+- I1 (accepted): fence ambiguity and fence definition were unspecified ⇒ defined; ambiguity is now decided by schema
+  validity, not by fence count.
+- I2 (accepted): brace matcher details (string state only at depth ≥ 1, stray `}`, unclosed `{`, objects inside arrays)
+  ⇒ specified and tested.
+- I3 (accepted): linear-pass requirement and a large-input criterion added.
+- I4 (accepted): evidence rule made consistent; write-before-decode, write failure, UTF-8 byte count specified.
+- I5 (accepted): mutation list completed (M1–M15).
+- M1 (accepted): `none` now passes the original text to today's path in every phase, so error text is unchanged.
+- M2 (accepted): noted the codex execute envelope line after the final-message line.
+- M6 (accepted): rule citation corrected to ccloop's own Rule 9 / Rule 15 / Rule 17.
