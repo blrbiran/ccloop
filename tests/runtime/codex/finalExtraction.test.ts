@@ -116,3 +116,18 @@ describe("Codex adapter final-message extraction (codex phase output hardening)"
     expect(message).toBe(`${todaysParseError(text)}: ${await f.call()}`);
   });
 });
+
+// Spec §3.1: codex execute appends its envelope line after the builder's output, so the envelope line, not the
+// final-message line, is last; the two agree (the envelope is the one JSON object).
+describe("codex execute prompt order (codex phase output hardening)", () => {
+  it("puts codex's envelope line after the executor's final-message line", async () => {
+    const f = await codexFixture("ok");
+    dirs.push(f.dir);
+    await new CodexAdapter(f.config).execute(f.context);
+    const prompt = (JSON.parse(await readFile(f.marker, "utf8")) as { prompt: string }).prompt;
+    expect(prompt.split("\n").slice(-2)).toEqual([
+      "Your final message must be exactly one JSON object: no Markdown code fence, no text before or after it.",
+      "Wrap the complete or partial result in a single object with the sole key result, as required by the output schema.",
+    ]);
+  });
+});

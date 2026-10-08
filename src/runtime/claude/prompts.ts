@@ -9,19 +9,25 @@ function formatJson(value: unknown): string {
   return JSON.stringify(value ?? null, null, 2);
 }
 
+// Codex phase output hardening (2026-10-08), spec §3.1: every existing line stays byte-for-byte and in order (the fake
+// CLIs anchor on the second line); new text is inserted after the second line or appended as the last line.
+const FINAL_MESSAGE_LINE = "Your final message must be exactly one JSON object: no Markdown code fence, no text before or after it.";
+
 export function buildPlannerPrompt(contract: LoopContract): string {
   return [
     "Return JSON only.",
     `Plan one isolated L2 attempt for task ${contract.objective.taskId}.`,
+    "This is the planning phase only. The workspace is read-only: do not create, edit or delete files, do not run apply_patch, and do not carry out the task. A later execute phase does the work this plan describes.",
     `Goal: ${contract.objective.goal}`,
     `Success condition: ${contract.objective.successCondition}`,
     "Non-goals:",
     formatList(contract.objective.nonGoals),
     "Target paths:",
     formatList(contract.context.targetPaths),
-    "Constraints:",
+    "Constraints (they bind the execute phase; plan for them, do not act on them now):",
     formatList(contract.context.constraints),
     'Return an object with {"summary": string, "primaryTargetPaths": string[]}.',
+    FINAL_MESSAGE_LINE,
   ].join("\n");
 }
 
@@ -49,6 +55,7 @@ export function buildExecutorPrompt(context: AttemptContext): string {
     'Return either a complete object with {"changedFiles": string[], "diffPatch": string, "commandOutputs": string[], "stdoutStderrLog": string} or a partial object that also includes {"completionStatus": "partial", "failureType": "timeout" | "error", "failureMessage": string}.',
     "If the attempt is interrupted, preserve any recognizable partial artifacts in those fields.",
     `If execute is aborted, you may have up to ${contract.executionPolicy.partialOutcomeRecoveryWindowMs}ms to flush one final execute-phase result.`,
+    FINAL_MESSAGE_LINE,
   ].join("\n");
 }
 
@@ -58,6 +65,7 @@ export function buildVerifierPrompt(context: AttemptContext): string {
   return [
     "Return JSON only.",
     `Verify task ${contract.objective.taskId}.`,
+    "This is the verify phase. Do not create, edit or delete files; run commands only to check the attempt.",
     `Goal: ${contract.objective.goal}`,
     `Success condition: ${contract.objective.successCondition}`,
     "Required checks:",
@@ -72,5 +80,6 @@ export function buildVerifierPrompt(context: AttemptContext): string {
     formatJson(context.execution),
     "Prefer rejection backed by concrete evidence.",
     'Return an object with {"approved": boolean, "rejectCategory": string, "primaryTargetPaths": string[], "failingCommand": string | null, "safeToRetry": boolean, "evidence": string[], "pauseSignals": string[], "stopSignals": string[]}.',
+    FINAL_MESSAGE_LINE,
   ].join("\n");
 }
