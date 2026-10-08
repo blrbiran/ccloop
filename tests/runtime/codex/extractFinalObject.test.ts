@@ -65,6 +65,13 @@ describe("extractFinalObject (codex phase output hardening)", () => {
     expect(extractPlan(text)).toEqual({ method: "none", candidates, valid });
   });
 
+  // K4 mutation M7f (2026-10-08): fail closed when a parsed span cannot be serialised for dedupe (JSON.parse is iterative,
+  // the key-sorting JSON.stringify is not): the unread tree could hold another answer, so the plan found before it is refused.
+  it("refuses a plan followed by an object too deep to serialise", () => {
+    const deep = `${'{"a":'.repeat(100_000)}1${"}".repeat(100_000)}`;
+    expect(extractPlan(`Plan: ${P}\nTrace: ${deep}`)).toEqual({ method: "none", candidates: 1, valid: 1 });
+  });
+
   describe("verify safety", () => {
     const acceptsVerify = phaseFinalAccepts("verify");
     const hiddenTemplate = `Template:\n${fence("json", JSON.stringify(approval))}\n`;
