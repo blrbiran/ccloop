@@ -1,4 +1,4 @@
-# ccloop Handoff — 2026-10-08：本仓 main 上只有人裁 139 改了三条判据与已知红名单（`src/**` 零改动，`stopProof`／`codexWatchdog` 已出名单）。Orca 账户计划的 Part B（用量事件加可选 `byModel`）已在 worktree 分支 `orca/usage-by-model` 上做完（只加不改判据），**等人合并推送**。详见文末「Orca 那条线」。
+# ccloop Handoff — 2026-10-08：本仓 main 上只有人裁 139 改了三条判据与已知红名单（`src/**` 零改动，`stopProof`／`codexWatchdog` 已出名单）。Orca 账户计划的 Part B（用量事件加可选 `byModel`，只加不改判据）已由人合进 main 并推送，Orca 已在分支上重钉到它。详见文末「Orca 那条线」。
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -407,42 +407,30 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-08，会话 `30bd7e40`**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-08，会话 `eaee0f2c`**；整节替换上一版，**不追加子会话日志**）
 
-以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。只引主题行与固定 pin，不写当前 HEAD；远端状态现查 `ls-remote`。上一版（会话 `9a20ac38`）说「Part B 下一轮会改本仓」——本轮已做完，见下。
+以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。只引主题行与固定 pin，不写当前 HEAD；远端状态现查 `ls-remote`。上一版（会话 `30bd7e40`）说「Part B 在 `orca/usage-by-model` 上等人合并」——人已合进本仓 main 并推送（主题行 `Merge ccloop main into orca/usage-by-model so main can fast-forward`），worktree 已删。
 
 ## 当前关联状态
 
-- **Part B（per-model 用量）已在本仓 worktree 分支 `orca/usage-by-model` 上做完，没合并、没推送，等人。** worktree 在 `/Users/biran/code/skills/loop/ccloop-usage-by-model`，基于本仓 main 的 `docs(handoff): roll the Orca line onto ruling 139 done and the byModel plan next`。五笔（按主题行找）：
-  1. `feat(control): carry a per-model breakdown on usage events`
-  2. `feat(claude): report usage per model from claude's modelUsage`
-  3. `fix(claude): take the per-model breakdown only from claude's envelope`
-  4. `feat(codex): report usage for the run's model`
-  5. `fix(control): stop the breakdown when a phase's models do not add up`
-- **只加不改判据**：`git diff --stat` 的测试部分只有 4 个新文件、0 删除；既有判据一条没动、一条没红。分支门（2026-10-07 现测）：typecheck／build RC 0；vitest 1211/1211，`check-known-reds.mjs` RC 0；`verify:control` RC 0（51 文件／490 条，要设 `ORCA_CCLOOP_BIN` 与 `ORCA_AGENTS_TABLE`，不设时 RC 1 是脚本拒跑，不是代码红）。其后最后一笔修复的全量是 1211/1212，唯一一条红是 `tests/cli/cli.test.ts > parseArgs > returns 0 for the example contract run`（负载 56 下 5 s 超时，不在已知红名单）；负载约 3.6 时单跑 3 次都是 37/37。**它没进名单，进不进归人。**
-- **语义（Orca 依赖这些，改了要同步 Orca）**：
-  - `byModel` 只在已知时出现，**从不写 `null` 或 `[]`**（`byModelSchema` 有 `.min(1)`）；按 `model` 的 JS code-unit 序严格升序；每项 `input`（不含缓存）／`output`／`cacheRead`／`cacheWrite`。
-  - 一个 run 里只要有一个阶段花了 token 却没给分项，或者某阶段各模型之和对不上它自己的 `tokenUsage`，这个 run 后面就再也不带 `byModel`。
-  - handoff 事件不带；codex 的单项按配置的模型名记。
-  - claude 的分项只取结果信封的 `modelUsage`；模型写进 `structured_output` 的 `modelUsage` 会被删掉，模型不能替自己报账。
-- **B4（能力标志 `usageBreakdown`）没做**：要人按人裁 88 点名 `tests/control/singleCallCapability.test.ts` C1，或者放弃这个标志（Orca 不消费它）。
-- **终审报过、本轮没修、归本仓 owner**：`claude-phase-runner.mjs` 在信封用量读不出时，会把模型自己写进答案的 `tokenUsage` 当成记账总数（早于 Part B，超出只加不改的范围）。
-- 未验证：真 claude 的 `modelUsage` 之和是否等于它的 `usage`（要付费跑）。如果对不上，本仓不会发 `byModel`，Orca 记为 `unattributed`。
-- **Orca 那边**：账户计划的 Task 12（重钉本仓、加 `usageByModelE2E`）要等人把这条分支合进 main 并推送、把推上去的 40 位提交给 Orca 会话。重钉会一并带入 `c3af4d6` 之后本仓 main 上的所有提交（含人裁 139）。Orca 已经能同时接受「带 `byModel`」和「不带」的事件。
+- **本轮本仓零改动。** Orca 已在它的 worktree 分支 `deps/usage-by-model-pin` 上重钉到本仓 `c82b21261cf45c8a615a75ef2e724c1173176920`（`pin-ccloop.mjs` 7 项检查 ok），新判据 `usageByModelE2E` 对旧 pin 红、新 pin 绿；**Orca 那两条分支等人合并推送**，合之前 Orca main 的 pin 仍是 `c3af4d6`。
+- **`byModel` 语义（Orca 依赖，改了要同步 Orca）**：只在已知时出现，从不写 `null`／`[]`；按 `model` 的 JS code-unit 序严格升序；每项 `input`（不含缓存）／`output`／`cacheRead`／`cacheWrite`；一个 run 里任一阶段花了 token 却没给分项、或分项之和对不上，后面就不再带；handoff 事件不带；codex 单项按配置的模型名记；claude 只取结果信封的 `modelUsage`。Orca 侧：对账（reconcile）那次 `ccloop run` 的花费仍记一行 `unattributed`（Orca 人裁 R2）。
+- **B4（`usageBreakdown` 能力标志）仍没做**：要人按人裁 88 点名 `tests/control/singleCallCapability.test.ts` C1，或放弃（Orca 不消费它）。
+- **归本仓 owner、未修**：`claude-phase-runner.mjs` 在信封用量读不出时，会把模型自己写进答案的 `tokenUsage` 当成记账总数（早于 Part B）。
+- 未验证：真 claude 的 `modelUsage` 之和是否等于它的 `usage`（要付费跑）；对不上时本仓不发 `byModel`，Orca 记 `unattributed`。
+- **Orca 新加的「合入方案」不调本仓新接口**：它在 Orca 侧把 `orca/<group>` 推到远端／开 GitHub PR／合进目标分支；冲突经人批准后用 scheduler 的 `runTask` 跑一次本仓 `ccloop run`（与落地对账同一条路），不改本仓协议。
 
 ## 固定依赖与跨仓约束（仍成立）
 
-- Orca pin 仍是 `github:blrbiran/ccloop#c3af4d6bdfbe8e9f57e9d2a953cdc610098e781b`。Orca 门的 `ORCA_CCLOOP_BIN` 一律用 pin 的 clone build（**绝对路径**——带 `..` 的路径会被 `control-binary-invalid` 拒绝）。2026-10-07 观测：拿本仓 main 的 `dist` 当 `ORCA_CCLOOP_BIN` 时，Orca `skillsE2E` 4 条以 `accept-refused:2:control-request-invalid` 红，原因未查。
-- Orca 以 `listAgents` 的 kind 为唯一权威；`listAgents.kind` 改名／改值、`PARTIAL_FLUSH_MARGIN_MS`（Orca 手抄）、protocol 3 的 `skillPluginDir`／`codexSkillsDir` 互斥、**用量事件的 `byModel` 形状**都必须同步 Orca。
+- Orca 门的 `ORCA_CCLOOP_BIN` 一律用 pin 的 **clone build**、**绝对路径**（带 `..` 会被 `control-binary-invalid` 拒）——npm 装进去的包没有 `tests/fixtures`，世界夹具找不到 fake codex。
+- Orca 以 `listAgents` 的 kind 为唯一权威；`listAgents.kind`、`PARTIAL_FLUSH_MARGIN_MS`（Orca 手抄）、protocol 3 的 `skillPluginDir`／`codexSkillsDir` 互斥、用量事件的 `byModel` 形状都必须同步 Orca。
 - Orca v2 默认：`maxFilesTouched`＝`Number.MAX_SAFE_INTEGER`、单 attempt 3 小时、partial recovery 60,000 ms；Orca 门的 fake codex 用 `integration`。Orca 控制 run 被 `ccloop resume` 拒。
 - loop 的 `requiredChecks` 在 worktree 里真跑 `sh -lc`；路径约束只查 executor 自报 `changedFiles`；`rejectOn` 只进 verifier prompt，`constraints` 不进 verifier、`nonGoals` 只进 planner。
-- runner 随 worker 死；never-started 记 0；codex `error` partial 进 verify。被杀调用没有 `outcome.json`、pgid 被复用会一直拒 resume，变更须先处理被杀续跑 spec §4.2。
-- syncskill Claude 路径：三 phase 加 `--plugin-dir`、去掉 `--disable-slash-commands`；无字段时 argv／信封哈希不变。
-- 前轮结论（G1、④、adapter／CLI 合并、预算链、被杀 run 续跑／孤儿收／R-A／R-B、H6 契约、人裁 139）仍有效，细节在前文与各自 ledger。
+- 前轮结论（G1、④、adapter／CLI 合并、预算链、被杀 run 续跑／孤儿收／R-A／R-B、H6 契约、人裁 139、Part B）仍有效，细节在前文与各自 ledger。
 
 ## 挂账与 awaitingHuman
 
-- 人：把 `orca/usage-by-model` 合进本仓 main（main 没动时 `--ff-only`）并推送；之后删 worktree `ccloop-usage-by-model`（Tier 0，人做）。B4 点名或放弃。`cli.test.ts` 那条要不要进已知红名单。
-- 名单里剩下的都是负载 flake；未入名单的负载 flake 除旧有 `agentsControl`、`evidence`、`endToEnd` candidate-fsynced、`claudeAgentAdapter` "a complete answer written after a stop is returned for execute"、`runCodexPhase` 两条、`skillsController` 三条外，本轮又见 `cli.test.ts` 那条。阶段 `setTimeout` 超 2,147,483,647 ms 变 1 ms 仍未处理。
+- 人：B4 点名或放弃；`tests/cli/cli.test.ts > parseArgs > returns 0 for the example contract run`（负载下 5 s 超时，单跑 37/37）进不进已知红名单。
+- 未入名单的负载 flake：`agentsControl`、`evidence`、`endToEnd` candidate-fsynced、`claudeAgentAdapter` "a complete answer written after a stop is returned for execute"、`runCodexPhase` 两条、`skillsController` 三条、`cli.test.ts` 那条。阶段 `setTimeout` 超 2,147,483,647 ms 变 1 ms 仍未处理。
 - 真 Claude §5.1「partial＋error 进 verify」与 reaper 杀活 claude 未验收；没有付费验收授权。
-- 纪律：known reds 用 `node scripts/check-known-reds.mjs`、泄漏用 `node scripts/check-tmp-leak.mjs`；只在 `git clone --local` 副本 build／验证／变异；用作 `ORCA_CCLOOP_BIN` 的 clone 不做变异；`cp`／`rm` 带 `-i`（子 agent 用裸 `cp` 会挂在确认提示上，本轮出过一次）；输出重定向到文件再完整读回。
+- 纪律：known reds 用 `node scripts/check-known-reds.mjs`、泄漏用 `node scripts/check-tmp-leak.mjs`；只在 `git clone --local` 副本 build／验证／变异；用作 `ORCA_CCLOOP_BIN` 的 clone 不做变异；`cp`／`rm` 用 `/bin/` 下的；git 一律 `-C <绝对路径>`（2026-10-08 Orca 一个子 agent 的 `cd` 失败后用 `;` 串接，把临时 git 实验跑进了 Orca 主工作树）；输出重定向到文件再完整读回。
