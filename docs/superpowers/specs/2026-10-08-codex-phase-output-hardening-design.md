@@ -214,3 +214,29 @@ Independent review (subagent, 2026-10-08, same session) of the first version of 
   separate fence collection is dead code. Ruled: candidates are the top-level balanced object spans only; fences need no
   separate handling (the brace pass scans their text). Mutation M2 is dropped. §3.2's fence bullet is superseded by this
   note (unpublished; recorded here rather than rewritten so the review trail stays readable).
+
+## 7. Corrections after the final whole-branch review (2026-10-08, controller ruling as spec owner)
+
+The final review (Critical C1, Important I1/I2, Minor M1–M4) showed that filtering candidates by schema validity lets an
+off-schema real answer disappear, so a schema-valid template wins: a verify rejection with an extra key, a string
+`"false"`, or missing keys, next to a fenced approval template, was accepted as approval. These rules supersede §3.2
+step 3 and the parked K1 item:
+
+1. **Answer-shaped nodes count, valid or not.** A node is *answer-shaped* when it has the phase's discriminating key:
+   verify `approved`; plan `summary` or `primaryTargetPaths`; execute `result`. Among all object nodes of all parsed
+   spans, if there is more than one distinct answer-shaped node (valid or not), return `none`. If exactly one exists and
+   `accepts` it, return `candidate`; otherwise `none`.
+2. **Verify extraction accepts only rejections.** A verify `candidate` is returned only when its `approved` is `false`.
+   A decorated approval gets `none` and fails exactly as today (`codex-result-invalid`). Extraction can therefore only
+   ever make verify stricter, never turn any answer into approval.
+3. **Bounded work.** At most 100 000 object nodes are visited per final message and the walk tracks depth; past
+   100 000 nodes or past depth 1 000 the result is `none` (fail closed). `accepts` (zod) runs only on answer-shaped
+   nodes.
+4. **Evidence for hidden text.** `final-extraction.json` gains `hidden: boolean` and is also written whenever text was
+   hidden (unclosed `{`, unparseable span, a limit in rule 3), even with zero candidates.
+5. The dead `!record(value)` guard is removed. The verifier prompt line becomes `This is the verify phase. Do not change
+   the attempt's files; run commands only to check the attempt.` (a build may write output; editing the attempt is what
+   is forbidden).
+
+Each rule gets criteria seen red by its own mutation; the final review's probe samples (`flip.mjs`, `perf2.mjs` in the
+session scratchpad) become tests.
