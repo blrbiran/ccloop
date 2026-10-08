@@ -123,3 +123,66 @@ export function codexModelUsage(events: string, model: string): ModelUsageV1[] |
   if (!integer(total) || !integer(output) || !integer(cached) || cached > total) return null;
   return [{ model, input: total - cached, output, cacheRead: cached, cacheWrite: 0 }];
 }
+
+/**
+ * Codex phase output hardening (2026-10-08), spec §3.2: the phase's strict acceptance test for extractFinalObject. Plan
+ * and verify use their phase schema; execute uses the strict {result} envelope whose result must pass the execution union.
+ */
+const executeEnvelope = z.object({result:execution}).strict();
+export function phaseFinalAccepts(phase: CodexPhase): (value: unknown) => boolean {
+  const schema: z.ZodTypeAny = phase === "execute" ? executeEnvelope : schemas[phase];
+  return (value) => schema.safeParse(value).success;
+}
+
+export type FinalExtraction =
+  | { method: "whole"; value: unknown }
+  | { method: "candidate"; value: unknown; candidates: number; valid: number }
+  | { method: "none"; candidates: number; valid: number };
+/**
+ * Codex phase output hardening (2026-10-08), spec §3.2: find the phase answer in a final message a provider let the model
+ * decorate. A final message that is whole JSON is returned as is (acceptance is then decided exactly as before).
+ * Otherwise every fenced block and every top-level balanced {…} span is a candidate; candidates that parse to objects are
+ * deduplicated by JSON.stringify, and the answer is the one distinct object `accepts` takes. Zero, or two or more
+ * different accepted objects, is `none`: decoration may never change which answer is accepted (a fenced approval
+ * template next to the real rejection is refused, not guessed). One linear pass for fences, one for spans.
+ */
+export function extractFinalObject(final: string, accepts: (value: unknown) => boolean): FinalExtraction {
+  try { return { method: "whole", value: JSON.parse(final) }; } catch { /* not whole JSON: look for candidates */ }
+  const texts: string[] = [];
+  // A line starting with ``` opens a block and the next line starting with ``` closes it; an unclosed fence is no block.
+  let body = -1;
+  for (let start = 0; ;) {
+    const newline = final.indexOf("\n", start);
+    if (final.startsWith("```", start)) {
+      if (body === -1) body = newline === -1 ? final.length : newline + 1;
+      else { texts.push(final.slice(body, start)); body = -1; }
+    }
+    if (newline === -1) break;
+    start = newline + 1;
+  }
+  // Brace spans: string state only inside an object (depth >= 1), so a stray quote in prose cannot hide one; a `}` at
+  // depth 0 is ignored; an unclosed `{` never closes, so no span starts after it.
+  let depth = 0, spanStart = 0, inString = false, escaped = false;
+  for (let i = 0; i < final.length; i++) {
+    const c = final[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+    } else if (c === "{") {
+      if (depth === 0) spanStart = i;
+      depth++;
+    } else if (c === "}") {
+      if (depth > 0 && --depth === 0) texts.push(final.slice(spanStart, i + 1));
+    } else if (c === '"' && depth > 0) inString = true;
+  }
+  const objects = new Map<string, unknown>();
+  for (const text of texts) {
+    let value: unknown;
+    try { value = JSON.parse(text); } catch { continue; }
+    if (record(value)) objects.set(JSON.stringify(value), value);
+  }
+  const valid = [...objects.values()].filter((value) => accepts(value));
+  const counts = { candidates: objects.size, valid: valid.length };
+  return valid.length === 1 ? { method: "candidate", value: valid[0], ...counts } : { method: "none", ...counts };
+}
