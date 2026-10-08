@@ -110,8 +110,14 @@ Algorithm:
      an object; a `}` at depth 0 is ignored; a span opens at a `{` at depth 0 and closes when depth returns to 0. An
      unclosed `{` ends the scan of spans (no span from it). An object nested in an array (`[{…}]`) has brace depth 0 at
      its `{` and is a candidate; the array itself is not.
-   Each candidate text is `JSON.parse`d once; parse failures and non-objects are dropped. Distinct values are compared by
-   canonical `JSON.stringify` of the parsed value, so the same object repeated (a fence and its own span) counts once.
+   Each candidate text is `JSON.parse`d once.
+   **Fail closed on hidden text (amended after the K1 review):** if the brace pass ends with an unclosed `{`, or any
+   top-level object span fails `JSON.parse`, return `none` — text the matcher cannot read could hold another answer.
+   (A fence body that fails to parse is not hidden: the brace pass scans the fence's text too.)
+   **Nested objects are candidates:** for every parsed candidate, every object node in its value tree (the root and
+   every nested object, walked iteratively) is offered to `accepts`, so an answer wrapped inside another object is seen.
+   Distinct values are compared by `JSON.stringify` with object keys sorted recursively, so the same object repeated (a
+   fence and its own span, or the same keys in another order) counts once.
 3. Keep the candidates that `accepts`. If **exactly one distinct** value remains, return
    `{method:"candidate", value, …}`; otherwise (zero, or two or more different schema-valid objects) return
    `{method:"none", …}`.
@@ -199,3 +205,8 @@ Independent review (subagent, 2026-10-08, same session) of the first version of 
 - M1 (accepted): `none` now passes the original text to today's path in every phase, so error text is unchanged.
 - M2 (accepted): noted the codex execute envelope line after the final-message line.
 - M6 (accepted): rule citation corrected to ccloop's own Rule 9 / Rule 15 / Rule 17.
+- K1 task review (2026-10-08, same session) found that an unclosed `{` or an unparseable wrapper could hide a verify
+  rejection while a fenced approval template stayed visible, so the template was accepted. Ruled (controller, as spec
+  owner): fail closed on an unclosed brace or an unparseable top-level span, walk nested objects, and sort keys before
+  dedupe (§3.2 step 2 amended in place; unpublished). Cost: answers that put stray braces in prose are refused as
+  today.
