@@ -142,6 +142,21 @@ describe("Codex adapter final-message extraction (codex phase output hardening)"
     expect((await stat(join(call, "final-extraction.json"))).mode & 0o777).toBe(0o600);
   });
 
+  // Follow-up B1 (re-review of 252d3ee): an answer-shaped node with a too-deep subtree fails as today, with evidence, instead
+  // of surfacing a RangeError and writing no final-extraction.json.
+  const deepChild = `${'{"a":'.repeat(99_999)}{}${"}".repeat(99_999)}`;
+  for (const { phase, text } of [
+    { phase: "plan", text: `Plan: {"summary":"s","primaryTargetPaths":[],"x":${deepChild}}` },
+    { phase: "verify", text: `Verdict: {"approved":false,"x":${deepChild}}` },
+    { phase: "execute", text: `Done: {"result":${deepChild}}` },
+  ] as const) it(`fails a ${phase} answer with a child nested 100 000 deep as today and records hidden text`, async () => {
+    const f = await withFinal(phase, text);
+    const message = await failure(phase === "plan" ? f.adapter.plan(f.context) : phase === "verify" ? f.adapter.verify(f.context) : f.adapter.execute(f.context));
+    const call = await f.call();
+    expect(message).toBe(phase === "execute" ? `${todaysParseError(text)}: ${call}` : `Error: codex-result-invalid: ${call}`);
+    expect(await readJson(join(call, "final-extraction.json"))).toEqual({ method: "none", candidates: 0, valid: 0, hidden: true, originalBytes: Buffer.byteLength(text, "utf8") });
+  });
+
   for (const { name, body } of [{ name: "complete", body: complete }, { name: "partial", body: partial }]) it(`extracts a ${name} execution envelope from prose`, async () => {
     const text = `Done. Result:\n${JSON.stringify({ result: body })}`;
     const f = await withFinal("execute", text);

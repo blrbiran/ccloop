@@ -186,18 +186,22 @@ export function scanFinalMessage(final: string, accepts: PhaseAcceptor): { extra
     let value: unknown;
     try { value = JSON.parse(text); } catch { hidden = true; continue; }
     // Every container of the tree, iteratively, with its depth: an answer wrapped inside another object is still seen.
-    const stack: Array<[object, number]> = [[value as object, 1]];
+    // The whole span is walked (and depth-checked) before any node is serialised, so a too-deep subtree under an
+    // answer-shaped node fails closed instead of overflowing JSON.stringify (follow-up B1).
+    const stack: Array<[object, number]> = [[value as object, 1]], found: Record<string, unknown>[] = [];
     for (let entry = stack.pop(); entry !== undefined; entry = stack.pop()) {
       const [node, level] = entry;
       if (level > MAX_DEPTH || (record(node) && ++nodes > MAX_NODES)) { hidden = true; break scan; }
       for (const item of Object.values(node)) if (item !== null && typeof item === "object") stack.push([item, level + 1]);
-      if (record(node) && shaped.size < 2 && accepts.keys.some((key) => Object.hasOwn(node, key))) {
-        const key = JSON.stringify(node, sortKeys);
-        if (!shaped.has(key)) {
-          const ok = accepts(node);
-          shaped.set(key, ok);
-          if (ok) answer = node;
-        }
+      if (record(node) && accepts.keys.some((key) => Object.hasOwn(node, key))) found.push(node);
+    }
+    for (const node of found) {
+      if (shaped.size >= 2) break;
+      const key = JSON.stringify(node, sortKeys);
+      if (!shaped.has(key)) {
+        const ok = accepts(node);
+        shaped.set(key, ok);
+        if (ok) answer = node;
       }
     }
     roots.add(JSON.stringify(value, sortKeys));

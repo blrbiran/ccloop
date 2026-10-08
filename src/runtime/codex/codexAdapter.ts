@@ -30,8 +30,9 @@ export class CodexAdapter implements RuntimeAdapter {
       throw Object.assign(new Error(`${outcome.reason.startsWith("codex-skills-") ? outcome.reason : `codex-${outcome.reason}`}: ${outcome.evidenceDir}`), { observedTokens: outcome.observedTokens });
     }
     try {
-      // Codex phase output hardening (2026-10-08), spec §3.2: a decorated final message yields its one schema-valid object;
-      // a whole-JSON answer, and one without exactly one valid object, take today's path with the original text unchanged.
+      // Codex phase output hardening (2026-10-08), spec §3.2 as corrected by §7: a decorated final message yields its answer
+      // when it holds exactly one distinct answer-shaped node and that node is accepted (verify: a rejection only); a
+      // whole-JSON answer, and any other message, take today's path with the original text unchanged.
       // Spec §7 rule 4: the evidence also records hidden text, and is written for it even when nothing parsed.
       const { extraction, hidden } = scanFinalMessage(outcome.final, phaseFinalAccepts(phase));
       if (extraction.method === "candidate" || (extraction.method === "none" && (extraction.candidates > 0 || hidden))) {

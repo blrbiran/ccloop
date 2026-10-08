@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractFinalObject, phaseFinalAccepts } from "../../../src/runtime/codex/protocol.js";
+import { extractFinalObject, phaseFinalAccepts, scanFinalMessage } from "../../../src/runtime/codex/protocol.js";
 
 // Codex phase output hardening (2026-10-08), spec §3.2 and §4. A provider that does not enforce --output-schema lets the
 // model wrap its answer in prose or a fence. The answer is taken only when exactly one schema-valid object is in the
@@ -82,6 +82,18 @@ describe("extractFinalObject (codex phase output hardening)", () => {
   });
   it("refuses a plan next to objects that bring the message past 100 000 object nodes (node limit)", () => {
     expect(extractPlan(`Plan: ${P}\nTrace: ${wide(99_999)}`)).toEqual({ method: "none", candidates: 1, valid: 1 });
+  });
+
+  // Follow-up B1 (re-review of 252d3ee, 2026-10-08): an answer-shaped node whose subtree is too deep must fail closed like any
+  // other deep span, not throw RangeError: each span is walked (and depth-checked) completely before any node is serialised.
+  const deepChild = `${'{"a":'.repeat(99_999)}{}${"}".repeat(99_999)}`, deepArray = `${"[".repeat(100_000)}${"]".repeat(100_000)}`;
+  for (const { name, phase, text } of [
+    { name: "a plan with a child nested 100 000 deep", phase: "plan", text: `Plan: {"summary":"s","primaryTargetPaths":[],"x":${deepChild}}` },
+    { name: "a plan with arrays nested 100 000 deep", phase: "plan", text: `Plan: {"summary":"s","primaryTargetPaths":[],"x":${deepArray}}` },
+    { name: "a verify rejection with a child nested 100 000 deep", phase: "verify", text: `Verdict: {"approved":false,"x":${deepChild}}` },
+    { name: "an execute envelope whose result is nested 100 000 deep", phase: "execute", text: `Done: {"result":${deepChild}}` },
+  ] as const) it(`refuses ${name} as hidden text instead of throwing`, () => {
+    expect(scanFinalMessage(text, phaseFinalAccepts(phase))).toEqual({ extraction: { method: "none", candidates: 0, valid: 0 }, hidden: true });
   });
 
   // Spec §7 rule 1: an answer-shaped node (one carrying the phase's discriminating key) counts whether or not it is valid, so
