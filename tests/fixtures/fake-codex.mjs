@@ -71,6 +71,10 @@ process.stdin.on("end",()=>{
   if(phase==="execute" && mode==="write-hang") {setInterval(()=>{},1000);return;}
   if(phase==="execute" && mode==="partial") Object.assign(body,{completionStatus:"partial",failureType:"error",failureMessage:"fixture partial"});
   if(mode!=="missing-final") writeFileSync(value("-o"),JSON.stringify(wireSchema.properties?.result?{result:body,...(mode==="envelope-extra"?{tokenUsage:0}:{})}:body));
+  // Codex phase output hardening (2026-10-08): mode `final-text`, argv `final-text <marker> <finalsFile>`, writes the
+  // finalsFile's string for this phase (`{"plan"?, "execute"?, "verify"?}`) as the final message verbatim, replacing the
+  // JSON answer above; a phase without an entry answers as mode `ok` does.
+  if(mode==="final-text"){const text=JSON.parse(readFileSync(process.argv[4],"utf8"))[phase];if(typeof text==="string")writeFileSync(value("-o"),text);}
   if(phase==="execute" && mode==="no-usage") return;
   const events=JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"中文"}})+"\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:mode==="high-usage"?39997:12,output_tokens:3}})+"\n";
   if(mode==="child-holds-pipe") {
