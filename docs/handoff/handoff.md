@@ -409,12 +409,12 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 ---
 # 📌 Orca 那条线（单节滚动，2026-10-10，Codex controller；整节替换本会话旧入口，不追加会话日志）
 
-Orca 当前入口：`/Users/biran/code/skills/loop/Orca/docs/handoff/handoff.md` §4.0，产品与台账已按人授权本地合进 main；审查 worktree/分支仍保留。本节不固定当前 HEAD；三个仓远端状态须分别现查 `/usr/bin/git ls-remote origin refs/heads/main`。
+Orca 当前入口：`/Users/biran/code/skills/loop/Orca/docs/handoff/handoff.md` §4.0；本轮无需brainstorm反馈修复在主检出 `codex/feedback-maintenance-20261010` 已完成、待人审核，尚未合Orca main。旧issue-fixes/D9/M3/M5/M6已收口且在main；保留审查worktree/分支，不重做。本节不固定当前 HEAD；三个仓远端状态须分别现查 `/usr/bin/git ls-remote origin refs/heads/main`。
 
 - 人已合并并推送本仓 codex阶段输出加固和 Orca issue-fixes。Orca主检出 package/lock/hidden lock 已安装固定 pin `ab824d16004de2d3c1613a76ec0431520aa16cc9`；旧 ccloop-planner 已按人授权清理。
 - 上一轮本仓行为仍是：规划只读、验证不改文件，最后恰好一个带阶段关键字段的 JSON 对象；只放宽验证“拒绝”，修饰过的“批准”仍无效，放宽提取保留final-extraction.json证据。唯一历史台账 `.superpowers/sdd/2026-10-08-codex-phase-output-hardening/progress.md`，spec §6/§7 更正优先，不重做。
 - **本会话本仓仅同步 main 上的 handoff，产品/协议未改。** Orca D9 owner保守结清未知用量、M3交接后失败重试、M5/M6性能任务均已实现、独立终审，并按人 2026-10-10 授权本地合 main；push 由人做。结清不发provider用量，也不改ccloop信封语义；控制库schema10只属Orca。
-- 新两轮进度看Orca执行台账的Round close，不读旧设计待审段。Orca原始门与性能结果/限制都在其台账，不能转述成本仓新全量门。真实ccloop通过固定pin clone+fakeagent运行，无付费provider。
+- 当前反馈轮进度/验收看Orca `.superpowers/sdd/2026-10-10-feedback-maintenance/progress.md` 末尾Round close；终审与原始门见同目录。root3505过/0失败/4跳过、web751过，pin另3/3、panel0–14绿；20最终变异RED/逐次diff0、clone60绿/内层leak0；真实launchd与浏览器几何未验。只补Web和操作文档，未加Codex single-call、未改本仓协议。新旧执行台账都看末尾Round close，不读旧设计待审段。Orca原始门与性能结果/限制都在其台账，不能转述成本仓新全量门。真实ccloop通过固定pin clone+fakeagent运行，无付费provider。
 - 同步约束仍是 `byModel`语义、`listAgents.kind`、`PARTIAL_FLUSH_MARGIN_MS`、protocol3 skills互斥；本仓修改这些先核Orca消费者。
 - 仍挂账：B4 usageBreakdown点名或放弃；claude-phase-runner信封用量缺失时把模型自报tokenUsage当总数；本仓K4六条与三条codex进程类负载flake是否登记，归本仓owner。人只批准了Orca F2四条，不能外推成本仓名单。
 - 门的 ORCA_CCLOOP_BIN 必须固定pin clone build绝对路径，npm发布包缺tests/fixtures；变异单独clone先build，rawlog完整读回，known-reds用check-known-reds.mjs，cp/rm用/bin、git带-C绝对路径。此次本地整合已获授权；推送/删新分支或worktree仍归人。
