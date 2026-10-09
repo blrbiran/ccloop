@@ -407,30 +407,25 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（**单节滚动更新，2026-10-08，会话 `eaee0f2c`**；整节替换上一版，**不追加子会话日志**）
+# 📌 Orca 那条线（**单节滚动更新，2026-10-09，会话 `e34dc963`**；整节替换上一版，**不追加子会话日志**）
 
-以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。只引主题行与固定 pin，不写当前 HEAD；远端状态现查 `ls-remote`。上一版（会话 `30bd7e40`）说「Part B 在 `orca/usage-by-model` 上等人合并」——人已合进本仓 main 并推送（主题行 `Merge ccloop main into orca/usage-by-model so main can fast-forward`），worktree 已删。
+以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。只引主题行与固定 pin，不写当前 HEAD；远端状态现查 `ls-remote`。上一版（会话 `eaee0f2c`）说「Orca 两条分支等人合并」——人已合进 Orca main 并推送，Orca main 的 pin 是 `c82b21261cf45c8a615a75ef2e724c1173176920`。
+
+## 本仓库本轮改动（**在分支 `fix/codex-planner-output` 上，未合、未推**；worktree `/Users/biran/code/skills/loop/ccloop-planner`）
+
+- 起因：Orca 用户用第三方模型跑 codex，规划阶段直接动手写文件、最后输出「Markdown＋JSON」，被判 `codex-result-invalid` 整个 run 失败。
+- 做了什么：(1) 三个阶段提示词写明边界（规划只读、不动手；验证不改尝试的文件；最终消息必须恰好一个 JSON 对象），原有行逐字保留以免假 CLI 认不出阶段；(2) codex 最终输出的解析放宽：只认「恰好一个带阶段关键字段的对象」，**验证阶段只放宽「拒绝」**——被修饰的「批准」照旧判无效，所以解析放宽只会让验证更严、不会把拒绝读成批准；有被藏起的文本、超过节点或深度上限一律判无效；放宽时写 `final-extraction.json` 证据。
+- 门：`check-known-reds` RC 0（1298/1299，唯一红是名单内、本分支未碰的 `claudePhaseRunner` 文件）、typecheck／build RC 0；每条新分支都有被看见红的变异。
+- 唯一进度源：`.superpowers/sdd/2026-10-08-codex-phase-output-hardening/progress.md`；spec `docs/superpowers/specs/2026-10-08-codex-phase-output-hardening-design.md`（**§6／§7 是评审后的更正，以它们为准**）；计划 `docs/superpowers/plans/2026-10-08-codex-phase-output-hardening.md`。
 
 ## 当前关联状态
 
-- **本轮本仓零改动。** Orca 已在它的 worktree 分支 `deps/usage-by-model-pin` 上重钉到本仓 `c82b21261cf45c8a615a75ef2e724c1173176920`（`pin-ccloop.mjs` 7 项检查 ok），新判据 `usageByModelE2E` 对旧 pin 红、新 pin 绿；**Orca 那两条分支等人合并推送**，合之前 Orca main 的 pin 仍是 `c3af4d6`。
-- **`byModel` 语义（Orca 依赖，改了要同步 Orca）**：只在已知时出现，从不写 `null`／`[]`；按 `model` 的 JS code-unit 序严格升序；每项 `input`（不含缓存）／`output`／`cacheRead`／`cacheWrite`；一个 run 里任一阶段花了 token 却没给分项、或分项之和对不上，后面就不再带；handoff 事件不带；codex 单项按配置的模型名记；claude 只取结果信封的 `modelUsage`。Orca 侧：对账（reconcile）那次 `ccloop run` 的花费仍记一行 `unattributed`（Orca 人裁 R2）。
-- **B4（`usageBreakdown` 能力标志）仍没做**：要人按人裁 88 点名 `tests/control/singleCallCapability.test.ts` C1，或放弃（Orca 不消费它）。
-- **归本仓 owner、未修**：`claude-phase-runner.mjs` 在信封用量读不出时，会把模型自己写进答案的 `tokenUsage` 当成记账总数（早于 Part B）。
-- 未验证：真 claude 的 `modelUsage` 之和是否等于它的 `usage`（要付费跑）；对不上时本仓不发 `byModel`，Orca 记 `unattributed`。
-- **Orca 新加的「合入方案」不调本仓新接口**：它在 Orca 侧把 `orca/<group>` 推到远端／开 GitHub PR／合进目标分支；冲突经人批准后用 scheduler 的 `runTask` 跑一次本仓 `ccloop run`（与落地对账同一条路），不改本仓协议。
+- **等人**：把 `fix/codex-planner-output` 合进本仓 main 并推送；之后 Orca agent 重钉（Orca 计划 Part F1）。
+- `byModel` 语义、`listAgents.kind`、`PARTIAL_FLUSH_MARGIN_MS`、protocol 3 skills 互斥：Orca 依赖，改了要同步 Orca（结论未变）。
+- 未入已知红名单的负载 flake（本轮新见）：K4 报告里的六个名字、三条 codex 进程类测试（`adapter` 清理、`runCodexPhase` 忽略 TERM 的 kill、`skillsController` verify 清理），各自单跑绿。是否入名单归人。
+- 仍挂：B4（`usageBreakdown`）点名或放弃；`claude-phase-runner.mjs` 在信封用量读不出时把模型自报的 `tokenUsage` 当总数（早于 Part B，归本仓 owner）。
 
 ## 固定依赖与跨仓约束（仍成立）
 
-- Orca 门的 `ORCA_CCLOOP_BIN` 一律用 pin 的 **clone build**、**绝对路径**（带 `..` 会被 `control-binary-invalid` 拒）——npm 装进去的包没有 `tests/fixtures`，世界夹具找不到 fake codex。
-- Orca 以 `listAgents` 的 kind 为唯一权威；`listAgents.kind`、`PARTIAL_FLUSH_MARGIN_MS`（Orca 手抄）、protocol 3 的 `skillPluginDir`／`codexSkillsDir` 互斥、用量事件的 `byModel` 形状都必须同步 Orca。
-- Orca v2 默认：`maxFilesTouched`＝`Number.MAX_SAFE_INTEGER`、单 attempt 3 小时、partial recovery 60,000 ms；Orca 门的 fake codex 用 `integration`。Orca 控制 run 被 `ccloop resume` 拒。
-- loop 的 `requiredChecks` 在 worktree 里真跑 `sh -lc`；路径约束只查 executor 自报 `changedFiles`；`rejectOn` 只进 verifier prompt，`constraints` 不进 verifier、`nonGoals` 只进 planner。
-- 前轮结论（G1、④、adapter／CLI 合并、预算链、被杀 run 续跑／孤儿收／R-A／R-B、H6 契约、人裁 139、Part B）仍有效，细节在前文与各自 ledger。
-
-## 挂账与 awaitingHuman
-
-- 人：B4 点名或放弃；`tests/cli/cli.test.ts > parseArgs > returns 0 for the example contract run`（负载下 5 s 超时，单跑 37/37）进不进已知红名单。
-- 未入名单的负载 flake：`agentsControl`、`evidence`、`endToEnd` candidate-fsynced、`claudeAgentAdapter` "a complete answer written after a stop is returned for execute"、`runCodexPhase` 两条、`skillsController` 三条、`cli.test.ts` 那条。阶段 `setTimeout` 超 2,147,483,647 ms 变 1 ms 仍未处理。
-- 真 Claude §5.1「partial＋error 进 verify」与 reaper 杀活 claude 未验收；没有付费验收授权。
-- 纪律：known reds 用 `node scripts/check-known-reds.mjs`、泄漏用 `node scripts/check-tmp-leak.mjs`；只在 `git clone --local` 副本 build／验证／变异；用作 `ORCA_CCLOOP_BIN` 的 clone 不做变异；`cp`／`rm` 用 `/bin/` 下的；git 一律 `-C <绝对路径>`（2026-10-08 Orca 一个子 agent 的 `cd` 失败后用 `;` 串接，把临时 git 实验跑进了 Orca 主工作树）；输出重定向到文件再完整读回。
+- Orca 门的 `ORCA_CCLOOP_BIN` 一律用 pin 的 **clone build**、**绝对路径**；npm 装的包没有 `tests/fixtures`。
+- 纪律：known reds 用 `node scripts/check-known-reds.mjs`；变异只在 `git clone --local` 副本里且先 `npm run build`；`cp`／`rm` 用 `/bin/` 下的；git 一律 `-C <绝对路径>`；输出重定向到文件再完整读回。
