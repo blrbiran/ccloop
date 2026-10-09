@@ -1,4 +1,4 @@
-# ccloop Handoff — 2026-10-08：本仓 main 上只有人裁 139 改了三条判据与已知红名单（`src/**` 零改动，`stopProof`／`codexWatchdog` 已出名单）。Orca 账户计划的 Part B（用量事件加可选 `byModel`，只加不改判据）已由人合进 main 并推送，Orca 已在分支上重钉到它。详见文末「Orca 那条线」。
+# ccloop Handoff — 2026-10-09：codex 阶段输出加固（`fix/codex-planner-output`）已由人合进 main 并推送；Orca 已在分支上重钉到它、等人合并。本仓其余状态见下文；Orca 关联见文末「Orca 那条线」。
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -406,26 +406,39 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
----
-# 📌 Orca 那条线（**单节滚动更新，2026-10-09，会话 `e34dc963`**；整节替换上一版，**不追加子会话日志**）
+---# 📌 Orca 那条线（**单节滚动更新，2026-10-09，会话 `3156185d`**；整节替换上一版，**不追加子会话日志**）
 
-以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。只引主题行与固定 pin，不写当前 HEAD；远端状态现查 `ls-remote`。上一版（会话 `eaee0f2c`）说「Orca 两条分支等人合并」——人已合进 Orca main 并推送，Orca main 的 pin 是 `c82b21261cf45c8a615a75ef2e724c1173176920`。
+以 Orca 仓 `docs/handoff/handoff.md` §4.0 为准。本节只引主题行和固定 pin，不写当前 HEAD；远端状态请现查 `ls-remote`。
+上一版（会话 `e34dc963`）说「`fix/codex-planner-output` 未合、未推」。现在人已把它合进本仓 main 并推送。该 worktree `ccloop-planner` 还没删，删不删由人定。
 
-## 本仓库本轮改动（**在分支 `fix/codex-planner-output` 上，未合、未推**；worktree `/Users/biran/code/skills/loop/ccloop-planner`）
+## 本仓库上一轮改动（**已在 main 上**；主题行见 `git log --grep 'codex phase output'`）
 
-- 起因：Orca 用户用第三方模型跑 codex，规划阶段直接动手写文件、最后输出「Markdown＋JSON」，被判 `codex-result-invalid` 整个 run 失败。
-- 做了什么：(1) 三个阶段提示词写明边界（规划只读、不动手；验证不改尝试的文件；最终消息必须恰好一个 JSON 对象），原有行逐字保留以免假 CLI 认不出阶段；(2) codex 最终输出的解析放宽：只认「恰好一个带阶段关键字段的对象」，**验证阶段只放宽「拒绝」**——被修饰的「批准」照旧判无效，所以解析放宽只会让验证更严、不会把拒绝读成批准；有被藏起的文本、超过节点或深度上限一律判无效；放宽时写 `final-extraction.json` 证据。
-- 门：`check-known-reds` RC 0（1298/1299，唯一红是名单内、本分支未碰的 `claudePhaseRunner` 文件）、typecheck／build RC 0；每条新分支都有被看见红的变异。
-- 唯一进度源：`.superpowers/sdd/2026-10-08-codex-phase-output-hardening/progress.md`；spec `docs/superpowers/specs/2026-10-08-codex-phase-output-hardening-design.md`（**§6／§7 是评审后的更正，以它们为准**）；计划 `docs/superpowers/plans/2026-10-08-codex-phase-output-hardening.md`。
+- **起因**：Orca 用户用第三方模型跑 codex，规划阶段直接动手写文件，最后输出「Markdown＋JSON」，被判 `codex-result-invalid`，整个 run 失败。
+- **做了什么**：
+  1. 三个阶段的提示词写明边界：规划只读、不动手；验证不改尝试的文件；最终消息必须恰好一个 JSON 对象。
+  2. codex 最终输出只认「恰好一个带阶段关键字段的对象」。**验证阶段只放宽「拒绝」**，被修饰过的「批准」照旧判无效。放宽解析时写 `final-extraction.json` 作为证据。
+- **唯一进度源**：`.superpowers/sdd/2026-10-08-codex-phase-output-hardening/progress.md`。spec 是 `docs/superpowers/specs/2026-10-08-codex-phase-output-hardening-design.md`，**以其中 §6／§7 的更正为准**。
 
 ## 当前关联状态
 
-- **等人**：把 `fix/codex-planner-output` 合进本仓 main 并推送；之后 Orca agent 重钉（Orca 计划 Part F1）。
-- `byModel` 语义、`listAgents.kind`、`PARTIAL_FLUSH_MARGIN_MS`、protocol 3 skills 互斥：Orca 依赖，改了要同步 Orca（结论未变）。
-- 未入已知红名单的负载 flake（本轮新见）：K4 报告里的六个名字、三条 codex 进程类测试（`adapter` 清理、`runCodexPhase` 忽略 TERM 的 kill、`skillsController` verify 清理），各自单跑绿。是否入名单归人。
-- 仍挂：B4（`usageBreakdown`）点名或放弃；`claude-phase-runner.mjs` 在信封用量读不出时把模型自报的 `tokenUsage` 当总数（早于 Part B，归本仓 owner）。
+- **Orca 已重钉到本仓 `ab824d16004de2d3c1613a76ec0431520aa16cc9`**，在 Orca 分支 `fix/issues-20261009` 上，等人合并。
+  - 重钉检查：`pin-ccloop.mjs` 7 项全 ok。
+  - Orca 终门（`ORCA_CCLOOP_BIN`＝ab824d1 的 clone build）里，真 ccloop 的 `executionDriverE2E` 10/10。
+  - Orca main 合并之前，pin 仍是 `c82b212`。
+- **本会话本仓零改动**，只改了本节。
+- `ccloop` 发 `Error: codex-exit-error: …` 时，Orca 现在有中英文说明（Orca 侧改动）。
+- **Orca 侧待人拍的设计决定**：codex 崩溃又没报用量的运行，在 Orca 里无法重试，整组也被挡住。解法在 Orca 侧（「结清未知用量」），**不改本仓协议**。
+- 以下是 Orca 依赖，改了要同步 Orca（结论未变）：`byModel` 语义、`listAgents.kind`、`PARTIAL_FLUSH_MARGIN_MS`、protocol 3 的 skills 互斥。
+- 仍然挂着：
+  - B4（`usageBreakdown`）点名或放弃。
+  - `claude-phase-runner.mjs` 在信封用量读不出时，把模型自报的 `tokenUsage` 当总数（早于 Part B，归本仓 owner）。
+  - 上一轮新见的负载 flake 进不进名单归人：K4 报告里的六个名字，以及三条 codex 进程类测试。
 
 ## 固定依赖与跨仓约束（仍成立）
 
 - Orca 门的 `ORCA_CCLOOP_BIN` 一律用 pin 的 **clone build**、**绝对路径**；npm 装的包没有 `tests/fixtures`。
-- 纪律：known reds 用 `node scripts/check-known-reds.mjs`；变异只在 `git clone --local` 副本里且先 `npm run build`；`cp`／`rm` 用 `/bin/` 下的；git 一律 `-C <绝对路径>`；输出重定向到文件再完整读回。
+- 纪律：
+  - known reds 用 `node scripts/check-known-reds.mjs` 判。
+  - 变异只在 `git clone --local` 副本里做，且先 `npm run build`。
+  - `cp`／`rm` 用 `/bin/` 下的；git 一律 `-C <绝对路径>`。
+  - 输出重定向到文件再完整读回。
