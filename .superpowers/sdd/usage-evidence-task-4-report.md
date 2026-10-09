@@ -36,3 +36,12 @@
 ## Concerns
 - The worktree still contains unrelated dirty tracked/untracked material outside this task; it was intentionally left untouched.
 - A-04 remains blocked. Any future run needs fresh contract/run/evidence paths, explicit budgets, and explicit approval before any paid call.
+
+## Follow-up Docs Checkpoint
+- Follow-up docs commit title: `docs: append Task 4 checkpoint`.
+- Follow-up docs commit SHA: `73fa00ed95c53337224be592bf203a892d713fdf`.
+- 2026-07-18 follow-up docs commit appends the required `.wolf/memory.md` checkpoint for the deterministic gate result: 13 files / 113 tests, typecheck/build pass, privacy clean, no real Claude, and A-04 still unapproved/unrun.
+- Scope note: this follow-up is limited to the checkpoint append plus this report note; other dirty metadata remains excluded.
+
+## Historical backup integration (Codex controller, 2026-10-10)
+The preceding six appended lines are copied byte-for-byte from the historical backup branch. They describe July evidence, not a new test run. The backup contains no product delta from its merge base; main already keeps OpenWolf memory untracked. The two historical commits remain recoverable through archive/evidence-first-v1-20261010. This append preserves all unique report text without bringing obsolete memory files back.
