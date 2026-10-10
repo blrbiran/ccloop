@@ -228,3 +228,34 @@ export async function appendUsageObservation(
 export async function readUsageEvents(sourceDir: string): Promise<UsageEventV1[]> {
   return [...(await readState(sourceDir)).events];
 }
+
+
+export interface AllowanceUsageIdentity {
+  runId: string;
+  generation: unknown;
+  usageHighWater: unknown;
+}
+
+/** Exact parked-boundary ledger, before the mechanical handoff event is appended. */
+export function parseKnownWorkUsageLedger(raw: unknown, expected: AllowanceUsageIdentity): AmountV1 {
+  const parsed = stateSchema.safeParse(raw);
+  const invalid = (): never => { throw new ControlProtocolError("control-allowance-usage-invalid"); };
+  if (!parsed.success || !positive.safeParse(expected.generation).success || !positive.safeParse(expected.usageHighWater).success) return invalid();
+  const state = parsed.data;
+  if (state.nextSeq !== expected.usageHighWater || state.events.length !== state.nextSeq - 1
+    || state.events.some((event, index) => event.eventSeq !== index + 1 || event.runId !== expected.runId
+      || event.generation !== expected.generation || (event.bucket === "work" && event.cumulative === null))) return invalid();
+  const settled = state.events.at(-1);
+  if (!settled || settled.bucket !== "work" || settled.cumulative === null
+    || canonicalHash(settled.cumulative) !== canonicalHash(state.totals.work)
+    || settled.cumulative.attempts < 1 || settled.cumulative.sessions < 1) return invalid();
+  return settled.cumulative;
+}
+
+export async function captureKnownWorkUsageLedger(sourceDir: string, expected: AllowanceUsageIdentity): Promise<ArtifactRefV1> {
+  const bytes = await readPrivateFile(sourceDir, usagePath(sourceDir));
+  let raw: unknown;
+  try { raw = JSON.parse(bytes.toString("utf8")); } catch { throw new ControlProtocolError("control-allowance-usage-invalid"); }
+  parseKnownWorkUsageLedger(raw, expected);
+  return await writeEvidence(sourceDir, bytes);
+}

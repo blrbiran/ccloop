@@ -6,7 +6,7 @@ import { AgentError } from "../agents/types.js";
 import { createStopRequestSignal, runLoop } from "../controller/runLoop.js";
 import { isTerminalRunStatus } from "../state/stateMachine.js";
 import { atomicReplacePrivateFile, readPrivateFile } from "./paths.js";
-import { appendUsageObservation, readUsageEvents, reconciledByModel, type ModelUsageV1 } from "./usage.js";
+import { appendUsageObservation, captureKnownWorkUsageLedger, readUsageEvents, reconciledByModel, type ModelUsageV1 } from "./usage.js";
 import { canonicalJson, isLoopEnvelope, parseControlRequest, type StartEnvelopeV3 } from "./protocol.js";
 import { prepareContinuationContract, readAllowanceContinuation } from "./materialize.js";
 import {
@@ -280,9 +280,12 @@ export async function runControlWorker(argv: string[]): Promise<void> {
         if (request === null && !isTerminalRunStatus(runState.status)) {
           throw new Error("control-handoff-request-required");
         }
-        await materializeResultRepository(envelope, runDir, runState.currentAttempt);
         const existingEvents = await readUsageEvents(sourceDir);
         const predictedHighWater = (existingEvents.at(-1)?.eventSeq ?? 0) + 1;
+        const allowanceUsage = envelope.protocol === 4 && runState.waitingCause === "token-allowance"
+          ? await captureKnownWorkUsageLedger(sourceDir, { runId: envelope.claim.runId, generation: envelope.claim.generation, usageHighWater: predictedHighWater })
+          : undefined;
+        await materializeResultRepository(envelope, runDir, runState.currentAttempt);
         const result = deadlineInterrupted
           ? "partial" as const
           : request !== null && !isTerminalRunStatus(runState.status)
@@ -292,7 +295,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
               : runState.status === "blocked_waiting_human" || runState.status === "exhausted" || runState.status === "cancelled"
                 ? "partial" as const
                 : "failed" as const;
-        const built = await buildHandoffPacket(envelope, request, runState, predictedHighWater, result);
+        const built = await buildHandoffPacket(envelope, request, runState, predictedHighWater, result, allowanceUsage);
         const handoffUsage = await appendUsageObservation(sourceDir, {
           runId: envelope.claim.runId,
           generation: envelope.claim.generation,

@@ -1,3 +1,4 @@
+import { parseKnownWorkUsageLedger } from "./usage.js";
 import { tokenPolicySchema } from "../budget/tokenPolicy.js";
 import { evaluateStopDecision } from "../stop/stopController.js";
 import type { RunControlHooks } from "../controller/runLoop.js";
@@ -164,7 +165,7 @@ export async function prepareContinuationContract(contract:LoopContract,runDir:s
 
 const savedPlanSchema = z.object({ summary: z.string(), primaryTargetPaths: z.array(z.string()), tokenUsage: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional() }).passthrough();
 const savedExecutionSchema = z.object({ changedFiles: z.array(z.string()), diffPatch: z.string(), commandOutputs: z.array(z.string()), stdoutStderrLog: z.string(), tokenUsage: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(), completionStatus: z.never().optional() }).passthrough();
-const allowanceSchema = z.object({ nextPhase: z.enum(["plan", "execute", "verify"]), plan: artifactRefSchema.nullable(), execution: artifactRefSchema.nullable(), verification: artifactRefSchema.nullable(), state: artifactRefSchema }).strict();
+const allowanceSchema = z.object({ nextPhase: z.enum(["plan", "execute", "verify"]), plan: artifactRefSchema.nullable(), execution: artifactRefSchema.nullable(), verification: artifactRefSchema.nullable(), state: artifactRefSchema, usage: artifactRefSchema }).strict();
 
 const fingerprintSchema = z.object({ rejectCategory: z.string(), primaryTargetPaths: z.array(z.string()), failingCommand: z.string().nullable() }).strict();
 const savedStateSchema = z.object({ currentAttempt: z.number().int().positive(), attemptsUsed: z.number().int().positive(),
@@ -204,7 +205,7 @@ export async function readAllowanceContinuation(envelope: LoopStartEnvelope): Pr
   if (!continuation.success) fail("control-allowance-evidence-invalid");
   const identity = packet.identity as Record<string, unknown> | undefined;
   if (!identity || identity.runId !== input.predecessorRunId || identity.groupId !== envelope.claim.groupId
-    || identity.taskId !== envelope.claim.taskId || identity.graphVersion !== envelope.claim.graphVersion
+    || identity.workItemId !== envelope.claim.workItemId || identity.taskId !== envelope.claim.taskId || identity.graphVersion !== envelope.claim.graphVersion
     || identity.targetVersion !== envelope.claim.targetVersion || packet.contractHash !== envelope.contractHash) fail("control-allowance-authority-mismatch");
   const state = packet.runState as Record<string, unknown> | undefined;
   if (state?.waitingCause !== "token-allowance" || state.allowanceNextPhase !== continuation.data.nextPhase) fail("control-allowance-evidence-invalid");
@@ -220,8 +221,16 @@ export async function readAllowanceContinuation(envelope: LoopStartEnvelope): Pr
   const savedState = savedStateSchema.safeParse(decode(reachable(continuation.data.state)));
   const policy = tokenPolicySchema.safeParse(packet.tokenPolicy);
   if (!savedState.success || canonicalHash(savedState.data) !== canonicalHash(packet.runState) || !policy.success) fail("control-allowance-evidence-invalid");
-  if (!envelope.tokenPolicy || envelope.tokenPolicy.inheritedUsage.attempts < policy.data.inheritedUsage.attempts + savedState.data.attemptsUsed
-    || envelope.tokenPolicy.inheritedUsage.sessions < policy.data.inheritedUsage.sessions + 1) fail("control-allowance-lineage-invalid");
+  const localUsage = parseKnownWorkUsageLedger(decode(reachable(continuation.data.usage)), {
+    runId: input.predecessorRunId, generation: identity.generation, usageHighWater: packet.usageHighWater,
+  });
+  if (localUsage.attempts !== savedState.data.attemptsUsed) fail("control-allowance-usage-invalid");
+  const currentPolicy = tokenPolicySchema.safeParse(envelope.tokenPolicy);
+  if (!currentPolicy.success) fail("control-allowance-lineage-invalid");
+  for (const dimension of ["tokens", "activeMs", "attempts", "sessions"] as const) {
+    const consumed = policy.data.inheritedUsage[dimension] + localUsage[dimension];
+    if (!Number.isSafeInteger(consumed) || currentPolicy.data.inheritedUsage[dimension] < consumed) fail("control-allowance-lineage-invalid");
+  }
   const recentFailures = savedState.data.recentFailures;
   if (continuation.data.nextPhase === "plan") {
     if (continuation.data.plan !== null || continuation.data.execution !== null) fail("control-allowance-phase-invalid");

@@ -46,6 +46,15 @@ async function runWorker(workTokens: number | null = null): Promise<void> {
     expect(packet.artifacts).toContainEqual(packet.allowanceContinuation.plan);
     expect(JSON.parse((await readEvidence(runtime.dir,packet.acceptedContract)).toString())).toEqual(envelope.work.contract);
     expect(packet.contractHash).toBe(envelope.contractHash);
+    expect(packet.allowanceContinuation.usage).toEqual(expect.objectContaining({artifactId:expect.any(String),hash:expect.any(String)}));
+    expect(packet.artifacts).toContainEqual(packet.allowanceContinuation.usage);
+    const sourceLedger=JSON.parse((await readEvidence(runtime.dir,packet.allowanceContinuation.usage)).toString());
+    const settledWork=collected.events.filter((event:any)=>event.bucket==="work").at(-1);
+    expect(sourceLedger.events.at(-1)).toEqual(settledWork);
+    expect(sourceLedger.totals.work).toEqual(settledWork.cumulative);
+    expect(sourceLedger.totals.work).toMatchObject({tokens:1_600_000,attempts:1,sessions:1});
+    expect(sourceLedger.nextSeq).toBe(packet.usageHighWater);
+
     return;
   }
   expect(collected.terminal.status).toBe("succeeded");
@@ -54,3 +63,5 @@ async function runWorker(workTokens: number | null = null): Promise<void> {
 }
 it("v4 worker executes all phases and publishes finite usage above three million tokens",{timeout:60000},()=>runWorker());
 it("v4 worker parks a cap allowance and retains reachable completed phase evidence",{timeout:60000},()=>runWorker(1_600_000));
+
+it("review I2: worker captures actual work usage including soft allowance overshoot",{timeout:60000},()=>runWorker(1_500_000));

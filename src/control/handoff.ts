@@ -51,7 +51,7 @@ export interface HandoffPacketV1 {
   contractHash?: string;
   tokenPolicy?: TokenPolicy;
   acceptedContract?: ArtifactRefV1;
-  allowanceContinuation?: { nextPhase: "plan" | "execute" | "verify"; plan: ArtifactRefV1 | null; execution: ArtifactRefV1 | null; verification: ArtifactRefV1 | null; state: ArtifactRefV1 };
+  allowanceContinuation?: { nextPhase: "plan" | "execute" | "verify"; plan: ArtifactRefV1 | null; execution: ArtifactRefV1 | null; verification: ArtifactRefV1 | null; state: ArtifactRefV1; usage: ArtifactRefV1 };
 }
 
 export interface BuiltHandoffPacketV1 {
@@ -295,6 +295,7 @@ export async function buildHandoffPacket(
   runState: RunState,
   usageHighWater: number,
   result: CandidateV1["result"] = request === null && runState.status === "succeeded" ? "complete" : "partial",
+  allowanceUsage?: ArtifactRefV1,
 ): Promise<BuiltHandoffPacketV1> {
   if (request === null && !isTerminalRunStatus(runState.status)) {
     throw new ControlProtocolError("control-handoff-request-required");
@@ -331,10 +332,10 @@ export async function buildHandoffPacket(
     const plan = nextPhase === "plan" ? null : phaseRefs["plan.json"];
     const verification = nextPhase === "plan" ? phaseRefs["verify.json"] : null;
     const execution = nextPhase === "verify" ? phaseRefs["execution.json"] : null;
-    if (!stateRef || (!plan && nextPhase !== "plan") || !nextPhase || (nextPhase === "verify" && !execution) || (nextPhase === "plan" && !verification)) throw new ControlProtocolError("control-allowance-evidence-missing");
+    if (!allowanceUsage || !stateRef || (!plan && nextPhase !== "plan") || !nextPhase || (nextPhase === "verify" && !execution) || (nextPhase === "plan" && !verification)) throw new ControlProtocolError("control-allowance-evidence-missing");
     const acceptedContract = await writeEvidence(envelope.work.sourceDir, Buffer.from(canonicalJson(envelope.work.contract)));
-    artifacts.push(acceptedContract);
-    allowance = { tokenPolicy: envelope.tokenPolicy, contractHash: envelope.contractHash, acceptedContract, allowanceContinuation: { nextPhase, plan: plan ?? null, execution: execution ?? null, verification: verification ?? null, state: stateRef } };
+    artifacts.push(acceptedContract, allowanceUsage);
+    allowance = { tokenPolicy: envelope.tokenPolicy, contractHash: envelope.contractHash, acceptedContract, allowanceContinuation: { nextPhase, plan: plan ?? null, execution: execution ?? null, verification: verification ?? null, state: stateRef, usage: allowanceUsage } };
   }
   const pendingDecisions = [
     ...runState.recentFailures.map((failure) => failure.rejectCategory).filter(Boolean),
