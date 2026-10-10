@@ -11,6 +11,7 @@ import { MAX_TASK_RESULT_EVIDENCE_BYTES, MAX_TASK_RESULT_FILE_BYTES, MAX_TASK_RE
 export const TASK_RESULT_MANIFEST_SCHEMA = "ccloop-task-result-manifest-v1";
 export const TASK_RESULT_COLLECTION_SCHEMA = "ccloop-task-results-v1";
 export const TASK_RESULT_VERIFICATION_STARTED_SCHEMA = "ccloop-task-result-verification-started-v1";
+export const TASK_RESULT_VERIFICATION_NOT_RUN_SCHEMA = "ccloop-task-result-verification-not-run-v1";
 const safe = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), positive = safe.refine(n => n > 0), hash = z.string().regex(/^[a-f0-9]{64}$/);
 export const taskResultIdentitySchema = z.object({
     groupId: idSchema, workItemId: idSchema, taskId: idSchema.nullable(), runId: idSchema, generation: positive, graphVersion: safe, targetVersion: safe, executionId: idSchema, envelopeHash: hash
@@ -19,6 +20,9 @@ export const taskResultVerificationStartedSchema = z.object({
     schema: z.literal(TASK_RESULT_VERIFICATION_STARTED_SCHEMA),
     attempt: positive,
     status: z.literal("in-progress"),
+}).strict();
+export const taskResultVerificationNotRunSchema = z.object({
+    schema: z.literal(TASK_RESULT_VERIFICATION_NOT_RUN_SCHEMA), attempt: positive, status: z.literal("not-run"),
 }).strict();
 export type TaskResultIdentityV1 = z.infer<typeof taskResultIdentitySchema>;
 export const taskResultOutputSchema = z.object({
@@ -38,7 +42,7 @@ export const taskResultCollectionSchema = z.object({
     schema: z.literal(TASK_RESULT_COLLECTION_SCHEMA), identity: taskResultIdentitySchema, currentAttempt: safe, revision: safe, manifests: z.array(observationSchema).max(64), nextRevision: safe
 }).strict().refine(c => c.nextRevision <= c.revision && c.manifests.every((m, i) => m.revision <= c.nextRevision && (i === 0 || c.manifests[i - 1]!.revision < m.revision)));
 export type TaskResultCollectionV1 = z.infer<typeof taskResultCollectionSchema>;
-const observationKindSchema = z.enum(["execution", "verification-started", "verification-completed"]);
+const observationKindSchema = z.enum(["execution", "verification-not-run", "verification-started", "verification-completed"]);
 const indexObservationSchema = observationSchema.extend({
     kind: observationKindSchema.optional()
 });
@@ -128,6 +132,8 @@ export interface TaskResultCaptureInput {
     verification?: VerificationResult;
     /** Actual controller verification entry, never Agent metadata. */
     verificationStarted?: boolean;
+    /** Actual post-execute/pre-verifier handoff guard, never absence of verifier evidence. */
+    verificationNotRun?: boolean;
     assertHeld: () => Promise<void>;
 }
 const exec = promisify(execFile);
@@ -140,7 +146,8 @@ async function capture(input: TaskResultCaptureInput): Promise<void> {
     const index: Index = old ?? {
         schema: "ccloop-task-result-index-v1", identity, revision: 0, manifests: []
     };
-    const kind = input.verificationStarted === true ? "verification-started"
+    const kind = input.verificationNotRun === true ? "verification-not-run"
+        : input.verificationStarted === true ? "verification-started"
         : input.verification !== undefined ? "verification-completed" : "execution";
     let executionStage: TaskResultManifestV1 | undefined;
     for (const observation of index.manifests) {
@@ -169,7 +176,9 @@ async function capture(input: TaskResultCaptureInput): Promise<void> {
     } };
     let manifest: TaskResultManifestV1;
     if (kind !== "execution") {
-        const evidence = kind === "verification-started"
+        const evidence = kind === "verification-not-run"
+            ? taskResultVerificationNotRunSchema.parse({ schema: TASK_RESULT_VERIFICATION_NOT_RUN_SCHEMA, attempt: input.attempt, status: "not-run" })
+            : kind === "verification-started"
             ? taskResultVerificationStartedSchema.parse({
                 schema: TASK_RESULT_VERIFICATION_STARTED_SCHEMA, attempt: input.attempt, status: "in-progress",
             }) : input.verification;
@@ -262,7 +271,7 @@ export async function captureTaskResult(input: TaskResultCaptureInput): Promise<
     catch (error) {
         await input.assertHeld();
         await appendEvent(input.runDir, {
-            type: "task_result_capture_failed", at: new Date().toISOString(), detail: `attempt ${input.attempt} ${input.verificationStarted || input.verification ? "verification" : "execution"}: ${error instanceof Error ? error.message : "capture failed"}`
+            type: "task_result_capture_failed", at: new Date().toISOString(), detail: `attempt ${input.attempt} ${input.verificationNotRun || input.verificationStarted || input.verification ? "verification" : "execution"}: ${error instanceof Error ? error.message : "capture failed"}`
         }).catch(() => undefined);
     }
 }

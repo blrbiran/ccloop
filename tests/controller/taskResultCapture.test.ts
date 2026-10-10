@@ -57,11 +57,21 @@ describe("immutable live attempt results",()=>{
     expect((await running).status).toBe("succeeded");const page=JSON.parse((await f.rpc("task-results",{input:f.input,afterRevision:0})).stdout);expect(page.manifests).toHaveLength(6);const rejected=await manifestOf(f,page.manifests[2].ref);const read=await f.rpc("read-task-result-evidence",{input:f.input,manifestRef:page.manifests[2].ref,ref:rejected.verificationRef});expect(JSON.parse(Buffer.from(JSON.parse(read.stdout).base64,"base64").toString()).approved).toBe(false);
   });
 
-  // Handoff before verify must retain only execution evidence, never a fabricated approval.
+  // Only the actual post-execute handoff guard may emit an owned verifier bypass fact.
   it.each(["plan","execute"] as const)("handoff after %s retains only actually executed observations",async phase=>{
     const f=await resultFixture(),stopRequested=createStopRequestSignal();let verifies=0;
-    const adapter:RuntimeAdapter={plan:async()=>({summary:"write",primaryTargetPaths:["answer.txt"]}),execute:async c=>{await writeFile(join(c.worktreePath,"answer.txt"),"handoff bytes");return {changedFiles:["answer.txt"],diffPatch:"patch",commandOutputs:[],stdoutStderrLog:"ok",taskResult:report}},verify:async()=>{verifies++;return verified}};
-    await runLoop(f.contract,f.runDir,adapter,{taskResultInput:f.input,stopRequested,onPhaseSettled:async observation=>{if(observation.phase===phase)stopRequested.requested=true}});expect(verifies).toBe(0);const r=await f.rpc("task-results",{input:f.input,afterRevision:0});expect(r.code,r.stderr).toBe(0);const page=JSON.parse(r.stdout);expect(page.manifests).toHaveLength(phase==="plan"?0:1);if(phase==="execute")expect(await manifestOf(f,page.manifests[0].ref)).toMatchObject({stage:"execution",verificationRef:null});
+    const adapter:RuntimeAdapter={plan:async()=>({summary:"write",primaryTargetPaths:["answer.txt"]}),execute:async c=>{await writeFile(join(c.worktreePath,"answer.txt"),"handoff bytes");return {changedFiles:["answer.txt"],diffPatch:"patch",commandOutputs:[],stdoutStderrLog:"ok",tokenUsage:9,taskResult:report}},verify:async()=>{verifies++;return verified}};
+    const state=await runLoop(f.contract,f.runDir,adapter,{taskResultInput:f.input,stopRequested,onPhaseSettled:async observation=>{if(observation.phase===phase)stopRequested.requested=true}});
+    expect(verifies).toBe(0);const r=await f.rpc("task-results",{input:f.input,afterRevision:0});expect(r.code,r.stderr).toBe(0);const page=JSON.parse(r.stdout);expect(page.manifests).toHaveLength(phase==="plan"?0:2);
+    if(phase==="execute"){
+      expect(state.budgetSnapshot.tokenBudgetRemaining).toBe(991);
+      const execution=await manifestOf(f,page.manifests[0].ref),boundary=await manifestOf(f,page.manifests[1].ref);
+      expect(execution).toMatchObject({stage:"execution",verificationRef:null});expect(boundary).toMatchObject({stage:"verification",attempt:1,outputs:execution.outputs,executionRef:execution.executionRef});
+      const read=await f.rpc("read-task-result-evidence",{input:f.input,manifestRef:page.manifests[1].ref,ref:boundary.verificationRef});expect(read.code,read.stderr).toBe(0);
+      expect(JSON.parse(Buffer.from(JSON.parse(read.stdout).base64,"base64").toString())).toEqual({schema:"ccloop-task-result-verification-not-run-v1",attempt:1,status:"not-run"});
+      const bytes=await f.rpc("read-task-result-evidence",{input:f.input,manifestRef:page.manifests[1].ref,ref:boundary.outputs[0].ref});expect(Buffer.from(JSON.parse(bytes.stdout).base64,"base64").toString()).toBe("handoff bytes");
+      expect(await readFile(join(f.runDir,"events.jsonl"),"utf8")).toContain("handoff requested after execute in attempt 1");
+    }
   });
 
   // A transient unsafe ancestor must stay unavailable without failing the actual task.
@@ -417,6 +427,27 @@ describe("immutable live attempt results",()=>{
       expect(JSON.parse(Buffer.from(JSON.parse(read.stdout).base64, "base64").toString()).approved).toBe(true);
       expect(await readFile(join(f.runDir, "events.jsonl"), "utf8")).toContain("task_result_capture_failed");
     } finally { open.mockRestore(); }
+  });
+
+  it.each(["failure","owner-loss","metadata-clock"] as const)("keeps actual handoff accounting and owner fences for not-run %s capture",async mode=>{
+    const f=await resultFixture(),stopRequested=createStopRequestSignal();const originalOpen=fs.open;let publications=0,injected=false,verifies=0;let clock=Date.now();const phases:Array<{phase:string;elapsedMs:number;tokenUsage:number|null}>=[];
+    const date=vi.spyOn(Date,"now").mockImplementation(()=>clock);
+    const spy=vi.spyOn(fs,"open").mockImplementation(async(...args:Parameters<typeof fs.open>)=>{
+      const handle=await originalOpen(...args);const path=String(args[0]);
+      if(mode==="failure"){
+        const write=handle.writeFile.bind(handle);handle.writeFile=(async(...writeArgs:Parameters<typeof handle.writeFile>)=>{const bytes=writeArgs[0];if(Buffer.isBuffer(bytes)&&bytes.toString().includes('"schema":"ccloop-task-result-verification-not-run-v1"')){injected=true;throw Object.assign(new Error("owned not-run capture failure"),{code:"EIO"});}return write(...writeArgs);}) as typeof handle.writeFile;
+      }
+      if(dirname(path)===join(f.runDir,"task-result-captures")&&basename(path).endsWith(".tmp")){
+        const sync=handle.sync.bind(handle);handle.sync=async()=>{await sync();if(++publications===2){expect(phases.at(-1)).toMatchObject({phase:"execute",tokenUsage:9,elapsedMs:0});injected=true;if(mode==="owner-loss"){const owner=await readOwnerRecord(f.runDir);await writeOwnerRecord(f.runDir,{...owner,currentOwnerEpoch:owner.currentOwnerEpoch+1,currentProcessInstanceId:"foreign-controller"});}if(mode==="metadata-clock")clock+=500;}};
+      }return handle;
+    });
+    const adapter:RuntimeAdapter={plan:async()=>({summary:"write",primaryTargetPaths:["answer.txt"]}),execute:async c=>{await writeFile(join(c.worktreePath,"answer.txt"),"handoff bytes");return {changedFiles:["answer.txt"],diffPatch:"patch",commandOutputs:[],stdoutStderrLog:"ok",tokenUsage:9,taskResult:report};},verify:async()=>{verifies++;return verified;}};
+    try{
+      const state=await runLoop(f.contract,f.runDir,adapter,{taskResultInput:f.input,stopRequested,onPhaseSettled:async observation=>{phases.push(observation);if(observation.phase==="execute")stopRequested.requested=true;}});
+      expect(injected).toBe(true);expect(verifies).toBe(0);expect(phases.map(p=>p.phase)).toEqual(["plan","execute"]);expect(state.budgetSnapshot).toMatchObject({tokenBudgetRemaining:991,timeRemainingMs:30000});
+      const response=await f.rpc("task-results",{input:f.input,afterRevision:0});expect(response.code,response.stderr).toBe(0);const page=JSON.parse(response.stdout);
+      if(mode==="owner-loss"){expect(state).toMatchObject({status:"cancelled",stopReason:"lease_lost"});expect(page.revision).toBe(1);}else{expect(state.status).toBe("executing");expect(page.revision).toBe(2);const boundary=await manifestOf(f,page.manifests[1].ref);if(mode==="failure"){expect(boundary.verificationRef).toBeNull();expect(await readFile(join(f.runDir,"events.jsonl"),"utf8")).toContain("task_result_capture_failed");}else expect(boundary.verificationRef).not.toBeNull();}
+    }finally{date.mockRestore();spy.mockRestore();}
   });
 
 });

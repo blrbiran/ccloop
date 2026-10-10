@@ -1296,12 +1296,13 @@ export async function runLoopFromState(
     execution: ExecutionResult | null,
     verification?: VerificationResult,
     verificationStarted = false,
+    verificationNotRun = false,
   ): Promise<void> => {
     if (options?.taskResultInput === undefined || execution === null) return;
     await heartbeat.runExclusive(async () => {
       await captureTaskResult({
         input: options.taskResultInput!, runDir, worktreePath, attempt, execution,
-        verification, verificationStarted, assertHeld: () => heartbeat.assertHeld(),
+        verification, verificationStarted, verificationNotRun, assertHeld: () => heartbeat.assertHeld(),
       });
     });
   };
@@ -1568,6 +1569,8 @@ export async function runLoopFromState(
 
       if (handoffRequested()) {
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
+        // Actual bypass after execute settlement; optional metadata cannot fabricate verifier entry or charge its clock.
+        await captureResult(attempt, worktreePath, completedExecution, undefined, false, true);
         return await persistHandoffBoundary("handoff_boundary", `handoff requested after execute in attempt ${attempt}`);
       }
 
