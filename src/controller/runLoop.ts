@@ -1,3 +1,5 @@
+import type { MaterializedAgentConfigV1 } from "../agents/types.js";
+import { captureExecutionFormatFailure, ExecutionFormatFailure } from "./executionFormatFailure.js";
 import { remainingTokens, minTokenCeiling, budgetAmountSchema, type BudgetAmount, type TokenPolicy } from "../budget/tokenPolicy.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -109,12 +111,14 @@ class PhaseExecutionError extends Error {
   // §3.2) -- "never 0" no longer holds for one case: an error carrying neverStarted books 0 (the runner proved no claude
   // process existed in the call). Every other error is unchanged: observed tokens, or null. ***
   readonly tokenUsage: number | null;
+  readonly formatFailure: ExecutionFormatFailure | null;
 
   constructor(elapsedMs: number, error: unknown) {
     super(String(error));
     this.name = "PhaseExecutionError";
     this.elapsedMs = elapsedMs;
     this.tokenUsage = observedTokensOf(error);
+    this.formatFailure = error instanceof ExecutionFormatFailure ? error : null;
   }
 }
 
@@ -1220,6 +1224,8 @@ export interface RunControlHooks {
   allowanceContinuation?: { nextPhase: "plan" | "execute" | "verify"; plan: AttemptPlan | null; execution: ExecutionResult | null; recentFailures?: FailureFingerprint[] };
   /** Trusted accepted control envelope supplied only by the worker. */
   taskResultInput?: StartEnvelopeV3;
+  /** Only supported original provider evidence can create a recovery capsule. */
+  executionFormatCapture?: {config:MaterializedAgentConfigV1};
   firstWorkspaceInput?: InputCheckpointV1;
   stopRequested?: StopRequestSignal;
   phaseSignal?: AbortSignal;
@@ -1445,8 +1451,15 @@ export async function runLoopFromState(
     let plan: AttemptPlan | null = null;
     let execution: ExecutionResult | null = null;
     let verification: VerificationResult | null = null;
+    let attemptStartHead: string | null = null;
+    let resolvedSourceBase: string | null = null;
+    let verifierEntered = false;
 
     try {
+      if (options?.executionFormatCapture && options.taskResultInput?.work.kind === "loop") {
+        attemptStartHead = (await execFileAsync("/usr/bin/git", ["rev-parse", "HEAD"], {cwd:worktreePath})).stdout.trim();
+        resolvedSourceBase = (await execFileAsync("/usr/bin/git", ["rev-parse", `${options.taskResultInput.work.base}^{commit}`], {cwd:options.taskResultInput.work.targetRepo})).stdout.trim();
+      }
       state = consumeAttemptBudget(state, contract, attempt);
       await writeOwnedRunState(runDir, state);
 
@@ -1729,6 +1742,7 @@ export async function runLoopFromState(
       // §8.1: launching a Claude call is a side effect. runVerification also shells out to the
       // contract's required checks inside the attempt worktree, which is one too.
       await heartbeat.assertHeld();
+      verifierEntered = true;
       activePhase = "verify";
       let startedCapture = Promise.resolve();
       let startedCaptureError: unknown = null;
@@ -2018,7 +2032,12 @@ export async function runLoopFromState(
       if (error instanceof PhaseExecutionError) {
         const failedPhase = activePhase;
         if (activePhase !== null) {
-          await settlePhase(activePhase, attempt, error.elapsedMs, error.tokenUsage === null ? undefined : { tokenUsage: error.tokenUsage }, true);
+          await settlePhase(activePhase, attempt, error.elapsedMs, error.tokenUsage === null ? undefined : { tokenUsage: error.tokenUsage, ...(error.formatFailure ? {usageEvidence:error.formatFailure.usageEvidence,modelUsage:error.formatFailure.modelUsage} : {}) }, true);
+        }
+
+        if (failedPhase === "execute" && error.formatFailure && options?.taskResultInput && worktreePath && attemptStartHead && resolvedSourceBase && !handoffAborted() && !handoffRequested()) {
+          await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+          await heartbeat.runExclusive(() => captureExecutionFormatFailure({input:options.taskResultInput!,runDir,worktreePath:worktreePath!,attempt,attemptStartHead:attemptStartHead!,resolvedBase:resolvedSourceBase!,runtimeContract:contract,actualConfig:options.executionFormatCapture!.config,failure:error.formatFailure!,verifierEntered,assertHeld:()=>heartbeat.assertHeld()}));
         }
 
         if (!isCodexSkillFailure(error) && (handoffAborted() || handoffRequested())) {

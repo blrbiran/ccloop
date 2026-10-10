@@ -15,7 +15,9 @@ export type ControlMethodV1 =
   | "collect"
   | "read-evidence"
   | "task-results"
-  | "read-task-result-evidence";
+  | "read-task-result-evidence"
+  | "saved-result-evidence"
+  | "read-saved-result-evidence";
 
 export interface AmountV1 {
   tokens: number;
@@ -123,7 +125,9 @@ export type ControlRequestV1 =
   | { method: "collect"; input: StartEnvelopeV3; afterSeq: number }
   | { method: "read-evidence"; input: StartEnvelopeV3; ref: ArtifactRefV1 }
   | { method: "task-results"; input: StartEnvelopeV3; afterRevision: number }
-  | { method: "read-task-result-evidence"; input: StartEnvelopeV3; manifestRef: ArtifactRefV1; ref: ArtifactRefV1 };
+  | { method: "read-task-result-evidence"; input: StartEnvelopeV3; manifestRef: ArtifactRefV1; ref: ArtifactRefV1 }
+  | { method: "saved-result-evidence"; input: StartEnvelopeV3 }
+  | { method: "read-saved-result-evidence"; input: StartEnvelopeV3; capsuleRef: ArtifactRefV1; ref: ArtifactRefV1 };
 
 export type ControlPayloadV1 =
   | CapabilitiesRequestV3
@@ -132,7 +136,8 @@ export type ControlPayloadV1 =
   | { input: StartEnvelopeV3; afterSeq: number }
   | { input: StartEnvelopeV3; ref: ArtifactRefV1 }
   | { input: StartEnvelopeV3; afterRevision: number }
-  | { input: StartEnvelopeV3; manifestRef: ArtifactRefV1; ref: ArtifactRefV1 };
+  | { input: StartEnvelopeV3; manifestRef: ArtifactRefV1; ref: ArtifactRefV1 }
+  | { input: StartEnvelopeV3; capsuleRef: ArtifactRefV1; ref: ArtifactRefV1 };
 
 export class ControlProtocolError extends Error {
   constructor(readonly code: string) {
@@ -255,6 +260,8 @@ const payloadSchemas = {
   inspect: startEnvelopeSchema,
   handoff: z.object({ input: startEnvelopeSchema, request: handoffRequestSchema }).strict(),
   collect: z.object({ input: startEnvelopeSchema, afterSeq: safeInteger }).strict(),
+  "saved-result-evidence": z.object({ input: startEnvelopeSchema }).strict(),
+  "read-saved-result-evidence": z.object({ input: startEnvelopeSchema, capsuleRef: artifactRefSchema, ref: artifactRefSchema }).strict(),
   "task-results": z.object({ input: startEnvelopeSchema, afterRevision: safeInteger }).strict(),
   "read-task-result-evidence": z.object({ input: startEnvelopeSchema, manifestRef: artifactRefSchema, ref: artifactRefSchema }).strict(),
   "read-evidence": z.object({ input: startEnvelopeSchema, ref: artifactRefSchema }).strict(),
@@ -357,7 +364,7 @@ export function parseControlRequest(method: ControlMethodV1, raw: unknown): Cont
   try {
     const payload = payloadSchemas[method].parse(raw) as ControlPayloadV1;
     if (method === "accept" || method === "inspect") validateEnvelopePaths(payload as StartEnvelopeV3, method);
-    if (method === "handoff" || method === "collect" || method === "read-evidence" || method === "task-results" || method === "read-task-result-evidence") {
+    if (method === "handoff" || method === "collect" || method === "read-evidence" || method === "task-results" || method === "read-task-result-evidence" || method === "saved-result-evidence" || method === "read-saved-result-evidence") {
       validateEnvelopePaths((payload as { input: StartEnvelopeV3 }).input, method);
     }
     return payload;

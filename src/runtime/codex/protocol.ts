@@ -25,7 +25,8 @@ const plan = z.object({summary:z.string(), primaryTargetPaths:strings}).strict()
 const executionFields = {taskResult:z.unknown().optional(),changedFiles:strings, diffPatch:z.string(), commandOutputs:strings, stdoutStderrLog:z.string()};
 const complete = z.object(executionFields).strict();
 const partial = z.object({...executionFields,completionStatus:z.literal("partial"),failureType:z.enum(["timeout","error"]),failureMessage:z.string()}).strict();
-const execution = z.union([complete,partial]);
+export const executionSchema = z.union([complete,partial]);
+const execution = executionSchema;
 const verification = z.object({approved:z.boolean(),rejectCategory:z.string(),primaryTargetPaths:strings,failingCommand:z.string().nullable(),safeToRetry:z.boolean(),evidence:strings,pauseSignals:strings,stopSignals:strings}).strict();
 const schemas = {plan,execute:execution,verify:verification};
 const string = {type:"string"};
@@ -72,7 +73,7 @@ export function observedTurnUsage(events: string): number | null {
   return observed;
 }
 
-export function decodeCodexResult<P extends CodexPhase>(phase:P, events:string, final:string): PhaseResults[P] {
+export function decodeCodexUsage(events:string, uniqueCompletion=false): {tokenUsage:number;usageEvidence:UsageEvidence} {
   let completed: Record<string, unknown> | undefined;
   for (const line of events.split("\n")) {
     if (!line.trim()) continue;
@@ -81,7 +82,7 @@ export function decodeCodexResult<P extends CodexPhase>(phase:P, events:string, 
     if (!record(row) || typeof row.type !== "string") throw new Error("codex-events-invalid");
     if (row.type === "turn.failed" || row.type === "error") throw new Error("codex-event-error");
     if (row.type !== "turn.completed") continue;
-    if (completed && JSON.stringify(completed) !== JSON.stringify(row)) throw new Error("codex-conflicting-completion");
+    if (completed && (uniqueCompletion || JSON.stringify(completed) !== JSON.stringify(row))) throw new Error("codex-conflicting-completion");
     completed = row;
   }
   if (!completed) throw new Error("codex-no-completion");
@@ -95,15 +96,20 @@ export function decodeCodexResult<P extends CodexPhase>(phase:P, events:string, 
   }
   const tokenUsage = input + output;
   if (tokenUsage === 0) throw new Error("codex-usage-unavailable");
+  const usageEvidence: UsageEvidence = {
+    usageStatus:"present", fields:{input_tokens:{status:"finite",value:input},output_tokens:{status:"finite",value:output},inputTokens:{status:"absent"},outputTokens:{status:"absent"}},
+    selectedInputField:"input_tokens",selectedOutputField:"output_tokens",normalizedTotal:tokenUsage,
+  };
+  return {tokenUsage,usageEvidence};
+}
+
+export function decodeCodexResult<P extends CodexPhase>(phase:P, events:string, final:string): PhaseResults[P] {
+  const {tokenUsage,usageEvidence}=decodeCodexUsage(events);
   let raw: unknown;
   try { raw = JSON.parse(final); } catch { throw new Error("codex-result-invalid"); }
   if (phase === "execute" && record(raw) && Object.hasOwn(raw, "taskResult")) raw.taskResult = boundedTaskResult(raw.taskResult);
   const parsed = schemas[phase].safeParse(raw);
   if (!parsed.success) throw new Error(`codex-result-invalid: ${parsed.error.message}`);
-  const usageEvidence: UsageEvidence = {
-    usageStatus:"present", fields:{input_tokens:{status:"finite",value:input},output_tokens:{status:"finite",value:output},inputTokens:{status:"absent"},outputTokens:{status:"absent"}},
-    selectedInputField:"input_tokens",selectedOutputField:"output_tokens",normalizedTotal:tokenUsage,
-  };
   // Validation above selects the phase schema; the generic preserves that selection for callers.
   return {...parsed.data, tokenUsage, usageEvidence} as PhaseResults[P];
 }
@@ -183,8 +189,10 @@ function canonicalJsonHash(value: unknown, reports?: WeakMap<object, string>): s
  * `candidates` counts distinct parsed spans, `valid` the accepted ones among the distinct answer-shaped nodes seen (the
  * walk stops examining answer-shaped nodes at the second: the result is then `none` whatever follows).
  */
-export function scanFinalMessage(final: string, accepts: PhaseAcceptor): { extraction: FinalExtraction; hidden: boolean } {
-  try { return { extraction: { method: "whole", value: JSON.parse(final) }, hidden: false }; } catch { /* not whole JSON: look for candidates */ }
+export function scanFinalMessage(final: string, accepts: PhaseAcceptor, strictExecution = false): { extraction: FinalExtraction; hidden: boolean } {
+  if (!strictExecution) {
+    try { return { extraction: { method: "whole", value: JSON.parse(final) }, hidden: false }; } catch { /* not whole JSON: look for candidates */ }
+  }
   const spans: string[] = [];
   // Brace spans: string state only inside an object (depth >= 1), so a stray quote in prose cannot hide one; a `}` at
   // depth 0 is ignored; an unclosed `{` never closes (its text is hidden from the matcher, handled below).
@@ -221,6 +229,7 @@ export function scanFinalMessage(final: string, accepts: PhaseAcceptor): { extra
       if (level > MAX_DEPTH || (record(node) && ++nodes > MAX_NODES)) { hidden = true; break scan; }
       // Only an established strict execute envelope owns an opaque report subtree. Orphan artifacts grant no opacity.
       if (accepts.opaqueTaskResult && record(node) && Object.hasOwn(node, "result") && executeEnvelope.safeParse(node).success) reportOwners.add(node.result as object);
+      if (strictExecution && record(node) && execution.safeParse(node).success) reportOwners.add(node);
       const opaque = record(node) && reportOwners.has(node) && Object.hasOwn(node, "taskResult");
       if (opaque) {
         const original = node.taskResult, bounded = boundedTaskResult(original);
@@ -236,7 +245,8 @@ export function scanFinalMessage(final: string, accepts: PhaseAcceptor): { extra
     for (const node of found) {
       if (shaped.size >= 2) break;
       // Lossy diagnostics are presentation data: compare original report identities, independent of prefix order.
-      const key = hasLossyReport ? "sha256:" + canonicalJsonHash(node, reportFingerprints) : JSON.stringify(node, sortKeys);
+      const semantic = strictExecution && executeEnvelope.safeParse(node).success ? node.result : node;
+      const key = hasLossyReport ? "sha256:" + canonicalJsonHash(semantic, reportFingerprints) : JSON.stringify(semantic, sortKeys);
       if (!shaped.has(key)) {
         const ok = accepts(node);
         shaped.set(key, ok);

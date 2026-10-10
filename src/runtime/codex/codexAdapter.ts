@@ -1,10 +1,9 @@
-import { z } from "zod";
-import { boundedTaskResult } from "../taskResult.js";
+import { normalizeExecutionFinal, ExecutionFormatFailure } from "../executionNormalizer.js";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
 import type { AttemptContext, RuntimeAdapter } from "../types.js";
-import { codexModelUsage, decodeCodexResult, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
+import { codexModelUsage, decodeCodexUsage, decodeCodexResult, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
 import { runCodexPhase } from "./runCodexPhase.js";
 
 /** Orca handoff delivery C-3: an aborted phase, carrying the usage its stdout showed before the kill (or null). */
@@ -30,6 +29,30 @@ export class CodexAdapter implements RuntimeAdapter {
       // turn usage its stdout showed (runCodexPhase observes it for every outcome but completed), null when none.
       throw Object.assign(new Error(`${outcome.reason.startsWith("codex-skills-") ? outcome.reason : `codex-${outcome.reason}`}: ${outcome.evidenceDir}`), { observedTokens: outcome.observedTokens });
     }
+    if (phase === "execute") {
+      // Completion and usage are independent facts; invalid finals must not erase actual spend.
+      let usage:ReturnType<typeof decodeCodexUsage>;
+      try { usage=decodeCodexUsage(outcome.events,true); }
+      catch(error) {
+        await writeFile(join(outcome.evidenceDir,"decode-error.txt"),String(error),{mode:0o600});
+        throw new Error(`${String(error)}: ${outcome.evidenceDir}`);
+      }
+      const modelUsage=codexModelUsage(outcome.events,this.config.model) ?? undefined;
+      await writeFile(join(outcome.evidenceDir,"usage.json"),JSON.stringify(usage.usageEvidence,null,2),{mode:0o600});
+      const normalization=normalizeExecutionFinal(outcome.final);
+      await writeFile(join(outcome.evidenceDir,"execution-normalization.json"),JSON.stringify(normalization),{mode:0o600});
+      if (normalization.diagnostic.method !== "whole" && (normalization.diagnostic.candidates>0 || normalization.diagnostic.hidden)) {
+        await writeFile(join(outcome.evidenceDir,"final-extraction.json"),JSON.stringify(normalization.diagnostic),{mode:0o600});
+      }
+      if (normalization.status === "unavailable") {
+        // Preserve historical parse diagnostics while adding an independent typed classification.
+        let original:unknown;
+        try { JSON.parse(outcome.final); original=new Error("codex-result-invalid"); } catch(error) { original=error; }
+        await writeFile(join(outcome.evidenceDir,"decode-error.txt"),String(original),{mode:0o600});
+        throw new ExecutionFormatFailure(`${String(original)}: ${outcome.evidenceDir}`,outcome.evidenceDir,usage.tokenUsage,usage.usageEvidence,modelUsage,normalization);
+      }
+      return {...normalization.execution,...usage,...(modelUsage===undefined?{}:{modelUsage})} as PhaseResults[P];
+    }
     try {
       // Codex phase output hardening (2026-10-08), spec §3.2 as corrected by §7: a decorated final message yields its answer
       // when it holds exactly one distinct answer-shaped node and that node is accepted (verify: a rejection only); a
@@ -40,15 +63,7 @@ export class CodexAdapter implements RuntimeAdapter {
         await writeFile(join(outcome.evidenceDir, "final-extraction.json"), JSON.stringify({ method: extraction.method, candidates: extraction.candidates, valid: extraction.valid, hidden, originalBytes: Buffer.byteLength(outcome.final, "utf8") }), { mode: 0o600 });
       }
       const final = extraction.method === "candidate" ? JSON.stringify(extraction.value) : outcome.final;
-      let decodedFinal = final;
-      if (phase === "execute") {
-        const body = z.object({result:z.unknown()}).strict().parse(JSON.parse(final)).result;
-        if (body !== null && typeof body === "object" && !Array.isArray(body) && Object.hasOwn(body, "taskResult")) {
-          (body as Record<string, unknown>).taskResult = boundedTaskResult((body as Record<string, unknown>).taskResult);
-        }
-        decodedFinal = JSON.stringify(body);
-      }
-      const result = decodeCodexResult(phase, outcome.events, decodedFinal);
+      const result = decodeCodexResult(phase, outcome.events, final);
       await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(result.usageEvidence, null, 2), { mode: 0o600 });
       // Orca accounts plan B3: codex runs one model, so the whole usage belongs to it.
       const modelUsage = codexModelUsage(outcome.events, this.config.model);

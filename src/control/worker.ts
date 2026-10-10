@@ -243,6 +243,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       allowanceContinuation,
       firstWorkspaceInput: envelope.inputCheckpoint ?? undefined,
       taskResultInput: envelope,
+      executionFormatCapture: config.kind === "codex" ? {config} : undefined,
       stopRequested,
       phaseSignal: phaseAbort.signal,
       onProcessRegistered,

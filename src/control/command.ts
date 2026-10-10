@@ -1,3 +1,4 @@
+import { collectSavedResultEvidence, readSavedResultEvidence, savedResultCollectionSchema } from "./savedResultEvidence.js";
 import { z } from "zod";
 import { resolveAgent } from "../agents/materialize.js";
 import { getDescriptor } from "../agents/registry.js";
@@ -170,6 +171,8 @@ const METHODS = new Set<ControlMethodV1>([
   "read-evidence",
   "task-results",
   "read-task-result-evidence",
+  "saved-result-evidence",
+  "read-saved-result-evidence",
 ]);
 
 async function parseCommand(argv: string[]): Promise<{ method: ControlMethodV1; agentsTablePath: string }> {
@@ -224,6 +227,11 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
   if (request.method === "collect") {
     return await collectExecution(request.input, request.afterSeq);
   }
+  if (request.method === "saved-result-evidence") return await collectSavedResultEvidence(request.input);
+  if (request.method === "read-saved-result-evidence") {
+    const bytes=await readSavedResultEvidence(request.input,request.capsuleRef,request.ref);
+    return {...request.ref,base64:bytes.toString("base64")};
+  }
   if (request.method === "task-results") return await collectTaskResults(request.input, request.afterRevision);
   if (request.method === "read-task-result-evidence") {
     const bytes = await readTaskResultEvidence(request.input, request.manifestRef, request.ref);
@@ -248,8 +256,9 @@ function validateResponse(method: ControlMethodV1, value: unknown, protocol = 3)
         tokenRemainingStatus: z.enum(["known", "unlimited", "unknown"]),
       }).strict() }).nullable(),
     }) : collectionSchema).parse(value);
+    if (method === "saved-result-evidence") return savedResultCollectionSchema.parse(value);
     if (method === "task-results") return taskResultCollectionSchema.parse(value);
-    if (method === "read-evidence" || method === "read-task-result-evidence") return evidenceSchema.parse(value);
+    if (method === "read-evidence" || method === "read-task-result-evidence" || method === "read-saved-result-evidence") return evidenceSchema.parse(value);
     return value;
   } catch {
     throw new Error("control-response-invalid");
