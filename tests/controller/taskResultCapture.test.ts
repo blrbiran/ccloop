@@ -215,6 +215,114 @@ describe("immutable live attempt results",()=>{
     } finally { date.mockRestore(); open.mockRestore(); }
   });
 
+  // Measured provider failure settles before optional I/O; its phase context survives to existing error routing.
+  it.each(["failure", "handoff", "owner-loss"] as const)("settles blocked-start provider error before release and preserves %s routing", async routing => {
+    const f = await resultFixture();
+    const stopRequested = createStopRequestSignal();
+    const originalOpen = fs.open;
+    let publications = 0;
+    let unblock!: () => void;
+    const gate = new Promise<void>(resolve => { unblock = resolve; });
+    let blocked!: () => void;
+    const metadataBlocked = new Promise<void>(resolve => { blocked = resolve; });
+    let settled!: () => void;
+    const verificationSettled = new Promise<void>(resolve => { settled = resolve; });
+    let clock = Date.now();
+    const date = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const phases: Array<{ phase: string; tokenUsage: number | null; elapsedMs: number; completedWithResult: boolean }> = [];
+    let verifies = 0;
+    let workspace = "";
+    let returned = false;
+    const open = vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await originalOpen(...args);
+      const path = String(args[0]);
+      if (dirname(path) === join(f.runDir, "task-result-captures") && basename(path).endsWith(".tmp")) {
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => {
+          await sync();
+          if (++publications === 2) {
+            blocked();
+            await gate;
+            if (routing === "owner-loss") {
+              const owner = await readOwnerRecord(f.runDir);
+              await writeOwnerRecord(f.runDir, { ...owner, currentOwnerEpoch: owner.currentOwnerEpoch + 1,
+                currentProcessInstanceId: "foreign-controller" });
+            }
+          }
+        };
+      }
+      return handle;
+    });
+    const adapter: RuntimeAdapter = {
+      plan: async () => ({ summary: "write", primaryTargetPaths: ["answer.txt"] }),
+      execute: async context => {
+        workspace = context.worktreePath;
+        await writeFile(join(workspace, "answer.txt"), "execute bytes");
+        return { changedFiles: ["answer.txt"], diffPatch: "patch", commandOutputs: [], stdoutStderrLog: "ok", tokenUsage: 9, taskResult: report };
+      },
+      verify: async () => {
+        verifies++;
+        throw Object.assign(new Error("owned provider error"), { observedTokens: 13 });
+      },
+    };
+    const running = runLoop(f.contract, f.runDir, adapter, {
+      taskResultInput: f.input,
+      stopRequested,
+      onPhaseSettled: async observation => {
+        phases.push(observation);
+        if (observation.phase === "verify") {
+          if (routing === "handoff") stopRequested.requested = true;
+          settled();
+        }
+      },
+    }).then(state => { returned = true; return state; });
+    let beforeRelease = false;
+    try {
+      await metadataBlocked;
+      beforeRelease = await Promise.race([
+        verificationSettled.then(() => true),
+        new Promise<boolean>(resolve => setTimeout(() => resolve(false), 1000)),
+      ]);
+      expect(verifies).toBe(1);
+      expect(beforeRelease, "measured provider-error usage must settle independently of optional metadata").toBe(true);
+      expect(phases.filter(phase => phase.phase === "verify")).toEqual([
+        expect.objectContaining({ tokenUsage: 13, elapsedMs: 0, completedWithResult: false }),
+      ]);
+      expect(returned).toBe(false);
+      await access(workspace);
+      const response = await f.rpc("task-results", { input: f.input, afterRevision: 0 });
+      expect(response.code, response.stderr).toBe(0);
+      expect(JSON.parse(response.stdout).revision).toBe(1);
+      clock += 500;
+    } finally {
+      unblock();
+      try {
+        const state = await running;
+        expect(state.budgetSnapshot).toMatchObject({ tokenBudgetRemaining: 978, timeRemainingMs: 30000 });
+        expect(phases.filter(phase => phase.phase === "verify")).toHaveLength(1);
+        const events = await readFile(join(f.runDir, "events.jsonl"), "utf8");
+        if (routing === "failure") {
+          expect(state).toMatchObject({ status: "failed", stopReason: "Error: owned provider error" });
+          expect(events).toContain('"type":"attempt_failed"');
+          await expect(access(workspace)).rejects.toThrow();
+        } else if (routing === "handoff") {
+          expect(state.status).toBe("verifying");
+          expect(events).toContain("handoff requested during verify in attempt 1");
+          expect(JSON.parse(await readFile(join(f.runDir, "attempts", "1", "execution.json"), "utf8"))).toMatchObject({ tokenUsage: 9, changedFiles: ["answer.txt"] });
+          await expect(access(join(f.runDir, "attempts", "1", "verification.json"))).rejects.toThrow();
+          await access(workspace);
+        } else {
+          expect(state).toMatchObject({ status: "cancelled", stopReason: "lease_lost" });
+          expect((await readOwnerRecord(f.runDir)).currentProcessInstanceId).toBe("foreign-controller");
+          await access(workspace);
+        }
+        const response = await f.rpc("task-results", { input: f.input, afterRevision: 0 });
+        expect(response.code, response.stderr).toBe(0);
+        expect(JSON.parse(response.stdout).revision).toBe(routing === "owner-loss" ? 1 : 2);
+      } finally { date.mockRestore(); open.mockRestore(); }
+    }
+  });
+
   // A genuine asynchronous fence refusal must not discard measured provider-error usage.
   it("preserves pending verifier error usage before a queued start publication loses its owner", async () => {
     const f = await resultFixture();

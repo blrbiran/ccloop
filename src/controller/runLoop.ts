@@ -1249,12 +1249,13 @@ export async function runLoopFromState(
     elapsedMs: number,
     result?: { tokenUsage?: number; usageEvidence?: UsageEvidence; modelUsage?: ModelUsageV1[] } | null,
     usageOnly = false,
+    retainPhaseContext = false,
   ): Promise<void> => {
     const key = `${attempt}:${phase}`;
     if (settledPhases.has(key)) return;
     state = applyPhaseUsage(state, elapsedMs, result?.tokenUsage);
     settledPhases.add(key);
-    if (activePhase === phase) activePhase = null;
+    if (!retainPhaseContext && activePhase === phase) activePhase = null;
     await options?.onPhaseSettled?.({
       phase,
       attempt,
@@ -1689,15 +1690,20 @@ export async function runLoopFromState(
           { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true },
         );
       } catch (error) {
-        await startedCapture;
-        if (startedCaptureError !== null) {
-          // Preserve the provider error's already-measured usage before a genuine queued owner fence refusal.
-          if (error instanceof PhaseExecutionError) {
-            await settlePhase("verify", attempt, error.elapsedMs,
-              error.tokenUsage === null ? undefined : { tokenUsage: error.tokenUsage }, true);
-          }
-          throw startedCaptureError;
+        if (error instanceof PhaseExecutionError) {
+          // Settle measured failure before optional I/O, retaining verify attribution for the outer handler.
+          // Its duplicate settlement is suppressed by settledPhases without losing failure/handoff context.
+          await settlePhase(
+            "verify",
+            attempt,
+            error.elapsedMs,
+            error.tokenUsage === null ? undefined : { tokenUsage: error.tokenUsage },
+            true,
+            true,
+          );
         }
+        await startedCapture;
+        if (startedCaptureError !== null) throw startedCaptureError;
         throw error;
       }
 
