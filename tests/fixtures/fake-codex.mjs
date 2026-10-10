@@ -69,6 +69,8 @@ process.stdin.on("end",()=>{
   if(phase==="verify" && mode==="false-answer") writeFileSync("answer.txt","0\n");
   if(mode==="quota") {process.stdout.write(JSON.stringify({type:"turn.failed",error:{message:"quota exhausted"}})+"\n");return;}
   if(phase==="execute" && mode==="write-hang") {setInterval(()=>{},1000);return;}
+  // Optional report channel paired build fixture: the same execute invocation writes both product and metadata.
+  if(phase==="execute" && mode==="task-result") {writeFileSync("answer.txt","42\n");body.taskResult={schema:"task-result-v1",goal:"Produce answer",completedWork:["Wrote answer"],conclusions:["Agent claim"],limitations:[],outputs:[{path:"answer.txt",label:"Answer"}]};}
   if(phase==="execute" && mode==="partial") Object.assign(body,{completionStatus:"partial",failureType:"error",failureMessage:"fixture partial"});
   if(mode!=="missing-final") writeFileSync(value("-o"),JSON.stringify(wireSchema.properties?.result?{result:body,...(mode==="envelope-extra"?{tokenUsage:0}:{})}:body));
   // Codex phase output hardening (2026-10-08): mode `final-text`, argv `final-text <marker> <finalsFile>`, writes the

@@ -47,7 +47,8 @@ import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { FailureFingerprint, LastTrustedBoundary, RunState, StopDecision } from "../state/types.js";
 import { cleanupAttemptWorkspace, createAttemptWorkspace, publishAttemptCommit } from "../workspace/worktreeManager.js";
 import { materializeFirstWorkspace } from "../control/materialize.js";
-import type { InputCheckpointV1 } from "../control/protocol.js";
+import { captureTaskResult } from "../control/taskResults.js";
+import type { StartEnvelopeV3, InputCheckpointV1 } from "../control/protocol.js";
 import type { ModelUsageV1 } from "../control/usage.js";
 
 export type { AttemptContext } from "../runtime/types.js";
@@ -1194,6 +1195,8 @@ export function createStopRequestSignal(): StopRequestSignal {
 }
 
 export interface RunControlHooks {
+  /** Trusted accepted control envelope supplied only by the worker. */
+  taskResultInput?: StartEnvelopeV3;
   firstWorkspaceInput?: InputCheckpointV1;
   stopRequested?: StopRequestSignal;
   phaseSignal?: AbortSignal;
@@ -1282,6 +1285,13 @@ export async function runLoopFromState(
   ): Promise<void> => {
     await heartbeat.assertHeld();
     await write();
+  };
+
+  const captureResult = async (attempt: number, worktreePath: string, execution: ExecutionResult | null, verification?: VerificationResult): Promise<void> => {
+    if (options?.taskResultInput === undefined || execution === null) return;
+    await heartbeat.runExclusive(async () => {
+      await captureTaskResult({input: options.taskResultInput!, runDir, worktreePath, attempt, execution, verification, assertHeld: () => heartbeat.assertHeld()});
+    });
   };
 
   while (true) {
@@ -1452,6 +1462,7 @@ export async function runLoopFromState(
 
       if (handoffAborted()) {
         execution = executeOutcome.result ?? null;
+        await captureResult(attempt, worktreePath, execution);
         await settlePhase("execute", attempt, executeOutcome.elapsedMs, execution);
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
         return await persistHandoffBoundary("handoff_interrupted", `handoff deadline interrupted execute in attempt ${attempt}`);
@@ -1463,6 +1474,7 @@ export async function runLoopFromState(
         await settlePhase("execute", attempt, executeOutcome.elapsedMs, executeOutcome.result);
         executeUsageAlreadyApplied = true;
         execution = executeOutcome.result ?? null;
+        await captureResult(attempt, worktreePath, execution);
 
         if (execution === null) {
           const changedPathsObserved = await observeChangedPathsBestEffort(worktreePath);
@@ -1536,6 +1548,7 @@ export async function runLoopFromState(
       }
 
       const completedExecution = execution;
+      await captureResult(attempt, worktreePath, completedExecution);
 
       if (!executeUsageAlreadyApplied) {
         await settlePhase("execute", attempt, executeOutcome.elapsedMs, completedExecution);
@@ -1682,6 +1695,7 @@ export async function runLoopFromState(
       await settlePhase("verify", attempt, verifyOutcome.elapsedMs, verification);
       // Captured because the guard's closure widens the `verification` let back to `| null`.
       const completedVerification = verification;
+      await captureResult(attempt, worktreePath, completedExecution, completedVerification);
       await guardedWriteArtifacts(() =>
         writeCompletedAttemptArtifacts(runDir, attempt, plan, execution, completedVerification),
       );

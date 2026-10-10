@@ -238,6 +238,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       : envelope.work.codexSkillsDir !== undefined ? { codexSkillsDir: envelope.work.codexSkillsDir } : undefined;
     await runLoop(contract, runDir, () => getDescriptor(config.kind).createAdapter(config, adapterOptions), {
       firstWorkspaceInput: envelope.inputCheckpoint ?? undefined,
+      taskResultInput: envelope,
       stopRequested,
       phaseSignal: phaseAbort.signal,
       onProcessRegistered,

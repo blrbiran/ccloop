@@ -11,7 +11,9 @@ export type ControlMethodV1 =
   | "inspect"
   | "handoff"
   | "collect"
-  | "read-evidence";
+  | "read-evidence"
+  | "task-results"
+  | "read-task-result-evidence";
 
 export interface AmountV1 {
   tokens: number;
@@ -115,14 +117,18 @@ export type ControlRequestV1 =
   | { method: "inspect"; input: StartEnvelopeV3 }
   | { method: "handoff"; input: StartEnvelopeV3; request: HandoffRequestV1 }
   | { method: "collect"; input: StartEnvelopeV3; afterSeq: number }
-  | { method: "read-evidence"; input: StartEnvelopeV3; ref: ArtifactRefV1 };
+  | { method: "read-evidence"; input: StartEnvelopeV3; ref: ArtifactRefV1 }
+  | { method: "task-results"; input: StartEnvelopeV3; afterRevision: number }
+  | { method: "read-task-result-evidence"; input: StartEnvelopeV3; manifestRef: ArtifactRefV1; ref: ArtifactRefV1 };
 
 export type ControlPayloadV1 =
   | CapabilitiesRequestV3
   | StartEnvelopeV3
   | { input: StartEnvelopeV3; request: HandoffRequestV1 }
   | { input: StartEnvelopeV3; afterSeq: number }
-  | { input: StartEnvelopeV3; ref: ArtifactRefV1 };
+  | { input: StartEnvelopeV3; ref: ArtifactRefV1 }
+  | { input: StartEnvelopeV3; afterRevision: number }
+  | { input: StartEnvelopeV3; manifestRef: ArtifactRefV1; ref: ArtifactRefV1 };
 
 export class ControlProtocolError extends Error {
   constructor(readonly code: string) {
@@ -233,6 +239,8 @@ const payloadSchemas = {
   inspect: startEnvelopeSchema,
   handoff: z.object({ input: startEnvelopeSchema, request: handoffRequestSchema }).strict(),
   collect: z.object({ input: startEnvelopeSchema, afterSeq: safeInteger }).strict(),
+  "task-results": z.object({ input: startEnvelopeSchema, afterRevision: safeInteger }).strict(),
+  "read-task-result-evidence": z.object({ input: startEnvelopeSchema, manifestRef: artifactRefSchema, ref: artifactRefSchema }).strict(),
   "read-evidence": z.object({ input: startEnvelopeSchema, ref: artifactRefSchema }).strict(),
 } satisfies Record<ControlMethodV1, z.ZodTypeAny>;
 
@@ -332,7 +340,7 @@ export function parseControlRequest(method: ControlMethodV1, raw: unknown): Cont
   try {
     const payload = payloadSchemas[method].parse(raw) as ControlPayloadV1;
     if (method === "accept" || method === "inspect") validateEnvelopePaths(payload as StartEnvelopeV3, method);
-    if (method === "handoff" || method === "collect" || method === "read-evidence") {
+    if (method === "handoff" || method === "collect" || method === "read-evidence" || method === "task-results" || method === "read-task-result-evidence") {
       validateEnvelopePaths((payload as { input: StartEnvelopeV3 }).input, method);
     }
     return payload;

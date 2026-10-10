@@ -17,6 +17,7 @@ import { acceptStart } from "./accept.js";
 import { collectExecution, inspectExecution } from "./collect.js";
 import { MAX_CONTROL_BYTES, readEvidence } from "./evidence.js";
 import { requestHandoff } from "./handoff.js";
+import { collectTaskResults, readTaskResultEvidence, taskResultCollectionSchema } from "./taskResults.js";
 import { byModelSchema } from "./usage.js";
 
 export interface ControlCommandResult {
@@ -166,6 +167,8 @@ const METHODS = new Set<ControlMethodV1>([
   "handoff",
   "collect",
   "read-evidence",
+  "task-results",
+  "read-task-result-evidence",
 ]);
 
 async function parseCommand(argv: string[]): Promise<{ method: ControlMethodV1; agentsTablePath: string }> {
@@ -218,6 +221,11 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
   if (request.method === "collect") {
     return await collectExecution(request.input, request.afterSeq);
   }
+  if (request.method === "task-results") return await collectTaskResults(request.input, request.afterRevision);
+  if (request.method === "read-task-result-evidence") {
+    const bytes = await readTaskResultEvidence(request.input, request.manifestRef, request.ref);
+    return { ...request.ref, base64: bytes.toString("base64") };
+  }
   if (request.method === "read-evidence") {
     const bytes = await readEvidence(request.input.work.sourceDir, request.ref);
     return { ...request.ref, base64: bytes.toString("base64") };
@@ -231,7 +239,8 @@ function validateResponse(method: ControlMethodV1, value: unknown): unknown {
     if (method === "accept" || method === "inspect") return executionStatusSchema.parse(value);
     if (method === "handoff") return handoffAckSchema.parse(value);
     if (method === "collect") return collectionSchema.parse(value);
-    if (method === "read-evidence") return evidenceSchema.parse(value);
+    if (method === "task-results") return taskResultCollectionSchema.parse(value);
+    if (method === "read-evidence" || method === "read-task-result-evidence") return evidenceSchema.parse(value);
     return value;
   } catch {
     throw new Error("control-response-invalid");
