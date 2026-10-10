@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
+import { boundedTaskResult } from "../taskResult.js";
 import type { ModelUsageV1 } from "../../control/usage.js";
 import type { AttemptPlan, ExecutionResult, UsageEvidence, VerificationResult } from "../types.js";
 
@@ -20,7 +22,7 @@ export function parseCodexConfig(raw: unknown): CodexConfig {
 
 const strings = z.array(z.string());
 const plan = z.object({summary:z.string(), primaryTargetPaths:strings}).strict();
-const executionFields = {changedFiles:strings, diffPatch:z.string(), commandOutputs:strings, stdoutStderrLog:z.string()};
+const executionFields = {taskResult:z.unknown().optional(),changedFiles:strings, diffPatch:z.string(), commandOutputs:strings, stdoutStderrLog:z.string()};
 const complete = z.object(executionFields).strict();
 const partial = z.object({...executionFields,completionStatus:z.literal("partial"),failureType:z.enum(["timeout","error"]),failureMessage:z.string()}).strict();
 const execution = z.union([complete,partial]);
@@ -33,7 +35,8 @@ export function phaseJsonSchema(phase: CodexPhase): Record<string, unknown> {
   if (phase === "plan") return object({summary:string,primaryTargetPaths:array});
   if (phase === "verify") return object({approved:{type:"boolean"},rejectCategory:string,primaryTargetPaths:array,failingCommand:{type:["string","null"]},safeToRetry:{type:"boolean"},evidence:array,pauseSignals:array,stopSignals:array});
   const fields = {changedFiles:array,diffPatch:string,commandOutputs:array,stdoutStderrLog:string};
-  return {anyOf:[object(fields),object({...fields,completionStatus:{type:"string",enum:["partial"]},failureType:{type:"string",enum:["timeout","error"]},failureMessage:string})]};
+  const optionalReport = (fields: Record<string, unknown>) => ({...object(fields), properties:{...fields,taskResult:{}}});
+  return {anyOf:[optionalReport(fields),optionalReport({...fields,completionStatus:{type:"string",enum:["partial"]},failureType:{type:"string",enum:["timeout","error"]},failureMessage:string})]};
 }
 
 const record = (x: unknown): x is Record<string,unknown> => x !== null && typeof x === "object" && !Array.isArray(x);
@@ -94,6 +97,7 @@ export function decodeCodexResult<P extends CodexPhase>(phase:P, events:string, 
   if (tokenUsage === 0) throw new Error("codex-usage-unavailable");
   let raw: unknown;
   try { raw = JSON.parse(final); } catch { throw new Error("codex-result-invalid"); }
+  if (phase === "execute" && record(raw) && Object.hasOwn(raw, "taskResult")) raw.taskResult = boundedTaskResult(raw.taskResult);
   const parsed = schemas[phase].safeParse(raw);
   if (!parsed.success) throw new Error(`codex-result-invalid: ${parsed.error.message}`);
   const usageEvidence: UsageEvidence = {
@@ -132,13 +136,13 @@ export function codexModelUsage(events: string, model: string): ModelUsageV1[] |
  */
 const executeEnvelope = z.object({result:execution}).strict();
 const phaseAnswerKeys: Record<CodexPhase, readonly string[]> = { plan: ["summary", "primaryTargetPaths"], execute: ["result"], verify: ["approved"] };
-export type PhaseAcceptor = ((value: unknown) => boolean) & { readonly keys: readonly string[] };
+export type PhaseAcceptor = ((value: unknown) => boolean) & { readonly keys: readonly string[]; readonly opaqueTaskResult?: boolean };
 export function phaseFinalAccepts(phase: CodexPhase): PhaseAcceptor {
   const schema: z.ZodTypeAny = phase === "execute" ? executeEnvelope : schemas[phase];
   const accepts = phase === "verify"
     ? (value: unknown) => schema.safeParse(value).success && (value as { approved: unknown }).approved === false
     : (value: unknown) => schema.safeParse(value).success;
-  return Object.assign(accepts, { keys: phaseAnswerKeys[phase] });
+  return Object.assign(accepts, { keys: phaseAnswerKeys[phase], ...(phase === "execute" ? { opaqueTaskResult: true } : {}) });
 }
 
 export type FinalExtraction =
@@ -146,6 +150,27 @@ export type FinalExtraction =
   | { method: "candidate"; value: unknown; candidates: number; valid: number }
   | { method: "none"; candidates: number; valid: number };
 const MAX_NODES = 100_000, MAX_DEPTH = 1_000;
+/** Parsed, transport-bounded JSON only: canonical streaming identity without recursive stringify or candidate depth. */
+function canonicalJsonHash(value: unknown, reports?: WeakMap<object, string>): string {
+  const hash = createHash("sha256");
+  const stack: Array<{ value: unknown } | { token: string }> = [{ value }];
+  while (stack.length) {
+    const work = stack.pop()!;
+    if ("token" in work) { hash.update(work.token); continue; }
+    const item = work.value;
+    if (item === null || typeof item !== "object") { hash.update(JSON.stringify(item)); continue; }
+    const array = Array.isArray(item), keys = array ? Object.keys(item) : Object.keys(item).sort();
+    hash.update(array ? "[" : "{"); stack.push({ token: array ? "]" : "}" });
+    for (let i = keys.length - 1; i >= 0; i--) {
+      const key = keys[i], fingerprint = key === "taskResult" ? reports?.get(item) : undefined;
+      // This internal non-JSON token cannot collide with a model-written JSON surrogate; it never enters returned data.
+      stack.push(fingerprint === undefined ? { value: (item as Record<string, unknown>)[key] } : { token: "@task-result-sha256:" + fingerprint });
+      if (!array) stack.push({ token: JSON.stringify(key) + ":" });
+      if (i > 0) stack.push({ token: "," });
+    }
+  }
+  return hash.digest("hex");
+}
 /**
  * Codex phase output hardening (2026-10-08), spec §3.2 as corrected by §7: find the phase answer in a final message a
  * provider let the model decorate. A final message that is whole JSON is returned as is (acceptance is then decided
@@ -180,6 +205,7 @@ export function scanFinalMessage(final: string, accepts: PhaseAcceptor): { extra
   let hidden = depth > 0, nodes = 0, answer: unknown;
   const sortKeys = (_key: string, v: unknown) => record(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : v;
   const seen = new Set<string>(), roots = new Set<string>(), shaped = new Map<string, boolean>();
+  const reportOwners = new WeakSet<object>(), reportFingerprints = new WeakMap<object, string>();
   scan: for (const text of spans) {
     if (seen.has(text)) continue; // the same span text again: same tree, nothing new to walk
     seen.add(text);
@@ -189,22 +215,35 @@ export function scanFinalMessage(final: string, accepts: PhaseAcceptor): { extra
     // The whole span is walked (and depth-checked) before any node is serialised, so a too-deep subtree under an
     // answer-shaped node fails closed instead of overflowing JSON.stringify (follow-up B1).
     const stack: Array<[object, number]> = [[value as object, 1]], found: Record<string, unknown>[] = [];
+    let hasLossyReport = false;
     for (let entry = stack.pop(); entry !== undefined; entry = stack.pop()) {
       const [node, level] = entry;
       if (level > MAX_DEPTH || (record(node) && ++nodes > MAX_NODES)) { hidden = true; break scan; }
-      for (const item of Object.values(node)) if (item !== null && typeof item === "object") stack.push([item, level + 1]);
+      // Only an established strict execute envelope owns an opaque report subtree. Orphan artifacts grant no opacity.
+      if (accepts.opaqueTaskResult && record(node) && Object.hasOwn(node, "result") && executeEnvelope.safeParse(node).success) reportOwners.add(node.result as object);
+      const opaque = record(node) && reportOwners.has(node) && Object.hasOwn(node, "taskResult");
+      if (opaque) {
+        const original = node.taskResult, bounded = boundedTaskResult(original);
+        const lossy = record(bounded) && bounded.schema === "ccloop-task-result-invalid-v1" &&
+          !(record(original) && Object.keys(original).length === 3 && original.schema === bounded.schema && original.reason === bounded.reason && original.diagnostic === bounded.diagnostic);
+        if (lossy) { reportFingerprints.set(node, canonicalJsonHash(original)); hasLossyReport = true; }
+        node.taskResult = bounded;
+      }
+      const children = opaque ? Object.entries(node).filter(([key]) => key !== "taskResult").map(([, item]) => item) : Object.values(node);
+      for (const item of children) if (item !== null && typeof item === "object") stack.push([item, level + 1]);
       if (record(node) && accepts.keys.some((key) => Object.hasOwn(node, key))) found.push(node);
     }
     for (const node of found) {
       if (shaped.size >= 2) break;
-      const key = JSON.stringify(node, sortKeys);
+      // Lossy diagnostics are presentation data: compare original report identities, independent of prefix order.
+      const key = hasLossyReport ? "sha256:" + canonicalJsonHash(node, reportFingerprints) : JSON.stringify(node, sortKeys);
       if (!shaped.has(key)) {
         const ok = accepts(node);
         shaped.set(key, ok);
         if (ok) answer = node;
       }
     }
-    roots.add(JSON.stringify(value, sortKeys));
+    roots.add(hasLossyReport ? "sha256:" + canonicalJsonHash(value, reportFingerprints) : JSON.stringify(value, sortKeys));
   }
   const counts = { candidates: roots.size, valid: [...shaped.values()].filter(Boolean).length };
   const unique = !hidden && shaped.size === 1 && counts.valid === 1;

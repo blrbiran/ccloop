@@ -1,3 +1,4 @@
+import { boundedTaskResult } from "../runtime/taskResult.js";
 import { access, appendFile, link, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -1993,7 +1994,14 @@ export async function writeAttemptArtifacts(runDir: string, attempt: number, art
   await writeFile(join(attemptDir, "plan.json"), JSON.stringify(artifacts.plan, null, 2));
 
   if (artifacts.execution !== undefined) {
-    await writeFile(join(attemptDir, "execution.json"), JSON.stringify(artifacts.execution, null, 2));
+    let execution = artifacts.execution;
+    if (execution !== null && typeof execution === "object" && !Array.isArray(execution) && Object.hasOwn(execution, "taskResult")) {
+      const fields = Object.getOwnPropertyDescriptors(execution);
+      const report = fields.taskResult;
+      fields.taskResult = { value: boundedTaskResult("value" in report ? report.value : report.get), enumerable: true, configurable: true, writable: true };
+      execution = Object.defineProperties({}, fields);
+    }
+    await writeFile(join(attemptDir, "execution.json"), JSON.stringify(execution, null, 2));
   }
 
   if (artifacts.verify !== undefined) {

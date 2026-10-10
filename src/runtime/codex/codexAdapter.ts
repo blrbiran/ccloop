@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { boundedTaskResult } from "../taskResult.js";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
@@ -39,7 +40,15 @@ export class CodexAdapter implements RuntimeAdapter {
         await writeFile(join(outcome.evidenceDir, "final-extraction.json"), JSON.stringify({ method: extraction.method, candidates: extraction.candidates, valid: extraction.valid, hidden, originalBytes: Buffer.byteLength(outcome.final, "utf8") }), { mode: 0o600 });
       }
       const final = extraction.method === "candidate" ? JSON.stringify(extraction.value) : outcome.final;
-      const result = decodeCodexResult(phase, outcome.events, phase === "execute" ? JSON.stringify(z.object({result:z.unknown()}).strict().parse(JSON.parse(final)).result) : final);
+      let decodedFinal = final;
+      if (phase === "execute") {
+        const body = z.object({result:z.unknown()}).strict().parse(JSON.parse(final)).result;
+        if (body !== null && typeof body === "object" && !Array.isArray(body) && Object.hasOwn(body, "taskResult")) {
+          (body as Record<string, unknown>).taskResult = boundedTaskResult((body as Record<string, unknown>).taskResult);
+        }
+        decodedFinal = JSON.stringify(body);
+      }
+      const result = decodeCodexResult(phase, outcome.events, decodedFinal);
       await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(result.usageEvidence, null, 2), { mode: 0o600 });
       // Orca accounts plan B3: codex runs one model, so the whole usage belongs to it.
       const modelUsage = codexModelUsage(outcome.events, this.config.model);

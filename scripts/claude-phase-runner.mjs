@@ -3,6 +3,9 @@ import { Socket } from "node:net";
 import { promisify } from "node:util";
 import { buildModelUsage, buildUsageEvidence, createLineSplitter, createUsageObserver, writeObservation } from "./claude-stream.mjs";
 
+// scripts/ is shipped alongside dist/src/: source and packaged runners share the runtime metadata bound.
+import { boundedTaskResult } from "../dist/src/runtime/taskResult.js";
+
 const execFileAsync = promisify(execFile);
 const CLAUDE_TERMINATION_GRACE_MS = 250;
 const DEFAULT_PARTIAL_OUTCOME_RECOVERY_WINDOW_MS = 1000;
@@ -29,6 +32,7 @@ const EXECUTION_SCHEMA = {
     diffPatch: { type: "string" },
     commandOutputs: { type: "array", items: { type: "string" } },
     stdoutStderrLog: { type: "string" },
+    taskResult: {},
     completionStatus: { type: "string", enum: ["partial"] },
     failureType: { type: "string", enum: ["timeout", "error"] },
     failureMessage: { type: "string" },
@@ -643,6 +647,7 @@ async function main() {
       throw new Error(`claude-execute-partial-incomplete: ${broken}`);
     }
 
+    if (request.phase === "execute" && Object.prototype.hasOwnProperty.call(structured, "taskResult")) structured.taskResult = boundedTaskResult(structured.taskResult);
     const usageEvidence = buildUsageEvidence(envelope);
     const response = usageEvidence.normalizedTotal === null
       ? { ...structured, usageEvidence, ...withModelUsage(envelope) }

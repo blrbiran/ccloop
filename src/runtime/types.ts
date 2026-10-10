@@ -56,6 +56,8 @@ export type AttemptPlan = {
 };
 
 type ExecutionArtifacts = {
+  /** Optional executor explanation; availability never changes the actual execution outcome. */
+  taskResult?: unknown;
   changedFiles: string[];
   diffPatch: string;
   commandOutputs: string[];

@@ -53,6 +53,10 @@ export function buildExecutorPrompt(context: AttemptContext): string {
     formatJson(context.plan),
     "Execute against the current attempt plan above and report only this attempt's concrete outcome.",
     'Return either a complete object with {"changedFiles": string[], "diffPatch": string, "commandOutputs": string[], "stdoutStderrLog": string} or a partial object that also includes {"completionStatus": "partial", "failureType": "timeout" | "error", "failureMessage": string}.',
+    'When possible, include optional taskResult metadata in that same complete or partial object: {"schema":"task-result-v1","goal":string,"completedWork":string[],"conclusions":string[],"outputs":[{"path":string,"label":string}],"limitations":string[]}.',
+    "This explanation describes this attempt only; it is not a product file, a verification claim, or an additional acceptance condition. Do not add task/run/group or verification identities. Missing explanation does not change the execution outcome.",
+    "Keep taskResult UTF-8 JSON at most 65536 bytes: a nonempty goal at most 4000 characters; each text array and outputs at most 32 entries; text entries at most 4000 characters; output path at most 1024 and label at most 256 characters. Empty arrays are valid.",
+    "Output paths must be relative POSIX file paths: no empty/dot/dot-dot components, absolute/drive or URL prefix, NUL or backslash. Report limitations honestly and leave actual verification to the verifier.",
     "If the attempt is interrupted, preserve any recognizable partial artifacts in those fields.",
     `If execute is aborted, you may have up to ${contract.executionPolicy.partialOutcomeRecoveryWindowMs}ms to flush one final execute-phase result.`,
     FINAL_MESSAGE_LINE,
@@ -61,6 +65,8 @@ export function buildExecutorPrompt(context: AttemptContext): string {
 
 export function buildVerifierPrompt(context: AttemptContext): string {
   const contract = context.contract;
+  // The Agent explanation is supplemental; verification continues to see the same actual execution evidence.
+  const { taskResult: _taskResult, ...executionCore } = context.execution ?? {};
 
   return [
     "Return JSON only.",
@@ -77,7 +83,7 @@ export function buildVerifierPrompt(context: AttemptContext): string {
     "Current attempt plan:",
     formatJson(context.plan),
     "Current execution outcome:",
-    formatJson(context.execution),
+    formatJson(context.execution === undefined ? undefined : executionCore),
     "Prefer rejection backed by concrete evidence.",
     'Return an object with {"approved": boolean, "rejectCategory": string, "primaryTargetPaths": string[], "failingCommand": string | null, "safeToRetry": boolean, "evidence": string[], "pauseSignals": string[], "stopSignals": string[]}.',
     FINAL_MESSAGE_LINE,

@@ -9,6 +9,7 @@ import { assertContextOption, type MaterializedAgentConfigV1 } from "../../agent
 import { claudeDescriptor, claudeModelArgument } from "../../agents/claude.js";
 import { observedTokensOf, SingleCallOutputInvalid, type AttemptContext, type AttemptPlan, type ExecutePhaseResult, type ExecutionResult, type RuntimeAdapter, type SingleCallRequest, type SingleCallResult, type VerificationResult } from "../types.js";
 import type { ModelUsageV1 } from "../../control/usage.js";
+import { boundedTaskResult } from "../taskResult.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./prompts.js";
 import type { ClaudePhaseRequest } from "./types.js";
 
@@ -295,10 +296,12 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
 
   async execute(context: AttemptContext): Promise<ExecutePhaseResult> {
     try {
-      return await this.phase<ExecutionResult>({
+      const result = await this.phase<ExecutionResult>({
         phase: "execute", prompt: buildExecutorPrompt(context), ...this.base(context),
         partialOutcomeRecoveryWindowMs: context.contract.executionPolicy.partialOutcomeRecoveryWindowMs,
       }, context, { stopGraceMs: Math.max(this.config.installation.killGraceMs, context.contract.executionPolicy.partialOutcomeRecoveryWindowMs + PARTIAL_FLUSH_MARGIN_MS) });
+      if (Object.hasOwn(result, "taskResult")) result.taskResult = boundedTaskResult(result.taskResult);
+      return result;
     } catch (error) {
       // As CodexAdapter (Orca claude stream usage, 2026-09-27): an aborted execute that was observed spending tokens
       // throws, so runLoop can settle that usage; one that was not keeps answering null exactly as before.
