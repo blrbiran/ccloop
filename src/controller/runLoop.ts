@@ -257,7 +257,9 @@ async function runVerification(
   context: AttemptContext,
   plan: AttemptPlan | null,
   execution: ExecutionResult,
+  onStarted?: () => void,
 ): Promise<VerificationResult> {
+  onStarted?.();
   const primaryTargetPaths = getVerificationPrimaryTargetPaths(contract, plan, execution);
   const requiredChecks = await runRequiredChecks(
     contract.verification.requiredChecks,
@@ -1287,10 +1289,19 @@ export async function runLoopFromState(
     await write();
   };
 
-  const captureResult = async (attempt: number, worktreePath: string, execution: ExecutionResult | null, verification?: VerificationResult): Promise<void> => {
+  const captureResult = async (
+    attempt: number,
+    worktreePath: string,
+    execution: ExecutionResult | null,
+    verification?: VerificationResult,
+    verificationStarted = false,
+  ): Promise<void> => {
     if (options?.taskResultInput === undefined || execution === null) return;
     await heartbeat.runExclusive(async () => {
-      await captureTaskResult({input: options.taskResultInput!, runDir, worktreePath, attempt, execution, verification, assertHeld: () => heartbeat.assertHeld()});
+      await captureTaskResult({
+        input: options.taskResultInput!, runDir, worktreePath, attempt, execution,
+        verification, verificationStarted, assertHeld: () => heartbeat.assertHeld(),
+      });
     });
   };
 
@@ -1654,25 +1665,52 @@ export async function runLoopFromState(
       // contract's required checks inside the attempt worktree, which is one too.
       await heartbeat.assertHeld();
       activePhase = "verify";
-      const verifyOutcome = await runPhaseWithTimeout(verifyTimeoutMs, (abortSignal) =>
-        runVerification(
-          contract,
-          attemptAdapter,
-          buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution, options),
-          plan,
-          completedExecution,
-        ),
-        { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true },
-      );
+      let startedCapture = Promise.resolve();
+      let startedCaptureError: unknown = null;
+      const flushStartedCapture = async (): Promise<void> => {
+        await startedCapture;
+        if (startedCaptureError !== null) throw startedCaptureError;
+      };
+      let verifyOutcome: PhaseOutcome<VerificationResult>;
+      try {
+        verifyOutcome = await runPhaseWithTimeout(verifyTimeoutMs, (abortSignal) =>
+          runVerification(
+            contract,
+            attemptAdapter,
+            buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution, options),
+            plan,
+            completedExecution,
+            options?.taskResultInput === undefined ? undefined : () => {
+              // This is actual verification entry. Metadata queues independently of the measured operation.
+              startedCapture = captureResult(attempt, worktreePath!, completedExecution, undefined, true)
+                .catch((error: unknown) => { startedCaptureError = error; });
+            },
+          ),
+          { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true },
+        );
+      } catch (error) {
+        await startedCapture;
+        if (startedCaptureError !== null) {
+          // Preserve the provider error's already-measured usage before a genuine queued owner fence refusal.
+          if (error instanceof PhaseExecutionError) {
+            await settlePhase("verify", attempt, error.elapsedMs,
+              error.tokenUsage === null ? undefined : { tokenUsage: error.tokenUsage }, true);
+          }
+          throw startedCaptureError;
+        }
+        throw error;
+      }
 
       if (handoffAborted()) {
         await settlePhase("verify", attempt, verifyOutcome.elapsedMs, verifyOutcome.result);
+        await flushStartedCapture();
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
         return await persistHandoffBoundary("handoff_interrupted", `handoff deadline interrupted verify in attempt ${attempt}`);
       }
 
       if (verifyOutcome.timedOut) {
         await settlePhase("verify", attempt, verifyOutcome.elapsedMs);
+        await flushStartedCapture();
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
         state = await persistTerminalState(
           runDir,
@@ -1693,6 +1731,7 @@ export async function runLoopFromState(
 
       verification = verifyOutcome.result;
       await settlePhase("verify", attempt, verifyOutcome.elapsedMs, verification);
+      await flushStartedCapture();
       // Captured because the guard's closure widens the `verification` let back to `| null`.
       const completedVerification = verification;
       await captureResult(attempt, worktreePath, completedExecution, completedVerification);

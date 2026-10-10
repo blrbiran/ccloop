@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { captureTaskResult } from "../../src/control/taskResults.js";
 import { MAX_TASK_RESULT_FILE_BYTES, readTaskResultFile } from "../../src/control/taskResultEvidence.js";
-vi.mock("node:fs/promises", async importOriginal => { const actual=await importOriginal<typeof fs>();return {...actual,open:vi.fn(actual.open)}; });
+vi.mock("node:fs/promises", async importOriginal => { const actual=await importOriginal<typeof fs>();return {...actual,open:vi.fn(actual.open),lstat:vi.fn(actual.lstat)}; });
+import { armAncestorSwap } from "./taskResultBoundaryFixture.js";
 import { manifestOf, report, resultFixture, verified } from "./taskResultFixture.js";
 describe("bounded result snapshots",()=>{
   // Removing safe path/no-follow/bounds checks must expose these sentinel files and fail.
@@ -19,7 +20,7 @@ describe("bounded result snapshots",()=>{
   // A growing file must not be admitted after the bounded read has started.
   it("rejects a changed-during-read file using real file I/O",async()=>{
     const f=await resultFixture(),path=join(f.repo,"answer.txt");const original=fs.open;
-    const spy=vi.spyOn(fs,"open").mockImplementation(async(...args:Parameters<typeof open>)=>{const handle=await original(...args);if(args[0]===path){const read=handle.read.bind(handle);handle.read=(async(...readArgs:any[])=>{const result=await (read as any)(...readArgs);await writeFile(path,"changed contents");return result}) as typeof handle.read;}return handle;});
+    const spy=vi.spyOn(fs,"open").mockImplementation(async(...args:Parameters<typeof open>)=>{const handle=await original(...args);if(await fs.realpath(String(args[0])).catch(()=>null)===path){const read=handle.read.bind(handle);handle.read=(async(...readArgs:any[])=>{const result=await (read as any)(...readArgs);await writeFile(path,"changed contents");return result}) as typeof handle.read;}return handle;});
     try{await expect(readTaskResultFile(f.repo,path,MAX_TASK_RESULT_FILE_BYTES)).rejects.toThrow("changed")}finally{spy.mockRestore()}
   });
   // Returning the latest report's attempt would label old bytes as the currently executing attempt.
@@ -39,6 +40,26 @@ describe("bounded result snapshots",()=>{
   it("caps controller-observed changed files at 64 and keeps private publication modes",async()=>{
     const f=await resultFixture();await mkdir(f.runDir);for(let i=0;i<70;i++)await writeFile(join(f.repo,`file-${String(i).padStart(2,"0")}.txt`),"captured");
     await captureTaskResult({input:f.input,runDir:f.runDir,worktreePath:f.repo,attempt:1,execution:{changedFiles:[],diffPatch:"",commandOutputs:[],stdoutStderrLog:""},assertHeld:async()=>{}});const indexPath=join(f.runDir,"task-result-captures","index.json"),index=JSON.parse(await readFile(indexPath,"utf8")),m=await manifestOf(f,index.manifests[0].ref);expect(m.outputs).toHaveLength(64);expect(m.outputs.every((o:any)=>o.origin==="changed"&&o.status==="available")).toBe(true);expect((await fs.stat(join(f.runDir,"task-result-captures"))).mode&0o777).toBe(0o700);expect((await fs.stat(indexPath)).mode&0o777).toBe(0o600);expect((await fs.stat(join(f.sourceDir,"control","task-result-evidence"))).mode&0o777).toBe(0o700);
+  });
+
+  // Restoring the pathname cannot authorize bytes opened through a different ancestor.
+  it("refuses an ancestor swapped and restored during the bounded read", async () => {
+    const f = await resultFixture();
+    const directory = join(f.repo, "output");
+    const outside = join(f.root, "outside");
+    await mkdir(directory);
+    await mkdir(outside);
+    await writeFile(join(directory, "answer.txt"), "inside snapshot");
+    await writeFile(join(outside, "answer.txt"), "OUTSIDE SENTINEL");
+    const race = await armAncestorSwap(directory, outside, "answer.txt");
+    try {
+      await expect(readTaskResultFile(f.repo, join(directory, "answer.txt"), MAX_TASK_RESULT_FILE_BYTES))
+        .rejects.toThrow("changed");
+      expect(race.wasSwapped()).toBe(true);
+    } finally {
+      await race.close();
+    }
+    expect(await readFile(join(directory, "answer.txt"), "utf8")).toBe("inside snapshot");
   });
 
 });
