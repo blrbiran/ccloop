@@ -66,7 +66,9 @@ export function buildExecutorPrompt(context: AttemptContext): string {
 export function buildVerifierPrompt(context: AttemptContext): string {
   const contract = context.contract;
   // The Agent explanation is supplemental; verification continues to see the same actual execution evidence.
-  const { taskResult: _taskResult, ...executionCore } = context.execution ?? {};
+  const fields = Object.getOwnPropertyDescriptors(context.execution ?? {});
+  delete fields.taskResult;
+  const executionCore = Object.defineProperties({}, Object.fromEntries(Object.entries(fields).filter(([, descriptor]) => descriptor.enumerable)));
 
   return [
     "Return JSON only.",
