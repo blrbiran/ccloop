@@ -407,14 +407,12 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（单节滚动，2026-10-10，Codex controller；整节替换本会话旧入口，不追加会话日志）
+# 📌 Orca 那条线（单节滚动，2026-10-11；后续仍就地替换）
 
-Orca 当前入口：`/Users/biran/code/skills/loop/Orca/docs/handoff/handoff.md` §4.0；本轮无需brainstorm反馈修复已按人2026-10-10最新授权fast-forward合Orca main，三仓本地main整合/无用worktree及branch清理完成，未push。旧issue-fixes/D9/M3/M5/M6已收口且在main，不重做；历史未提交材料和隐藏证据已归档。本节不固定当前 HEAD；三个仓远端状态须分别现查 `/usr/bin/git ls-remote origin refs/heads/main`。
+Orca 主入口是 `/Users/biran/code/skills/loop/Orca/docs/handoff/handoff.md` §4.0。本仓 `codex/task-result-channel-20261010` 已快进合入本地 `main`；编辑本文期间本仓的 `origin/main` 跟踪引用移动到了已合提交，但网络 DNS 不通，未直接核验远端；文档提交后的推送状态须现查，不固定当前 HEAD。旧 issue-fixes/D9/M3/M5/M6/feedback-maintenance 已收口，不重做。
 
-- 人已合并并推送本仓 codex阶段输出加固和 Orca issue-fixes。Orca主检出 package/lock/hidden lock 已安装固定 pin `ab824d16004de2d3c1613a76ec0431520aa16cc9`；旧 ccloop-planner 已按人授权清理。
-- 上一轮本仓行为仍是：规划只读、验证不改文件，最后恰好一个带阶段关键字段的 JSON 对象；只放宽验证“拒绝”，修饰过的“批准”仍无效，放宽提取保留final-extraction.json证据。唯一历史台账 `.superpowers/sdd/2026-10-08-codex-phase-output-hardening/progress.md`，spec §6/§7 更正优先，不重做。
-- **本轮本仓仅同步 main handoff，并原样保全旧backup唯一6行历史报告；产品/协议未改。** 旧分支已按人授权清理，backup提交由archive tag保留。三仓整合记录见Orca `docs/handoff/2026-10-10-main-integration-and-cleanup.md`。 Orca D9 owner保守结清未知用量、M3交接后失败重试、M5/M6性能任务均已实现、独立终审，并按人 2026-10-10 授权本地合 main；push 由人做。结清不发provider用量，也不改ccloop信封语义；控制库schema10只属Orca。
-- 当前反馈轮进度/验收看Orca `.superpowers/sdd/2026-10-10-feedback-maintenance/progress.md` 末尾Round close；终审与原始门见同目录。root3505过/0失败/4跳过、web751过，pin另3/3、panel0–14绿；20最终变异RED/逐次diff0、clone60绿/内层leak0；真实launchd与浏览器几何未验。只补Web和操作文档，未加Codex single-call、未改本仓协议。新旧执行台账都看末尾Round close，不读旧设计待审段。Orca原始门与性能结果/限制都在其台账，不能转述成本仓新全量门。真实ccloop通过固定pin clone+fakeagent运行，无付费provider。
-- 同步约束仍是 `byModel`语义、`listAgents.kind`、`PARTIAL_FLUSH_MARGIN_MS`、protocol3 skills互斥；本仓修改这些先核Orca消费者。
-- 仍挂账：B4 usageBreakdown点名或放弃；claude-phase-runner信封用量缺失时把模型自报tokenUsage当总数；本仓K4六条与三条codex进程类负载flake是否登记，归本仓owner。人只批准了Orca F2四条，不能外推成本仓名单。
-- 门的 ORCA_CCLOOP_BIN 必须固定pin clone build绝对路径，npm发布包缺tests/fixtures；变异单独clone先build，rawlog完整读回，known-reds用check-known-reds.mjs，cp/rm用/bin、git带-C绝对路径。此次本地整合已获授权；推送/删新分支或worktree仍归人。
+本轮本仓新增可选的结构化 `taskResult` 与输出证据：Agent 仅提供说明，控制器捕获不可变 execution/verification 输出、严格 owner/attempt/revision 边界和真实 started/completed/not-run 生命周期；普通 handoff-before-verifier 的 `not-run` 由实际交接守卫记录，不能从“没看见 verifier”推断。核心执行/用量/验收和 verifier 原有语义不变，不为总结额外调用模型。Orca Results 1–4 的消费者已合其本地 main，Results 5 Web 页面仍是未提交 WIP；详见 Orca 成果 spec §8–8.6、计划与 handoff。若修改本仓信封、可选证据或生命周期，先核 Orca 的严格镜像读取模型。
+
+本仓开发源树完成边界：原生 134 文件／1381 通过，`verify:control` 58 文件／627 通过，known-red roster 中 0 个实际失败；本地打包和真实包 fake worker 冒烟通过，保留了 3 次计划/执行/验证调用、开始/完成观察和输出字节。源码可合并并不代表发布包或 Orca 默认依赖改变。Orca package/lock/hidden lock 仍 pin `ab824d16004de2d3c1613a76ec0431520aa16cc9`；Orca 回归用该 pin clone build 的绝对 CLI 路径，待人审后才考虑发布/repin/真实运行切换。Linux 原生文件捕获未验，unsupported 平台拒绝而非猜测。
+
+本仓旧约束仍有效：`byModel`、`listAgents.kind`、`PARTIAL_FLUSH_MARGIN_MS`、protocol 3 skills 互斥；B4 usageBreakdown 点名或放弃、Claude 缺信封用量时模型自报 tokenUsage、K4 与进程类 flake 仍挂账，不能把 Orca 的历史豁免外推到本仓。测试/文档提交须隔离 HOME/XDG/TMPDIR；本仓 Qoder post-commit tracker 用每命令空 `core.hooksPath` 避免，勿改持久 Git 配置。该结果分支的 `/private/tmp/orca-results-ccloop-20261010` worktree 若仍存在，核对无独有改动后再清理；不要误删 Orca 的 Results 5 WIP。
