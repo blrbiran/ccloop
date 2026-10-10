@@ -46,7 +46,7 @@ export const loopContractSchema = z
         maxAttempts: z.number().int().positive(),
         perAttemptTimeoutMs: z.number().int().positive(),
         totalRuntimeBudgetMs: z.number().int().positive(),
-        tokenBudget: z.number().int().positive(),
+        tokenBudget: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
         worktreeRequired: z.literal(true),
         partialOutcomeRecoveryWindowMs: z.number().int().nonnegative(),
       })

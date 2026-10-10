@@ -159,6 +159,11 @@ export function evaluateResumeEligibility(input: ResumeGateInput): ResumeEligibi
     return { ok: false, reason: `run status ${runState.status} is not resumable` };
   }
 
+  if (runState.budgetSnapshot.tokenRemainingStatus === "unknown"
+    || (runState.budgetSnapshot.tokenBudgetRemaining === null && runState.budgetSnapshot.tokenRemainingStatus !== "unlimited")) {
+    return { ok: false, reason: "token-usage-unknown" };
+  }
+
   return { ok: true };
 }
 

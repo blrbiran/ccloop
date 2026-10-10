@@ -161,6 +161,7 @@ const collectionSchema = z.object({
 }).strict();
 
 const METHODS = new Set<ControlMethodV1>([
+  "features",
   "capabilities",
   "accept",
   "inspect",
@@ -174,6 +175,7 @@ const METHODS = new Set<ControlMethodV1>([
 async function parseCommand(argv: string[]): Promise<{ method: ControlMethodV1; agentsTablePath: string }> {
   const method = argv[0] as ControlMethodV1 | undefined;
   if (method === undefined || !METHODS.has(method)) throw new Error("control-command-invalid");
+  if (method === "features" && argv.length === 1) return { method, agentsTablePath: "" };
   // Agent selection (2026-09-26), spec §4.5: `--agents <table>` is the only form; `--adapter`/`--adapter-config`
   // are no longer accepted. Every method checks the path's shape; only capabilities and accept read the table
   // (spec §4.2, I4: a broken table must not block collecting a run already in flight).
@@ -202,6 +204,7 @@ async function tableView(agentsTablePath: string): Promise<unknown> {
 }
 
 async function defaultHandler(request: ControlRequestV1, context: ControlContextV1): Promise<unknown> {
+  if (request.method === "features") return { protocol: 1, tokenPolicy: "optional-v1" };
   if (request.method === "capabilities") {
     if (request.agent === null) return await tableView(context.agentsTablePath);
     const { config, resolution } = await resolveAgent(await readAgentsTable(context.agentsTablePath), request.agent);
@@ -233,12 +236,18 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
   throw new ControlProtocolError("control-method-unavailable");
 }
 
-function validateResponse(method: ControlMethodV1, value: unknown): unknown {
+function validateResponse(method: ControlMethodV1, value: unknown, protocol = 3): unknown {
   try {
+    if (method === "features") return z.object({ protocol: z.literal(1), tokenPolicy: z.literal("optional-v1") }).strict().parse(value);
     if (method === "capabilities") return capabilitiesSchema.parse(value);
     if (method === "accept" || method === "inspect") return executionStatusSchema.parse(value);
     if (method === "handoff") return handoffAckSchema.parse(value);
-    if (method === "collect") return collectionSchema.parse(value);
+    if (method === "collect") return (protocol === 4 ? collectionSchema.extend({
+      terminal: terminalSchema.extend({ waitingCause: z.literal("token-allowance").optional(), allowanceNextPhase: z.enum(["plan", "execute", "verify"]).optional(), budgetSnapshot: z.object({
+        attemptsRemaining: safeInteger, timeRemainingMs: safeInteger, tokenBudgetRemaining: safeInteger.nullable(),
+        tokenRemainingStatus: z.enum(["known", "unlimited", "unknown"]),
+      }).strict() }).nullable(),
+    }) : collectionSchema).parse(value);
     if (method === "task-results") return taskResultCollectionSchema.parse(value);
     if (method === "read-evidence" || method === "read-task-result-evidence") return evidenceSchema.parse(value);
     return value;
@@ -263,7 +272,7 @@ export async function runControlCommand(
     const payload = parseControlRequest(command.method, raw);
     const request = attachControlMethod(command.method, payload);
     const value = await (deps.handle ?? defaultHandler)(request, { agentsTablePath: command.agentsTablePath });
-    const validated = validateResponse(command.method, value);
+    const validated = validateResponse(command.method, value, "input" in request ? request.input.protocol : 3);
     const stdout = `${JSON.stringify(validated)}\n`;
     if (Buffer.byteLength(stdout) > MAX_CONTROL_BYTES) {
       throw new ControlProtocolError("control-response-too-large");

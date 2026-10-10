@@ -66,9 +66,25 @@ function progressOf(state: unknown): ProgressV1 {
   return { status, currentAttempt, attemptsUsed, attemptsRemaining: budgetSnapshot.attemptsRemaining, lastTransitionAt };
 }
 
-function terminalOf(state: unknown): RunState | null {
+function terminalOf(state: unknown, protocol: number): RunState | null {
   const run = state as RunState;
-  return isTerminalRunStatus(run.status) ? run : null;
+  if (!isTerminalRunStatus(run.status)) return null;
+  if (protocol === 4) return run;
+  // Internal extensions must never change the frozen finite protocol-3 projection.
+  return {
+    status: run.status, currentAttempt: run.currentAttempt, attemptsUsed: run.attemptsUsed,
+    lastTransitionAt: run.lastTransitionAt, waitingOnHuman: run.waitingOnHuman, stopReason: run.stopReason,
+    budgetSnapshot: { attemptsRemaining: run.budgetSnapshot.attemptsRemaining,
+      timeRemainingMs: run.budgetSnapshot.timeRemainingMs, tokenBudgetRemaining: run.budgetSnapshot.tokenBudgetRemaining },
+    recentFailures: run.recentFailures,
+  };
+}
+
+function candidateOf(candidate: CandidateV1, proof: StopProofV1 | null): NonNullable<CollectionV1["candidate"]> {
+  const { groupId, workItemId, taskId, runId, generation, graphVersion, targetVersion,
+    checkpointId, usageHighWater, result, artifacts, snapshot, missing, unresolvedRequestIds, terminalOutcome, handoff } = candidate;
+  return { groupId, workItemId, taskId, runId, generation, graphVersion, targetVersion,
+    checkpointId, usageHighWater, result, artifacts, snapshot, missing, unresolvedRequestIds, stopProof: proof, terminalOutcome, handoff };
 }
 
 export async function collectExecution(input: StartEnvelopeV3, afterSeq: number): Promise<CollectionV1> {
@@ -82,8 +98,8 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const loopState = await readLoopStateJson(input.work.sourceDir);
   return {
     events,
-    candidate: storedCandidate === null ? null : { ...storedCandidate, stopProof: proof },
-    terminal: storedCandidate === null || loopState === null ? null : terminalOf(loopState.state),
+    candidate: storedCandidate === null ? null : candidateOf(storedCandidate, proof),
+    terminal: storedCandidate === null || loopState === null ? null : terminalOf(loopState.state, input.protocol),
     progress: loopState === null ? null : progressOf(loopState.state),
   };
 }

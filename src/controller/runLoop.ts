@@ -1,3 +1,4 @@
+import { remainingTokens, minTokenCeiling, budgetAmountSchema, type BudgetAmount, type TokenPolicy } from "../budget/tokenPolicy.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
@@ -307,6 +308,7 @@ function initialState(contract: LoopContract): RunState {
       attemptsRemaining: contract.executionPolicy.maxAttempts,
       timeRemainingMs: contract.executionPolicy.totalRuntimeBudgetMs,
       tokenBudgetRemaining: contract.executionPolicy.tokenBudget,
+      ...(contract.executionPolicy.tokenBudget === null ? { tokenRemainingStatus: "unlimited" as const } : {}),
     },
     recentFailures: [],
   };
@@ -453,7 +455,10 @@ function applyPhaseUsage(state: RunState, elapsedMs: number, tokenUsage: number 
     budgetSnapshot: {
       ...state.budgetSnapshot,
       timeRemainingMs: Math.max(state.budgetSnapshot.timeRemainingMs - elapsedMs, 0),
-      tokenBudgetRemaining: Math.max(state.budgetSnapshot.tokenBudgetRemaining - getTokenUsage(tokenUsage), 0),
+      tokenBudgetRemaining: remainingTokens(state.budgetSnapshot.tokenBudgetRemaining, getTokenUsage(tokenUsage)),
+      ...(state.budgetSnapshot.tokenRemainingStatus === undefined ? {} : {
+        tokenRemainingStatus: tokenUsage === undefined ? "unknown" as const : state.budgetSnapshot.tokenRemainingStatus,
+      }),
     },
   };
 }
@@ -1114,7 +1119,19 @@ export async function runLoop(
   adapter: RuntimeAdapter | (() => RuntimeAdapter),
   hooks?: RunControlHooks,
 ): Promise<RunState> {
+  if (hooks?.workGrant !== undefined) {
+    const grant = budgetAmountSchema.parse(hooks.workGrant);
+    contract = { ...contract, executionPolicy: { ...contract.executionPolicy,
+      tokenBudget: minTokenCeiling(contract.executionPolicy.tokenBudget, grant.tokens),
+      maxAttempts: Math.min(contract.executionPolicy.maxAttempts, grant.attempts),
+      totalRuntimeBudgetMs: Math.min(contract.executionPolicy.totalRuntimeBudgetMs, grant.activeMs),
+    } };
+  }
   const state = transitionRunState(initialState(contract), "planning");
+  if (hooks?.taskResultInput?.protocol === 4 && state.budgetSnapshot.tokenRemainingStatus === undefined) {
+    state.budgetSnapshot.tokenRemainingStatus = "known";
+  }
+  state.recentFailures = hooks?.allowanceContinuation?.recentFailures ?? [];
   const ownerRecord = buildInitialOwnerRecord(contract, state);
   await initializeRunFiles(runDir, contract, state);
   // §7: as early as possible, but never before initializeRunFiles — the gate may append an
@@ -1197,6 +1214,10 @@ export function createStopRequestSignal(): StopRequestSignal {
 }
 
 export interface RunControlHooks {
+  workGrant?: BudgetAmount;
+  tokenPolicy?: TokenPolicy;
+  /** Only the worker supplies this, after validating the checkpoint and reachable artifacts. */
+  allowanceContinuation?: { nextPhase: "plan" | "execute" | "verify"; plan: AttemptPlan | null; execution: ExecutionResult | null; recentFailures?: FailureFingerprint[] };
   /** Trusted accepted control envelope supplied only by the worker. */
   taskResultInput?: StartEnvelopeV3;
   firstWorkspaceInput?: InputCheckpointV1;
@@ -1239,9 +1260,14 @@ export async function runLoopFromState(
   leaseLoss: LeaseLossSignal = { lost: null },
   options?: RunLoopFromStateOptions,
 ): Promise<RunState> {
+  if (initialLoopState.budgetSnapshot.tokenBudgetRemaining === null && contract.executionPolicy.tokenBudget !== null) {
+    throw new Error("token-usage-unknown");
+  }
   let state = initialLoopState;
   let activeAdapter: RuntimeAdapter | null = typeof adapter === "function" ? null : adapter;
   let activePhase: PhaseName | null = null;
+  let observedTokens = 0;
+  let observationsKnown = true;
   const settledPhases = new Set<string>();
   const settlePhase = async (
     phase: PhaseName,
@@ -1253,6 +1279,11 @@ export async function runLoopFromState(
   ): Promise<void> => {
     const key = `${attempt}:${phase}`;
     if (settledPhases.has(key)) return;
+    if (result?.tokenUsage === undefined) observationsKnown = false;
+    else {
+      observedTokens += result.tokenUsage;
+      if (!Number.isSafeInteger(observedTokens) || observedTokens < 0) throw new Error("control-usage-invalid");
+    }
     state = applyPhaseUsage(state, elapsedMs, result?.tokenUsage);
     settledPhases.add(key);
     if (!retainPhaseContext && activePhase === phase) activePhase = null;
@@ -1270,6 +1301,20 @@ export async function runLoopFromState(
     await appendEvent(runDir, { type, at: new Date().toISOString(), detail });
     await writeOwnedRunState(runDir, state);
     return state;
+  };
+  const parkAllowance = async (nextPhase: "plan" | "execute" | "verify", failure?: FailureFingerprint): Promise<RunState | null> => {
+    const policy = options?.tokenPolicy;
+    if (!policy || !observationsKnown || state.budgetSnapshot.tokenBudgetRemaining !== 0
+      || state.budgetSnapshot.timeRemainingMs === 0 || state.budgetSnapshot.attemptsRemaining === 0
+      || !policy.bindingCauses.some(cause => cause === "group" || cause === "spend-cap")) return null;
+    const total = policy.inheritedUsage.tokens + observedTokens;
+    if (!Number.isSafeInteger(total) || remainingTokens(policy.authoredTokenCeiling, total) === 0) return null;
+    const waiting = { ...transitionRunState(state, "blocked_waiting_human", "token allowance depleted"),
+      waitingOnHuman: false, waitingCause: "token-allowance" as const, allowanceNextPhase: nextPhase,
+      recentFailures: failure ? [...state.recentFailures, failure] : state.recentFailures };
+    await appendTransitionEvent(runDir, waiting, "loop_blocked_waiting_human", "token allowance depleted");
+    await writeOwnedRunState(runDir, waiting);
+    return waiting;
   };
   const handoffRequested = (): boolean => options?.stopRequested?.requested === true;
   const handoffAborted = (): boolean => options?.phaseSignal?.aborted === true;
@@ -1347,6 +1392,9 @@ export async function runLoopFromState(
       return state;
     }
 
+    if (hasBudgetExceeded(state) || state.budgetSnapshot.attemptsRemaining === 0 || options?.workGrant?.sessions === 0) {
+      return await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON);
+    }
     const attempt = state.attemptsUsed + 1;
 
     let worktreePath: string | null = null;
@@ -1402,72 +1450,83 @@ export async function runLoopFromState(
       state = consumeAttemptBudget(state, contract, attempt);
       await writeOwnedRunState(runDir, state);
 
-      const planTimeoutMs = getPhaseTimeoutMs(contract, state);
-      // §8.1: launching a Claude call is a side effect.
-      await heartbeat.assertHeld();
-      activePhase = "plan";
-      const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal) =>
-        attemptAdapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options)),
-        { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true },
-      );
-
-      if (handoffAborted()) {
-        await settlePhase("plan", attempt, planOutcome.elapsedMs, planOutcome.result);
-        return await persistHandoffBoundary("handoff_interrupted", `handoff deadline interrupted plan in attempt ${attempt}`);
+      const continuation = attempt === 1 ? options?.allowanceContinuation : undefined;
+      if (continuation) {
+        plan = continuation.plan;
+        execution = continuation.execution;
       }
-
-      if (planOutcome.timedOut) {
-        await settlePhase("plan", attempt, planOutcome.elapsedMs);
-        state = await persistTerminalState(
-          runDir,
-          writeOwnedRunState,
-          state,
-          "exhausted",
-          hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("plan", planTimeoutMs),
-        );
-        // §8.1: removing the worktree is a side effect on a directory a new owner may already
-        // be reading.
+      if (!continuation || continuation.nextPhase === "plan") {
+        const planTimeoutMs = getPhaseTimeoutMs(contract, state);
+        // §8.1: launching a Claude call is a side effect.
         await heartbeat.assertHeld();
-        await cleanupAttemptWorkspaceBestEffort(
-          contract.context.repoPath,
-          worktreePath,
-          runDir,
-          "cleanup after terminal decision exhausted",
+        activePhase = "plan";
+        const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal) =>
+          attemptAdapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options)),
+          { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true },
         );
-        return state;
+
+        if (handoffAborted()) {
+          await settlePhase("plan", attempt, planOutcome.elapsedMs, planOutcome.result);
+          return await persistHandoffBoundary("handoff_interrupted", `handoff deadline interrupted plan in attempt ${attempt}`);
+        }
+
+        if (planOutcome.timedOut) {
+          await settlePhase("plan", attempt, planOutcome.elapsedMs);
+          state = await persistTerminalState(
+            runDir,
+            writeOwnedRunState,
+            state,
+            "exhausted",
+            hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("plan", planTimeoutMs),
+          );
+          // §8.1: removing the worktree is a side effect on a directory a new owner may already
+          // be reading.
+          await heartbeat.assertHeld();
+          await cleanupAttemptWorkspaceBestEffort(
+            contract.context.repoPath,
+            worktreePath,
+            runDir,
+            "cleanup after terminal decision exhausted",
+          );
+          return state;
+        }
+
+        plan = planOutcome.result;
+        await settlePhase("plan", attempt, planOutcome.elapsedMs, plan);
+
+        if (handoffRequested()) {
+          await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+          return await persistHandoffBoundary("handoff_boundary", `handoff requested after plan in attempt ${attempt}`);
+        }
+
+        if (hasBudgetExceeded(state)) {
+          await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+          const parked = await parkAllowance("execute");
+          if (parked) return parked;
+          state = await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON);
+          await heartbeat.assertHeld();
+          await cleanupAttemptWorkspaceBestEffort(
+            contract.context.repoPath,
+            worktreePath,
+            runDir,
+            "cleanup after terminal decision exhausted",
+          );
+          return state;
+        }
+
       }
-
-      plan = planOutcome.result;
-      await settlePhase("plan", attempt, planOutcome.elapsedMs, plan);
-
-      if (handoffRequested()) {
-        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
-        return await persistHandoffBoundary("handoff_boundary", `handoff requested after plan in attempt ${attempt}`);
-      }
-
-      if (hasBudgetExceeded(state)) {
-        await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
-        state = await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON);
-        await heartbeat.assertHeld();
-        await cleanupAttemptWorkspaceBestEffort(
-          contract.context.repoPath,
-          worktreePath,
-          runDir,
-          "cleanup after terminal decision exhausted",
-        );
-        return state;
-      }
-
       state = transitionRunState(state, "executing");
       await appendTransitionEvent(runDir, state, "attempt_started", `attempt ${attempt}`);
       await writeOwnedRunState(runDir, state);
-      await appendTransitionEvent(runDir, state, "execute_started", `attempt ${attempt}`);
+      if (continuation?.nextPhase !== "verify") await appendTransitionEvent(runDir, state, "execute_started", `attempt ${attempt}`);
 
       const executeTimeoutMs = getPhaseTimeoutMs(contract, state);
       // §8.1: launching a Claude call is a side effect.
       await heartbeat.assertHeld();
-      activePhase = "execute";
-      const executeOutcome = await runPhaseWithTimeout(
+      activePhase = continuation?.nextPhase === "verify" ? null : "execute";
+      const executeOutcome = continuation?.nextPhase === "verify"
+        ? { timedOut: false as const, elapsedMs: 0, result: continuation.execution! }
+        : await runPhaseWithTimeout(
         executeTimeoutMs,
         (abortSignal) => attemptAdapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options)),
         { awaitAbortedResult: true },
@@ -1476,12 +1535,12 @@ export async function runLoopFromState(
       if (handoffAborted()) {
         execution = executeOutcome.result ?? null;
         await captureResult(attempt, worktreePath, execution);
-        await settlePhase("execute", attempt, executeOutcome.elapsedMs, execution);
+        if (continuation?.nextPhase !== "verify") await settlePhase("execute", attempt, executeOutcome.elapsedMs, execution);
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
         return await persistHandoffBoundary("handoff_interrupted", `handoff deadline interrupted execute in attempt ${attempt}`);
       }
 
-      let executeUsageAlreadyApplied = false;
+      let executeUsageAlreadyApplied = continuation?.nextPhase === "verify";
 
       if (executeOutcome.timedOut) {
         await settlePhase("execute", attempt, executeOutcome.elapsedMs, executeOutcome.result);
@@ -1649,6 +1708,8 @@ export async function runLoopFromState(
 
       if (hasBudgetExceeded(state)) {
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
+        const parked = isPartialExecutionResult(completedExecution) ? null : await parkAllowance("verify");
+        if (parked) return parked;
         state = await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON);
         await heartbeat.assertHeld();
         await cleanupAttemptWorkspaceBestEffort(
@@ -1765,12 +1826,27 @@ export async function runLoopFromState(
               humanCancelled: false,
               successSatisfied: verification.approved,
               humanGateHit: false,
-              attemptNumber: attempt,
-              maxAttempts: contract.executionPolicy.maxAttempts,
+              attemptNumber: attempt + (options?.tokenPolicy?.inheritedUsage.attempts ?? 0),
+              maxAttempts: contract.executionPolicy.maxAttempts + (options?.tokenPolicy?.inheritedUsage.attempts ?? 0),
               budgetExceeded: hasBudgetExceeded(state),
               recentFailures: state.recentFailures,
               verifier: verification,
             });
+
+      if (decision.kind === "exhausted" && !humanGateHit && matchedStopSignal === null) {
+        const retry = evaluateStopDecision({
+          humanCancelled: false, successSatisfied: verification.approved, humanGateHit: false,
+          attemptNumber: attempt + (options?.tokenPolicy?.inheritedUsage.attempts ?? 0),
+          maxAttempts: contract.executionPolicy.maxAttempts + (options?.tokenPolicy?.inheritedUsage.attempts ?? 0),
+          budgetExceeded: state.budgetSnapshot.timeRemainingMs === 0,
+          recentFailures: state.recentFailures, verifier: verification,
+        });
+        if (retry.kind === "retryable") {
+          const parked = await parkAllowance("plan", { rejectCategory: verification.rejectCategory,
+            primaryTargetPaths: verification.primaryTargetPaths, failingCommand: verification.failingCommand });
+          if (parked) return parked;
+        }
+      }
 
       if (decision.kind === "retryable") {
         const failure: FailureFingerprint = {

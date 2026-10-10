@@ -154,7 +154,10 @@ describe("control protocol v1", () => {
   // apart from invalid requests. The capabilities assertions are unchanged.
   it("names unsupported protocol versions separately from invalid requests", async () => {
     const { envelope } = await fixture();
-    for (const protocol of [1, 2, 4]) {
+    // Task3 delegated controller ruling (2026-10-11): protocol4 is supported; protocol5 remains unsupported.
+    expect(parseControlRequest("accept", { ...envelope, protocol: 4 })).toEqual({ ...envelope, protocol: 4 });
+    expect(() => parseControlRequest("accept", { ...envelope, protocol: 4, extra: true })).toThrow("control-request-invalid");
+    for (const protocol of [1, 2, 5]) {
       expect(() => parseControlRequest("accept", { ...envelope, protocol })).toThrow("control-protocol-unsupported");
     }
     expect(() => parseControlRequest("accept", { ...envelope, extra: true })).toThrow(

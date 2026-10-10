@@ -242,6 +242,10 @@ function buildExecutionPolicy(
   executionPolicyOverrides: ExecutionPolicyOverrides = {},
 ): LoopContract["executionPolicy"] {
   const runtimeOverrides = pickRuntimeExecutionPolicyOverrides(executionPolicyOverrides);
+  // These acceptance scenarios promise entered phases and retain their finite positive allowance.
+  if (runtimeOverrides.tokenBudget !== undefined && (runtimeOverrides.tokenBudget === null || runtimeOverrides.tokenBudget <= 0)) {
+    throw new Error("validation scenario tokenBudget must be positive");
+  }
   const perAttemptTimeoutMs =
     runtimeOverrides.perAttemptTimeoutMs ?? resolveTimeoutMs(id, timeoutMs);
 

@@ -1,3 +1,6 @@
+import { tokenPolicySchema } from "../budget/tokenPolicy.js";
+import { evaluateStopDecision } from "../stop/stopController.js";
+import type { RunControlHooks } from "../controller/runLoop.js";
 import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { constants } from "node:fs";
@@ -5,9 +8,9 @@ import { chmod, lstat, mkdir, open, readFile, readdir, readlink, realpath, rm, s
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { LoopContract } from "../contract/schema.js";
+import { loopContractSchema, type LoopContract } from "../contract/schema.js";
 import { createAttemptWorkspace } from "../workspace/worktreeManager.js";
-import { artifactRefSchema, type ArtifactRefV1, type InputCheckpointV1 } from "./protocol.js";
+import { canonicalHash, artifactRefSchema, type ArtifactRefV1, type InputCheckpointV1, type LoopStartEnvelope } from "./protocol.js";
 
 const execFileAsync = promisify(execFile);
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -156,4 +159,94 @@ export async function prepareContinuationContract(contract:LoopContract,runDir:s
  const continuation={protocol:1,predecessorRunId:input.predecessorRunId,checkpointId:input.checkpointId,checkpointHash:input.checkpointHash,unfinished:loaded.manifest.unfinished,pendingDecisions:loaded.manifest.pendingDecisions,awaitingHuman:loaded.manifest.awaitingHuman};
  await writePrivate(path,Buffer.from(JSON.stringify(continuation)));const copy=structuredClone(contract);copy.context.relevantDocs=[...copy.context.relevantDocs,path];
  copy.context.constraints=[...copy.context.constraints,CONTINUATION_CONSTRAINT,`${CONTINUATION_INPUT_PREFIX}${JSON.stringify({unfinished:continuation.unfinished,pendingDecisions:continuation.pendingDecisions,awaitingHuman:continuation.awaitingHuman})}`];return copy;
+}
+
+
+const savedPlanSchema = z.object({ summary: z.string(), primaryTargetPaths: z.array(z.string()), tokenUsage: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional() }).passthrough();
+const savedExecutionSchema = z.object({ changedFiles: z.array(z.string()), diffPatch: z.string(), commandOutputs: z.array(z.string()), stdoutStderrLog: z.string(), tokenUsage: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(), completionStatus: z.never().optional() }).passthrough();
+const allowanceSchema = z.object({ nextPhase: z.enum(["plan", "execute", "verify"]), plan: artifactRefSchema.nullable(), execution: artifactRefSchema.nullable(), verification: artifactRefSchema.nullable(), state: artifactRefSchema }).strict();
+
+const fingerprintSchema = z.object({ rejectCategory: z.string(), primaryTargetPaths: z.array(z.string()), failingCommand: z.string().nullable() }).strict();
+const savedStateSchema = z.object({ currentAttempt: z.number().int().positive(), attemptsUsed: z.number().int().positive(),
+  budgetSnapshot: z.object({ attemptsRemaining: z.number().int().positive(), timeRemainingMs: z.number().int().positive(), tokenBudgetRemaining: z.literal(0), tokenRemainingStatus: z.literal("known") }).passthrough(),
+  recentFailures: z.array(fingerprintSchema), waitingCause: z.literal("token-allowance"), allowanceNextPhase: z.enum(["plan", "execute", "verify"]),
+}).passthrough();
+const savedVerificationSchema = z.object({ approved: z.literal(false), rejectCategory: z.string(), primaryTargetPaths: z.array(z.string()), failingCommand: z.string().nullable(), safeToRetry: z.literal(true), pauseSignals: z.array(z.string()), stopSignals: z.array(z.string()) }).passthrough();
+
+function semanticContract(contract: LoopContract): unknown {
+  const copy = structuredClone(contract);
+  const { repoPath: _repo, ...context } = copy.context;
+  const { tokenBudget: _tokens, maxAttempts: _attempts, totalRuntimeBudgetMs: _time, ...executionPolicy } = copy.executionPolicy;
+  return { ...copy, context, executionPolicy };
+}
+
+/** The checkpoint's own handoff is the only root allowed to select already-paid phase artifacts. */
+export async function readAllowanceContinuation(envelope: LoopStartEnvelope): Promise<RunControlHooks["allowanceContinuation"]> {
+  if (envelope.protocol !== 4 || envelope.inputCheckpoint === null) return undefined;
+  const input = envelope.inputCheckpoint;
+  const loaded = await loadBundle(input);
+  await assertUnchanged(input, loaded);
+  const decode = (ref: ArtifactRefV1): unknown => {
+    const bytes = loaded.bytes.get(ref.artifactId);
+    if (!bytes || sha256(bytes) !== ref.hash) fail("control-allowance-evidence-missing");
+    try { return JSON.parse(bytes.toString("utf8")); } catch { return fail("control-allowance-evidence-invalid"); }
+  };
+  const checkpoint = decode(loaded.manifest.checkpoint) as Record<string, unknown>;
+  if (checkpoint.handoff === undefined) return undefined;
+  const handoffRef = artifactRefSchema.safeParse(checkpoint.handoff);
+  if (!handoffRef.success) fail("control-allowance-evidence-invalid");
+  const packet = decode(handoffRef.data) as Record<string, unknown>;
+  if (packet.allowanceContinuation === undefined) {
+    if ((packet.runState as Record<string, unknown> | undefined)?.waitingCause === "token-allowance") fail("control-allowance-evidence-missing");
+    return undefined;
+  }
+  const continuation = allowanceSchema.safeParse(packet.allowanceContinuation);
+  if (!continuation.success) fail("control-allowance-evidence-invalid");
+  const identity = packet.identity as Record<string, unknown> | undefined;
+  if (!identity || identity.runId !== input.predecessorRunId || identity.groupId !== envelope.claim.groupId
+    || identity.taskId !== envelope.claim.taskId || identity.graphVersion !== envelope.claim.graphVersion
+    || identity.targetVersion !== envelope.claim.targetVersion || packet.contractHash !== envelope.contractHash) fail("control-allowance-authority-mismatch");
+  const state = packet.runState as Record<string, unknown> | undefined;
+  if (state?.waitingCause !== "token-allowance" || state.allowanceNextPhase !== continuation.data.nextPhase) fail("control-allowance-evidence-invalid");
+  const artifacts = z.array(artifactRefSchema).safeParse(packet.artifacts);
+  if (!artifacts.success) fail("control-allowance-evidence-invalid");
+  const reachable = (raw: unknown): ArtifactRefV1 => {
+    const ref = artifactRefSchema.safeParse(raw);
+    if (!ref.success || !artifacts.data.some(item => item.artifactId === ref.data.artifactId && item.hash === ref.data.hash)) fail("control-allowance-evidence-unreachable");
+    return ref.data;
+  };
+  const source = loopContractSchema.safeParse(decode(reachable(packet.acceptedContract)));
+  if (!source.success || canonicalHash(semanticContract(source.data)) !== canonicalHash(semanticContract(envelope.work.contract))) fail("control-allowance-authority-mismatch");
+  const savedState = savedStateSchema.safeParse(decode(reachable(continuation.data.state)));
+  const policy = tokenPolicySchema.safeParse(packet.tokenPolicy);
+  if (!savedState.success || canonicalHash(savedState.data) !== canonicalHash(packet.runState) || !policy.success) fail("control-allowance-evidence-invalid");
+  if (!envelope.tokenPolicy || envelope.tokenPolicy.inheritedUsage.attempts < policy.data.inheritedUsage.attempts + savedState.data.attemptsUsed
+    || envelope.tokenPolicy.inheritedUsage.sessions < policy.data.inheritedUsage.sessions + 1) fail("control-allowance-lineage-invalid");
+  const recentFailures = savedState.data.recentFailures;
+  if (continuation.data.nextPhase === "plan") {
+    if (continuation.data.plan !== null || continuation.data.execution !== null) fail("control-allowance-phase-invalid");
+    const verification = savedVerificationSchema.safeParse(decode(reachable(continuation.data.verification)));
+    if (!verification.success || !recentFailures.length) fail("control-allowance-phase-invalid");
+    const value = verification.data;
+    const fingerprint = { rejectCategory: value.rejectCategory, primaryTargetPaths: value.primaryTargetPaths, failingCommand: value.failingCommand };
+    if (canonicalHash(recentFailures.at(-1)) !== canonicalHash(fingerprint)) fail("control-allowance-phase-invalid");
+    const decision = evaluateStopDecision({ humanCancelled: false, successSatisfied: false,
+      humanGateHit: value.pauseSignals.some(signal => source.data.escalationAndExit.pauseOn.includes(signal)),
+      attemptNumber: policy.data.inheritedUsage.attempts + savedState.data.currentAttempt,
+      maxAttempts: policy.data.inheritedUsage.attempts + savedState.data.currentAttempt + savedState.data.budgetSnapshot.attemptsRemaining,
+      budgetExceeded: false, recentFailures: recentFailures.slice(0, -1), verifier: value,
+    });
+    if (decision.kind !== "retryable" || value.stopSignals.some(signal => source.data.escalationAndExit.stopOn.includes(signal))) fail("control-allowance-phase-invalid");
+    return { nextPhase: "plan", plan: null, execution: null, recentFailures };
+  }
+  if (continuation.data.verification !== null) fail("control-allowance-phase-invalid");
+  const plan = savedPlanSchema.safeParse(decode(reachable(continuation.data.plan)));
+  if (!plan.success) fail("control-allowance-phase-invalid");
+  if (continuation.data.nextPhase === "execute") {
+    if (continuation.data.execution !== null) fail("control-allowance-phase-invalid");
+    return { nextPhase: "execute", plan: plan.data, execution: null, recentFailures };
+  }
+  const execution = savedExecutionSchema.safeParse(decode(reachable(continuation.data.execution)));
+  if (!execution.success) fail("control-allowance-phase-invalid");
+  return { nextPhase: "verify", plan: plan.data, execution: execution.data, recentFailures };
 }

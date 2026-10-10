@@ -1,3 +1,4 @@
+import { budgetAmountSchema, tokenPolicySchema, type TokenPolicy, type BudgetAmount } from "../budget/tokenPolicy.js";
 import { createHash } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
@@ -6,6 +7,7 @@ import type { AgentSelectionV1, PartialSelectionV1 } from "../agents/types.js";
 import { loopContractSchema, type LoopContract } from "../contract/schema.js";
 
 export type ControlMethodV1 =
+  | "features"
   | "capabilities"
   | "accept"
   | "inspect"
@@ -23,7 +25,7 @@ export interface AmountV1 {
 }
 
 export interface GrantV1 {
-  work: AmountV1;
+  work: BudgetAmount;
   handoff: AmountV1;
 }
 
@@ -82,7 +84,8 @@ export interface SingleCallWork {
 }
 
 interface StartEnvelopeBaseV3 {
-  protocol: 3;
+  protocol: 3 | 4;
+  tokenPolicy?: TokenPolicy;
   claim: ClaimV2;
   contractHash: string;
 }
@@ -112,6 +115,7 @@ export interface CapabilitiesRequestV3 {
 }
 
 export type ControlRequestV1 =
+  | { method: "features" }
   | { method: "capabilities"; agent: PartialSelectionV1 | null }
   | { method: "accept"; input: StartEnvelopeV3 }
   | { method: "inspect"; input: StartEnvelopeV3 }
@@ -192,7 +196,7 @@ const inputCheckpointSchema = z
 const loopWorkSchema = z
   .object({
     kind: z.literal("loop"),
-    contract: loopContractSchema,
+    contract: loopContractSchema.refine(contract => contract.executionPolicy.tokenBudget !== null && contract.executionPolicy.tokenBudget > 0),
     targetRepo: z.string().min(1),
     base: z.string().min(1),
     sourceDir: z.string().min(1),
@@ -218,10 +222,21 @@ const singleCallWorkSchema = z
   })
   .strict();
 const envelopeBase = { protocol: z.literal(3), claim: claimSchema, contractHash: hashSchema };
-const startEnvelopeSchema = z.union([
+const legacyStartEnvelopeSchema = z.union([
   z.object({ ...envelopeBase, inputCheckpoint: inputCheckpointSchema.nullable(), work: loopWorkSchema }).strict(),
   z.object({ ...envelopeBase, inputCheckpoint: z.null(), work: singleCallWorkSchema }).strict(),
 ]);
+const nullableLoopWorkSchema = z.object({
+  kind: z.literal("loop"), contract: loopContractSchema,
+  targetRepo: z.string().min(1), base: z.string().min(1), sourceDir: z.string().min(1),
+  skillPluginDir: z.string().min(1).optional(), codexSkillsDir: z.string().min(1).optional(),
+}).strict().refine(work => !(work.skillPluginDir !== undefined && work.codexSkillsDir !== undefined));
+const v4StartEnvelopeSchema = z.object({
+  protocol: z.literal(4), contractHash: hashSchema, tokenPolicy: tokenPolicySchema.optional(),
+  claim: claimSchema.extend({ grant: z.object({ work: budgetAmountSchema.extend({ sessions: positiveSafeInteger }), handoff: amountSchema }).strict() }),
+  inputCheckpoint: inputCheckpointSchema.nullable(), work: nullableLoopWorkSchema,
+}).strict();
+const startEnvelopeSchema = z.union([legacyStartEnvelopeSchema, v4StartEnvelopeSchema]);
 export const handoffRequestSchema = z
   .object({
     protocol: z.literal(1),
@@ -234,6 +249,7 @@ export const handoffRequestSchema = z
   .strict();
 
 const payloadSchemas = {
+  features: z.object({}).strict(),
   capabilities: z.object({ agent: partialSelectionSchema.nullable() }).strict(),
   accept: startEnvelopeSchema,
   inspect: startEnvelopeSchema,
@@ -334,7 +350,8 @@ export function parseControlRequest(method: ControlMethodV1, raw: unknown): Cont
   // Agent selection (2026-09-26), spec §5: the start envelope is protocol 2; a v1 envelope is refused by name.
   // Handoff requests stay protocol 1 and are nested, so this reads the envelope's number (spec §5 M4).
   // ERRATUM (Orca single-call estimate, 2026-09-27, human ruling S7): the start envelope is now protocol 3 only; 1 and 2 are refused by name.
-  if (version !== undefined && version !== 3) {
+  // Task3 (2026-10-11): independent features negotiates protocol4; legacy protocol3 remains finite and exact.
+  if (version !== undefined && version !== 3 && version !== 4) {
     throw new ControlProtocolError("control-protocol-unsupported");
   }
   try {
@@ -351,6 +368,7 @@ export function parseControlRequest(method: ControlMethodV1, raw: unknown): Cont
 }
 
 export function attachControlMethod(method: ControlMethodV1, payload: ControlPayloadV1): ControlRequestV1 {
+  if (method === "features") return { method };
   if (method === "capabilities") return { method, agent: (payload as CapabilitiesRequestV3).agent };
   if (method === "accept" || method === "inspect") return { method, input: payload as StartEnvelopeV3 };
   return { method, ...(payload as Record<string, unknown>) } as ControlRequestV1;

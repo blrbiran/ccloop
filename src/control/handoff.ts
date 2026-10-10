@@ -1,3 +1,4 @@
+import type { TokenPolicy } from "../budget/tokenPolicy.js";
 import { constants } from "node:fs";
 import { open, readdir, unlink } from "node:fs/promises";
 import { join, relative } from "node:path";
@@ -47,6 +48,10 @@ export interface HandoffPacketV1 {
   usageHighWater: number;
   unresolvedRequestIds: string[];
   artifacts: ArtifactRefV1[];
+  contractHash?: string;
+  tokenPolicy?: TokenPolicy;
+  acceptedContract?: ArtifactRefV1;
+  allowanceContinuation?: { nextPhase: "plan" | "execute" | "verify"; plan: ArtifactRefV1 | null; execution: ArtifactRefV1 | null; verification: ArtifactRefV1 | null; state: ArtifactRefV1 };
 }
 
 export interface BuiltHandoffPacketV1 {
@@ -302,15 +307,16 @@ export async function buildHandoffPacket(
   for (const kind of listDescriptors().map((descriptor) => descriptor.kind).sort()) {
     await retainAgentLogs(envelope.work.sourceDir, runDir, join(runDir, kind), artifacts, rawLogs);
   }
-  await retainFile(envelope.work.sourceDir, join(runDir, "loop-state.json"), "loop-state.json", artifacts, missing);
+  const stateRef = await retainFile(envelope.work.sourceDir, join(runDir, "loop-state.json"), "loop-state.json", artifacts, missing);
   await retainFile(envelope.work.sourceDir, join(runDir, "loop-contract.json"), "loop-contract.json", artifacts, missing);
+  const phaseRefs: Record<string, ArtifactRefV1 | null> = {};
   if (runState.currentAttempt > 0) {
-    const entered = request !== null && !isTerminalRunStatus(runState.status)
+    const entered = (request !== null && !isTerminalRunStatus(runState.status)) || (envelope.protocol === 4 && runState.waitingCause === "token-allowance")
       ? await enteredPhaseFiles(envelope.work.sourceDir, runDir, runState.currentAttempt)
       : null;
     for (const name of ["plan.json", "execution.json", "verify.json"]) {
       if (entered !== null && !entered.has(name)) continue;
-      await retainFile(
+      phaseRefs[name] = await retainFile(
         envelope.work.sourceDir,
         join(runDir, "attempts", String(runState.currentAttempt), name),
         `attempts/${runState.currentAttempt}/${name}`,
@@ -319,12 +325,24 @@ export async function buildHandoffPacket(
       );
     }
   }
+  let allowance: Pick<HandoffPacketV1, "contractHash" | "acceptedContract" | "allowanceContinuation" | "tokenPolicy"> = {};
+  if (envelope.protocol === 4 && runState.waitingCause === "token-allowance") {
+    const nextPhase = runState.allowanceNextPhase;
+    const plan = nextPhase === "plan" ? null : phaseRefs["plan.json"];
+    const verification = nextPhase === "plan" ? phaseRefs["verify.json"] : null;
+    const execution = nextPhase === "verify" ? phaseRefs["execution.json"] : null;
+    if (!stateRef || (!plan && nextPhase !== "plan") || !nextPhase || (nextPhase === "verify" && !execution) || (nextPhase === "plan" && !verification)) throw new ControlProtocolError("control-allowance-evidence-missing");
+    const acceptedContract = await writeEvidence(envelope.work.sourceDir, Buffer.from(canonicalJson(envelope.work.contract)));
+    artifacts.push(acceptedContract);
+    allowance = { tokenPolicy: envelope.tokenPolicy, contractHash: envelope.contractHash, acceptedContract, allowanceContinuation: { nextPhase, plan: plan ?? null, execution: execution ?? null, verification: verification ?? null, state: stateRef } };
+  }
   const pendingDecisions = [
     ...runState.recentFailures.map((failure) => failure.rejectCategory).filter(Boolean),
     ...(runState.waitingOnHuman && runState.stopReason !== null ? [runState.stopReason] : []),
   ];
   const packet: HandoffPacketV1 = {
     protocol: 1,
+    ...allowance,
     identity: identity(envelope),
     request,
     runState,

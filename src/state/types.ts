@@ -20,7 +20,8 @@ export type FailureFingerprint = {
 export type BudgetSnapshot = {
   attemptsRemaining: number;
   timeRemainingMs: number;
-  tokenBudgetRemaining: number;
+  tokenBudgetRemaining: number | null;
+  tokenRemainingStatus?: "known" | "unlimited" | "unknown";
 };
 
 export type RunState = {
@@ -30,6 +31,8 @@ export type RunState = {
   lastTransitionAt: string;
   waitingOnHuman: boolean;
   stopReason: string | null;
+  waitingCause?: "token-allowance";
+  allowanceNextPhase?: "plan" | "execute" | "verify";
   budgetSnapshot: BudgetSnapshot;
   recentFailures: FailureFingerprint[];
 };

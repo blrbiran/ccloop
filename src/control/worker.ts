@@ -8,7 +8,7 @@ import { isTerminalRunStatus } from "../state/stateMachine.js";
 import { atomicReplacePrivateFile, readPrivateFile } from "./paths.js";
 import { appendUsageObservation, readUsageEvents, reconciledByModel, type ModelUsageV1 } from "./usage.js";
 import { canonicalJson, isLoopEnvelope, parseControlRequest, type StartEnvelopeV3 } from "./protocol.js";
-import { prepareContinuationContract } from "./materialize.js";
+import { prepareContinuationContract, readAllowanceContinuation } from "./materialize.js";
 import {
   buildHandoffPacket,
   persistHandoffCandidate,
@@ -157,6 +157,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
     }));
     await initializeProcessRegistry(sourceDir);
     let cumulativeTokens = 0;
+    let usageKnown = true;
     const byModelAccumulator = createByModelAccumulator();
     const stopRequested = createStopRequestSignal();
     const phaseAbort = new AbortController();
@@ -230,13 +231,16 @@ export async function runControlWorker(argv: string[]): Promise<void> {
     }
     const runDir = join(sourceDir, "run");
     registerAttemptRefNamespace(runDir, envelope.claim.runId);
-    const contract = envelope.inputCheckpoint === null
+    const allowanceContinuation = await readAllowanceContinuation(envelope);
+    const contract = envelope.inputCheckpoint === null || allowanceContinuation !== undefined
       ? envelope.work.contract
       : await prepareContinuationContract(envelope.work.contract, runDir, envelope.inputCheckpoint);
     const adapterOptions = envelope.work.kind === "loop" && envelope.work.skillPluginDir !== undefined
       ? { skillPluginDir: envelope.work.skillPluginDir }
       : envelope.work.codexSkillsDir !== undefined ? { codexSkillsDir: envelope.work.codexSkillsDir } : undefined;
     await runLoop(contract, runDir, () => getDescriptor(config.kind).createAdapter(config, adapterOptions), {
+      ...(envelope.protocol === 4 ? { workGrant: envelope.claim.grant.work, tokenPolicy: envelope.tokenPolicy } : {}),
+      allowanceContinuation,
       firstWorkspaceInput: envelope.inputCheckpoint ?? undefined,
       taskResultInput: envelope,
       stopRequested,
@@ -244,6 +248,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       onProcessRegistered,
       onPhaseSettled: async (observation) => {
         if (observation.completedWithResult) await recordCompletedPhase(sourceDir);
+        if (observation.tokenUsage === null) usageKnown = false;
         let byModel: ModelUsageV1[] | undefined;
         if (observation.tokenUsage !== null) {
           const next = cumulativeTokens + observation.tokenUsage;
@@ -256,7 +261,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
           generation: envelope.claim.generation,
           bucket: "work",
           observationId: `attempt-${observation.attempt}-${observation.phase}`,
-          threadTotalTokens: observation.tokenUsage === null ? null : cumulativeTokens,
+          threadTotalTokens: observation.tokenUsage === null || (envelope.protocol === 4 && !usageKnown) ? null : cumulativeTokens,
           elapsedMs: observation.elapsedMs,
           attempts: observation.attempt,
           sessions: 1,
