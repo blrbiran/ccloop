@@ -12,7 +12,7 @@ const ref=artifactRefSchema;
 const MAX_SAVED_BYTES=12*1024*1024-1024;
 export const executionSnapshotSchema=z.object({
   schema:z.literal("ccloop-execution-snapshot-v1"),head:oid,indexTree:oid,indexCommit:oid,bundleRefName:z.string().startsWith("refs/ccloop/"),
-  index:ref,bundle:ref,status:ref,
+  index:ref,bundle:ref,status:ref,rootMode:safe.max(0o777),
   files:z.array(z.object({path:z.string().min(1),kind:z.literal("file"),mode:safe,ref}).strict()).max(10000),
   directories:z.array(z.object({path:z.string().min(1),mode:safe}).strict()).max(10000),
   deleted:z.array(z.string()),

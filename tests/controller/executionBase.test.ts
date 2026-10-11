@@ -1,0 +1,34 @@
+import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { writeFile,readFile,rm } from "node:fs/promises";
+import { join } from "node:path";
+import { afterEach,expect,it } from "vitest";
+import { buildBundle } from "../control/optionalMaterializeFixture.js";
+import { materializeFirstWorkspace } from "../../src/control/materialize.js";
+import { resolveCheckpointOriginalBase } from "../../src/controller/executionFormatFailure.js";
+const exec=promisify(execFile),roots:string[]=[];
+afterEach(async()=>{for(const root of roots.splice(0))await rm(root,{recursive:true,force:true});});
+it("proves an immutable original base distinct from the real restored checkpoint HEAD",async()=>{
+ const h=await buildBundle();roots.push(h.root);const original=String(h.snapshot.head);
+ const git=async(...args:string[])=>(await exec("/usr/bin/git",["-c","user.name=Test","-c","user.email=test@invalid",...args],{cwd:h.sourceRepo})).stdout.trim();
+ const tree=await git("rev-parse",`${original}^{tree}`),head=await git("commit-tree",tree,"-p",original,"-m","checkpoint descendant");
+ await git("update-ref","HEAD",head);const bundlePath=join(h.root,"descendant.bundle");await git("bundle","create",bundlePath,"--all","HEAD");
+ const ref=(bytes:Buffer)=>{const hash=createHash("sha256").update(bytes).digest("hex");return {artifactId:`sha256-${hash}`,hash};};
+ const retain=async(bytes:Buffer)=>{const r=ref(bytes),file=`artifacts/${r.artifactId}.bin`;await writeFile(join(h.input.bundlePath,file),bytes,{mode:0o600});h.manifest.artifacts.push({ref:r,file});return r;};
+ const bundle=await retain(await readFile(bundlePath));const snapshot=await retain(Buffer.from(JSON.stringify({...h.snapshot,head,bundle})));
+ const checkpointBytes=Buffer.from(JSON.stringify({checkpointId:h.input.checkpointId,snapshot})),checkpoint=ref(checkpointBytes);
+ h.manifest.artifacts[0]={ref:checkpoint,file:"checkpoint.json"};Object.assign(h.manifest,{checkpoint,checkpointHash:checkpoint.hash,snapshot});h.input.checkpointHash=checkpoint.hash;
+ await writeFile(join(h.input.bundlePath,"checkpoint.json"),checkpointBytes);await writeFile(h.manifestPath,JSON.stringify(h.manifest));
+ const {worktreePath}=await materializeFirstWorkspace(h.targetRepo,h.runDir,1,h.input);
+ expect((await exec("/usr/bin/git",["rev-parse","HEAD"],{cwd:worktreePath})).stdout.trim()).toBe(head);expect(head).not.toBe(original);
+ expect(await resolveCheckpointOriginalBase(original,worktreePath,head)).toBe(original);
+ expect(await resolveCheckpointOriginalBase("HEAD",worktreePath,head)).toBeNull();
+ const unrelated=(await exec("/usr/bin/git",["rev-parse","HEAD"],{cwd:h.targetRepo})).stdout.trim();
+ expect(await resolveCheckpointOriginalBase(unrelated,worktreePath,head)).toBeNull();
+ expect(await resolveCheckpointOriginalBase("a".repeat(40),worktreePath,head)).toBeNull();
+ // A mutable replace ref must not turn an unrelated immutable base into ancestry proof.
+ const replacement=(await exec("/usr/bin/git",["-c","user.name=Test","-c","user.email=test@invalid","commit-tree",tree,"-p",unrelated,"-m","replacement ancestry"],{cwd:worktreePath})).stdout.trim();
+ await exec("/usr/bin/git",["replace",head,replacement],{cwd:worktreePath});
+ expect(await resolveCheckpointOriginalBase(unrelated,worktreePath,head)).toBeNull();
+},30000);

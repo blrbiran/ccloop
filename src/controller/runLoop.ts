@@ -1,5 +1,5 @@
 import type { MaterializedAgentConfigV1 } from "../agents/types.js";
-import { captureExecutionFormatFailure, ExecutionFormatFailure } from "./executionFormatFailure.js";
+import { captureExecutionFormatFailure, ExecutionFormatFailure, resolveCheckpointOriginalBase } from "./executionFormatFailure.js";
 import { remainingTokens, minTokenCeiling, budgetAmountSchema, type BudgetAmount, type TokenPolicy } from "../budget/tokenPolicy.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -1405,15 +1405,21 @@ export async function runLoopFromState(
 
     let worktreePath: string | null = null;
     let infraRetryUsed = false;
+    let initializedBase: string | null = null;
 
     while (!worktreePath) {
       try {
         // §8.1: adding a worktree mutates the repository, so the lease is re-checked here —
         // inside the retry loop, because the retry can be a long way from the first attempt.
         await heartbeat.assertHeld();
+        // Preserve the ordinary fresh-workspace HEAD choice, but freeze the exact commit
+        // before creating it. Each retry/attempt gets its own actual initialization fact.
+        if (!(attempt === 1 && options?.firstWorkspaceInput) && options?.executionFormatCapture) {
+          initializedBase = (await execFileAsync("/usr/bin/git", ["rev-parse", "HEAD^{commit}"], {cwd:contract.context.repoPath})).stdout.trim();
+        }
         worktreePath = (attempt === 1 && options?.firstWorkspaceInput
           ? await materializeFirstWorkspace(contract.context.repoPath, runDir, attempt, options.firstWorkspaceInput)
-          : await createAttemptWorkspace(contract.context.repoPath, runDir, attempt)).worktreePath;
+          : await createAttemptWorkspace(contract.context.repoPath, runDir, attempt, initializedBase ?? undefined)).worktreePath;
       } catch (error) {
         // §8.1: a refused lease is not a workspace-infrastructure failure and must consume
         // neither the infra retry nor the blocked_waiting_human escalation below. No worktree
@@ -1452,13 +1458,15 @@ export async function runLoopFromState(
     let execution: ExecutionResult | null = null;
     let verification: VerificationResult | null = null;
     let attemptStartHead: string | null = null;
-    let resolvedSourceBase: string | null = null;
+    let resolvedSourceBase = options?.firstWorkspaceInput ? null : initializedBase;
     let verifierEntered = false;
 
     try {
       if (options?.executionFormatCapture && options.taskResultInput?.work.kind === "loop") {
         attemptStartHead = (await execFileAsync("/usr/bin/git", ["rev-parse", "HEAD"], {cwd:worktreePath})).stdout.trim();
-        resolvedSourceBase = (await execFileAsync("/usr/bin/git", ["rev-parse", `${options.taskResultInput.work.base}^{commit}`], {cwd:options.taskResultInput.work.targetRepo})).stdout.trim();
+        if (options.firstWorkspaceInput) {
+          resolvedSourceBase = await resolveCheckpointOriginalBase(options.taskResultInput.work.base, worktreePath, attemptStartHead);
+        }
       }
       state = consumeAttemptBudget(state, contract, attempt);
       await writeOwnedRunState(runDir, state);
@@ -2035,9 +2043,9 @@ export async function runLoopFromState(
           await settlePhase(activePhase, attempt, error.elapsedMs, error.tokenUsage === null ? undefined : { tokenUsage: error.tokenUsage, ...(error.formatFailure ? {usageEvidence:error.formatFailure.usageEvidence,modelUsage:error.formatFailure.modelUsage} : {}) }, true);
         }
 
-        if (failedPhase === "execute" && error.formatFailure && options?.taskResultInput && worktreePath && attemptStartHead && resolvedSourceBase && !handoffAborted() && !handoffRequested()) {
+        if (failedPhase === "execute" && error.formatFailure && options?.taskResultInput && worktreePath && attemptStartHead && !handoffAborted() && !handoffRequested()) {
           await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
-          await heartbeat.runExclusive(() => captureExecutionFormatFailure({input:options.taskResultInput!,runDir,worktreePath:worktreePath!,attempt,attemptStartHead:attemptStartHead!,resolvedBase:resolvedSourceBase!,runtimeContract:contract,actualConfig:options.executionFormatCapture!.config,failure:error.formatFailure!,verifierEntered,assertHeld:()=>heartbeat.assertHeld()}));
+          await heartbeat.runExclusive(() => captureExecutionFormatFailure({input:options.taskResultInput!,runDir,worktreePath:worktreePath!,attempt,attemptStartHead:attemptStartHead!,resolvedBase:resolvedSourceBase,runtimeContract:contract,actualConfig:options.executionFormatCapture!.config,failure:error.formatFailure!,verifierEntered,assertHeld:()=>heartbeat.assertHeld()}));
         }
 
         if (!isCodexSkillFailure(error) && (handoffAborted() || handoffRequested())) {

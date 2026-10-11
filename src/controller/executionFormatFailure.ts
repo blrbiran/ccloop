@@ -22,18 +22,33 @@ import { codexSkillsPendingPath } from "../runtime/codex/codexSkills.js";
 const exec=promisify(execFile);
 const git=async(cwd:string,...args:string[])=>(await exec("/usr/bin/git",["-c","core.hooksPath=/dev/null",...args],{cwd,maxBuffer:16*1024*1024,timeout:30000})).stdout.trim();
 const read=(root:string,path:string)=>readTaskResultFile(root,path,16*1024*1024);
+/** A checkpoint proves its restored HEAD, not a former symbolic target's value. */
+export async function resolveCheckpointOriginalBase(acceptedBase:string,worktreePath:string,restoredHead:string):Promise<string|null>{
+  if(!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(acceptedBase))return null;
+  try {
+    if(await git(worktreePath,"--no-replace-objects","cat-file","-t",acceptedBase)!=="commit")return null;
+    await git(worktreePath,"--no-replace-objects","merge-base","--is-ancestor",acceptedBase,restoredHead);
+    return acceptedBase;
+  } catch {return null;}
+}
+
 const missing=async(path:string)=>{try{await lstat(path);return false;}catch(e){if((e as NodeJS.ErrnoException).code==="ENOENT")return true;throw e;}};
 const positive=z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const processSchema=z.object({pid:positive,pgid:positive,startedAt:z.string().min(1),phase:z.literal("execute")}).strict();
 export interface ExecutionFormatCaptureInput {
-  input:StartEnvelopeV3;runDir:string;worktreePath:string;attempt:number;attemptStartHead:string;resolvedBase:string;
+  input:StartEnvelopeV3;runDir:string;worktreePath:string;attempt:number;attemptStartHead:string;resolvedBase:string|null;
   runtimeContract:LoopContract;actualConfig:MaterializedAgentConfigV1;
   failure:ExecutionFormatFailure;verifierEntered:boolean;assertHeld:()=>Promise<void>;
+}
+function supportedMode(mode:number):number {
+  if ((mode & 0o7000) !== 0) throw new Error("saved-result-mode-unsupported");
+  return mode & 0o777;
 }
 async function snapshot(input:ExecutionFormatCaptureInput):Promise<ArtifactRefV1>{
   const {worktreePath:tree}=input,source=input.input.work.sourceDir;
   const write=(bytes:Buffer)=>writeSavedBytes(source,bytes,input.assertHeld);
   if(!await missing(codexSkillsPendingPath(tree)))throw new Error("saved-result-skills-cleanup-incomplete");
+  const rootMode=supportedMode((await lstat(tree)).mode);
   const head=await git(tree,"rev-parse","HEAD");
   const indexPath=await realpath(resolve(tree,await git(tree,"rev-parse","--git-path","index")));
   const indexBytes=await read(dirname(indexPath),indexPath);
@@ -46,15 +61,15 @@ async function snapshot(input:ExecutionFormatCaptureInput):Promise<ArtifactRefV1
       if(name===".git") {if(directory!=="")throw new Error("saved-result-nested-repository-unavailable");continue;}
       const path=directory?`${directory}/${name}`:name;
       if(!safeTaskResultPath(path))throw new Error("saved-result-snapshot-path-invalid");
-      const stat=await lstat(join(tree,path));
+      const stat=await lstat(join(tree,path)),mode=supportedMode(stat.mode);
       if(stat.isDirectory()){
         if(directories.length>=10000)throw new Error("saved-result-snapshot-too-large");
-        directories.push({path,mode:stat.mode&0o777});await walk(path);
+        directories.push({path,mode});await walk(path);
       }
       else {
         if(!stat.isFile())throw new Error("saved-result-snapshot-entry-unsupported");
         if(files.length>=10000)throw new Error("saved-result-snapshot-too-large");
-        files.push({path,kind:"file",mode:stat.mode&0o777,ref:await write(await read(tree,join(tree,path)))});
+        files.push({path,kind:"file",mode,ref:await write(await read(tree,join(tree,path)))});
       }
     }
   };
@@ -77,16 +92,18 @@ async function snapshot(input:ExecutionFormatCaptureInput):Promise<ArtifactRefV1
     await git(repo,"bundle","create",bundlePath,bundleRefName);
     const bundle=await write(await read(source,bundlePath)),status=await write(statusBytes);
     if(head!==await git(tree,"rev-parse","HEAD")||!(await read(dirname(indexPath),indexPath)).equals(indexBytes))throw new Error("saved-result-snapshot-changed");
+    if(supportedMode((await lstat(tree)).mode)!==rootMode)throw new Error("saved-result-snapshot-changed");
     const captured=[...files],capturedDirectories=[...directories];files.length=0;directories.length=0;await walk("");files.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
-    if(canonicalHash(captured)!==canonicalHash(files)||canonicalHash(capturedDirectories)!==canonicalHash(directories))throw new Error("saved-result-snapshot-changed");
+    if(supportedMode((await lstat(tree)).mode)!==rootMode||canonicalHash(captured)!==canonicalHash(files)||canonicalHash(capturedDirectories)!==canonicalHash(directories))throw new Error("saved-result-snapshot-changed");
     await input.assertHeld();
-    return await write(Buffer.from(canonicalJson(executionSnapshotSchema.parse({schema:"ccloop-execution-snapshot-v1",head,indexTree,indexCommit,bundleRefName,index,bundle,status,files,directories,deleted}))));
+    return await write(Buffer.from(canonicalJson(executionSnapshotSchema.parse({schema:"ccloop-execution-snapshot-v1",head,indexTree,indexCommit,bundleRefName,index,bundle,status,files,directories,deleted,rootMode}))));
   } finally {await rm(scratch,{recursive:true,force:true});}
 }
 async function capture(input:ExecutionFormatCaptureInput):Promise<ArtifactRefV1>{
   const {input:envelope,failure}=input,source=envelope.work.sourceDir;
   if(!isLoopEnvelope(envelope)||input.runDir!==join(source,"run")||input.verifierEntered||!positive.safeParse(input.attempt).success)throw new Error("saved-result-capture-authority-invalid");
   await input.assertHeld();
+  if(input.resolvedBase===null)throw new Error("saved-result-original-base-unavailable");
   const identity=await savedResultIdentity(envelope),write=(bytes:Buffer)=>writeSavedBytes(source,bytes,input.assertHeld);
   const retain=(path:string)=>read(source,path).then(write);
   const json=async(path:string)=>JSON.parse((await read(source,path)).toString());

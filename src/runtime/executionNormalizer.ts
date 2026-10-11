@@ -32,4 +32,3 @@ export class ExecutionFormatFailure extends Error {
     super(message); this.name="ExecutionFormatFailure";
   }
 }
-
