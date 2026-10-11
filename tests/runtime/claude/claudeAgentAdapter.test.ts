@@ -27,7 +27,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f(); });
 
-async function fixture(mode: "ok" | "hang" | "grandchild" | "usage-then-hang" | "start-then-hang" | "write-then-hang" | "write-quiet-then-hang" | "write-ignore-term" | "write-then-fail" | "answer-then-linger", selection: Partial<MaterializedAgentConfigV1["selection"]> = {}, installation: Partial<MaterializedAgentConfigV1["installation"]> = {}) {
+async function fixture(mode: "ok" | "hang" | "grandchild" | "usage-then-hang" | "start-then-hang" | "write-then-hang" | "write-quiet-then-hang" | "write-ignore-term" | "write-then-fail" | "answer-then-linger" | "answer-then-gated-exit", selection: Partial<MaterializedAgentConfigV1["selection"]> = {}, installation: Partial<MaterializedAgentConfigV1["installation"]> = {}) {
   const f = await codexFixture("unused");
   const marker = join(f.dir, "claude-marker.json");
   cleanup.push(async () => {
@@ -52,6 +52,28 @@ async function fixture(mode: "ok" | "hang" | "grandchild" | "usage-then-hang" | 
 
 const argvLines = async (marker: string): Promise<string[][]> =>
   (await readFile(`${marker}.argv`, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+
+function observeRunnerLifecycle(f: Awaited<ReturnType<typeof fixture>>): string {
+  const path = join(f.dir, "runner-lifecycle.jsonl");
+  const previous = process.env.CCLOOP_CLAUDE_TEST_LIFECYCLE_PATH;
+  process.env.CCLOOP_CLAUDE_TEST_LIFECYCLE_PATH = path;
+  cleanup.push(async () => {
+    if (previous === undefined) delete process.env.CCLOOP_CLAUDE_TEST_LIFECYCLE_PATH;
+    else process.env.CCLOOP_CLAUDE_TEST_LIFECYCLE_PATH = previous;
+  });
+  return path;
+}
+
+async function waitForRunnerInnerExit(path: string, code: number | null, signal: string | null): Promise<void> {
+  await expect.poll(async () => {
+    try {
+      return (await readFile(path, "utf8")).split("\n").filter(Boolean).some((line) => {
+        const event = JSON.parse(line) as { event?: string; code?: number | null; signal?: string | null };
+        return event.event === "inner-exit" && event.code === code && event.signal === signal;
+      });
+    } catch { return false; }
+  }, { timeout: 10_000 }).toBe(true);
+}
 
 describe("ClaudeAgentAdapter (Orca agent selection, spec §4.7)", () => {
   it("finds the phase runner script from the source tree", () => {
@@ -358,9 +380,11 @@ describe("ClaudeAgentAdapter, the execute result written after a stop (consolida
 
   it("a complete answer written after a stop is returned for execute", async () => {
     const f = await fixture("answer-then-linger");
+    const lifecycle = observeRunnerLifecycle(f);
     const abort = new AbortController();
     const running = new ClaudeAgentAdapter(f.config).execute({ ...f.context, abortSignal: abort.signal });
     await waitFor(`${f.marker}.answered`);
+    await waitForRunnerInnerExit(lifecycle, 0, null);
     abort.abort();
     const result = await running;
     expect(result).toMatchObject({ changedFiles: ["answer.txt"] });
@@ -371,6 +395,7 @@ describe("ClaudeAgentAdapter, the execute result written after a stop (consolida
   // usage (12 + 3) into tokenUsage 15, while the call's observation holds the closed message's 1109.
   it("a result written after a stop that already carries tokenUsage keeps it", async () => {
     const f = await fixture("answer-then-linger");
+    const lifecycle = observeRunnerLifecycle(f);
     const abort = new AbortController();
     const running = new ClaudeAgentAdapter(f.config).execute({ ...f.context, abortSignal: abort.signal });
     await waitFor(`${f.marker}.answered`);
@@ -380,16 +405,63 @@ describe("ClaudeAgentAdapter, the execute result written after a stop (consolida
       const [call] = await readdir(root);
       return readObservedTokens(join(root, call!, "observed-usage.json"));
     }, { timeout: 10_000 }).toBe(1109);
+    await waitForRunnerInnerExit(lifecycle, 0, null);
     abort.abort();
     const result = await running;
     expect(result!.tokenUsage).toBe(15);
   }, 20_000);
 
+  it("keeps explicit usage after a gated CLI exits zero and the runner observes that exit", async () => {
+    const f = await fixture("answer-then-gated-exit");
+    const lifecycle = observeRunnerLifecycle(f);
+    const abort = new AbortController();
+    const running = new ClaudeAgentAdapter(f.config).execute({ ...f.context, abortSignal: abort.signal });
+    await waitFor(`${f.marker}.answered`);
+    const root = join(f.context.runDir, "claude", String(f.context.attempt), "execute");
+    await expect.poll(async () => {
+      try {
+        const [call] = await readdir(root);
+        return readObservedTokens(join(root, call!, "observed-usage.json"));
+      } catch { return null; }
+    }, { timeout: 10_000 }).toBe(1109);
+    await writeFile(`${f.marker}.release-exit`, "1");
+    await waitForRunnerInnerExit(lifecycle, 0, null);
+    abort.abort();
+    const result = await running;
+    expect(result).toMatchObject({ changedFiles: ["answer.txt"], tokenUsage: 15 });
+    expect(result).not.toHaveProperty("completionStatus");
+  }, 20_000);
+
+  it("does not accept a streamed answer from a CLI killed before exit", async () => {
+    const f = await fixture("answer-then-gated-exit");
+    const lifecycle = observeRunnerLifecycle(f);
+    const abort = new AbortController();
+    const running = new ClaudeAgentAdapter(f.config).execute({ ...f.context, abortSignal: abort.signal });
+    await waitFor(`${f.marker}.answered`);
+    const root = join(f.context.runDir, "claude", String(f.context.attempt), "execute");
+    await expect.poll(async () => {
+      try {
+        const [call] = await readdir(root);
+        return readObservedTokens(join(root, call!, "observed-usage.json"));
+      } catch { return null; }
+    }, { timeout: 10_000 }).toBe(1109);
+    abort.abort();
+    const error = await running.then(() => { throw new Error("resolved"); }, (e: unknown) => e);
+    expect(error).toBeInstanceOf(ClaudePhaseAborted);
+    expect((error as ClaudePhaseAborted).observedTokens).toBe(1109);
+    await waitForRunnerInnerExit(lifecycle, null, "SIGTERM");
+    const [call] = await readdir(root);
+    expect(JSON.parse(await readFile(join(root, call!, "outcome.json"), "utf8"))).toMatchObject({ reason: "aborted", code: 1, signal: null });
+    expect(await readFile(join(root, call!, "stdout.json"), "utf8")).toBe("");
+  }, 20_000);
+
   it("a plan stopped after its answer still throws ClaudePhaseAborted", async () => {
     const f = await fixture("answer-then-linger");
+    const lifecycle = observeRunnerLifecycle(f);
     const abort = new AbortController();
     const running = new ClaudeAgentAdapter(f.config).plan({ ...f.context, abortSignal: abort.signal });
     await waitFor(`${f.marker}.answered`);
+    await waitForRunnerInnerExit(lifecycle, 0, null);
     abort.abort();
     const error = await running.then(() => { throw new Error("resolved"); }, (e: unknown) => e);
     expect(error).toBeInstanceOf(ClaudePhaseAborted);

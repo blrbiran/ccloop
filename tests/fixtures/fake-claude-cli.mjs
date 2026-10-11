@@ -183,9 +183,14 @@ if (NEW_WRITE_MODES.has(mode)) {
   if (!refused) {
     if (delay === undefined) {
       await respond();
-      if (mode === "answer-then-linger") {
+      if (mode === "answer-then-linger" || mode === "answer-then-gated-exit") {
         spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: ["ignore", "inherit", "ignore"] });
         writeFileSync(`${marker}.answered`, "1");
+        // A controlled pre-exit state: the complete envelope and observed usage exist, but the CLI has not exited.
+        // Only the test may release this gate. A stop before release must not turn the envelope into success.
+        if (mode === "answer-then-gated-exit") {
+          while (!existsSync(`${marker}.release-exit`)) await new Promise((resolve) => setTimeout(resolve, 10));
+        }
         process.exit(0);
       }
     } else {

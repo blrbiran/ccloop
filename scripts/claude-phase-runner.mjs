@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { appendFileSync, existsSync } from "node:fs";
 import { Socket } from "node:net";
 import { promisify } from "node:util";
 import { buildModelUsage, buildUsageEvidence, createLineSplitter, createUsageObserver, writeObservation } from "./claude-stream.mjs";
@@ -280,6 +281,40 @@ let interruptHandled = false;
 let parentGone = false;
 let claudeEverStarted = false;
 let lastSpawnFailure = null; // "<code>: <message>" of the latest failed spawn in this call
+let finalizationOwner = null;
+let finalizationDone = Promise.resolve();
+let finishFinalization = null;
+
+function claimFinalization(owner) {
+  if (finalizationOwner !== null) return false;
+  finalizationOwner = owner;
+  finalizationDone = new Promise((resolve) => { finishFinalization = resolve; });
+  return true;
+}
+
+function completeFinalization(owner) {
+  if (finalizationOwner === owner) finishFinalization?.();
+}
+
+// Test-only lifecycle witness: the fake CLI can report its own exit intent, but only this runner can report that it
+// actually observed the child's exit. Kept out of the CLI environment below.
+function recordTestLifecycle(event) {
+  const path = process.env.CCLOOP_CLAUDE_TEST_LIFECYCLE_PATH;
+  if (path) {
+    try { appendFileSync(path, `${JSON.stringify(event)}\n`); } catch { /* observation must not change execution */ }
+  }
+}
+
+async function waitForTestMainClaimGate() {
+  const path = process.env.CCLOOP_CLAUDE_TEST_MAIN_CLAIM_GATE;
+  if (!path) return;
+  recordTestLifecycle({ event: "main-claim-pending" });
+  const deadline = Date.now() + 10_000;
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error("test main claim gate timed out");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 async function handleInterrupt(signal) {
   if (interruptHandled) {
@@ -287,22 +322,34 @@ async function handleInterrupt(signal) {
   }
 
   interruptHandled = true;
+  recordTestLifecycle({ event: "interrupt-start", signal });
+  // A completed CLI may already have handed its answer to main. Let that owned write finish before this handler returns;
+  // process.exit here could cut an asynchronous stdout write short.
+  if (finalizationOwner === "main") {
+    await finalizationDone;
+    return;
+  }
   // Spec §3.2: interrupted while waiting to retry a failed spawn -- no claude ever ran in this call, so the answer is
   // "never started", not a timeout partial. Main sees interruptHandled and writes nothing.
   if (!claudeEverStarted && lastSpawnFailure !== null) {
+    if (!claimFinalization("interrupt")) { await finalizationDone; return; }
     if (!parentGone) {
       try { await writeNeverStarted(lastSpawnFailure); } catch { process.exit(1); }
     }
+    completeFinalization("interrupt");
     process.exit(0);
     return;
   }
   const child = currentClaudeProcess;
-  const childHadExited = child !== null && (child.exitCode !== null || child.signalCode !== null);
   await terminateClaudeProcess(getPartialOutcomeRecoveryWindowMs(currentRequest));
 
-  if (childHadExited && child?.exitCode === 0 && child.signalCode === null) {
+  // SIGTERM can make an already answered CLI exit successfully while its inherited stdout pipe remains open.
+  // Decide from the actual exit after close, not the state captured before the await.
+  if (child?.exitCode === 0 && child.signalCode === null) {
     return;
   }
+
+  if (!claimFinalization("interrupt")) { await finalizationDone; return; }
 
   if (currentRequest?.phase === "execute") {
     const partial = await buildPartialExecutionOutcome(
@@ -316,6 +363,7 @@ async function handleInterrupt(signal) {
     if (partial !== null) {
       try {
         await writeJsonToStdout(partial);
+        completeFinalization("interrupt");
         process.exit(0);
       } catch (error) {
         process.stderr.write(String(error));
@@ -369,7 +417,7 @@ function readArgvEnv(name, fallback, requireCommand) {
 function claudeEnv() {
   // Crash resume (2026-10-02): CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS is this runner's own input too.
   // Crash resume (2026-10-02), spec §3.1: so are CCLOOP_PARENT_WATCH_FD and CCLOOP_PARENT_GONE_GRACE_MS.
-  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: _observedUsagePath, CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS: _spawnRetryDelay, CCLOOP_PARENT_WATCH_FD: _parentWatchFd, CCLOOP_PARENT_GONE_GRACE_MS: _parentGoneGrace, ...env } = process.env;
+  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: _observedUsagePath, CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS: _spawnRetryDelay, CCLOOP_PARENT_WATCH_FD: _parentWatchFd, CCLOOP_PARENT_GONE_GRACE_MS: _parentGoneGrace, CCLOOP_CLAUDE_TEST_LIFECYCLE_PATH: _testLifecyclePath, CCLOOP_CLAUDE_TEST_MAIN_CLAIM_GATE: _testMainClaimGate, ...env } = process.env;
   return env;
 }
 
@@ -534,6 +582,7 @@ async function runClaude(request, claudeCommand, extraArgs) {
   child.stdin?.end(promptOnStdin ? request.prompt : undefined);
   trackClaudeProcessClose(child);
   currentClaudeProcess = child;
+  child.on("exit", (code, signal) => recordTestLifecycle({ event: "inner-exit", code, signal }));
   const observationPath = process.env.CCLOOP_CLAUDE_OBSERVED_USAGE_PATH;
   const observer = createUsageObserver();
   let resultEvent = null;
@@ -614,6 +663,8 @@ async function main() {
 
   try {
     const result = await runClaude(request, claudeCommand, extraArgs);
+    if (process.env.CCLOOP_CLAUDE_TEST_MAIN_CLAIM_GATE) await waitForTestMainClaimGate();
+    if (!claimFinalization("main")) return;
     const envelope = result.envelope;
     // Orca single-call estimate (2026-09-27), spec §5.2 item 8: an answer with no structured object is reported, not
     // thrown, so the usage claude spent on it is still booked. The caller's schema is claude's to enforce (--json-schema);
@@ -654,9 +705,10 @@ async function main() {
       : { ...structured, usageEvidence, tokenUsage: usageEvidence.normalizedTotal, ...withModelUsage(envelope) };
     await writeJsonToStdout(response);
   } catch (error) {
-    if (interruptHandled) {
+    if (interruptHandled && finalizationOwner !== "main") {
       return;
     }
+    if (finalizationOwner === null && !claimFinalization("main")) return;
 
     // Spec §3.2: before the execute partial branch -- nothing ran, so there is nothing to recover.
     if (error instanceof ClaudeNeverStarted) {
@@ -674,6 +726,8 @@ async function main() {
 
     process.stderr.write(String(error));
     process.exitCode = 1;
+  } finally {
+    completeFinalization("main");
   }
 }
 
