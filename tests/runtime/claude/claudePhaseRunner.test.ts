@@ -896,6 +896,54 @@ setInterval(() => {}, 1000);
     expect(payload.changedFiles).not.toContain("dirty.txt");
   }, MARKER_WAIT_TEST_TIMEOUT_MS);
 
+  for (const [label, cliOutput] of [["no result", ""], ["malformed result", "{not-json\n"]] as const) {
+    it(`publishes one timeout partial when an interrupted exit-zero CLI leaves ${label}`, async () => {
+      const markerPath = join(await mkdtemp(join(tmpdir(), "ccloop-claude-exit-zero-invalid-")), "ready");
+      const worktreePath = await createCommittedRepo({ "dirty.txt": "before\n" });
+      await writeFile(join(worktreePath, "dirty.txt"), "after\n");
+      const binDir = await createFakeClaudeBinary(`
+const { writeFileSync } = require("node:fs");
+const { spawn } = require("node:child_process");
+process.on("SIGTERM", () => process.exit(0));
+process.stdout.write(${JSON.stringify(cliOutput)});
+spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 250)"], {
+  stdio: ["ignore", "inherit", "ignore"]
+});
+writeFileSync(process.env.CLAUDE_MARKER_PATH, "ready");
+setInterval(() => {}, 1000);
+`);
+      const { child, result } = spawnPhaseRunner({
+        phase: "execute", prompt: "run execute", attempt: 1, runDir: worktreePath,
+        worktreePath, partialOutcomeRecoveryWindowMs: 1000,
+      }, { PATH: `${binDir}:${process.env.PATH ?? ""}`, CLAUDE_MARKER_PATH: markerPath });
+
+      await waitForFileToContain(markerPath, "ready");
+      child.kill("SIGTERM");
+      const outcome = await result;
+      expect(outcome).toMatchObject({ code: 0, signal: null });
+      const payload = JSON.parse(outcome.stdout);
+      expect(payload).toMatchObject({
+        completionStatus: "partial", failureType: "timeout", changedFiles: ["dirty.txt"],
+      });
+      expect(payload.failureMessage).toContain("SIGTERM");
+      expect(payload.changedFiles).not.toContain("inner-success.txt");
+    }, MARKER_WAIT_TEST_TIMEOUT_MS);
+  }
+
+  it("keeps an un-interrupted exit-zero missing answer as an error partial", async () => {
+    const worktreePath = await createCommittedRepo({ "dirty.txt": "before\n" });
+    await writeFile(join(worktreePath, "dirty.txt"), "after\n");
+    const binDir = await createFakeClaudeBinary("process.exit(0);");
+    const { result } = spawnPhaseRunner({
+      phase: "execute", prompt: "run execute", attempt: 1, runDir: worktreePath,
+      worktreePath, partialOutcomeRecoveryWindowMs: 1000,
+    }, { PATH: `${binDir}:${process.env.PATH ?? ""}` });
+    const outcome = await result;
+    expect(outcome).toMatchObject({ code: 0, signal: null });
+    const payload = JSON.parse(outcome.stdout);
+    expect(payload).toMatchObject({ completionStatus: "partial", failureType: "error", changedFiles: ["dirty.txt"] });
+  }, MARKER_WAIT_TEST_TIMEOUT_MS);
+
   it("finishes its owned stdout response before handling a later interrupt", async () => {
     const lifecyclePath = join(await mkdtemp(join(tmpdir(), "ccloop-claude-response-owner-")), "lifecycle.jsonl");
     const worktreePath = await createCommittedRepo({ "dirty.txt": "before\n" });

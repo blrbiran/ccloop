@@ -277,6 +277,7 @@ async function writeJsonToStdout(value) {
 let currentRequest = null;
 let currentClaudeProcess = null;
 let interruptHandled = false;
+let interruptSignal = null;
 // Crash resume (2026-10-02), spec §3.1/§3.2: set by onParentGone below.
 let parentGone = false;
 let claudeEverStarted = false;
@@ -322,6 +323,7 @@ async function handleInterrupt(signal) {
   }
 
   interruptHandled = true;
+  interruptSignal = signal;
   recordTestLifecycle({ event: "interrupt-start", signal });
   // A completed CLI may already have handed its answer to main. Let that owned write finish before this handler returns;
   // process.exit here could cut an asynchronous stdout write short.
@@ -660,9 +662,13 @@ async function main() {
   // would spend until the grace kill. The exit hook kills the group.
   if (parentGone) return;
   currentRequest = request;
+  let claudeExitedSuccessfully = false;
+  let completeAnswerReady = false;
 
   try {
     const result = await runClaude(request, claudeCommand, extraArgs);
+    // runClaude resolves only after an exit-0 close. Keep that fact separate from whether its envelope is usable.
+    claudeExitedSuccessfully = true;
     if (process.env.CCLOOP_CLAUDE_TEST_MAIN_CLAIM_GATE) await waitForTestMainClaimGate();
     if (!claimFinalization("main")) return;
     const envelope = result.envelope;
@@ -703,6 +709,7 @@ async function main() {
     const response = usageEvidence.normalizedTotal === null
       ? { ...structured, usageEvidence, ...withModelUsage(envelope) }
       : { ...structured, usageEvidence, tokenUsage: usageEvidence.normalizedTotal, ...withModelUsage(envelope) };
+    completeAnswerReady = true;
     await writeJsonToStdout(response);
   } catch (error) {
     if (interruptHandled && finalizationOwner !== "main") {
@@ -717,7 +724,13 @@ async function main() {
     }
 
     if (request.phase === "execute") {
-      const partial = await buildPartialExecutionOutcome(request, "error", String(error), [], String(error));
+      // A successful CLI exit is not a successful execute answer. If its missing/malformed envelope is discovered
+      // after SIGTERM, retain the interrupted dirty-worktree timeout fallback instead of reclassifying it as an error.
+      const interruptedWithoutAnswer = interruptHandled && claudeExitedSuccessfully && !completeAnswerReady;
+      const message = interruptedWithoutAnswer
+        ? `claude phase runner interrupted by ${interruptSignal}`
+        : String(error);
+      const partial = await buildPartialExecutionOutcome(request, interruptedWithoutAnswer ? "timeout" : "error", message, [], message);
       if (partial !== null) {
         await writeJsonToStdout(partial);
         return;
