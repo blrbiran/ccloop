@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
-import { detectAgents } from "./detect.js";
+import { draftCommandForCandidate, draftInstallationForCandidate, findAgentCandidatePaths } from "./detect.js";
 import { probeVersion } from "./materialize.js";
-import { parseAgentsTable, readAgentsTableSnapshot } from "./table.js";
+import { assertAgentsTableLocation, parseAgentsTable, readAgentsTableSnapshot } from "./table.js";
 import { AgentError, type AgentsTableV1, type InstallationV1 } from "./types.js";
 import { assertUpdatesRoot, cleanupOperationTemporary, readOwnedJson, replaceTableDurably, sha256, withTableUpdateLock, writeOwnedJson } from "./updateReceipt.js";
 import { testCrashPoint } from "../control/testCrashPoint.js";
@@ -95,24 +95,28 @@ export async function previewAgentInstallations(tablePath: string, input: { home
   const snapshot = await readAgentsTableSnapshot(tablePath);
   if (sha256(snapshot.bytes) !== observation.baseTableHash) stale();
   const table = snapshot.table;
-  const discovered = await detectAgents({ home: input.home ?? homedir(), path: input.path ?? process.env.PATH ?? "", platform: process.platform, probe: input.probe });
+  const paths = await findAgentCandidatePaths({ home: input.home ?? homedir(), path: input.path ?? process.env.PATH ?? "", platform: process.platform });
+  const probe = input.probe ?? probeVersion;
   const changes: DetectionChange[] = [];
   for (const row of observation.installed) {
     if (row.status === "changed" && row.realpath !== null && row.observedVersion !== null) {
       changes.push({ changeId: randomUUID(), kind: "version", installationId: row.id, command: row.command, realpath: row.realpath, version: row.observedVersion });
     }
-    for (const candidate of discovered.candidates[row.kind] ?? []) {
-      if (!candidate.runnable || candidate.version === null || candidate.realpath === row.realpath) continue;
-      changes.push({ changeId: randomUUID(), kind: "path", installationId: row.id, command: [candidate.path, ...row.command.slice(1)], realpath: candidate.realpath, version: candidate.version });
+    for (const candidate of paths[row.kind] ?? []) {
+      if (candidate.realpath === row.realpath) continue;
+      const command = [candidate.path, ...row.command.slice(1)];
+      const version = await probe(command);
+      if (version === null) continue;
+      changes.push({ changeId: randomUUID(), kind: "path", installationId: row.id, command, realpath: candidate.realpath, version });
     }
   }
-  for (const [kind, candidates] of Object.entries(discovered.candidates)) {
+  for (const [kind, candidates] of Object.entries(paths)) {
     if (Object.values(table.installations).some((row) => row.kind === kind) || Object.hasOwn(table.installations, kind)) continue;
     for (const candidate of candidates) {
-      if (!candidate.runnable || candidate.version === null) continue;
-      const draft = discovered.table.installations[kind];
-      if (draft === undefined) continue;
-      changes.push({ changeId: randomUUID(), kind: "addition", installationId: kind, command: [candidate.path, ...draft.command.slice(1)], realpath: candidate.realpath, version: candidate.version, installation: { ...draft, command: [candidate.path, ...draft.command.slice(1)], version: candidate.version } });
+      const command = draftCommandForCandidate(kind, candidate.path);
+      const version = await probe(command);
+      if (version === null) continue;
+      changes.push({ changeId: randomUUID(), kind: "addition", installationId: kind, command, realpath: candidate.realpath, version, installation: draftInstallationForCandidate(kind, candidate.path, version) });
     }
   }
   const preview: AgentDetectionPreview = { ...observation, schema: "orca-agent-detection-preview-v1", previewId: randomUUID(), changes };
@@ -135,9 +139,10 @@ async function recheck(change: DetectionChange, probe: typeof probeVersion): Pro
 
 export async function applyAgentInstallations(tablePath: string, request: ApplyAgentDetection, deps: { probe?: typeof probeVersion } = {}): Promise<AgentDetectionReceipt> {
   validateRequest(request);
-  await readAgentsTableSnapshot(tablePath);
+  await assertAgentsTableLocation(tablePath);
   // The only caller-supplied location is the control command's configured --agents table, never a payload path.
-  return withTableUpdateLock(tablePath, request.opId, async (root) => {
+  return withTableUpdateLock(tablePath, request.opId, async (root, assertHeld) => {
+    assertHeld();
     const receiptName = `receipt-${request.opId}.json`;
     const intentName = `intent-${request.opId}.json`;
     const completed = await readOwnedJson<AgentDetectionReceipt>(root, receiptName);
@@ -152,6 +157,7 @@ export async function applyAgentInstallations(tablePath: string, request: ApplyA
       const current = await readAgentsTableSnapshot(tablePath);
       const hash = sha256(current.bytes);
       if (hash === intent.receipt.afterHash) {
+        assertHeld();
         await writeOwnedJson(root, receiptName, intent.receipt);
         return intent.receipt;
       }
@@ -165,8 +171,9 @@ export async function applyAgentInstallations(tablePath: string, request: ApplyA
         await recheck(change, deps.probe ?? probeVersion);
       }
       if (sha256(current.bytes) !== intent.receipt.beforeHash) stale();
-      await replaceTableDurably(tablePath, root, Buffer.from(`${JSON.stringify(intent.receipt.after)}\n`), current.bytes, intent.mode, request.opId, request.requestDigest);
+      await replaceTableDurably(tablePath, root, Buffer.from(`${JSON.stringify(intent.receipt.after)}\n`), current.bytes, intent.mode, request.opId, request.requestDigest, assertHeld);
       await testCrashPoint("agent-update-after-rename");
+      assertHeld();
       await writeOwnedJson(root, receiptName, intent.receipt);
       return intent.receipt;
     }
@@ -195,12 +202,14 @@ export async function applyAgentInstallations(tablePath: string, request: ApplyA
     const afterBytes = Buffer.from(`${JSON.stringify(next)}\n`);
     const receipt: AgentDetectionReceipt = { schema: "orca-agent-detection-receipt-v1", opId: request.opId, requestDigest: request.requestDigest, previewId: request.previewId, acceptedChangeIds: [...request.acceptedChangeIds], beforeHash: request.baseTableHash, afterHash: sha256(afterBytes), before: original.table, after: next };
     // Intent includes the exact replacement bytes' hash; recovery derives the same bytes from its immutable after value.
+    assertHeld();
     await writeOwnedJson(root, intentName, { schema: "orca-agent-detection-intent-v1", request, receipt, mode: original.mode } satisfies Intent);
     await testCrashPoint("agent-update-before-rename");
     const current = await readAgentsTableSnapshot(tablePath);
     if (!current.bytes.equals(original.bytes)) stale();
-    await replaceTableDurably(tablePath, root, afterBytes, original.bytes, original.mode, request.opId, request.requestDigest);
+    await replaceTableDurably(tablePath, root, afterBytes, original.bytes, original.mode, request.opId, request.requestDigest, assertHeld);
     await testCrashPoint("agent-update-after-rename");
+    assertHeld();
     await writeOwnedJson(root, receiptName, receipt);
     await testCrashPoint("agent-update-after-receipt");
     return receipt;

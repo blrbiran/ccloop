@@ -59,6 +59,23 @@ function assertPrivate(metadata: { uid: number; mode: number }, euid: number, wh
   if ((metadata.mode & 0o022) !== 0) throw invalid(`${what} is group- or world-writable`);
 }
 
+/** Validates configured table ownership and path without opening or parsing its current bytes. */
+export async function assertAgentsTableLocation(path: string): Promise<void> {
+  if (!isAbsolute(path)) throw invalid("table path is not absolute");
+  const euid = process.geteuid!();
+  try {
+    const entry = await lstat(path);
+    if (!entry.isFile() || entry.isSymbolicLink() || (await realpath(path)) !== path) throw invalid("table path is not a canonical regular file");
+    assertPrivate(entry, euid, "table");
+    const parent = await lstat(dirname(path));
+    if (!parent.isDirectory() || parent.isSymbolicLink()) throw invalid("table directory is not a directory");
+    assertPrivate(parent, euid, "table directory");
+  } catch (error) {
+    if (error instanceof AgentError) throw error;
+    throw invalid(error instanceof Error ? error.message : String(error));
+  }
+}
+
 /**
  * Spec §4.2 / §12 I14: the table is read only through a no-follow handle, must be a regular file whose path
  * is its own realpath, and it and its directory must belong to the effective user and be writable by no one

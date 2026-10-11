@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runControlCommand } from "../../src/control/command.js";
 import { applyAgentInstallations, previewAgentInstallations } from "../../src/agents/updates.js";
-import { assertUpdatesRoot, replaceTableDurably, writeOwnedJson } from "../../src/agents/updateReceipt.js";
+import { assertUpdatesRoot, replaceTableDurably, withTableUpdateLock, writeOwnedJson } from "../../src/agents/updateReceipt.js";
 
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ccloop-agent-updates-")));
@@ -22,6 +22,62 @@ async function control(method: string, path: string, payload: object = {}) {
 }
 
 describe("configured installation updates", () => {
+  it("releases the private kernel lock after normal completion and an error", async () => {
+    const f = await fixture();
+    expect(await withTableUpdateLock(f.path, "normal", async () => "held")).toBe("held");
+    await expect(withTableUpdateLock(f.path, "error", async () => { throw new Error("fixture-error"); })).rejects.toThrow("fixture-error");
+    expect(await withTableUpdateLock(f.path, "next", async () => "held-again")).toBe("held-again");
+    expect((await stat(join(`${f.path}.updates`, "lock"))).mode & 0o777).toBe(0o600);
+  });
+  it.each(["malformed", "unreadable"])("replays a matching completed receipt before reading a %s current table", async (condition) => {
+    const f = await fixture();
+    const preview = await previewAgentInstallations(f.path, { home: f.root, path: join(f.root, "none") });
+    const change = preview.changes.find((entry) => entry.kind === "version" && entry.installationId === "custom");
+    const request = { opId: `completed-${condition}`, requestDigest: "a".repeat(64), previewId: preview.previewId, baseTableHash: preview.baseTableHash, acceptedChangeIds: [change!.changeId] };
+    const first = await control("agent-installation-apply", f.path, request);
+    expect(first.code, first.stderr).toBe(0);
+    if (condition === "malformed") await writeFile(f.path, "{broken", { mode: 0o600 });
+    else await chmod(f.path, 0o000);
+    const replay = await control("agent-installation-apply", f.path, request);
+    expect(replay).toEqual(first);
+  });
+  it.each(["table-parent", "updates-root"])("still refuses a completed replay with a non-private %s", async (condition) => {
+    const f = await fixture();
+    const preview = await previewAgentInstallations(f.path, { home: f.root, path: join(f.root, "none") });
+    const change = preview.changes.find((entry) => entry.kind === "version" && entry.installationId === "custom");
+    const request = { opId: `private-${condition}`, requestDigest: "b".repeat(64), previewId: preview.previewId, baseTableHash: preview.baseTableHash, acceptedChangeIds: [change!.changeId] };
+    expect((await control("agent-installation-apply", f.path, request)).code).toBe(0);
+    await chmod(condition === "table-parent" ? f.root : `${f.path}.updates`, condition === "table-parent" ? 0o777 : 0o755);
+    const replay = await control("agent-installation-apply", f.path, request);
+    expect(replay.code).toBe(2);
+    expect(replay.stderr).toMatch(/agents-table-invalid|agent-installation-update-invalid/);
+  });
+  it.each(["unavailable", "misleading-version"])("probes a path choice's offered custom argv when the bare binary is %s", async (bare) => {
+    const f = await fixture();
+    const alternateDir = join(f.root, `arg-sensitive-${bare}`);
+    await (await import("node:fs/promises")).mkdir(alternateDir);
+    const alternate = join(alternateDir, "claude");
+    await writeFile(alternate, `#!/bin/sh\nif [ "$1" = "--custom" ] && [ "$2" = "--version" ]; then echo "2.1.284"; else ${bare === "unavailable" ? "exit 1" : "echo 0.0.1"}; fi\n`, { mode: 0o700 });
+    const preview = await previewAgentInstallations(f.path, { home: f.root, path: alternateDir });
+    const choice = preview.changes.find((change) => change.kind === "path" && change.installationId === "custom" && change.command[0] === alternate);
+    expect(choice).toMatchObject({ command: [alternate, "--custom"], version: "2.1.284" });
+    const receipt = await applyAgentInstallations(f.path, { opId: `arg-path-${bare}`, requestDigest: "f".repeat(64), previewId: preview.previewId, baseTableHash: preview.baseTableHash, acceptedChangeIds: [choice!.changeId] });
+    expect(receipt.after.installations.custom.command).toEqual([alternate, "--custom"]);
+    expect(receipt.after.installations.custom.version).toBe("2.1.284");
+  });
+  it("binds an addition to the descriptor draft argv rather than its bare binary version", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "ccloop-agent-draft-argv-")));
+    const path = join(root, "agents.json");
+    const binary = join(root, "claude");
+    await writeFile(binary, '#!/bin/sh\nif [ "$1" = "--permission-mode" ]; then echo "2.1.285"; else echo "0.0.1"; fi\n', { mode: 0o700 });
+    await writeFile(path, JSON.stringify({ schema: "ccloop-agents-table-v1", installations: {} }), { mode: 0o600 });
+    const preview = await previewAgentInstallations(path, { home: root, path: root });
+    const choice = preview.changes.find((change) => change.kind === "addition" && change.installationId === "claude" && change.command[0] === binary);
+    expect(choice?.command[1]).toBe("--permission-mode");
+    expect(choice?.version).toBe("2.1.285");
+    const receipt = await applyAgentInstallations(path, { opId: "draft-argv", requestDigest: "e".repeat(64), previewId: preview.previewId, baseTableHash: preview.baseTableHash, acceptedChangeIds: [choice!.changeId] });
+    expect(receipt.after.installations.claude.version).toBe("2.1.285");
+  });
   it("publishes an immutable private JSON file without clobbering an existing receipt", async () => {
     const f = await fixture();
     const root = await assertUpdatesRoot(f.path, true);

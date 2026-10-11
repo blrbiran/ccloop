@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { link, lstat, mkdir, open, rename, rm, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { AgentError } from "./types.js";
 import { testCrashPoint } from "../control/testCrashPoint.js";
@@ -79,59 +80,64 @@ export async function writeOwnedJson(root: string, name: string, value: unknown)
   }
 }
 
-async function deadLock(root: string): Promise<boolean> {
+async function ensureKernelLockFile(root: string): Promise<string> {
   const lock = join(root, "lock");
-  const owner = await readOwnedJson<{ pid: number }>(root, "lock");
-  if (owner === null) return false;
-  if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) fail("invalid update lock owner");
-  try { process.kill(owner.pid, 0); return false; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+  try {
+    const fd = await open(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try { await fd.sync(); } finally { await fd.close(); }
+    await syncDirectory(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  const info = await lstat(lock);
+  if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.geteuid!() || (info.mode & 0o077) !== 0) fail("invalid update lock file");
+  return lock;
 }
 
-/** The sole table-scoped writer lock, shared by every apply entry point and every process. */
-export async function withTableUpdateLock<T>(tablePath: string, opId: string, fn: (root: string) => Promise<T>): Promise<T> {
+/** One fixed kernel lock per table. A killed parent closes the helper's stdin, releasing the lock. */
+export async function withTableUpdateLock<T>(tablePath: string, _opId: string, fn: (root: string, assertHeld: () => void) => Promise<T>): Promise<T> {
   const root = await assertUpdatesRoot(tablePath, true);
-  const lock = join(root, "lock");
-  const deadline = Date.now() + 20_000;
-  const token = randomUUID();
-  while (true) {
-    const ticket = join(root, `claim-${opId}-${randomUUID()}.json`);
-    await writeOwnedJson(root, ticket.split("/").at(-1)!, { pid: process.pid, token });
-    try {
-      // The claim is fully written before its hard link becomes the lock; readers never see an
-      // ownerless lock and therefore cannot mistake a paused writer for a crashed one.
-      await link(ticket, lock);
-      await syncDirectory(root);
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (await deadLock(root)) {
-        // One reclaimer at a time. Without this guard, two reclaimers could both observe the dead
-        // owner and the slower one could rename a live lock freshly acquired by another process.
-        const reclaim = join(root, "reclaim");
-        try { await mkdir(reclaim, { mode: 0o700 }); }
-        catch (race) { if ((race as NodeJS.ErrnoException).code !== "EEXIST") throw race; await new Promise((resolve) => setTimeout(resolve, 30)); continue; }
-        try {
-          if (await deadLock(root)) {
-            const moved = join(root, `stale-${randomUUID()}`);
-            await rename(lock, moved);
-            await unlink(moved);
-          }
-        } finally { await rm(reclaim, { recursive: true, force: true }); }
-        continue;
-      }
-      if (Date.now() >= deadline) fail("update lock timeout");
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    } finally {
-      await unlink(ticket).catch(() => undefined);
-    }
-  }
-  try { return await fn(root); }
-  finally {
-    const owner = await readOwnedJson<{ token: string }>(root, "lock");
-    if (owner?.token !== token) fail("update lock ownership changed");
-    await unlink(lock);
-    await syncDirectory(root);
+  const lock = await ensureKernelLockFile(root);
+  if (process.platform !== "darwin" && process.platform !== "linux") fail("unsupported update lock platform");
+  const script = 'process.stdin.resume();process.stdin.on("end",()=>process.exit(0));process.stdout.write("LOCKED\\n");';
+  const command = process.platform === "darwin" ? "/usr/bin/lockf" : "/usr/bin/flock";
+  const args = process.platform === "darwin"
+    ? ["-k", "-t", "20", lock, process.execPath, "-e", script]
+    : ["-x", "-w", "20", lock, process.execPath, "-e", script];
+  const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: process.env });
+  child.stdin.on("error", () => undefined);
+  let ready = false;
+  let lost = false;
+  let output = "";
+  let errorOutput = "";
+  const closed = new Promise<void>((resolve) => child.once("close", () => { lost = true; resolve(); }));
+  const acquired = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new AgentError("agent-installation-update-invalid", "table lock timeout")); }, 25_000);
+    const settle = (error?: Error): void => {
+      if (ready) return;
+      ready = true;
+      clearTimeout(timer);
+      if (error) reject(error); else resolve();
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+      if (output.includes("LOCKED\n")) settle();
+      if (output.length > 1024) settle(new AgentError("agent-installation-update-invalid", "table lock helper output overflow"));
+    });
+    child.stderr.on("data", (chunk: Buffer) => { errorOutput = `${errorOutput}${chunk.toString("utf8")}`.slice(0, 1024); });
+    child.once("error", (error) => settle(new AgentError("agent-installation-update-invalid", `table lock helper unavailable: ${error.message}`)));
+    child.once("close", () => settle(new AgentError("agent-installation-update-invalid", `table lock helper exited: ${errorOutput || "no details"}`)));
+  });
+  try {
+    await acquired;
+    const assertHeld = (): void => { if (lost || child.exitCode !== null || child.signalCode !== null) fail("table lock helper lost"); };
+    assertHeld();
+    await testCrashPoint("agent-update-lock-recovery-acquired");
+    return await fn(root, assertHeld);
+  } finally {
+    child.stdin.end();
+    const releaseDeadline = setTimeout(() => child.kill("SIGKILL"), 2_000);
+    try { await closed; } finally { clearTimeout(releaseDeadline); }
   }
 }
 
@@ -147,7 +153,7 @@ export async function cleanupOperationTemporary(root: string, opId: string, dige
   await syncDirectory(root);
 }
 
-export async function replaceTableDurably(tablePath: string, root: string, bytes: Buffer, expectedBytes: Buffer, mode: number, opId: string, digest: string): Promise<void> {
+export async function replaceTableDurably(tablePath: string, root: string, bytes: Buffer, expectedBytes: Buffer, mode: number, opId: string, digest: string, assertHeld: () => void = () => undefined): Promise<void> {
   const parent = dirname(tablePath);
   const temporary = join(root, temporaryName(opId, digest));
   let fd;
@@ -160,6 +166,7 @@ export async function replaceTableDurably(tablePath: string, root: string, bytes
     fd = undefined;
     await syncDirectory(root);
     await testCrashPoint("agent-update-temp-fsynced");
+    assertHeld();
     // This check follows all temporary-file I/O and immediately precedes the atomic replacement.
     if (!(await readAgentsTableSnapshot(tablePath)).bytes.equals(expectedBytes)) {
       throw new AgentError("agent-installation-update-stale");

@@ -24,7 +24,7 @@ async function setup() {
   return { root, path, request };
 }
 
-async function subprocess(path: string, request: object, crash?: { point: string; marker: string }) {
+function startSubprocess(path: string, request: object, crash?: { point: string; marker: string }) {
   const child = spawn(process.execPath, ["--import", "tsx", cliPath, "control", "agent-installation-apply", "--agents", path], {
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env, ...(crash ? { NODE_ENV: "test", CCLOOP_CONTROL_TEST_CRASH_POINT: crash.point, CCLOOP_CONTROL_TEST_CRASH_MARKER: crash.marker } : {}) },
@@ -33,19 +33,47 @@ async function subprocess(path: string, request: object, crash?: { point: string
   child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
   child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
   child.stdin.end(JSON.stringify(request));
-  if (crash) {
-    const deadline = Date.now() + 10_000;
-    while (true) {
-      try { await stat(crash.marker); break; }
-      catch { if (Date.now() >= deadline) throw new Error(`crash marker missing: ${stderr}`); await new Promise((resolve) => setTimeout(resolve, 30)); }
-    }
-    child.kill("SIGKILL");
+  const completed = new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveExit, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => resolveExit({ code, stdout, stderr }));
+  });
+  return { child, completed, stderr: () => stderr };
+}
+
+async function waitMarker(marker: string, stderr: () => string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (true) {
+    try { await stat(marker); return; }
+    catch { if (Date.now() >= deadline) throw new Error(`crash marker missing: ${stderr()}`); await new Promise((resolve) => setTimeout(resolve, 30)); }
   }
-  const code = await new Promise<number | null>((resolveExit, reject) => { child.once("error", reject); child.once("close", resolveExit); });
-  return { code, stdout, stderr };
+}
+
+async function subprocess(path: string, request: object, crash?: { point: string; marker: string }) {
+  const running = startSubprocess(path, request, crash);
+  if (crash) {
+    await waitMarker(crash.marker, running.stderr);
+    running.child.kill("SIGKILL");
+  }
+  return running.completed;
 }
 
 describe("durable installation update operation", { timeout: 30_000 }, () => {
+  it("does not let a second process take a live writer's table lock", async () => {
+    const f = await setup();
+    const marker = join(f.root, "held-lock");
+    const held = startSubprocess(f.path, f.request, { point: "agent-update-lock-recovery-acquired", marker });
+    try {
+      await waitMarker(marker, held.stderr);
+      const other = { ...f.request, opId: "waiting-writer", requestDigest: "b".repeat(64) };
+      const waiting = startSubprocess(f.path, other);
+      const state = await Promise.race([waiting.completed.then(() => "completed"), new Promise<string>((resolve) => setTimeout(() => resolve("waiting"), 1_500))]);
+      expect(state).toBe("waiting");
+      held.child.kill("SIGKILL");
+      await held.completed;
+      const result = await waiting.completed;
+      expect(result.code, result.stderr).toBe(0);
+    } finally { held.child.kill("SIGKILL"); }
+  });
   it("serializes two separate process writers so exactly one succeeds", async () => {
     const f = await setup();
     const other = { ...f.request, opId: "op-other", requestDigest: "b".repeat(64) };
@@ -86,4 +114,13 @@ describe("durable installation update operation", { timeout: 30_000 }, () => {
     expect(recovered.map((result) => result.code)).toEqual([0, 0]);
     expect(recovered[0]!.stdout).toBe(recovered[1]!.stdout);
   });
+
+  it("recovers again when the process reclaiming a dead writer lock also crashes", async () => {
+    const f = await setup();
+    await subprocess(f.path, f.request, { point: "agent-update-after-rename", marker: join(f.root, "first-crash") });
+    await subprocess(f.path, f.request, { point: "agent-update-lock-recovery-acquired", marker: join(f.root, "reclaimer-crash") });
+    const replay = await runControlCommand(["agent-installation-apply", "--agents", f.path], JSON.stringify(f.request));
+    expect(replay.code, replay.stderr).toBe(0);
+    expect(JSON.parse(replay.stdout).after.installations.custom.version).toBe("2.1.283");
+  }, 35_000);
 });
