@@ -1,0 +1,1 @@
+{"executionId":"execution-legacy-real","generation":1,"graceMs":100,"isolated":true,"ownerLeaseReleased":true,"probedAt":"2026-10-11T02:05:41.862Z","registered":[{"pgid":73117,"phase":"plan","pid":73117,"startedAt":"Sun Oct 11 02:05:41 2026"},{"pgid":73131,"phase":"execute","pid":73131,"startedAt":"Sun Oct 11 02:05:41 2026"}],"workerSealed":true}

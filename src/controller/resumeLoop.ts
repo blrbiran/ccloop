@@ -1,3 +1,4 @@
+import {readSavedResultMode} from "./verifySavedResult.js";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { loadContract } from "../contract/loadContract.js";
@@ -240,6 +241,8 @@ export async function resumeLoop(
     await appendEvent(runDir, { type: "resume_denied", at: new Date().toISOString(), detail });
     throw new ResumeNotEligibleError(detail);
   }
+
+  if(await readSavedResultMode(runDir))throw new ResumeNotEligibleError("saved-result-controller-resume-required");
 
   let ownerRecord;
   let ownerTransfer;

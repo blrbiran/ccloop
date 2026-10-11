@@ -1,0 +1,1 @@
+{"attemptsUsed":1,"budgetSnapshot":{"attemptsRemaining":1,"timeRemainingMs":29636,"tokenBudgetRemaining":985,"tokenRemainingStatus":"known"},"currentAttempt":1,"lastTransitionAt":"2026-10-11T02:42:57.021Z","recentFailures":[],"status":"blocked_waiting_human","stopReason":"retry after first failed attempt requires human approval","waitingOnHuman":true}

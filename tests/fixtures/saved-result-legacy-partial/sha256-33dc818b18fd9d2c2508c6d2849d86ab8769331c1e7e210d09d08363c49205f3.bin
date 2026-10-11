@@ -1,0 +1,16 @@
+[
+  {
+    "code": "unrecognized_keys",
+    "keys": [
+      "changedFiles",
+      "diffPatch",
+      "commandOutputs",
+      "stdoutStderrLog",
+      "completionStatus",
+      "failureType",
+      "failureMessage"
+    ],
+    "path": [],
+    "message": "Unrecognized key(s) in object: 'changedFiles', 'diffPatch', 'commandOutputs', 'stdoutStderrLog', 'completionStatus', 'failureType', 'failureMessage'"
+  }
+]

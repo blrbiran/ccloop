@@ -1,3 +1,4 @@
+import {loadSavedResultRecovery} from "./savedResultRecovery.js";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -75,6 +76,7 @@ export async function acceptStart(
   // Agent selection (2026-09-26), spec §4.6: materialize the claimed selection against the table (which also runs
   // `<command> --version` against the recorded version: agent-version-drift); the claim's configHash must be the
   // materialized config's canonical hash. A replayed accept above never reads the table (spec §4.2, I4).
+  if(input.mode === "verify-saved-result" && input.work.kind === "loop")await loadSavedResultRecovery(input as import("./protocol.js").LoopStartEnvelope);
   const table = await readAgentsTable(binding.agentsTablePath);
   const { config, resolution } = await resolveAgent(table, input.claim.agent);
   const configHash = resolution.configHash;

@@ -1,3 +1,7 @@
+import {testCrashPoint} from "../control/testCrashPoint.js";
+import {canonicalHash} from "../control/protocol.js";
+import {loadSavedResultRecovery,materializeSavedResult,boundSavedResultRuntime,assertSavedResultFence,type LoadedSavedResult} from "../control/savedResultRecovery.js";
+import {persistSavedResultMode,readSavedResultMode,hasSavedResultEntry,enterSavedResultVerification,assertSavedResultUnmodified,recoverSavedResultEntry,persistSavedResultCompletion,runSavedResultCheck,prepareSavedResultVerification,hasPreparedSavedResultProof} from "./verifySavedResult.js";
 import type { MaterializedAgentConfigV1 } from "../agents/types.js";
 import { captureExecutionFormatFailure, ExecutionFormatFailure, resolveCheckpointOriginalBase } from "./executionFormatFailure.js";
 import { remainingTokens, minTokenCeiling, budgetAmountSchema, type BudgetAmount, type TokenPolicy } from "../budget/tokenPolicy.js";
@@ -48,7 +52,7 @@ import type {
 import { isPartialExecutionResult, observedTokensOf } from "../runtime/types.js";
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { FailureFingerprint, LastTrustedBoundary, RunState, StopDecision } from "../state/types.js";
-import { cleanupAttemptWorkspace, createAttemptWorkspace, publishAttemptCommit } from "../workspace/worktreeManager.js";
+import { cleanupAttemptWorkspace, createAttemptWorkspace, publishAttemptCommit, registerAttemptRefNamespace } from "../workspace/worktreeManager.js";
 import { materializeFirstWorkspace } from "../control/materialize.js";
 import { captureTaskResult } from "../control/taskResults.js";
 import type { StartEnvelopeV3, InputCheckpointV1 } from "../control/protocol.js";
@@ -186,12 +190,13 @@ async function runRequiredChecks(
   worktreePath: string,
   primaryTargetPaths: string[],
   abortSignal?: AbortSignal,
+  checkRunner?:(command:string,index:number)=>Promise<{stdout:string;stderr:string}>,
 ): Promise<RequiredChecksOutcome> {
   const evidence: string[] = [];
 
-  for (const command of requiredChecks) {
+  for (const [checkIndex,command] of requiredChecks.entries()) {
     try {
-      const { stdout, stderr } = await execFileAsync("sh", ["-lc", command], {
+      const { stdout, stderr } = checkRunner ? await checkRunner(command,checkIndex) : await execFileAsync("sh", ["-lc", command], {
         cwd: worktreePath,
         signal: abortSignal,
         maxBuffer: 10 * 1024 * 1024,
@@ -263,6 +268,8 @@ async function runVerification(
   plan: AttemptPlan | null,
   execution: ExecutionResult,
   onStarted?: () => void,
+  checkRunner?:(command:string,index:number)=>Promise<{stdout:string;stderr:string}>,
+  beforeVerifier?:()=>Promise<void>,
 ): Promise<VerificationResult> {
   onStarted?.();
   const primaryTargetPaths = getVerificationPrimaryTargetPaths(contract, plan, execution);
@@ -271,6 +278,7 @@ async function runVerification(
     context.worktreePath,
     primaryTargetPaths,
     context.abortSignal,
+    checkRunner,
   );
 
   if (!requiredChecks.passed) {
@@ -293,6 +301,7 @@ async function runVerification(
     });
   }
 
+  await beforeVerifier?.();
   const verification = await adapter.verify(context);
   return enforceVerificationContract(contract, {
     ...verification,
@@ -1123,7 +1132,13 @@ export async function runLoop(
   adapter: RuntimeAdapter | (() => RuntimeAdapter),
   hooks?: RunControlHooks,
 ): Promise<RunState> {
-  if (hooks?.workGrant !== undefined) {
+  const recoveryInput=hooks?.savedResultRecovery ?? (hooks?.taskResultInput?.mode === "verify-saved-result" ? hooks.taskResultInput as import("../control/protocol.js").LoopStartEnvelope : undefined);
+  const recoveryFunding=recoveryInput ? (await loadSavedResultRecovery(recoveryInput)).admission.funding : undefined;
+  if(recoveryFunding){
+    const grant=recoveryFunding.freshGrant.work;
+    if(hooks?.workGrant && canonicalHash(hooks.workGrant)!==canonicalHash(grant))throw new Error("saved-result-funding-invalid");
+    contract={...contract,executionPolicy:{...contract.executionPolicy,tokenBudget:grant.tokens,maxAttempts:grant.attempts,totalRuntimeBudgetMs:grant.activeMs}};
+  } else if (hooks?.workGrant !== undefined) {
     const grant = budgetAmountSchema.parse(hooks.workGrant);
     contract = { ...contract, executionPolicy: { ...contract.executionPolicy,
       tokenBudget: minTokenCeiling(contract.executionPolicy.tokenBudget, grant.tokens),
@@ -1131,7 +1146,10 @@ export async function runLoop(
       totalRuntimeBudgetMs: Math.min(contract.executionPolicy.totalRuntimeBudgetMs, grant.activeMs),
     } };
   }
+  if(recoveryInput) { boundSavedResultRuntime(recoveryInput.work.contract,contract); await loadSavedResultRecovery(recoveryInput); await persistSavedResultMode(runDir,recoveryInput); }
+  else if(await readSavedResultMode(runDir)) throw new Error("saved-result-mode-conflict");
   const state = transitionRunState(initialState(contract), "planning");
+  if(recoveryInput)state.savedResult={mode:"verify-saved-result",packageHash:recoveryInput.savedResultRecovery!.packageHash,admissionHash:recoveryInput.savedResultRecovery!.admissionHash,recoveryOf:recoveryInput.savedResultRecovery!.recoveryOf,funding:recoveryFunding!};
   if (hooks?.taskResultInput?.protocol === 4 && state.budgetSnapshot.tokenRemainingStatus === undefined) {
     state.budgetSnapshot.tokenRemainingStatus = "known";
   }
@@ -1218,6 +1236,8 @@ export function createStopRequestSignal(): StopRequestSignal {
 }
 
 export interface RunControlHooks {
+  savedResultRecovery?: import("../control/protocol.js").LoopStartEnvelope;
+  onRecoveryAttemptEntered?:(input:{attempt:number})=>Promise<void>;
   workGrant?: BudgetAmount;
   tokenPolicy?: TokenPolicy;
   /** Only the worker supplies this, after validating the checkpoint and reachable artifacts. */
@@ -1270,6 +1290,25 @@ export async function runLoopFromState(
     throw new Error("token-usage-unknown");
   }
   let state = initialLoopState;
+  const durableMode=await readSavedResultMode(runDir);
+  const explicitRecovery=options?.savedResultRecovery ?? (options?.taskResultInput?.mode === "verify-saved-result" ? options.taskResultInput as import("../control/protocol.js").LoopStartEnvelope : undefined);
+  if(explicitRecovery && (!durableMode || JSON.stringify(explicitRecovery)!==JSON.stringify(durableMode))) {
+    if(!durableMode || canonicalHash(explicitRecovery)!==canonicalHash(durableMode))throw new Error("saved-result-mode-conflict");
+  }
+  const recovery=durableMode ? await loadSavedResultRecovery(durableMode) : undefined;
+  if(recovery){registerAttemptRefNamespace(runDir,recovery.input.claim.runId);boundSavedResultRuntime(recovery.input.work.contract,contract);if(canonicalHash(state.savedResult?.funding)!==canonicalHash(recovery.admission.funding))throw new Error("saved-result-funding-invalid");}
+  const inheritedAttempts=recovery?.admission.funding.inheritedUsage.attempts ?? options?.tokenPolicy?.inheritedUsage.attempts ?? 0;
+  if((state.savedResult!==undefined)!==(recovery!==undefined)||recovery&&(state.savedResult!.packageHash!==recovery.input.savedResultRecovery!.packageHash||state.savedResult!.admissionHash!==recovery.input.savedResultRecovery!.admissionHash))throw new Error("saved-result-mode-conflict");
+  if(recovery && (state.savedResult?.entry || await hasSavedResultEntry(runDir))){
+    const recovered=await recoverSavedResultEntry(runDir,state,recovery);
+    await createOwnedRunStateWriter()(runDir,recovered);return recovered;
+  }
+  if(recovery && state.attemptsUsed > 0 && !await hasPreparedSavedResultProof(runDir,state))throw new Error("saved-result-lifecycle-unavailable");
+  const providerOptions=recovery ? {...options,onProcessRegistered:async(registration:{pid:number;pgid:number;startedAt:string;phase:string})=>{
+    await options?.onProcessRegistered?.(registration);
+    await assertSavedResultFence(recovery.input,recovery.admission);
+  }} : options;
+  if(recovery)state={...state,status:"planning"};
   let activeAdapter: RuntimeAdapter | null = typeof adapter === "function" ? null : adapter;
   let activePhase: PhaseName | null = null;
   let observedTokens = 0;
@@ -1309,6 +1348,7 @@ export async function runLoopFromState(
     return state;
   };
   const parkAllowance = async (nextPhase: "plan" | "execute" | "verify", failure?: FailureFingerprint): Promise<RunState | null> => {
+    if(recovery)return null;
     const policy = options?.tokenPolicy;
     if (!policy || !observationsKnown || state.budgetSnapshot.tokenBudgetRemaining !== 0
       || state.budgetSnapshot.timeRemainingMs === 0 || state.budgetSnapshot.attemptsRemaining === 0
@@ -1398,10 +1438,10 @@ export async function runLoopFromState(
       return state;
     }
 
-    if (hasBudgetExceeded(state) || state.budgetSnapshot.attemptsRemaining === 0 || options?.workGrant?.sessions === 0) {
+    if (hasBudgetExceeded(state) || (state.budgetSnapshot.attemptsRemaining === 0 && (!recovery || state.attemptsUsed === 0)) || options?.workGrant?.sessions === 0) {
       return await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON);
     }
-    const attempt = state.attemptsUsed + 1;
+    const attempt = recovery ? 1 : state.attemptsUsed + 1;
 
     let worktreePath: string | null = null;
     let infraRetryUsed = false;
@@ -1417,7 +1457,9 @@ export async function runLoopFromState(
         if (!(attempt === 1 && options?.firstWorkspaceInput) && options?.executionFormatCapture) {
           initializedBase = (await execFileAsync("/usr/bin/git", ["rev-parse", "HEAD^{commit}"], {cwd:contract.context.repoPath})).stdout.trim();
         }
-        worktreePath = (attempt === 1 && options?.firstWorkspaceInput
+        worktreePath = (recovery
+          ? await materializeSavedResult(contract.context.repoPath,runDir,attempt,recovery)
+          : attempt === 1 && options?.firstWorkspaceInput
           ? await materializeFirstWorkspace(contract.context.repoPath, runDir, attempt, options.firstWorkspaceInput)
           : await createAttemptWorkspace(contract.context.repoPath, runDir, attempt, initializedBase ?? undefined)).worktreePath;
       } catch (error) {
@@ -1470,8 +1512,9 @@ export async function runLoopFromState(
       }
       state = consumeAttemptBudget(state, contract, attempt);
       await writeOwnedRunState(runDir, state);
+      if(recovery){await options?.onRecoveryAttemptEntered?.({attempt});state=await prepareSavedResultVerification(runDir,worktreePath,recovery,state);await writeOwnedRunState(runDir,state);}
 
-      const continuation = attempt === 1 ? options?.allowanceContinuation : undefined;
+      const continuation = recovery ? {nextPhase:"verify" as const,plan:recovery.plan,execution:recovery.execution} : attempt === 1 ? options?.allowanceContinuation : undefined;
       if (continuation) {
         plan = continuation.plan;
         execution = continuation.execution;
@@ -1654,7 +1697,7 @@ export async function runLoopFromState(
         return await persistHandoffBoundary("handoff_boundary", `handoff requested after execute in attempt ${attempt}`);
       }
 
-      if (isPartialExecutionResult(completedExecution)) {
+      if (!recovery && isPartialExecutionResult(completedExecution)) {
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
 
         const partialPathPolicy = evaluatePathPolicy({
@@ -1709,7 +1752,7 @@ export async function runLoopFromState(
       }
 
       const pathPolicy = evaluatePathPolicy({
-        changedFiles: completedExecution.changedFiles,
+        changedFiles: recovery ? [...new Set([...recovery.actualChangedPaths,...completedExecution.changedFiles])] : completedExecution.changedFiles,
         allowlistPaths: contract.safetyPolicy.allowlistPaths,
         denylistPaths: contract.safetyPolicy.denylistPaths,
         maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
@@ -1750,6 +1793,11 @@ export async function runLoopFromState(
       // §8.1: launching a Claude call is a side effect. runVerification also shells out to the
       // contract's required checks inside the attempt worktree, which is one too.
       await heartbeat.assertHeld();
+      if(recovery){
+        await testCrashPoint("saved-result-before-entry");
+        state=await enterSavedResultVerification(runDir,worktreePath,recovery,state);
+        await writeOwnedRunState(runDir,state);
+      }
       verifierEntered = true;
       activePhase = "verify";
       let startedCapture = Promise.resolve();
@@ -1764,7 +1812,7 @@ export async function runLoopFromState(
           runVerification(
             contract,
             attemptAdapter,
-            buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution, options),
+            {...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution, providerOptions),...(recovery?{savedExecution:{originalBase:recovery.originalBase,candidateHead:recovery.snapshot.head,changedPaths:recovery.actualChangedPaths}}:{})},
             plan,
             completedExecution,
             options?.taskResultInput === undefined ? undefined : () => {
@@ -1772,8 +1820,10 @@ export async function runLoopFromState(
               startedCapture = captureResult(attempt, worktreePath!, completedExecution, undefined, true)
                 .catch((error: unknown) => { startedCaptureError = error; });
             },
+            recovery ? (command,index)=>runSavedResultCheck(runDir,worktreePath!,command,index,options?.phaseSignal ? AbortSignal.any([abortSignal,options.phaseSignal]) : abortSignal,providerOptions?.onProcessRegistered) : undefined,
+            recovery ? ()=>assertSavedResultUnmodified(runDir,worktreePath!,recovery,state) : undefined,
           ),
-          { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true },
+          { awaitAbortedResult: recovery !== undefined || attemptAdapter.awaitAbortedPhaseCleanup === true },
         );
       } catch (error) {
         if (error instanceof PhaseExecutionError) {
@@ -1801,8 +1851,10 @@ export async function runLoopFromState(
       }
 
       if (verifyOutcome.timedOut) {
-        await settlePhase("verify", attempt, verifyOutcome.elapsedMs);
+        const timeoutUsage=recovery ? verifyOutcome.result ?? (verifyOutcome.abortedError instanceof PhaseExecutionError && verifyOutcome.abortedError.tokenUsage!==null ? {tokenUsage:verifyOutcome.abortedError.tokenUsage}:undefined) : undefined;
+        await settlePhase("verify", attempt, verifyOutcome.elapsedMs,timeoutUsage,true);
         await flushStartedCapture();
+        if(recovery)await assertSavedResultUnmodified(runDir,worktreePath,recovery,state);
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
         state = await persistTerminalState(
           runDir,
@@ -1821,9 +1873,12 @@ export async function runLoopFromState(
         return state;
       }
 
+      if(recovery)await testCrashPoint("saved-result-verifier-returned");
       verification = verifyOutcome.result;
       await settlePhase("verify", attempt, verifyOutcome.elapsedMs, verification);
+      if(recovery)await testCrashPoint("saved-result-usage-settled");
       await flushStartedCapture();
+      if(recovery)await assertSavedResultUnmodified(runDir,worktreePath,recovery,state);
       // Captured because the guard's closure widens the `verification` let back to `| null`.
       const completedVerification = verification;
       await captureResult(attempt, worktreePath, completedExecution, completedVerification);
@@ -1840,7 +1895,7 @@ export async function runLoopFromState(
         verification.pauseSignals.some((signal) => contract.escalationAndExit.pauseOn.includes(signal));
       const matchedStopSignal = getMatchedStopSignal(contract, verification.stopSignals);
 
-      const decision: StopDecision = humanGateHit
+      let decision: StopDecision = humanGateHit
         ? { kind: "blocked_waiting_human", reason: pathPolicy.reason ?? "human gate or denylist hit" }
         : matchedStopSignal !== null
           ? { kind: "cancelled", reason: `stopOn signal matched: ${matchedStopSignal}` }
@@ -1848,18 +1903,20 @@ export async function runLoopFromState(
               humanCancelled: false,
               successSatisfied: verification.approved,
               humanGateHit: false,
-              attemptNumber: attempt + (options?.tokenPolicy?.inheritedUsage.attempts ?? 0),
-              maxAttempts: contract.executionPolicy.maxAttempts + (options?.tokenPolicy?.inheritedUsage.attempts ?? 0),
+              attemptNumber: attempt + inheritedAttempts,
+              maxAttempts: contract.executionPolicy.maxAttempts + inheritedAttempts,
               budgetExceeded: hasBudgetExceeded(state),
               recentFailures: state.recentFailures,
               verifier: verification,
             });
 
+      if(recovery && decision.kind === "retryable")decision={kind:"failed",reason:"saved-result-verification-rejected"};
+
       if (decision.kind === "exhausted" && !humanGateHit && matchedStopSignal === null) {
         const retry = evaluateStopDecision({
           humanCancelled: false, successSatisfied: verification.approved, humanGateHit: false,
-          attemptNumber: attempt + (options?.tokenPolicy?.inheritedUsage.attempts ?? 0),
-          maxAttempts: contract.executionPolicy.maxAttempts + (options?.tokenPolicy?.inheritedUsage.attempts ?? 0),
+          attemptNumber: attempt + inheritedAttempts,
+          maxAttempts: contract.executionPolicy.maxAttempts + inheritedAttempts,
           budgetExceeded: state.budgetSnapshot.timeRemainingMs === 0,
           recentFailures: state.recentFailures, verifier: verification,
         });
@@ -1922,7 +1979,15 @@ export async function runLoopFromState(
         continue;
       }
 
-      state = await persistTerminalState(runDir, writeOwnedRunState, state, decision.kind, decision.reason);
+      if(recovery){
+        await assertSavedResultUnmodified(runDir,worktreePath,recovery,state);
+        const terminal=transitionRunState(state,decision.kind,decision.reason);
+        await persistSavedResultCompletion(runDir,terminal,verification);
+        state=terminal;
+        await appendTransitionEvent(runDir,state,`loop_${decision.kind}`,decision.reason);
+        await writeOwnedRunState(runDir,state);
+        await testCrashPoint("saved-result-terminal-fsynced");
+      } else state = await persistTerminalState(runDir, writeOwnedRunState, state, decision.kind, decision.reason);
 
       if (decision.kind !== "blocked_waiting_human") {
         await heartbeat.assertHeld();
@@ -2035,7 +2100,8 @@ export async function runLoopFromState(
           : await persistTerminalState(runDir, writeOwnedRunState, state, "cancelled", error.stopReason);
       }
 
-      const failureReason = error instanceof PhaseExecutionError ? error.message : String(error);
+      let failureReason = error instanceof PhaseExecutionError ? error.message : String(error);
+      let recoveryRefusal=false;
 
       if (error instanceof PhaseExecutionError) {
         const failedPhase = activePhase;
@@ -2043,12 +2109,16 @@ export async function runLoopFromState(
           await settlePhase(activePhase, attempt, error.elapsedMs, error.tokenUsage === null ? undefined : { tokenUsage: error.tokenUsage, ...(error.formatFailure ? {usageEvidence:error.formatFailure.usageEvidence,modelUsage:error.formatFailure.modelUsage} : {}) }, true);
         }
 
+        if(recovery && verifierEntered && worktreePath && state.savedResult?.entry){
+          try{await assertSavedResultUnmodified(runDir,worktreePath,recovery,state);}catch(refusal){failureReason=String(refusal);recoveryRefusal=true;}
+        }
+
         if (failedPhase === "execute" && error.formatFailure && options?.taskResultInput && worktreePath && attemptStartHead && !handoffAborted() && !handoffRequested()) {
           await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
           await heartbeat.runExclusive(() => captureExecutionFormatFailure({input:options.taskResultInput!,runDir,worktreePath:worktreePath!,attempt,attemptStartHead:attemptStartHead!,resolvedBase:resolvedSourceBase,runtimeContract:contract,actualConfig:options.executionFormatCapture!.config,failure:error.formatFailure!,verifierEntered,assertHeld:()=>heartbeat.assertHeld()}));
         }
 
-        if (!isCodexSkillFailure(error) && (handoffAborted() || handoffRequested())) {
+        if (!recoveryRefusal && !isCodexSkillFailure(error) && (handoffAborted() || handoffRequested())) {
           await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
           const interrupted = handoffAborted();
           return await persistHandoffBoundary(

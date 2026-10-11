@@ -1,0 +1,29 @@
+{
+  "summary": "write answer",
+  "primaryTargetPaths": [
+    "answer.txt"
+  ],
+  "tokenUsage": 15,
+  "usageEvidence": {
+    "usageStatus": "present",
+    "fields": {
+      "input_tokens": {
+        "status": "finite",
+        "value": 10
+      },
+      "output_tokens": {
+        "status": "finite",
+        "value": 5
+      },
+      "inputTokens": {
+        "status": "absent"
+      },
+      "outputTokens": {
+        "status": "absent"
+      }
+    },
+    "selectedInputField": "input_tokens",
+    "selectedOutputField": "output_tokens",
+    "normalizedTotal": 15
+  }
+}

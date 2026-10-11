@@ -69,7 +69,7 @@ function progressOf(state: unknown): ProgressV1 {
 function terminalOf(state: unknown, protocol: number): RunState | null {
   const run = state as RunState;
   if (!isTerminalRunStatus(run.status)) return null;
-  if (protocol === 4) return run;
+  if (protocol === 4) { const {savedResult:_private,...core}=run;return core; }
   // Internal extensions must never change the frozen finite protocol-3 projection.
   return {
     status: run.status, currentAttempt: run.currentAttempt, attemptsUsed: run.attemptsUsed,

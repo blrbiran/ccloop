@@ -16,6 +16,10 @@ export type ControlMethodV1 =
   | "read-evidence"
   | "task-results"
   | "read-task-result-evidence"
+  | "settle-saved-result"
+  | "read-saved-result-settlement"
+  | "saved-result-source-eligibility"
+  | "saved-result-eligibility"
   | "saved-result-evidence"
   | "read-saved-result-evidence";
 
@@ -88,6 +92,8 @@ export interface SingleCallWork {
 interface StartEnvelopeBaseV3 {
   protocol: 3 | 4;
   tokenPolicy?: TokenPolicy;
+  mode?: "verify-saved-result";
+  savedResultRecovery?: SavedResultRecoveryInput;
   claim: ClaimV2;
   contractHash: string;
 }
@@ -116,6 +122,8 @@ export interface CapabilitiesRequestV3 {
   agent: PartialSelectionV1 | null;
 }
 
+export interface SavedResultSourceInput { source: LoopStartEnvelope; sourceAttempt: number; packagePath: string; packageHash: string }
+
 export type ControlRequestV1 =
   | { method: "features" }
   | { method: "capabilities"; agent: PartialSelectionV1 | null }
@@ -126,10 +134,15 @@ export type ControlRequestV1 =
   | { method: "read-evidence"; input: StartEnvelopeV3; ref: ArtifactRefV1 }
   | { method: "task-results"; input: StartEnvelopeV3; afterRevision: number }
   | { method: "read-task-result-evidence"; input: StartEnvelopeV3; manifestRef: ArtifactRefV1; ref: ArtifactRefV1 }
+  | { method: "settle-saved-result"; input: LoopStartEnvelope }
+  | { method: "read-saved-result-settlement"; input: LoopStartEnvelope; settlementRef: ArtifactRefV1; ref: ArtifactRefV1 }
+  | { method: "saved-result-source-eligibility"; input: SavedResultSourceInput }
+  | { method: "saved-result-eligibility"; input: LoopStartEnvelope }
   | { method: "saved-result-evidence"; input: StartEnvelopeV3 }
   | { method: "read-saved-result-evidence"; input: StartEnvelopeV3; capsuleRef: ArtifactRefV1; ref: ArtifactRefV1 };
 
 export type ControlPayloadV1 =
+  | { input: SavedResultSourceInput }
   | CapabilitiesRequestV3
   | StartEnvelopeV3
   | { input: StartEnvelopeV3; request: HandoffRequestV1 }
@@ -189,6 +202,14 @@ const claimSchema = z
   })
   .strict();
 
+export interface SavedResultRecoveryInput {
+  packagePath: string; packageHash: string; admissionHash: string;
+  recoveryOf: { sourceRunId: string; sourceAttempt: number; capsuleHash: string; snapshotHash: string; normalizedExecutionHash: string };
+}
+export const recoveryOfSchema = z.object({ sourceRunId: idSchema, sourceAttempt: positiveSafeInteger,
+  capsuleHash: hashSchema, snapshotHash: hashSchema, normalizedExecutionHash: hashSchema }).strict();
+export const savedResultRecoveryInputSchema = z.object({ packagePath: z.string().min(1), packageHash: hashSchema,
+  admissionHash: hashSchema, recoveryOf: recoveryOfSchema }).strict();
 export const artifactRefSchema = z.object({ artifactId: idSchema, hash: hashSchema }).strict();
 const inputCheckpointSchema = z
   .object({
@@ -238,10 +259,11 @@ const nullableLoopWorkSchema = z.object({
 }).strict().refine(work => !(work.skillPluginDir !== undefined && work.codexSkillsDir !== undefined));
 const v4StartEnvelopeSchema = z.object({
   protocol: z.literal(4), contractHash: hashSchema, tokenPolicy: tokenPolicySchema.optional(),
+  mode: z.literal("verify-saved-result").optional(), savedResultRecovery: savedResultRecoveryInputSchema.optional(),
   claim: claimSchema.extend({ grant: z.object({ work: budgetAmountSchema.extend({ sessions: positiveSafeInteger }), handoff: amountSchema }).strict() }),
   inputCheckpoint: inputCheckpointSchema.nullable(), work: nullableLoopWorkSchema,
-}).strict();
-const startEnvelopeSchema = z.union([legacyStartEnvelopeSchema, v4StartEnvelopeSchema]);
+}).strict().refine(e => (e.mode === undefined) === (e.savedResultRecovery === undefined) && (e.mode === undefined || e.inputCheckpoint === null));
+export const startEnvelopeSchema = z.union([legacyStartEnvelopeSchema, v4StartEnvelopeSchema]);
 export const handoffRequestSchema = z
   .object({
     protocol: z.literal(1),
@@ -260,6 +282,10 @@ const payloadSchemas = {
   inspect: startEnvelopeSchema,
   handoff: z.object({ input: startEnvelopeSchema, request: handoffRequestSchema }).strict(),
   collect: z.object({ input: startEnvelopeSchema, afterSeq: safeInteger }).strict(),
+  "settle-saved-result": z.object({input:v4StartEnvelopeSchema.refine(e=>e.mode==="verify-saved-result")}).strict(),
+  "read-saved-result-settlement": z.object({input:v4StartEnvelopeSchema.refine(e=>e.mode==="verify-saved-result"),settlementRef:artifactRefSchema,ref:artifactRefSchema}).strict(),
+  "saved-result-source-eligibility": z.object({input:z.object({source:startEnvelopeSchema.refine(e=>e.work.kind==="loop"&&(!("mode" in e)||e.mode===undefined)),sourceAttempt:positiveSafeInteger,packagePath:z.string().min(1),packageHash:hashSchema}).strict()}).strict(),
+  "saved-result-eligibility": z.object({input:v4StartEnvelopeSchema.refine(e=>e.mode==="verify-saved-result")}).strict(),
   "saved-result-evidence": z.object({ input: startEnvelopeSchema }).strict(),
   "read-saved-result-evidence": z.object({ input: startEnvelopeSchema, capsuleRef: artifactRefSchema, ref: artifactRefSchema }).strict(),
   "task-results": z.object({ input: startEnvelopeSchema, afterRevision: safeInteger }).strict(),
@@ -364,7 +390,7 @@ export function parseControlRequest(method: ControlMethodV1, raw: unknown): Cont
   try {
     const payload = payloadSchemas[method].parse(raw) as ControlPayloadV1;
     if (method === "accept" || method === "inspect") validateEnvelopePaths(payload as StartEnvelopeV3, method);
-    if (method === "handoff" || method === "collect" || method === "read-evidence" || method === "task-results" || method === "read-task-result-evidence" || method === "saved-result-evidence" || method === "read-saved-result-evidence") {
+    if (method === "settle-saved-result" || method === "read-saved-result-settlement" || method === "saved-result-eligibility" || method === "handoff" || method === "collect" || method === "read-evidence" || method === "task-results" || method === "read-task-result-evidence" || method === "saved-result-evidence" || method === "read-saved-result-evidence") {
       validateEnvelopePaths((payload as { input: StartEnvelopeV3 }).input, method);
     }
     return payload;

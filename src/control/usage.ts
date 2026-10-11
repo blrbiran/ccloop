@@ -96,6 +96,7 @@ const stateSchema = z
     observations: z.record(z.object({ hash, eventSeq: positive }).strict()),
   })
   .strict();
+export const usageLedgerSchema = stateSchema;
 const inputSchema = z
   .object({
     runId: id,

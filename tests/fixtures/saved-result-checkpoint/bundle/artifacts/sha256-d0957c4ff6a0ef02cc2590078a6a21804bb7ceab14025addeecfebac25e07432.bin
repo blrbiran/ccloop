@@ -1,0 +1,30 @@
+{
+  "reason": "completed",
+  "code": 0,
+  "signal": null,
+  "evidenceDir": "/private/tmp/results-task2-v2z4A0/run-e3e38edd-fcf2-482b-8b28-f6a05621ef63/run/codex/1/verify/call-XL8aEv",
+  "observedTokens": null,
+  "executable": "/Users/biran/.nvm/versions/node/v22.13.1/bin/node",
+  "args": [
+    "/private/tmp/results-task2-v2z4A0/fake.mjs",
+    "exec",
+    "--json",
+    "--ephemeral",
+    "--color",
+    "never",
+    "--model",
+    "fixture-new-verifier",
+    "--sandbox",
+    "read-only",
+    "-C",
+    "/private/tmp/results-task2-v2z4A0/run-e3e38edd-fcf2-482b-8b28-f6a05621ef63/run/worktrees/attempt-1",
+    "--output-schema",
+    "/private/tmp/results-task2-v2z4A0/run-e3e38edd-fcf2-482b-8b28-f6a05621ef63/run/codex/1/verify/call-XL8aEv/schema.json",
+    "-o",
+    "/private/tmp/results-task2-v2z4A0/run-e3e38edd-fcf2-482b-8b28-f6a05621ef63/run/codex/1/verify/call-XL8aEv/final.json",
+    "-"
+  ],
+  "stdoutTruncated": false,
+  "stderrTruncated": false,
+  "finalTruncated": false
+}

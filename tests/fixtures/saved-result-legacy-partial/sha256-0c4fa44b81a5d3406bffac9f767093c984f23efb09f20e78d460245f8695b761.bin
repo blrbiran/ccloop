@@ -1,0 +1,30 @@
+{
+  "reason": "completed",
+  "code": 0,
+  "signal": null,
+  "evidenceDir": "/private/tmp/results-task2-mlNJU9/run-b1618240-5d55-4bfc-9a35-eea1ec252fcc/run/codex/1/execute/call-apwrpt",
+  "observedTokens": null,
+  "executable": "/Users/biran/.nvm/versions/node/v22.13.1/bin/node",
+  "args": [
+    "/private/tmp/results-task2-mlNJU9/fake.mjs",
+    "exec",
+    "--json",
+    "--ephemeral",
+    "--color",
+    "never",
+    "--model",
+    "fixture",
+    "--sandbox",
+    "workspace-write",
+    "-C",
+    "/private/tmp/results-task2-mlNJU9/run-b1618240-5d55-4bfc-9a35-eea1ec252fcc/run/worktrees/attempt-1",
+    "--output-schema",
+    "/private/tmp/results-task2-mlNJU9/run-b1618240-5d55-4bfc-9a35-eea1ec252fcc/run/codex/1/execute/call-apwrpt/schema.json",
+    "-o",
+    "/private/tmp/results-task2-mlNJU9/run-b1618240-5d55-4bfc-9a35-eea1ec252fcc/run/codex/1/execute/call-apwrpt/final.json",
+    "-"
+  ],
+  "stdoutTruncated": false,
+  "stderrTruncated": false,
+  "finalTruncated": false
+}

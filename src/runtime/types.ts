@@ -11,6 +11,7 @@ export type AttemptContext = {
   abortSignal?: AbortSignal;
   plan?: AttemptPlan;
   execution?: ExecutionResult;
+  savedExecution?: { originalBase:string; candidateHead:string; changedPaths:string[] };
   onProcessRegistered?: (process: {
     pid: number;
     pgid: number;

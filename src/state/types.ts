@@ -25,6 +25,7 @@ export type BudgetSnapshot = {
 };
 
 export type RunState = {
+  savedResult?: { funding: import("../control/savedResultRecovery.js").RecoveryFunding; mode: "verify-saved-result"; packageHash: string; admissionHash: string; recoveryOf: import("../control/protocol.js").SavedResultRecoveryInput["recoveryOf"]; prepared?: { candidateHash:string; protectedInputsHash:string; preparedAt:string }; entry?: { candidateHash: string; protectedInputsHash: string; enteredAt: string } };
   status: RunStatus;
   currentAttempt: number;
   attemptsUsed: number;

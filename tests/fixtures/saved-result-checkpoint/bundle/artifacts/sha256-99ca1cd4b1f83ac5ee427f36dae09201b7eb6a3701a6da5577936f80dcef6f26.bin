@@ -1,0 +1,47 @@
+{
+  "approved": false,
+  "rejectCategory": "needs-change",
+  "primaryTargetPaths": [
+    "answer.txt"
+  ],
+  "failingCommand": null,
+  "safeToRetry": true,
+  "evidence": [
+    "command output | required check passed: node -e \"const f=require('fs');if(process.env.CCLOOP_RECOVERY_CHECK_MARKER)f.appendFileSync(process.env.CCLOOP_RECOVERY_CHECK_MARKER,'check\\n');if(process.env.CCLOOP_RECOVERY_CHECK_MUTATE)f.writeFileSync('answer.txt','modified');if(f.readFileSync('answer.txt','utf8')!=='saved candidate\\n')process.exit(1)\"",
+    "checked"
+  ],
+  "pauseSignals": [],
+  "stopSignals": [],
+  "tokenUsage": 15,
+  "usageEvidence": {
+    "usageStatus": "present",
+    "fields": {
+      "input_tokens": {
+        "status": "finite",
+        "value": 10
+      },
+      "output_tokens": {
+        "status": "finite",
+        "value": 5
+      },
+      "inputTokens": {
+        "status": "absent"
+      },
+      "outputTokens": {
+        "status": "absent"
+      }
+    },
+    "selectedInputField": "input_tokens",
+    "selectedOutputField": "output_tokens",
+    "normalizedTotal": 15
+  },
+  "modelUsage": [
+    {
+      "model": "fixture-new-verifier",
+      "input": 10,
+      "output": 5,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    }
+  ]
+}

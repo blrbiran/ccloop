@@ -1,0 +1,30 @@
+{
+  "reason": "completed",
+  "code": 0,
+  "signal": null,
+  "evidenceDir": "/private/tmp/results-task2-SeV63H/run-05a2d432-32d5-40f6-8f63-0a003d8deef5/run/codex/1/execute/call-ouctIs",
+  "observedTokens": null,
+  "executable": "/Users/biran/.nvm/versions/node/v22.13.1/bin/node",
+  "args": [
+    "/private/tmp/results-task2-SeV63H/fake.mjs",
+    "exec",
+    "--json",
+    "--ephemeral",
+    "--color",
+    "never",
+    "--model",
+    "fixture",
+    "--sandbox",
+    "workspace-write",
+    "-C",
+    "/private/tmp/results-task2-SeV63H/run-05a2d432-32d5-40f6-8f63-0a003d8deef5/run/worktrees/attempt-1",
+    "--output-schema",
+    "/private/tmp/results-task2-SeV63H/run-05a2d432-32d5-40f6-8f63-0a003d8deef5/run/codex/1/execute/call-ouctIs/schema.json",
+    "-o",
+    "/private/tmp/results-task2-SeV63H/run-05a2d432-32d5-40f6-8f63-0a003d8deef5/run/codex/1/execute/call-ouctIs/final.json",
+    "-"
+  ],
+  "stdoutTruncated": false,
+  "stderrTruncated": false,
+  "finalTruncated": false
+}

@@ -1,6 +1,9 @@
+import {assertSavedResultCompletionCandidate,assertSavedResultDelivery} from "../controller/verifySavedResult.js";
+import {createOwnedRunStateWriter} from "../controller/ownedRunStateWriter.js";
+import {loadSavedResultRecovery} from "./savedResultRecovery.js";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseMaterializedAgentConfig } from "../agents/materialize.js";
+import { parseMaterializedAgentConfig,agentConfigHash } from "../agents/materialize.js";
 import { getDescriptor } from "../agents/registry.js";
 import { AgentError } from "../agents/types.js";
 import { createStopRequestSignal, runLoop } from "../controller/runLoop.js";
@@ -155,6 +158,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       }
       throw error;
     }));
+    if(envelope.mode==="verify-saved-result"&&agentConfigHash(config)!==envelope.claim.configHash)throw new Error("saved-result-config-mismatch");
     await initializeProcessRegistry(sourceDir);
     let cumulativeTokens = 0;
     let usageKnown = true;
@@ -247,6 +251,11 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       stopRequested,
       phaseSignal: phaseAbort.signal,
       onProcessRegistered,
+      onRecoveryAttemptEntered: async ({attempt}) => {
+        // A count-only, pre-provider fact. Verification usage remains a separate measured observation.
+        await appendUsageObservation(sourceDir,{runId:envelope.claim.runId,generation:envelope.claim.generation,bucket:"work",observationId:`saved-result-attempt-${attempt}`,
+          threadTotalTokens:0,elapsedMs:0,attempts:attempt,sessions:1,evidence:{kind:"saved-result-attempt-entry-v1",runId:envelope.claim.runId,generation:envelope.claim.generation,attempt,providerEntered:false}});
+      },
       onPhaseSettled: async (observation) => {
         if (observation.completedWithResult) await recordCompletedPhase(sourceDir);
         if (observation.tokenUsage === null) usageKnown = false;
@@ -286,8 +295,18 @@ export async function runControlWorker(argv: string[]): Promise<void> {
         const allowanceUsage = envelope.protocol === 4 && runState.waitingCause === "token-allowance"
           ? await captureKnownWorkUsageLedger(sourceDir, { runId: envelope.claim.runId, generation: envelope.claim.generation, usageHighWater: predictedHighWater })
           : undefined;
-        await materializeResultRepository(envelope, runDir, runState.currentAttempt);
-        const result = deadlineInterrupted
+        if(envelope.mode==="verify-saved-result"&&runState.status==="succeeded"){
+          try{
+            const saved=await loadSavedResultRecovery(envelope);
+            await assertSavedResultCompletionCandidate(runDir,saved,runState);
+            const repository=await materializeResultRepository(envelope,runDir,runState.currentAttempt);
+            await assertSavedResultDelivery(runDir,saved,runState,repository);
+          }catch(error){
+            Object.assign(runState,{status:"failed",waitingOnHuman:false,stopReason:error instanceof Error&&["saved-result-publication-unavailable","saved-result-source-stale"].includes(error.message)?error.message:"saved-result-modified-during-verification",lastTransitionAt:new Date().toISOString()});
+            await createOwnedRunStateWriter()(runDir,runState);
+          }
+        }else await materializeResultRepository(envelope, runDir, runState.currentAttempt);
+        let result = (deadlineInterrupted || envelope.mode==="verify-saved-result"&&!isTerminalRunStatus(runState.status))
           ? "partial" as const
           : request !== null && !isTerminalRunStatus(runState.status)
             ? "complete" as const
@@ -296,7 +315,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
               : runState.status === "blocked_waiting_human" || runState.status === "exhausted" || runState.status === "cancelled"
                 ? "partial" as const
                 : "failed" as const;
-        const built = await buildHandoffPacket(envelope, request, runState, predictedHighWater, result, allowanceUsage);
+        let built = await buildHandoffPacket(envelope, request, runState, predictedHighWater, result, allowanceUsage);
         const handoffUsage = await appendUsageObservation(sourceDir, {
           runId: envelope.claim.runId,
           generation: envelope.claim.generation,
@@ -308,6 +327,16 @@ export async function runControlWorker(argv: string[]): Promise<void> {
           sessions: 0,
           evidence: { requestId: request?.requestId ?? null, result, mechanical: true },
         });
+        if(envelope.mode==="verify-saved-result"&&runState.status==="succeeded"){
+          try{
+            const saved=await loadSavedResultRecovery(envelope);
+            await assertSavedResultDelivery(runDir,saved,runState,join(sourceDir,"repo"));
+          }catch(error){
+            Object.assign(runState,{status:"failed",waitingOnHuman:false,stopReason:error instanceof Error&&["saved-result-publication-unavailable","saved-result-source-stale"].includes(error.message)?error.message:"saved-result-modified-during-verification",lastTransitionAt:new Date().toISOString()});
+            await createOwnedRunStateWriter()(runDir,runState);
+            result="failed";built=await buildHandoffPacket(envelope,request,runState,handoffUsage.eventSeq,result,allowanceUsage);
+          }
+        }
         await persistHandoffCandidate(envelope, request, runState, built, {
           result,
           usageHighWater: handoffUsage.eventSeq,

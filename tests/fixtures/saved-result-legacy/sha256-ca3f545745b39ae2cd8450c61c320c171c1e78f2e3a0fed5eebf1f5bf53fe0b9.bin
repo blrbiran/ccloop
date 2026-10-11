@@ -1,0 +1,30 @@
+{
+  "reason": "completed",
+  "code": 0,
+  "signal": null,
+  "evidenceDir": "/private/tmp/results-task2-B8E1sf/run-e73e593c-d1d4-494f-83bf-bb0c61e17169/run/codex/1/execute/call-dWqmnf",
+  "observedTokens": null,
+  "executable": "/Users/biran/.nvm/versions/node/v22.13.1/bin/node",
+  "args": [
+    "/private/tmp/results-task2-B8E1sf/fake.mjs",
+    "exec",
+    "--json",
+    "--ephemeral",
+    "--color",
+    "never",
+    "--model",
+    "fixture",
+    "--sandbox",
+    "workspace-write",
+    "-C",
+    "/private/tmp/results-task2-B8E1sf/run-e73e593c-d1d4-494f-83bf-bb0c61e17169/run/worktrees/attempt-1",
+    "--output-schema",
+    "/private/tmp/results-task2-B8E1sf/run-e73e593c-d1d4-494f-83bf-bb0c61e17169/run/codex/1/execute/call-dWqmnf/schema.json",
+    "-o",
+    "/private/tmp/results-task2-B8E1sf/run-e73e593c-d1d4-494f-83bf-bb0c61e17169/run/codex/1/execute/call-dWqmnf/final.json",
+    "-"
+  ],
+  "stdoutTruncated": false,
+  "stderrTruncated": false,
+  "finalTruncated": false
+}

@@ -1,0 +1,10 @@
+{
+  "runId": "task-1",
+  "logicalSessionId": "task-1:2026-10-11T02:42:55.552Z",
+  "currentOwnerEpoch": 1,
+  "currentProcessInstanceId": "pid:49509:1791686574429",
+  "lastAffirmedAt": "2026-10-11T02:42:55.687Z",
+  "ownerStatus": "current",
+  "supersededByEpoch": null,
+  "leaseAffirmedAt": null
+}

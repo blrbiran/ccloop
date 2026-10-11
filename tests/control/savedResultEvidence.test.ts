@@ -104,7 +104,7 @@ it('captures original attempt, usage, full snapshot and exact runtime bytes befo
  const collected=JSON.parse(legacy.stdout);expect(Object.keys(collected)).toEqual(['events','candidate','terminal','progress']);expect(collected.terminal.status).toBe('failed');
  expect(Object.keys(collected.terminal)).toEqual(['status','currentAttempt','attemptsUsed','lastTransitionAt','waitingOnHuman','stopReason','budgetSnapshot','recentFailures']);
  expect(Object.hasOwn(collected.candidate,'capsule')).toBe(false);
- expect(JSON.parse((await f.rpc('features',{})).stdout)).toEqual({protocol:1,tokenPolicy:'optional-v1'});
+ expect(JSON.parse((await f.rpc('features',{})).stdout)).toEqual({protocol:1,tokenPolicy:'optional-v1',savedResultRecovery:'v1'});
  const foreign=await writeSavedBytes(f.sourceDir,Buffer.from('private foreign bytes'),async()=>{});
  expect((await f.rpc('read-saved-result-evidence',{input:f.input,capsuleRef:page.capsule,ref:foreign})).code).not.toBe(0);
  const changed=structuredClone(f.input);changed.claim.generation=2;
@@ -236,4 +236,23 @@ it("fix I1 preserves ordinary retry choice while binding each attempt's actual o
  const c=await jsonRef(f,page.capsule,page.capsule),current=(await exec("/usr/bin/git",["rev-parse","HEAD"],{cwd:f.repo})).stdout.trim();
  expect(c.attempt).toBe(2);expect(c.resolvedBase).toBe(current);expect(c.attemptStartHead).toBe(current);
  expect((await exec("/usr/bin/git",["rev-parse","HEAD^"],{cwd:f.repo})).stdout.trim()).not.toBe(c.resolvedBase);
+},30000);
+
+it("Task6 never turns a genuine current malformed capsule into an invented normalized execution",async()=>{
+ const f=await world(),page=JSON.parse((await f.rpc("saved-result-evidence",{input:f.input})).stdout);
+ const packagePath=join(f.root,"source-probe");await mkdir(packagePath,{mode:0o700});
+ const artifacts:any[]=[],seen=new Set<string>();
+ const visit=async(ref:any):Promise<void>=>{
+  if(seen.has(ref.artifactId))return;seen.add(ref.artifactId);
+  const response=await f.rpc("read-saved-result-evidence",{input:f.input,capsuleRef:page.capsule,ref});expect(response.code,response.stderr).toBe(0);
+  const bytes=Buffer.from(JSON.parse(response.stdout).base64,"base64"),file=ref.artifactId+".bin";await writeFile(join(packagePath,file),bytes,{mode:0o600});artifacts.push({ref,file});
+  let decoded:unknown;try{decoded=JSON.parse(bytes.toString());}catch{return;}
+  const walk=async(value:any):Promise<void>=>{if(value===null||typeof value!=="object")return;if(typeof value.artifactId==="string"&&typeof value.hash==="string"){await visit(value);return;}for(const child of Object.values(value))await walk(child);};
+  await walk(decoded);
+ };
+ await visit(page.capsule);
+ const manifest={schema:"ccloop-saved-result-source-package-v1",authorityKind:"execution-format-failure-v1",source:page.capsule,artifacts},bytes=Buffer.from(canonicalJson(manifest));
+ await writeFile(join(packagePath,"package.json"),bytes,{mode:0o600});
+ const {createHash}=await import("node:crypto"),{readSavedResultSourceEligibility}=await import("../../src/control/savedResultRecovery.js");
+ expect(await readSavedResultSourceEligibility({source:f.input,sourceAttempt:page.attempt,packagePath,packageHash:createHash("sha256").update(bytes).digest("hex")})).toEqual({status:"unavailable",reason:"execution-format-invalid"});
 },30000);

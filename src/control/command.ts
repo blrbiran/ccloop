@@ -1,3 +1,5 @@
+import {settleSavedResult,readSavedResultSettlement,savedResultSettlementSchema} from "./settleSavedResult.js";
+import {readSavedResultSourceEligibility,readSavedResultEligibility,savedResultEligibilitySchema,savedResultSourceEligibilitySchema} from "./savedResultRecovery.js";
 import { collectSavedResultEvidence, readSavedResultEvidence, savedResultCollectionSchema } from "./savedResultEvidence.js";
 import { z } from "zod";
 import { resolveAgent } from "../agents/materialize.js";
@@ -171,6 +173,10 @@ const METHODS = new Set<ControlMethodV1>([
   "read-evidence",
   "task-results",
   "read-task-result-evidence",
+  "settle-saved-result",
+  "read-saved-result-settlement",
+  "saved-result-source-eligibility",
+  "saved-result-eligibility",
   "saved-result-evidence",
   "read-saved-result-evidence",
 ]);
@@ -207,7 +213,7 @@ async function tableView(agentsTablePath: string): Promise<unknown> {
 }
 
 async function defaultHandler(request: ControlRequestV1, context: ControlContextV1): Promise<unknown> {
-  if (request.method === "features") return { protocol: 1, tokenPolicy: "optional-v1" };
+  if (request.method === "features") return { protocol: 1, tokenPolicy: "optional-v1", savedResultRecovery: "v1" };
   if (request.method === "capabilities") {
     if (request.agent === null) return await tableView(context.agentsTablePath);
     const { config, resolution } = await resolveAgent(await readAgentsTable(context.agentsTablePath), request.agent);
@@ -227,6 +233,10 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
   if (request.method === "collect") {
     return await collectExecution(request.input, request.afterSeq);
   }
+  if (request.method === "settle-saved-result")return settleSavedResult(request.input);
+  if (request.method === "read-saved-result-settlement"){const bytes=await readSavedResultSettlement(request.input,request.settlementRef,request.ref);return {...request.ref,base64:bytes.toString("base64")};}
+  if (request.method === "saved-result-source-eligibility") return await readSavedResultSourceEligibility(request.input);
+  if (request.method === "saved-result-eligibility") return await readSavedResultEligibility(request.input);
   if (request.method === "saved-result-evidence") return await collectSavedResultEvidence(request.input);
   if (request.method === "read-saved-result-evidence") {
     const bytes=await readSavedResultEvidence(request.input,request.capsuleRef,request.ref);
@@ -246,7 +256,7 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
 
 function validateResponse(method: ControlMethodV1, value: unknown, protocol = 3): unknown {
   try {
-    if (method === "features") return z.object({ protocol: z.literal(1), tokenPolicy: z.literal("optional-v1") }).strict().parse(value);
+    if (method === "features") return z.object({ protocol: z.literal(1), tokenPolicy: z.literal("optional-v1"), savedResultRecovery: z.literal("v1") }).strict().parse(value);
     if (method === "capabilities") return capabilitiesSchema.parse(value);
     if (method === "accept" || method === "inspect") return executionStatusSchema.parse(value);
     if (method === "handoff") return handoffAckSchema.parse(value);
@@ -256,9 +266,12 @@ function validateResponse(method: ControlMethodV1, value: unknown, protocol = 3)
         tokenRemainingStatus: z.enum(["known", "unlimited", "unknown"]),
       }).strict() }).nullable(),
     }) : collectionSchema).parse(value);
+    if (method === "settle-saved-result")return z.object({ref:artifactRefSchema,settlement:savedResultSettlementSchema}).strict().parse(value);
+    if (method === "saved-result-source-eligibility") return savedResultSourceEligibilitySchema.parse(value);
+    if (method === "saved-result-eligibility") return savedResultEligibilitySchema.parse(value);
     if (method === "saved-result-evidence") return savedResultCollectionSchema.parse(value);
     if (method === "task-results") return taskResultCollectionSchema.parse(value);
-    if (method === "read-evidence" || method === "read-task-result-evidence" || method === "read-saved-result-evidence") return evidenceSchema.parse(value);
+    if (method === "read-saved-result-settlement" || method === "read-evidence" || method === "read-task-result-evidence" || method === "read-saved-result-evidence") return evidenceSchema.parse(value);
     return value;
   } catch {
     throw new Error("control-response-invalid");
@@ -281,7 +294,7 @@ export async function runControlCommand(
     const payload = parseControlRequest(command.method, raw);
     const request = attachControlMethod(command.method, payload);
     const value = await (deps.handle ?? defaultHandler)(request, { agentsTablePath: command.agentsTablePath });
-    const validated = validateResponse(command.method, value, "input" in request ? request.input.protocol : 3);
+    const validated = validateResponse(command.method, value, "input" in request && "protocol" in request.input ? request.input.protocol : 3);
     const stdout = `${JSON.stringify(validated)}\n`;
     if (Buffer.byteLength(stdout) > MAX_CONTROL_BYTES) {
       throw new ControlProtocolError("control-response-too-large");

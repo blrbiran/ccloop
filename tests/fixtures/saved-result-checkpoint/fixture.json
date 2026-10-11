@@ -1,0 +1,122 @@
+{
+  "schema": "genuine-recovery-checkpoint-fixture-v1",
+  "input": {
+    "predecessorRunId": "run-e3e38edd-fcf2-482b-8b28-f6a05621ef63",
+    "checkpointId": "checkpoint-27a6c72b5aca1f4e936f86a4a41c577db4bfc8e926a6d581",
+    "checkpointHash": "fd47a8d5ae13d335af897a2eb87f7f628581dc12aab2d71060ca3f2f79100f80",
+    "bundlePath": "/private/tmp/results-task2-v2z4A0/next/input/checkpoint-27a6c72b5aca1f4e936f86a4a41c577db4bfc8e926a6d581"
+  },
+  "source": {
+    "protocol": 4,
+    "claim": {
+      "groupId": "g1",
+      "workItemId": "T1",
+      "taskId": "T1",
+      "runId": "run-e3e38edd-fcf2-482b-8b28-f6a05621ef63",
+      "generation": 1,
+      "graphVersion": 3,
+      "targetVersion": 1,
+      "commandId": "recover-command",
+      "configHash": "066bd445b52b4074f2095eb8a2e43879d35aef0b7cf3a897f0bafca7b4168689",
+      "agent": {
+        "agent": "codex",
+        "model": "fixture-new-verifier",
+        "contextWindow": "agent-default"
+      },
+      "grant": {
+        "work": {
+          "tokens": 1000,
+          "activeMs": 30000,
+          "attempts": 2,
+          "sessions": 1
+        },
+        "handoff": {
+          "tokens": 1000,
+          "activeMs": 30000,
+          "attempts": 2,
+          "sessions": 1
+        }
+      },
+      "ownerToken": "recover-owner"
+    },
+    "contractHash": "653938bd2a52eba5c7b682e79db27b1adf9c482df43508bca49bed5c112d6cf4",
+    "inputCheckpoint": null,
+    "work": {
+      "kind": "loop",
+      "contract": {
+        "objective": {
+          "taskId": "task-1",
+          "goal": "Produce answer",
+          "successCondition": "check",
+          "nonGoals": []
+        },
+        "context": {
+          "repoPath": "/private/tmp/results-task2-v2z4A0/repo",
+          "targetPaths": [
+            "answer.txt"
+          ],
+          "relevantDocs": [],
+          "buildTestCommands": [
+            "true"
+          ],
+          "constraints": []
+        },
+        "executionPolicy": {
+          "autonomyLevel": "L2",
+          "maxAttempts": 2,
+          "perAttemptTimeoutMs": 10000,
+          "totalRuntimeBudgetMs": 30000,
+          "tokenBudget": 1000,
+          "worktreeRequired": true,
+          "partialOutcomeRecoveryWindowMs": 0
+        },
+        "safetyPolicy": {
+          "allowlistPaths": [],
+          "denylistPaths": [],
+          "maxFilesTouched": 64,
+          "humanGateConditions": []
+        },
+        "verification": {
+          "verifierType": "agent",
+          "requiredChecks": [
+            "node -e \"const f=require('fs');if(process.env.CCLOOP_RECOVERY_CHECK_MARKER)f.appendFileSync(process.env.CCLOOP_RECOVERY_CHECK_MARKER,'check\\n');if(process.env.CCLOOP_RECOVERY_CHECK_MUTATE)f.writeFileSync('answer.txt','modified');if(f.readFileSync('answer.txt','utf8')!=='saved candidate\\n')process.exit(1)\""
+          ],
+          "rejectOn": [
+            "check failed"
+          ],
+          "evidenceRequired": []
+        },
+        "escalationAndExit": {
+          "escalationTargets": [],
+          "pauseOn": [],
+          "stopOn": [],
+          "terminalStates": [
+            "succeeded",
+            "failed",
+            "exhausted",
+            "cancelled",
+            "blocked_waiting_human"
+          ]
+        }
+      },
+      "targetRepo": "/private/tmp/results-task2-v2z4A0/repo",
+      "base": "18a46bf111c922fc07349ae2a795def18bdd7d9c",
+      "sourceDir": "/private/tmp/results-task2-v2z4A0/run-e3e38edd-fcf2-482b-8b28-f6a05621ef63"
+    },
+    "mode": "verify-saved-result",
+    "savedResultRecovery": {
+      "packagePath": "/private/tmp/results-task2-v2z4A0/run-e3e38edd-fcf2-482b-8b28-f6a05621ef63/input/recovery",
+      "packageHash": "1dc070ec8ab480aab55f657960db0ad79d22a026051795c60ff7c582eabfc690",
+      "admissionHash": "128b49792016041c63bea6dc27ceffc9a6928756d9cc732190fcee63e758f8a6",
+      "recoveryOf": {
+        "sourceRunId": "run-e73e593c-d1d4-494f-83bf-bb0c61e17169",
+        "sourceAttempt": 1,
+        "capsuleHash": "44fb75e737430bfd3b0682850bd583bc63b82102e8204e80b7f17f47f7854582",
+        "snapshotHash": "e82c776f4f0d7da7059f9a1084727b24e5704fbcf7e5ce082427a17d4339b265",
+        "normalizedExecutionHash": "412d7a5ae7050505fde52aa983abecf0c34e399f4296666e89db1fbcf0bbbf79"
+      }
+    }
+  },
+  "producerBase": "367066b38f171d01663d7b767fdbfecca7d4f53c",
+  "limitation": "Current Task6 worker over typed controller admission; real archiveRun, usage observation, commitCandidate and exportResumeBundle primitives; not Task7 owner recovery authorization."
+}

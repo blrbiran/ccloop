@@ -308,7 +308,11 @@ export async function buildHandoffPacket(
   for (const kind of listDescriptors().map((descriptor) => descriptor.kind).sort()) {
     await retainAgentLogs(envelope.work.sourceDir, runDir, join(runDir, kind), artifacts, rawLogs);
   }
-  const stateRef = await retainFile(envelope.work.sourceDir, join(runDir, "loop-state.json"), "loop-state.json", artifacts, missing);
+  const {savedResult:_privateRecovery,...coreRunState}=runState;
+  const stateRef = _privateRecovery === undefined
+    ? await retainFile(envelope.work.sourceDir, join(runDir, "loop-state.json"), "loop-state.json", artifacts, missing)
+    : await writeEvidence(envelope.work.sourceDir,Buffer.from(canonicalJson(coreRunState)));
+  if(_privateRecovery !== undefined)artifacts.push(stateRef!);
   await retainFile(envelope.work.sourceDir, join(runDir, "loop-contract.json"), "loop-contract.json", artifacts, missing);
   const phaseRefs: Record<string, ArtifactRefV1 | null> = {};
   if (runState.currentAttempt > 0) {
@@ -346,7 +350,7 @@ export async function buildHandoffPacket(
     ...allowance,
     identity: identity(envelope),
     request,
-    runState,
+    runState:coreRunState,
     completed: runState.attemptsUsed > 0 ? [`${runState.attemptsUsed} attempt(s) entered`] : [],
     unfinished: runState.status === "succeeded" ? [] : [envelope.work.contract.objective.successCondition],
     pendingDecisions,

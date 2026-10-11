@@ -81,6 +81,24 @@ function assertUniquePaths(snapshot:SnapshotV1):void {
  const expectedDeleted=new Set(snapshot.index.filter(entry=>!tree.has(entry.path)).map(entry=>entry.path));
  if(expectedDeleted.size!==new Set(snapshot.deleted).size||snapshot.deleted.some(path=>!expectedDeleted.has(path)))fail("control-resume-snapshot-invalid");
 }
+/** Recovery mode remains in the original archive even though the core handoff projects it away. */
+function refuseRecoveryCheckpoint(checkpoint:Record<string,unknown>,manifest:ResumeBundleV1,bytes:Map<string,Buffer>):void {
+ const roots=z.array(artifactRefSchema).safeParse(checkpoint.artifacts);if(!roots.success)return;
+ const decode=(ref:ArtifactRefV1):any=>{const value=bytes.get(ref.artifactId);if(!value||sha256(value)!==ref.hash)fail("control-resume-artifact-missing");try{return JSON.parse(value.toString("utf8"));}catch{fail("control-resume-checkpoint-invalid");}};
+ for(const ref of roots.data){
+  if(!ref.artifactId.startsWith("archive-"))continue;
+  const archive=decode(ref);
+  if(archive.version!==1||archive.runId!==manifest.predecessorRunId||canonicalHash(archive.snapshot)!==canonicalHash(manifest.snapshot))fail("control-resume-checkpoint-invalid");
+  if(!Array.isArray(archive.logs))fail("control-resume-checkpoint-invalid");
+  for(const path of ["control/envelope.json","run/loop-state.json"]){
+   const entries=archive.logs.filter((entry:any)=>entry.path===path);if(entries.length>1)fail("control-resume-checkpoint-invalid");
+   if(!entries.length)continue;
+   const parsed=artifactRefSchema.safeParse(entries[0].ref);if(!parsed.success)fail("control-resume-checkpoint-invalid");
+   const value=decode(parsed.data);
+   if(value.mode==="verify-saved-result"||value.savedResult?.mode==="verify-saved-result")fail("saved-result-explicit-command-required");
+  }
+ }
+}
 async function loadBundle(input:InputCheckpointV1):Promise<LoadedBundle>{
  if(!isAbsolute(input.bundlePath))fail("control-resume-bundle-path-invalid");
  let root:string;try{root=await realpath(input.bundlePath);}catch{fail("control-resume-bundle-path-invalid");}
@@ -98,6 +116,7 @@ async function loadBundle(input:InputCheckpointV1):Promise<LoadedBundle>{
  const checkpointBytes=bytes.get(manifest.checkpoint.artifactId);if(!checkpointBytes||sha256(checkpointBytes)!==input.checkpointHash)fail("control-resume-checkpoint-mismatch");
  let checkpoint:unknown;try{checkpoint=JSON.parse(checkpointBytes.toString("utf8"));}catch{fail("control-resume-checkpoint-invalid");}
  const checkpointRecord=checkpoint as Record<string,unknown>;if(checkpointRecord.checkpointId!==input.checkpointId||JSON.stringify(checkpointRecord.snapshot)!==JSON.stringify(manifest.snapshot))fail("control-resume-checkpoint-invalid");
+ refuseRecoveryCheckpoint(checkpointRecord,manifest,bytes);
  const snapshotBytes=bytes.get(manifest.snapshot.artifactId);if(!snapshotBytes)fail("control-resume-artifact-missing");let snapshotRaw:unknown;
  try{snapshotRaw=JSON.parse(snapshotBytes.toString("utf8"));}catch{fail("control-resume-snapshot-invalid");}
  const snapshotParsed=snapshotSchema.safeParse(snapshotRaw);if(!snapshotParsed.success)fail("control-resume-snapshot-invalid");const snapshot=snapshotParsed.data;

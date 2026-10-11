@@ -1,0 +1,58 @@
+{
+  "objective": {
+    "taskId": "task-1",
+    "goal": "Produce answer",
+    "successCondition": "check",
+    "nonGoals": []
+  },
+  "context": {
+    "repoPath": "/private/tmp/results-task2-SeV63H/run-05a2d432-32d5-40f6-8f63-0a003d8deef5/repo",
+    "targetPaths": [
+      "answer.txt"
+    ],
+    "relevantDocs": [],
+    "buildTestCommands": [
+      "true"
+    ],
+    "constraints": []
+  },
+  "executionPolicy": {
+    "autonomyLevel": "L2",
+    "maxAttempts": 2,
+    "perAttemptTimeoutMs": 10000,
+    "totalRuntimeBudgetMs": 30000,
+    "tokenBudget": 1000,
+    "worktreeRequired": true,
+    "partialOutcomeRecoveryWindowMs": 0
+  },
+  "safetyPolicy": {
+    "allowlistPaths": [],
+    "denylistPaths": [
+      "answer.txt"
+    ],
+    "maxFilesTouched": 64,
+    "humanGateConditions": []
+  },
+  "verification": {
+    "verifierType": "agent",
+    "requiredChecks": [
+      "node -e \"const f=require('fs');if(process.env.CCLOOP_RECOVERY_CHECK_MARKER)f.appendFileSync(process.env.CCLOOP_RECOVERY_CHECK_MARKER,'check\\n');if(process.env.CCLOOP_RECOVERY_CHECK_MUTATE)f.writeFileSync('answer.txt','modified');if(f.readFileSync('answer.txt','utf8')!=='saved candidate\\n')process.exit(1)\""
+    ],
+    "rejectOn": [
+      "check failed"
+    ],
+    "evidenceRequired": []
+  },
+  "escalationAndExit": {
+    "escalationTargets": [],
+    "pauseOn": [],
+    "stopOn": [],
+    "terminalStates": [
+      "succeeded",
+      "failed",
+      "exhausted",
+      "cancelled",
+      "blocked_waiting_human"
+    ]
+  }
+}

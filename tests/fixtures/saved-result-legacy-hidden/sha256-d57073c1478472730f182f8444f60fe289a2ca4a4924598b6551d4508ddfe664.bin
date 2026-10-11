@@ -1,0 +1,14 @@
+{
+  "status": "failed",
+  "currentAttempt": 1,
+  "attemptsUsed": 1,
+  "lastTransitionAt": "2026-10-11T02:05:41.396Z",
+  "waitingOnHuman": false,
+  "stopReason": "Error: [\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"changedFiles\",\n      \"diffPatch\",\n      \"commandOutputs\",\n      \"stdoutStderrLog\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key(s) in object: 'changedFiles', 'diffPatch', 'commandOutputs', 'stdoutStderrLog'\"\n  }\n]: /private/tmp/results-task2-SeV63H/run-05a2d432-32d5-40f6-8f63-0a003d8deef5/run/codex/1/execute/call-ouctIs",
+  "budgetSnapshot": {
+    "attemptsRemaining": 1,
+    "timeRemainingMs": 29876,
+    "tokenBudgetRemaining": 985
+  },
+  "recentFailures": []
+}
