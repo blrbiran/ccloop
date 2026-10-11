@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runControlCommand } from "../../src/control/command.js";
 import { applyAgentInstallations, previewAgentInstallations } from "../../src/agents/updates.js";
-import { assertUpdatesRoot, replaceTableDurably } from "../../src/agents/updateReceipt.js";
+import { assertUpdatesRoot, replaceTableDurably, writeOwnedJson } from "../../src/agents/updateReceipt.js";
 
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ccloop-agent-updates-")));
@@ -22,6 +22,13 @@ async function control(method: string, path: string, payload: object = {}) {
 }
 
 describe("configured installation updates", () => {
+  it("publishes an immutable private JSON file without clobbering an existing receipt", async () => {
+    const f = await fixture();
+    const root = await assertUpdatesRoot(f.path, true);
+    await writeOwnedJson(root, "receipt-immutable.json", { value: 1 });
+    await expect(writeOwnedJson(root, "receipt-immutable.json", { value: 2 })).rejects.toMatchObject({ code: "EEXIST" });
+    expect(JSON.parse(await readFile(join(root, "receipt-immutable.json"), "utf8"))).toEqual({ value: 1 });
+  });
   it("refuses a table changed after the replacement temporary file was written", async () => {
     const f = await fixture();
     const expected = await readFile(f.path);

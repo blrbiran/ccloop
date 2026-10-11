@@ -54,7 +54,7 @@ describe("durable installation update operation", { timeout: 30_000 }, () => {
     expect(results.find((result) => result.code === 2)?.stderr).toContain("agent-installation-update-stale");
   });
 
-  it.each(["before-rename", "temp-fsynced", "after-rename", "after-receipt"])("recovers the same receipt after a crash %s", async (point) => {
+  it.each(["intent-open", "before-rename", "temp-fsynced", "after-rename", "receipt-open", "after-receipt"])("recovers the same receipt after a crash %s", async (point) => {
     const f = await setup();
     const marker = join(f.root, "crash-marker");
     const crashed = await subprocess(f.path, f.request, { point: `agent-update-${point}`, marker });

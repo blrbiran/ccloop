@@ -43,10 +43,40 @@ export async function readOwnedJson<T>(root: string, name: string): Promise<T | 
 }
 
 export async function writeOwnedJson(root: string, name: string, value: unknown): Promise<void> {
-  const fd = await open(join(root, name), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  try { await fd.writeFile(`${JSON.stringify(value)}\n`); await fd.sync(); }
-  finally { await fd.close(); }
-  await syncDirectory(root);
+  const temporary = join(root, `${name}.tmp`);
+  const target = join(root, name);
+  // A previous crash may have left this operation's unpublished temporary. No final artifact
+  // is read or replaced here, and only this exact private owned temporary can be removed.
+  let old;
+  try { old = await lstat(temporary); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  if (old !== undefined) {
+    if (!old.isFile() || old.isSymbolicLink() || old.uid !== process.geteuid!() || (old.mode & 0o077) !== 0) fail("invalid owned JSON temporary file");
+    await unlink(temporary);
+    await syncDirectory(root);
+  }
+  const fd = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try {
+    if (name.startsWith("intent-")) await testCrashPoint("agent-update-intent-open");
+    if (name.startsWith("receipt-")) await testCrashPoint("agent-update-receipt-open");
+    await fd.writeFile(`${JSON.stringify(value)}\n`);
+    await fd.sync();
+  } catch (error) {
+    await fd.close();
+    await unlink(temporary).catch(() => undefined);
+    throw error;
+  }
+  await fd.close();
+  try {
+    await syncDirectory(root);
+    // link is atomic and refuses an existing immutable preview, intent or receipt. Readers
+    // cannot observe a partial final JSON file, even if the process dies during writing.
+    await link(temporary, target);
+    await syncDirectory(root);
+  } finally {
+    await unlink(temporary).catch(() => undefined);
+    await syncDirectory(root);
+  }
 }
 
 async function deadLock(root: string): Promise<boolean> {
