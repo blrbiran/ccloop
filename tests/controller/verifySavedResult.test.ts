@@ -146,3 +146,62 @@ it('refuses a candidate moved behind a workspace path symlink even when every by
   await expect(candidateFingerprint(workspace.worktreePath)).rejects.toThrow('saved-result-modified-during-verification');
  }finally{await rm(f.root,{recursive:true,force:true});}
 });
+
+
+it.each(['candidate','protected-input','fence'] as const)('r1 refuses %s changes before returned-result handoff publication and retains actual verification usage',async kind=>{
+ const f=await savedRecoveryFixture();try{
+  const abort=new AbortController(),observations:any[]=[];let plan=0,execute=0,verify=0;
+  const state=await runLoop(f.input.work.contract,f.runDir,{plan:async()=>{plan++;throw Error('plan replay');},execute:async()=>{execute++;throw Error('execute replay');},verify:async c=>{
+   verify++;if(kind==='candidate')await writeFile(join(c.worktreePath,'answer.txt'),'modified during handoff');
+   if(kind==='protected-input')await writeFile(join(f.runDir,'loop-contract.json'),'{}');
+   if(kind==='fence')await rm(join(f.sourceDir,'control/recovery-fence.json'));
+   abort.abort();return {...verified,tokenUsage:7};
+  }},{savedResultRecovery:f.input,phaseSignal:abort.signal,onPhaseSettled:async o=>{observations.push(o);}});
+  expect(state.status).toBe('failed');expect(state.stopReason).toContain(kind==='fence'?'saved-result-source-stale':'saved-result-modified-during-verification');
+  expect([plan,execute,verify]).toEqual([0,0,1]);expect(observations).toHaveLength(1);expect(observations[0]).toMatchObject({phase:'verify',tokenUsage:7,completedWithResult:true});expect(state.budgetSnapshot.tokenBudgetRemaining).toBe(993);
+  const events=(await readFile(join(f.runDir,'events.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line).type);
+  expect(events).not.toContain('handoff_interrupted');expect(events).not.toContain('handoff_boundary');expect(f.log('run/loop-state.json').status).toBe('failed');
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
+it('r1 retains unchanged returned-result interruption without replaying paid phases',async()=>{
+ const f=await savedRecoveryFixture();try{
+  const abort=new AbortController(),observations:any[]=[];let verify=0;
+  const state=await runLoop(f.input.work.contract,f.runDir,{plan:async()=>{throw Error('plan replay');},execute:async()=>{throw Error('execute replay');},verify:async()=>{verify++;abort.abort();return {...verified,tokenUsage:7};}},{savedResultRecovery:f.input,phaseSignal:abort.signal,onPhaseSettled:async o=>{observations.push(o);}});
+  expect(state.status).toBe('verifying');expect(state.stopReason).toBeNull();expect(verify).toBe(1);expect(observations).toHaveLength(1);expect(observations[0]).toMatchObject({phase:'verify',tokenUsage:7});expect(state.budgetSnapshot.tokenBudgetRemaining).toBe(993);
+  expect(await readFile(join(f.runDir,'worktrees/attempt-1/answer.txt'),'utf8')).toBe('saved candidate\n');
+  expect((await readFile(join(f.runDir,'events.jsonl'),'utf8'))).toContain('handoff_interrupted');
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
+it.each([false,true])('r1 command interruption modified=%s checks recovery integrity without inventing provider usage',async modified=>{
+ const f=await savedRecoveryFixture();let stopped:Promise<void>|undefined;try{
+  const {mkdir,stat}=await import('node:fs/promises'),home=join(f.root,'command-home'),ready=join(f.root,'command-ready');await mkdir(home,{mode:0o700});
+  await writeFile(join(home,'.profile'),(modified?"printf changed > answer.txt\n":'')+`printf ready > '${ready}'\nwhile :; do sleep 1; done\n`);vi.stubEnv('HOME',home);
+  const abort=new AbortController(),observations:any[]=[];let verify=0;
+  stopped=(async()=>{for(let i=0;i<250;i++){try{await stat(ready);abort.abort();return;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}await new Promise(r=>setTimeout(r,20));}throw Error('command was not entered');})();
+  const state=await runLoop(f.input.work.contract,f.runDir,{plan:async()=>{throw Error('plan replay');},execute:async()=>{throw Error('execute replay');},verify:async()=>{verify++;return {...verified,tokenUsage:7};}},{savedResultRecovery:f.input,phaseSignal:abort.signal,onPhaseSettled:async o=>{observations.push(o);}});await stopped;
+  expect(verify).toBe(0);expect(observations).toHaveLength(1);expect(observations[0]).toMatchObject({phase:'verify',tokenUsage:null,completedWithResult:false});
+  const events=(await readFile(join(f.runDir,'events.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line).type);
+  if(modified){expect(state.status).toBe('failed');expect(state.stopReason).toContain('saved-result-modified-during-verification');expect(events).not.toContain('handoff_interrupted');}
+  else{expect(state.status).toBe('verifying');expect(events).toContain('handoff_interrupted');expect(await readFile(join(f.runDir,'worktrees/attempt-1/answer.txt'),'utf8')).toBe('saved candidate\n');}
+ }finally{vi.unstubAllEnvs();await stopped?.catch(()=>undefined);await rm(f.root,{recursive:true,force:true});}
+},15000);
+it('r1 rechecks private fence authority after registration before releasing the real check',async()=>{
+ const f=await savedRecoveryFixture();try{
+  const marker=join(f.root,'checks');vi.stubEnv('CCLOOP_RECOVERY_CHECK_MARKER',marker);let verifier=0;
+  const state=await runLoop(f.input.work.contract,f.runDir,{plan:async()=>{throw Error('plan replay');},execute:async()=>{throw Error('execute replay');},verify:async()=>{verifier++;return {...verified,tokenUsage:7};}},{savedResultRecovery:f.input,onProcessRegistered:async()=>{await chmod(join(f.sourceDir,'control'),0o777);}});
+  expect(state.status).toBe('failed');expect(state.stopReason).toContain('saved-result-source-stale');expect(verifier).toBe(0);await expect(readFile(marker)).rejects.toMatchObject({code:'ENOENT'});
+  expect((await import('node:fs/promises').then(fs=>fs.stat(join(f.sourceDir,'control')))).mode&0o7777).toBe(0o777);
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
+
+it('r1 retains observed usage when timeout cleanup races an external handoff interruption',async()=>{
+ const f=await savedRecoveryFixture();try{
+  f.input.claim.grant.work.activeMs=3000;f.admission.funding.freshGrant.work.activeMs=3000;f.admission.funding.fundedTotal.activeMs=33000;await f.seal();
+  const abort=new AbortController(),observations:any[]=[];let verify=0;
+  const state=await runLoop(f.input.work.contract,f.runDir,{plan:async()=>{throw Error('plan replay');},execute:async()=>{throw Error('execute replay');},verify:async c=>{
+   verify++;await new Promise<void>(resolve=>c.abortSignal!.addEventListener('abort',()=>resolve(),{once:true}));abort.abort();throw Object.assign(Error('verifier interrupted after observed usage'),{name:'AbortError',observedTokens:7});
+  }},{savedResultRecovery:f.input,phaseSignal:abort.signal,onPhaseSettled:async o=>{observations.push(o);}});
+  expect(verify).toBe(1);expect(state.status).toBe('exhausted');expect(state.stopReason).toBe('runtime or token budget exhausted');expect(state.budgetSnapshot.timeRemainingMs).toBe(0);expect(observations).toHaveLength(1);expect(observations[0]).toMatchObject({phase:'verify',tokenUsage:7,completedWithResult:false});expect(state.budgetSnapshot.tokenBudgetRemaining).toBe(993);
+  expect((await readFile(join(f.runDir,'events.jsonl'),'utf8'))).not.toContain('handoff_interrupted');
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},10000);

@@ -75,8 +75,13 @@ export async function savedGit(cwd:string,...args:string[]):Promise<Buffer>{
  const env={...process.env};for(const key of Object.keys(env))if(key.startsWith("GIT_"))delete env[key];
  return (await exec("/usr/bin/git",["--no-replace-objects","-c","core.hooksPath=/dev/null","-c","core.fsmonitor=false",...args],{cwd,env,encoding:"buffer",maxBuffer:16*1024*1024,timeout:30000})).stdout;
 }
+async function assertPrivateAuthorityDirectory(root:string):Promise<void>{
+ const metadata=await lstat(root);
+ if(await realpath(root)!==root||!metadata.isDirectory()||metadata.isSymbolicLink()||(metadata.mode&0o7777)!==0o700
+  ||typeof process.getuid!=="function"||metadata.uid!==process.getuid())fail("saved-result-package-path-invalid");
+}
 async function privateBytes(root:string,file:string):Promise<Buffer>{
- if(await realpath(root)!==root||(await lstat(root)).isSymbolicLink())fail("saved-result-package-path-invalid");
+ await assertPrivateAuthorityDirectory(root);
  const target=join(root,file);if(await realpath(target)!==target)fail("saved-result-package-path-invalid");
  const before=await lstat(target,{bigint:true});
  if(!before.isFile()||before.nlink!==1n||(before.mode&0o7777n)!==0o600n||before.size>BigInt(12*1024*1024-1024))fail("saved-result-package-file-invalid");
@@ -108,7 +113,8 @@ async function loadPackage(input:LoopStartEnvelope,requireFence=true){
  if(input.protocol!==4||input.mode!=="verify-saved-result"||!input.savedResultRecovery||input.inputCheckpoint!==null)fail("saved-result-mode-invalid");
  const r=input.savedResultRecovery,root=r.packagePath;
  const inputRoot=join(input.work.sourceDir,"input");
- if(dirname(root)!==inputRoot||await realpath(inputRoot)!==inputRoot)fail("saved-result-package-path-invalid");
+ if(dirname(root)!==inputRoot)fail("saved-result-package-path-invalid");
+ await assertPrivateAuthorityDirectory(inputRoot);
  const raw=await privateBytes(root,"package.json");if(digest(raw)!==r.packageHash)fail("saved-result-package-hash-mismatch");
  const manifest=savedResultPackageSchema.parse(JSON.parse(raw.toString())),bytes=new Map<string,Buffer>(),files=new Set(["package.json"]);
  for(const e of manifest.artifacts){
@@ -129,6 +135,7 @@ async function loadPackage(input:LoopStartEnvelope,requireFence=true){
   if(p.runId!==admission.currentRunId||p.runId===admission.source.runId||!same(p.recoveryOf,r.recoveryOf))fail("saved-result-source-stale");
  }
  if(requireFence)await assertSavedResultFence(input,admission);
+ else await assertPrivateAuthorityDirectory(join(input.work.sourceDir,"control"));
  return {manifest,bytes,get,json,admission};
 }
 async function validateSnapshot(snapshot:LegacySnapshot,get:(ref:ArtifactRefV1)=>Buffer,runId:string,attempt:number,base:string):Promise<string[]>{

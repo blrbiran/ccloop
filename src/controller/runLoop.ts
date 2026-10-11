@@ -1843,9 +1843,10 @@ export async function runLoopFromState(
         throw error;
       }
 
-      if (handoffAborted()) {
+      if (handoffAborted() && !(recovery && verifyOutcome.timedOut)) {
         await settlePhase("verify", attempt, verifyOutcome.elapsedMs, verifyOutcome.result);
         await flushStartedCapture();
+        if(recovery)await assertSavedResultUnmodified(runDir,worktreePath,recovery,state);
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
         return await persistHandoffBoundary("handoff_interrupted", `handoff deadline interrupted verify in attempt ${attempt}`);
       }

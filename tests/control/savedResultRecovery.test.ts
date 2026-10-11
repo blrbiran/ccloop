@@ -138,3 +138,30 @@ it.each(['attempt_commit_publish_failed','workspace_cleanup_failed'])('refuses a
   expect(await readSavedResultEligibility(f.input)).toEqual({status:'unavailable',reason:'saved-result-legacy-publication-unproven'});
  }finally{await rm(f.root,{recursive:true,force:true});}
 },30000);
+
+
+it.each(['execution-package','input-parent','fence-control'] as const)('r1 rejects nonprivate %s authority without repairing caller permissions',async kind=>{
+ const f=await savedRecoveryFixture();try{
+  expect((await readSavedResultEligibility(f.input)).status).toBe('eligible');
+  const {chmod,stat}=await import('node:fs/promises'),root=kind==='execution-package'?f.input.savedResultRecovery!.packagePath:join(f.sourceDir,kind==='input-parent'?'input':'control');
+  await chmod(root,0o777);expect(await readSavedResultEligibility(f.input)).toEqual({status:'unavailable',reason:kind==='fence-control'?'saved-result-source-stale':'saved-result-package-path-invalid'});
+  expect((await stat(root)).mode&0o7777).toBe(0o777);
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
+it('r1 rejects a nonprivate source-only package without creating execution authority or changing permissions',async()=>{
+ const f=await savedRecoveryFixture();try{
+  const {chmod,stat}=await import('node:fs/promises'),packagePath=join(f.root,'source-private-probe');await mkdir(packagePath,{mode:0o700});const {admission,...rest}=f.manifest,manifest={...rest,schema:'ccloop-saved-result-source-package-v1'};
+  for(const e of manifest.artifacts)await cp(join(f.input.savedResultRecovery!.packagePath,e.file),join(packagePath,e.file));
+  const bytes=Buffer.from(canonicalJson(manifest));await writeFile(join(packagePath,'package.json'),bytes,{mode:0o600});const input={source:f.source,sourceAttempt:1,packagePath,packageHash:createHash('sha256').update(bytes).digest('hex')};
+  expect((await readSavedResultSourceEligibility(input)).status).toBe('eligible');await chmod(packagePath,0o777);
+  expect(await readSavedResultSourceEligibility(input)).toEqual({status:'unavailable',reason:'saved-result-package-path-invalid'});expect((await stat(packagePath)).mode&0o7777).toBe(0o777);await expect(stat(f.runDir)).rejects.toMatchObject({code:'ENOENT'});
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
+
+it('r1 refuses nonprivate control authority when a revoked fence is omitted for dead-owner reconciliation',async()=>{
+ const f=await savedRecoveryFixture();try{
+  const {loadSavedResultRecovery}=await import('../../src/control/savedResultRecovery.js'),{chmod,stat}=await import('node:fs/promises');
+  await rm(join(f.sourceDir,'control/recovery-fence.json'));await loadSavedResultRecovery(f.input,false);
+  await chmod(join(f.sourceDir,'control'),0o777);const outcome=await loadSavedResultRecovery(f.input,false).then(()=>({status:'loaded'}),error=>({status:'refused',reason:error.message}));expect(outcome).toEqual({status:'refused',reason:'saved-result-package-path-invalid'});expect((await stat(join(f.sourceDir,'control'))).mode&0o7777).toBe(0o777);
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
