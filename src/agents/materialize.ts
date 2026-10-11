@@ -23,27 +23,34 @@ const VERSION_TIMEOUT_MS = 10_000;
 export function probeVersion(command: string[], options: { timeoutMs?: number } = {}): Promise<string | null> {
   return new Promise((resolve) => {
     let settled = false;
+    let aborted = false;
     let output = "";
-    const child = spawn(command[0]!, [...command.slice(1), "--version"], { stdio: ["ignore", "pipe", "ignore"], env: process.env });
+    // A private process group lets timeout/overflow reap descendants that a CLI leaves behind.
+    const child = spawn(command[0]!, [...command.slice(1), "--version"], { stdio: ["ignore", "pipe", "ignore"], env: process.env, detached: true });
     const finish = (value: string | null): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       resolve(value);
     };
+    const abortTree = (): void => {
+      if (aborted) return;
+      aborted = true;
+      if (child.pid !== undefined) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+      }
+    };
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish(null);
+      abortTree();
     }, options.timeoutMs ?? VERSION_TIMEOUT_MS);
     child.stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString("utf8");
       if (output.length > VERSION_OUTPUT_LIMIT) {
-        child.kill("SIGKILL");
-        finish(null);
+        abortTree();
       }
     });
     child.on("error", () => finish(null));
-    child.on("close", (code) => finish(code === 0 ? (VERSION_PATTERN.exec(output)?.[0] ?? null) : null));
+    child.on("close", (code) => finish(!aborted && code === 0 ? (VERSION_PATTERN.exec(output)?.[0] ?? null) : null));
   });
 }
 

@@ -64,22 +64,25 @@ function assertPrivate(metadata: { uid: number; mode: number }, euid: number, wh
  * is its own realpath, and it and its directory must belong to the effective user and be writable by no one
  * else. `deps.euid` exists so a criterion can observe the owner check without root.
  */
-export async function readAgentsTable(path: string, deps: { euid?: number } = {}): Promise<AgentsTableV1> {
+export async function readAgentsTableSnapshot(path: string, deps: { euid?: number } = {}): Promise<{ table: AgentsTableV1; bytes: Buffer; mode: number }> {
   if (!isAbsolute(path)) throw invalid("table path is not absolute");
   const euid = deps.euid ?? process.geteuid!();
   let handle;
-  let text: string;
+  let bytes: Buffer;
+  let mode: number;
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const metadata = await handle.stat();
     if (!metadata.isFile()) throw invalid("table is not a regular file");
     assertPrivate(metadata, euid, "table");
     if (metadata.size > MAX_TABLE_BYTES) throw invalid("table is larger than 1 MiB");
+    mode = metadata.mode & 0o777;
     if ((await realpath(path)) !== path) throw invalid("table path is not its own realpath");
     const parent = await lstat(dirname(path));
     if (!parent.isDirectory()) throw invalid("table directory is not a directory");
     assertPrivate(parent, euid, "table directory");
-    text = (await handle.readFile()).toString("utf8");
+    bytes = await handle.readFile();
+    if (bytes.length > MAX_TABLE_BYTES) throw invalid("table is larger than 1 MiB");
   } catch (error) {
     if (error instanceof AgentError) throw error;
     throw invalid(error instanceof Error ? error.message : String(error));
@@ -88,11 +91,15 @@ export async function readAgentsTable(path: string, deps: { euid?: number } = {}
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(text) as unknown;
+    raw = JSON.parse(bytes.toString("utf8")) as unknown;
   } catch {
     throw invalid("table is not JSON");
   }
-  return parseAgentsTable(raw);
+  return { table: parseAgentsTable(raw), bytes, mode };
+}
+
+export async function readAgentsTable(path: string, deps: { euid?: number } = {}): Promise<AgentsTableV1> {
+  return (await readAgentsTableSnapshot(path, deps)).table;
 }
 
 /**

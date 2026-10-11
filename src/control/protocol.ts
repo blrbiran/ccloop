@@ -8,6 +8,9 @@ import { loopContractSchema, type LoopContract } from "../contract/schema.js";
 
 export type ControlMethodV1 =
   | "features"
+  | "agent-installation-observe"
+  | "agent-installation-preview"
+  | "agent-installation-apply"
   | "capabilities"
   | "accept"
   | "inspect"
@@ -126,6 +129,9 @@ export interface SavedResultSourceInput { source: LoopStartEnvelope; sourceAttem
 
 export type ControlRequestV1 =
   | { method: "features" }
+  | { method: "agent-installation-observe" }
+  | { method: "agent-installation-preview" }
+  | { method: "agent-installation-apply"; opId: string; requestDigest: string; previewId: string; baseTableHash: string; acceptedChangeIds: string[] }
   | { method: "capabilities"; agent: PartialSelectionV1 | null }
   | { method: "accept"; input: StartEnvelopeV3 }
   | { method: "inspect"; input: StartEnvelopeV3 }
@@ -142,6 +148,7 @@ export type ControlRequestV1 =
   | { method: "read-saved-result-evidence"; input: StartEnvelopeV3; capsuleRef: ArtifactRefV1; ref: ArtifactRefV1 };
 
 export type ControlPayloadV1 =
+  | { opId: string; requestDigest: string; previewId: string; baseTableHash: string; acceptedChangeIds: string[] }
   | { input: SavedResultSourceInput }
   | CapabilitiesRequestV3
   | StartEnvelopeV3
@@ -277,6 +284,9 @@ export const handoffRequestSchema = z
 
 const payloadSchemas = {
   features: z.object({}).strict(),
+  "agent-installation-observe": z.object({}).strict(),
+  "agent-installation-preview": z.object({}).strict(),
+  "agent-installation-apply": z.object({ opId: idSchema, requestDigest: hashSchema, previewId: idSchema, baseTableHash: hashSchema, acceptedChangeIds: z.array(idSchema).min(1) }).strict(),
   capabilities: z.object({ agent: partialSelectionSchema.nullable() }).strict(),
   accept: startEnvelopeSchema,
   inspect: startEnvelopeSchema,
@@ -402,6 +412,7 @@ export function parseControlRequest(method: ControlMethodV1, raw: unknown): Cont
 
 export function attachControlMethod(method: ControlMethodV1, payload: ControlPayloadV1): ControlRequestV1 {
   if (method === "features") return { method };
+  if (method === "agent-installation-observe" || method === "agent-installation-preview") return { method };
   if (method === "capabilities") return { method, agent: (payload as CapabilitiesRequestV3).agent };
   if (method === "accept" || method === "inspect") return { method, input: payload as StartEnvelopeV3 };
   return { method, ...(payload as Record<string, unknown>) } as ControlRequestV1;

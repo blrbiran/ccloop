@@ -104,7 +104,7 @@ it('captures original attempt, usage, full snapshot and exact runtime bytes befo
  const collected=JSON.parse(legacy.stdout);expect(Object.keys(collected)).toEqual(['events','candidate','terminal','progress']);expect(collected.terminal.status).toBe('failed');
  expect(Object.keys(collected.terminal)).toEqual(['status','currentAttempt','attemptsUsed','lastTransitionAt','waitingOnHuman','stopReason','budgetSnapshot','recentFailures']);
  expect(Object.hasOwn(collected.candidate,'capsule')).toBe(false);
- expect(JSON.parse((await f.rpc('features',{})).stdout)).toEqual({protocol:1,tokenPolicy:'optional-v1',savedResultRecovery:'v1'});
+ expect(JSON.parse((await f.rpc('features',{})).stdout)).toEqual({protocol:1,tokenPolicy:'optional-v1',savedResultRecovery:'v1',agentInstallationUpdate:'v1'});
  const foreign=await writeSavedBytes(f.sourceDir,Buffer.from('private foreign bytes'),async()=>{});
  expect((await f.rpc('read-saved-result-evidence',{input:f.input,capsuleRef:page.capsule,ref:foreign})).code).not.toBe(0);
  const changed=structuredClone(f.input);changed.claim.generation=2;

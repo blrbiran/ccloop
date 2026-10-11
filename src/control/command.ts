@@ -2,6 +2,7 @@ import {settleSavedResult,readSavedResultSettlement,savedResultSettlementSchema}
 import {readSavedResultSourceEligibility,readSavedResultEligibility,savedResultEligibilitySchema,savedResultSourceEligibilitySchema} from "./savedResultRecovery.js";
 import { collectSavedResultEvidence, readSavedResultEvidence, savedResultCollectionSchema } from "./savedResultEvidence.js";
 import { z } from "zod";
+import { applyAgentInstallations, observeAgentInstallations, previewAgentInstallations } from "../agents/updates.js";
 import { resolveAgent } from "../agents/materialize.js";
 import { getDescriptor } from "../agents/registry.js";
 import { assertAgentsTablePath, readAgentsTable } from "../agents/table.js";
@@ -120,6 +121,31 @@ const evidenceSchema = z
   .object({ artifactId: z.string().min(1), hash: z.string().regex(/^[a-f0-9]{64}$/), base64: z.string() })
   .strict();
 const safeInteger = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const updateHashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const observedInstallationSchema = z.object({
+  id: z.string().min(1), kind: z.string().min(1), command: z.array(z.string()).min(1),
+  recordedVersion: z.string().min(1), observedVersion: z.string().min(1).nullable(), realpath: z.string().nullable(),
+  status: z.enum(["current", "changed", "unavailable"]),
+}).strict();
+const observationSchema = z.object({
+  schema: z.literal("orca-agent-detection-observation-v1"), baseTableHash: updateHashSchema,
+  observedAt: z.string().datetime(), installed: z.array(observedInstallationSchema),
+}).strict();
+const updateChangeSchema = z.object({
+  changeId: z.string().min(1), kind: z.enum(["version", "path", "addition"]),
+  installationId: z.string().min(1), command: z.array(z.string()).min(1),
+  realpath: z.string().min(1), version: z.string().min(1), installation: z.record(z.unknown()).optional(),
+}).strict();
+const previewSchema = observationSchema.omit({ schema: true }).extend({
+  schema: z.literal("orca-agent-detection-preview-v1"), previewId: z.string().min(1), changes: z.array(updateChangeSchema),
+}).strict();
+const tableResponseSchema = z.object({ schema: z.literal("ccloop-agents-table-v1"), installations: z.record(z.unknown()) }).strict();
+const receiptSchema = z.object({
+  schema: z.literal("orca-agent-detection-receipt-v1"), opId: z.string().min(1), requestDigest: updateHashSchema,
+  previewId: z.string().min(1), acceptedChangeIds: z.array(z.string().min(1)).min(1),
+  beforeHash: updateHashSchema, afterHash: updateHashSchema,
+  before: tableResponseSchema, after: tableResponseSchema,
+}).strict();
 const amountSchema = z.object({ tokens: safeInteger, activeMs: safeInteger, attempts: safeInteger, sessions: safeInteger }).strict();
 export const usageEventSchema = z.object({
   runId: z.string().min(1),
@@ -165,6 +191,9 @@ const collectionSchema = z.object({
 
 const METHODS = new Set<ControlMethodV1>([
   "features",
+  "agent-installation-observe",
+  "agent-installation-preview",
+  "agent-installation-apply",
   "capabilities",
   "accept",
   "inspect",
@@ -213,7 +242,10 @@ async function tableView(agentsTablePath: string): Promise<unknown> {
 }
 
 async function defaultHandler(request: ControlRequestV1, context: ControlContextV1): Promise<unknown> {
-  if (request.method === "features") return { protocol: 1, tokenPolicy: "optional-v1", savedResultRecovery: "v1" };
+  if (request.method === "features") return { protocol: 1, tokenPolicy: "optional-v1", savedResultRecovery: "v1", agentInstallationUpdate: "v1" };
+  if (request.method === "agent-installation-observe") return observeAgentInstallations(context.agentsTablePath);
+  if (request.method === "agent-installation-preview") return previewAgentInstallations(context.agentsTablePath);
+  if (request.method === "agent-installation-apply") return applyAgentInstallations(context.agentsTablePath, request);
   if (request.method === "capabilities") {
     if (request.agent === null) return await tableView(context.agentsTablePath);
     const { config, resolution } = await resolveAgent(await readAgentsTable(context.agentsTablePath), request.agent);
@@ -256,7 +288,10 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
 
 function validateResponse(method: ControlMethodV1, value: unknown, protocol = 3): unknown {
   try {
-    if (method === "features") return z.object({ protocol: z.literal(1), tokenPolicy: z.literal("optional-v1"), savedResultRecovery: z.literal("v1") }).strict().parse(value);
+    if (method === "features") return z.object({ protocol: z.literal(1), tokenPolicy: z.literal("optional-v1"), savedResultRecovery: z.literal("v1"), agentInstallationUpdate: z.literal("v1") }).strict().parse(value);
+    if (method === "agent-installation-observe") return observationSchema.parse(value);
+    if (method === "agent-installation-preview") return previewSchema.parse(value);
+    if (method === "agent-installation-apply") return receiptSchema.parse(value);
     if (method === "capabilities") return capabilitiesSchema.parse(value);
     if (method === "accept" || method === "inspect") return executionStatusSchema.parse(value);
     if (method === "handoff") return handoffAckSchema.parse(value);

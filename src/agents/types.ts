@@ -64,6 +64,9 @@ export const AGENT_ERROR_CODES = [
   // `resume --agents` refuses a run directory holding none.
   "agent-selection-exists",
   "agent-selection-missing",
+  "agent-installation-update-invalid",
+  "agent-installation-update-conflict",
+  "agent-installation-update-stale",
 ] as const;
 export type AgentErrorCode = (typeof AGENT_ERROR_CODES)[number];
 

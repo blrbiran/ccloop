@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -24,6 +24,21 @@ const versions: Record<string, string> = { "/opt/claude": "2.1.282", "/opt/codex
 const probe = async (command: string[]) => versions[command[0]!] ?? null;
 
 describe("probing an installed CLI's version", () => {
+  it("reaps a version probe's child process tree before reporting timeout", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-version-tree-")));
+    const pidPath = join(dir, "grandchild.pid");
+    const scriptPath = join(dir, "parent.mjs");
+    await writeFile(scriptPath, 'import { spawn } from "node:child_process"; import { writeFileSync } from "node:fs"; const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }); writeFileSync(process.argv[2], String(child.pid)); setInterval(() => {}, 1000);');
+    let pid = 0;
+    try {
+      expect(await probeVersion([process.execPath, scriptPath, pidPath], { timeoutMs: 500 })).toBeNull();
+      pid = Number(await readFile(pidPath, "utf8"));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(() => process.kill(pid, 0)).toThrow();
+    } finally {
+      if (pid) { try { process.kill(pid, "SIGKILL"); } catch { /* already reaped */ } }
+    }
+  });
   it("answers the x.y.z the real CLIs print (claude 2.1.282, codex-cli 0.155.1 as measured on this machine)", async () => {
     expect(await probeVersion(await script('console.log("2.1.282 (Claude Code)")'))).toBe("2.1.282");
     expect(await probeVersion(await script('console.log("codex-cli 0.155.1")'))).toBe("0.155.1");
