@@ -1,4 +1,4 @@
-# ccloop Handoff — codex 阶段输出加固已由人合进 main 并推送；Orca 已安装固定 pin。Orca 新两轮完成并本地合 main；push 由人做，关联见文末滚动节。
+# ccloop Handoff — codex 阶段输出加固已由人合进 main 并推送；Orca 仍使用固定 pin。Orca feedback-followup Tasks 1–14 已本地合 main；push 由人做，关联见文末滚动节。
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -407,16 +407,12 @@ Orca `webCcloopSmoke` 那两条 `start-envelope-conflict:run:targetVersion` **�
 *** **`src/**` 与 `tests/**` 一个字节都没动。E1 的 I-2 ＋ 人裁 85 那一轮原样挂着，仍是下一件事。** ***
 
 ---
-# 📌 Orca 那条线（单节滚动，2026-10-11；后续仍就地替换）
+# 📌 Orca 那条线（单节滚动，2026-10-12；后续仍就地替换）
 
-Orca 主入口 /Users/biran/code/skills/loop/Orca/docs/handoff/handoff.md §4.0。本轮 feedback-followup Tasks1–7 已独立 Approved，含 Results5、captureRevision 整合 P2、Task7 R1，完成内容按人的授权合本地 main。Tasks8–14 待后续，不称十四项全轮接受。旧 issue-fixes/D9/M3/M5/M6/feedback-maintenance 不重做。接手现查状态、分支和远端，不固定当前 HEAD；原 Orca Results5 worktree 的旧 WIP 保留。
+Orca 主入口 `/Users/biran/code/skills/loop/Orca/docs/handoff/handoff.md` §4.0。feedback-followup Tasks 1–14 已实现、独立复审并按人的授权合入两仓本地 main；Results 5 的旧 WIP 工作树 HEAD、状态与 21 项文件指纹保持，不清理。旧 issue-fixes／D9/M3／M5/M6／feedback-maintenance／Task 7 复审不重做。接手现查状态与远端，不固定活 HEAD。
 
-本仓 Tasks3、5、6 提供 optional-v1 token 策略（null 仅表示无 token 上限，真实用量仍为有限安全整数）、独立 features/protocol4、确定性严格 execute 规范化与不可变格式失败证据、仅验证保存成果和死 worker 机械结算；原 protocol3 核心响应/证据集合保持。接口、四份 spec、每项 report/review/raw、21个 guard clone 变异在 Orca .superpowers/sdd/2026-10-11-feedback-followup/。改信封/证据/生命周期須同步 Orca 严格镜像。原失败/已记 WORK 不重写，只记新验证用量，不自动重放 provider。
+本仓原 Tasks 3、5、6 的 optional-v1 token 策略、独立 features/protocol4、严格 execute 规范化、不可变保存证据、只验证与死 worker 机械结算仍有效；protocol3 核心响应／证据集合不扩形。null 只表示写下的 token 上限无限，未知用量仍阻断，不猜零；原失败／已记 WORK 不重写，普通旧 archive 缺真实发布 ref 仍明确不可用。本轮 Task 9 增加安装观察、手动 detect／preview／apply、锁与 CAS、持久 intent／receipt 及同命令恢复；Orca Task 10 用 schema 13 outbox 与原 owner／client 绑定接入。Task 14 修复 Claude runner 的重复响应发布和无效答案中止分支；真实历史 `ClaudePhaseAborted` 交错未被证明复现或消失，Linux 原生 `/usr/bin/flock` 未在本机验。
 
-最新从实际本地 main 克隆的源76f/446：类型/build RC0，全量串行147文件1566通过零跳过；全部147跟踪测试文件和逐项 JSON 已核。历史正式 verify:control70文件793通过零跳过及独立复审仍按 Task6 记录，不称本次全量为另一次正式脚本运行。Orca 新门源 e066/934：root3695/391加30明确条件跳过，Web926/106零跳过，实际保存专用23/2零跳过，面板15步通过。完整 raw/source/命令/RC/逐名跳过见 handoff-merged-verification-report.md，旧 abcbe 与 final UI 源范围保留未重标。
+本仓最终源码类型／build、两 worker 不筛选全量 1601/1601 零跳过、正式 `verify:control` 793/793 零跳过、known-red 核验和实际 tarball fake-worker plan→execute→verify 均通过；旧默认并发红与诊断 raw 保留。Orca 最终产品源码根级 JSON 3742 通过／30 条逐名条件跳过、Web 987/987、正式 chain、历史保存专用 23/23、默认 pin 3/3、真实本地工具夹具 3/3、全量临时目录残留 0 与隔离浏览器桌面／390px／短高几何均有证据。30 条中 29 条由专用门实跑，真实 launchd 冒烟未跑。完整源版本、命令、RC、raw 哈希与复审见 Orca `.superpowers/sdd/2026-10-11-feedback-followup/` 的 `progress.md`、`task-14-native-gates-report.md`、`task-14-native-evidence-manifest.json`、`task-14-browser-report.md`。
 
-Task7 真实 owner/迁移/资金/交付已独立核对和原生接通，不由 typed seam 替代。schema12 的11→12仅更新标记，防旧11 owner 重开未准备 recovery 降级普通执行；真实升级/备份/旧 owner 退役仍未做。普通失败后的普通重试只通过真实成功命令凭据，positive noDispatch 证明独立，未知/缺 marker 不猜零或自动 fallback。普通旧 archive 缺发布 ref、当前 malformed capsule 和转换的旧 Claude 输出可明确不可用；完整 archive primitive 正例不等于标准旧生命周期全可恢复。
-
-旧 Claude 并行停止/重复输出与 stale-exit 竞态已诊断，修复归 Task14；串行绿不表示已修或永久 flake。无 push/发布/默认 repin/真实服务或数据根切换；Orca package/lock 仍 pinab824d1，新能力门明确用本轮 main 新构建 CLI。最终只读远端与清洁/指纹观察见 Orca 整合审计，本地 tracking 不是远端实查；新隔离树从当前本地 main 起，不固定 SHA。真实浏览器几何和 Linux 原生捕获未验。
-
-本仓 byModel/listAgents.kind/PARTIAL_FLUSH_MARGIN_MS/protocol3 skills互斥、B4/K4/进程 flake 旧约束继续有效。测试隔离 HOME/XDG/TMPDIR，去掉 CCMEM_CONFIG_PATH，真实配置/付费 provider 未触。每次提交/FF 单次空 hooksPath，持久 Git 配置未改。私有证据和干净 managed stub 保留，不额外清理或误删原 Results5 WIP。
+两仓未 push、未发布、未改默认 pin 或真实运行；Orca package/lock 仍 pin `ab824d1`，新安装能力的配对门才显式使用本轮新 ccloop CLI。Orca schema 12 代码原已合入，现加单向 schema 13；真实库备份、旧 owner 退役、升级、面板／daemon／ccmem 数据根切换都未做。本仓 byModel／listAgents.kind／PARTIAL_FLUSH_MARGIN_MS／protocol3 skills 互斥、B4/K4 与进程 flake 旧约束继续有效；测试隔离 HOME/XDG/TMPDIR、去掉 CCMEM_CONFIG_PATH，不触真实配置或付费 provider。
