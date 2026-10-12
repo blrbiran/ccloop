@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import type { AgentDescriptor } from "./registry.js";
+import { OmpAdapter } from "../runtime/omp/ompAdapter.js";
 import { AgentError, assertContextOption, assertModel, commonSearchDirs } from "./types.js";
 
 export const ompDescriptor: AgentDescriptor = {
@@ -38,5 +39,5 @@ export const ompDescriptor: AgentDescriptor = {
     };
   },
   singleCallExecution() { return null; },
-  createAdapter() { throw new Error("omp-adapter-unavailable"); },
+  createAdapter(config) { return new OmpAdapter(config); },
 };
