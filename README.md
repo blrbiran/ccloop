@@ -232,7 +232,7 @@ Adapter 契约（`src/runtime/types.ts`）有三个 phase：`plan` / `execute` /
 
 > consolidation step 4（2026-10-01）删掉了 `--adapter`／`--adapter-config`。`run`／`resume`／`sweep` 带上其中任何一个都会 exit 1，报 `unknown flag --adapter`（或 `unknown flag --adapter-config`）——和别的不认识的 flag 一样，没有专门的提示。现在 CLI 只认 `--agents`。
 
-agents 表（`ccloop-agents-table-v1`）登记装了哪些 agent CLI。`node dist/cli.js agents detect` 在 PATH 和常见安装目录里找 codex／claude，打印一份草稿表（只打到 stdout，不写任何文件）；挑出要的条目存成文件，再用 `agents validate` 核对版本：
+agents 表（`ccloop-agents-table-v1`）登记装了哪些 agent CLI。`node dist/cli.js agents detect` 在 PATH 和常见安装目录里找 codex／claude／omp，打印一份草稿表（只打到 stdout，不写任何文件）；挑出要的条目存成文件，再用 `agents validate` 核对版本：
 
 ```bash
 node dist/cli.js agents detect                          # 草稿：{"schema":"ccloop-agents-detect-v1","table":{...},"candidates":[...]}
@@ -281,6 +281,24 @@ runner 是固定的：`ClaudeAgentAdapter` 总是起这个 `scripts/claude-phase
 
 - executor 的 prompt 里写着 **"Never declare final success; only report what changed in this attempt."**——判定成功是 verifier 的职责，不是 executor 的。
 - verifier 的 prompt 会把 `rejectOn` 和 `evidenceRequired` 原样注入，并要求「证据缺失即 `approved: false`」。
+
+### 6.4 `omp`——单阶段受限调用
+
+OMP 的安装只允许一个绝对路径可执行文件，不接受预置命令参数。模型名来自**该安装自己的配置**：`agents detect` 读取有效 `modelRoles.default` 与模型目录，只有能精确、唯一解析的 `provider/model` 才写入草稿；不同机器不共享默认模型名。也可以手写安装表，例如：
+
+```json
+{ "schema": "ccloop-agents-table-v1", "installations": { "omp": {
+  "kind": "omp", "command": ["/abs/path/to/omp"], "version": "<detected-version>",
+  "configDir": "/abs/private/omp-agent", "profile": null,
+  "defaultModel": "your-provider/your-model", "timeoutMs": 120000, "killGraceMs": 5000
+} } }
+```
+
+`configDir` 与命名 `profile` 二选一；使用命名 profile 时把 `configDir` 设为 `null`。版本和模型目录以本机探测结果为准。现有安装的版本／路径更新必须仍能解析其**冻结的精确模型**，否则预览标记不可选，Apply 再次检查并拒绝漂移。
+
+每个 plan／execute／verify 都是独立的一次 OMP print 调用。ccloop 传入该阶段的系统提示，关闭扩展、技能和会话；plan／verify 只开放 read／grep／glob，execute 才开放 edit／write／bash。OMP 即使习惯继续完成整个任务，也必须在本阶段 JSON 回答后停止；事件流中出现额外继续、禁用工具或模型切换会被拒绝。plan／verify 若改动 HEAD 或 Git 可见文件会被拒绝；execute 若自行提交、移动 HEAD 也会被拒绝。execute 的自报 `changedFiles` 必须与 Git 可见的实际变更完全一致，重命名的来源与目标都计入，再由现有路径策略检查。
+
+OMP 用量按每条完整 assistant 消息的 input、output、cacheRead、cacheWrite 相加；中断且只有部分消息时保持用量未知，不把下界当成已知总额。代理返回的零成本字段不代表模型免费。首轮采用受限 CLI 加隔离验收：Git 忽略文件和工作树外的主机副作用仍需外层隔离，不能把这套检查当作完整沙箱。OMP 暂无 syncskill 注入和单次预估能力。
 
 ---
 
