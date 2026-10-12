@@ -135,6 +135,7 @@ const updateChangeSchema = z.object({
   changeId: z.string().min(1), kind: z.enum(["version", "path", "addition"]),
   installationId: z.string().min(1), command: z.array(z.string()).min(1),
   realpath: z.string().min(1), version: z.string().min(1), installation: z.record(z.unknown()).optional(),
+  unavailableReason: z.literal("omp-frozen-model-unavailable").optional(),
 }).strict();
 const previewSchema = observationSchema.omit({ schema: true }).extend({
   schema: z.literal("orca-agent-detection-preview-v1"), previewId: z.string().min(1), changes: z.array(updateChangeSchema),

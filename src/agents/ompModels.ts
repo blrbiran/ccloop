@@ -10,13 +10,12 @@ export function canonicalOmpSelector(input: string, selectors: readonly string[]
   return matches.length === 1 ? matches[0]! : null;
 }
 
-/** Read the catalog under the same structured profile/configuration as a phase. This never sends a model prompt. */
-export async function readOmpModels(installation: InstallationV1): Promise<string[]> {
+async function runOmpJson(installation: InstallationV1, args: string[]): Promise<unknown> {
   const profile = installation.profile as string | null;
   const env: NodeJS.ProcessEnv = { ...process.env, OMP_PROFILE: profile ?? "default" };
   if (installation.configDir !== null) env.PI_CODING_AGENT_DIR = installation.configDir;
-  return await new Promise<string[]>((resolve, reject) => {
-    const child = spawn(installation.command[0], ["--profile", profile ?? "default", "models", "--json", "--no-extensions"], {
+  return await new Promise<unknown>((resolve, reject) => {
+    const child = spawn(installation.command[0], ["--no-extensions", "--profile", profile ?? "default", ...args], {
       detached: true, env, stdio: ["ignore", "pipe", "pipe"],
     });
     const stdoutChunks: Buffer[] = [];
@@ -42,19 +41,33 @@ export async function readOmpModels(installation: InstallationV1): Promise<strin
       clearTimeout(timer);
       if (aborted || spawnError !== null || code !== 0) { reject(new Error("omp-model-catalog-unavailable")); return; }
       try {
-        const parsed: unknown = JSON.parse(Buffer.concat(stdoutChunks).toString("utf8"));
-        if (parsed === null || typeof parsed !== "object" || !Array.isArray((parsed as { models?: unknown }).models)) throw new Error("invalid catalog");
-        const rows = (parsed as { models: unknown[] }).models;
-        const selectors = rows.map((row) => {
-          if (row === null || typeof row !== "object") throw new Error("invalid model row");
-          const value = row as Record<string, unknown>;
-          if (typeof value.provider !== "string" || typeof value.id !== "string" || typeof value.selector !== "string"
-            || value.selector !== `${value.provider}/${value.id}` || value.selector.length > 200) throw new Error("invalid model selector");
-          return value.selector;
-        });
-        if (new Set(selectors).size !== selectors.length) throw new Error("duplicate model selector");
-        resolve(selectors);
+        resolve(JSON.parse(Buffer.concat(stdoutChunks).toString("utf8")) as unknown);
       } catch { reject(new Error("omp-model-catalog-invalid")); }
     });
   });
+}
+
+/** Read the catalog under the same structured profile/configuration as a phase. This never sends a model prompt. */
+export async function readOmpModels(installation: InstallationV1): Promise<string[]> {
+  const parsed = await runOmpJson(installation, ["models", "--json"]);
+  if (parsed === null || typeof parsed !== "object" || !Array.isArray((parsed as { models?: unknown }).models)) throw new Error("omp-model-catalog-invalid");
+  const rows = (parsed as { models: unknown[] }).models;
+  const selectors = rows.map((row) => {
+    if (row === null || typeof row !== "object") throw new Error("omp-model-catalog-invalid");
+    const value = row as Record<string, unknown>;
+    if (typeof value.provider !== "string" || typeof value.id !== "string" || typeof value.selector !== "string"
+      || value.selector !== `${value.provider}/${value.id}` || value.selector.length > 200) throw new Error("omp-model-catalog-invalid");
+    return value.selector;
+  });
+  if (new Set(selectors).size !== selectors.length) throw new Error("omp-model-catalog-invalid");
+  return selectors;
+}
+
+export async function readOmpConfiguredDefault(installation: InstallationV1): Promise<string | null> {
+  const parsed = await runOmpJson(installation, ["config", "get", "modelRoles", "--json"]);
+  if (parsed === null || typeof parsed !== "object") return null;
+  const value = (parsed as { value?: unknown }).value;
+  if (value === null || typeof value !== "object") return null;
+  const model = (value as { default?: unknown }).default;
+  return typeof model === "string" && model.length > 0 ? model : null;
 }

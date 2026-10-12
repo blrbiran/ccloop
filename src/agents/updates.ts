@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
 import { draftCommandForCandidate, draftInstallationForCandidate, findAgentCandidatePaths } from "./detect.js";
 import { probeVersion } from "./materialize.js";
+import { readOmpModels } from "./ompModels.js";
 import { assertAgentsTableLocation, parseAgentsTable, readAgentsTableSnapshot } from "./table.js";
 import { AgentError, type AgentsTableV1, type InstallationV1 } from "./types.js";
 import { assertUpdatesRoot, cleanupOperationTemporary, readOwnedJson, replaceTableDurably, sha256, withTableUpdateLock, writeOwnedJson } from "./updateReceipt.js";
@@ -38,6 +39,7 @@ export interface DetectionChange {
   realpath: string;
   version: string;
   installation?: InstallationV1;
+  unavailableReason?: "omp-frozen-model-unavailable";
 }
 export interface AgentDetectionPreview extends Omit<AgentDetectionObservation, "schema"> {
   schema: "orca-agent-detection-preview-v1";
@@ -99,15 +101,18 @@ export async function previewAgentInstallations(tablePath: string, input: { home
   const probe = input.probe ?? probeVersion;
   const changes: DetectionChange[] = [];
   for (const row of observation.installed) {
+    const frozen = table.installations[row.id]!;
     if (row.status === "changed" && row.realpath !== null && row.observedVersion !== null) {
-      changes.push({ changeId: randomUUID(), kind: "version", installationId: row.id, command: row.command, realpath: row.realpath, version: row.observedVersion });
+      const unavailableReason = await ompUnavailable({ ...frozen, version: row.observedVersion });
+      changes.push({ changeId: randomUUID(), kind: "version", installationId: row.id, command: row.command, realpath: row.realpath, version: row.observedVersion, ...(unavailableReason === undefined ? {} : { unavailableReason }) });
     }
     for (const candidate of paths[row.kind] ?? []) {
       if (candidate.realpath === row.realpath) continue;
       const command = [candidate.path, ...row.command.slice(1)];
       const version = await probe(command);
       if (version === null) continue;
-      changes.push({ changeId: randomUUID(), kind: "path", installationId: row.id, command, realpath: candidate.realpath, version });
+      const unavailableReason = await ompUnavailable({ ...frozen, command: command as [string, ...string[]], version });
+      changes.push({ changeId: randomUUID(), kind: "path", installationId: row.id, command, realpath: candidate.realpath, version, ...(unavailableReason === undefined ? {} : { unavailableReason }) });
     }
   }
   for (const [kind, candidates] of Object.entries(paths)) {
@@ -116,7 +121,8 @@ export async function previewAgentInstallations(tablePath: string, input: { home
       const command = draftCommandForCandidate(kind, candidate.path);
       const version = await probe(command);
       if (version === null) continue;
-      changes.push({ changeId: randomUUID(), kind: "addition", installationId: kind, command, realpath: candidate.realpath, version, installation: draftInstallationForCandidate(kind, candidate.path, version) });
+      const installation = await draftInstallationForCandidate(kind, candidate.path, version);
+      changes.push({ changeId: randomUUID(), kind: "addition", installationId: kind, command, realpath: candidate.realpath, version, ...(installation === null ? {} : { installation }) });
     }
   }
   const preview: AgentDetectionPreview = { ...observation, schema: "orca-agent-detection-preview-v1", previewId: randomUUID(), changes };
@@ -130,11 +136,22 @@ function sameRequest(a: ApplyAgentDetection, b: ApplyAgentDetection): boolean {
   return a.opId === b.opId && a.requestDigest === b.requestDigest && a.previewId === b.previewId && a.baseTableHash === b.baseTableHash && JSON.stringify(a.acceptedChangeIds) === JSON.stringify(b.acceptedChangeIds);
 }
 
-async function recheck(change: DetectionChange, probe: typeof probeVersion): Promise<void> {
+async function ompUnavailable(installation: InstallationV1): Promise<DetectionChange["unavailableReason"]> {
+  if (installation.kind !== "omp") return undefined;
+  try {
+    return (await readOmpModels(installation)).includes(installation.defaultModel as string) ? undefined : "omp-frozen-model-unavailable";
+  } catch { return "omp-frozen-model-unavailable"; }
+}
+
+async function recheck(change: DetectionChange, probe: typeof probeVersion, table: AgentsTableV1): Promise<void> {
+  if (change.unavailableReason !== undefined) fail(change.unavailableReason);
   const real = await exactRealpath(change.command);
   if (real !== change.realpath) stale();
   const version = await probe(change.command);
   if (version !== change.version) stale();
+  const old = table.installations[change.installationId];
+  const selected = change.kind === "addition" ? change.installation : old === undefined ? undefined : { ...old, command: change.command as [string, ...string[]], version: change.version };
+  if (selected !== undefined && await ompUnavailable(selected)) fail("omp-frozen-model-unavailable");
 }
 
 export async function applyAgentInstallations(tablePath: string, request: ApplyAgentDetection, deps: { probe?: typeof probeVersion } = {}): Promise<AgentDetectionReceipt> {
@@ -168,7 +185,7 @@ export async function applyAgentInstallations(tablePath: string, request: ApplyA
       for (const id of request.acceptedChangeIds) {
         const change = preview.changes.find((entry) => entry.changeId === id);
         if (change === undefined) conflict("accepted change missing");
-        await recheck(change, deps.probe ?? probeVersion);
+        await recheck(change, deps.probe ?? probeVersion, current.table);
       }
       if (sha256(current.bytes) !== intent.receipt.beforeHash) stale();
       await replaceTableDurably(tablePath, root, Buffer.from(`${JSON.stringify(intent.receipt.after)}\n`), current.bytes, intent.mode, request.opId, request.requestDigest, assertHeld);
@@ -187,7 +204,7 @@ export async function applyAgentInstallations(tablePath: string, request: ApplyA
       const change = preview.changes.find((entry) => entry.changeId === id);
       if (change === undefined || used.has(change.installationId)) conflict("accepted changes conflict");
       used.add(change.installationId);
-      await recheck(change, deps.probe ?? probeVersion);
+      await recheck(change, deps.probe ?? probeVersion, original.table);
       if (change.kind === "addition") {
         if (Object.hasOwn(next.installations, change.installationId) || change.installation === undefined) conflict("addition id exists");
         next.installations[change.installationId] = change.installation;

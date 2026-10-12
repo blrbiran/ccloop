@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
 import { delimiter, isAbsolute, join } from "node:path";
 import { probeVersion } from "./materialize.js";
+import { canonicalOmpSelector, readOmpConfiguredDefault, readOmpModels } from "./ompModels.js";
 import { getDescriptor, listDescriptors } from "./registry.js";
 import type { AgentsTableV1, InstallationV1 } from "./types.js";
 
@@ -28,9 +29,9 @@ export function draftCommandForCandidate(kind: string, path: string): [string, .
   return [path, ...(getDescriptor(kind).draftCommandArgs ?? [])];
 }
 
-export function draftInstallationForCandidate(kind: string, path: string, version: string): InstallationV1 {
+export async function draftInstallationForCandidate(kind: string, path: string, version: string): Promise<InstallationV1 | null> {
   const descriptor = getDescriptor(kind);
-  return {
+  const draft: InstallationV1 = {
     kind,
     command: draftCommandForCandidate(kind, path),
     version,
@@ -39,6 +40,16 @@ export function draftInstallationForCandidate(kind: string, path: string, versio
     killGraceMs: DRAFT_KILL_GRACE_MS,
     ...descriptor.draftInstallationExtras,
   };
+  if (kind !== "omp") return draft;
+  const active = process.env.OMP_PROFILE ?? process.env.PI_PROFILE ?? "";
+  draft.profile = active.trim() !== "" && active.trim() !== "default" ? active.trim() : null;
+  try {
+    const configured = await readOmpConfiguredDefault(draft);
+    if (configured === null) return null;
+    const defaultModel = canonicalOmpSelector(configured, await readOmpModels(draft));
+    if (defaultModel === null) return null;
+    return { ...draft, defaultModel };
+  } catch { return null; }
 }
 
 /** Spec §4.3 / §12 I14: relative PATH entries and world-writable directories are never searched. */
@@ -111,14 +122,24 @@ export async function detectAgents(input: {
   const candidates: Record<string, CandidateV1[]> = {};
   for (const descriptor of listDescriptors()) {
     const listed: CandidateV1[] = [];
+    const ompDrafts = new Map<string, InstallationV1>();
     for (const candidate of paths[descriptor.kind] ?? []) {
       const version = await probe([candidate.path]);
+      if (descriptor.kind === "omp" && version !== null) {
+        const draft = await draftInstallationForCandidate(descriptor.kind, candidate.path, version);
+        if (draft === null) {
+          listed.push({ ...candidate, version, runnable: false, error: "omp-default-model-unresolved" });
+          continue;
+        }
+        ompDrafts.set(candidate.path, draft);
+      }
       listed.push({ ...candidate, version, runnable: version !== null, ...(version === null ? { error: "version-probe-failed" } : {}) });
     }
     candidates[descriptor.kind] = listed;
     const chosen = listed.find((candidate) => candidate.isPathDefault && candidate.runnable) ?? listed.find((candidate) => candidate.runnable);
     if (chosen !== undefined) {
-      installations[descriptor.kind] = draftInstallationForCandidate(descriptor.kind, chosen.path, chosen.version!);
+      const draft = descriptor.kind === "omp" ? ompDrafts.get(chosen.path)! : await draftInstallationForCandidate(descriptor.kind, chosen.path, chosen.version!);
+      if (draft !== null) installations[descriptor.kind] = draft;
     }
   }
   return { schema: "ccloop-agents-detect-v1", table: { schema: "ccloop-agents-table-v1", installations }, candidates };
