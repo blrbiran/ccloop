@@ -6,7 +6,7 @@ import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
 import { withCodexSkillLinks } from "./codexSkills.js";
 import type { AttemptContext } from "../types.js";
-import { observedTurnUsage, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
+import { executeWireJsonSchema, observedTurnUsage, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
 
 export type PhaseRequest = {phase:CodexPhase;prompt:string;context:AttemptContext};
 export type PhaseOutcome = {
@@ -39,8 +39,8 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   if(context.abortSignal?.aborted){result.reason="aborted";return persist();}
   const timeout=Math.min(config.timeoutMs,context.state.budgetSnapshot.timeRemainingMs);
   if(timeout<=0){result.reason="timeout";return persist();}
-  const businessSchema=phaseJsonSchema(phase);
-  const wireSchema=phase==="execute"?{type:"object",properties:{result:businessSchema},required:["result"],additionalProperties:false}:businessSchema;
+  const wireBusinessSchema=phase==="execute"?executeWireJsonSchema():phaseJsonSchema(phase);
+  const wireSchema=phase==="execute"?{type:"object",properties:{result:wireBusinessSchema},required:["result"],additionalProperties:false}:wireBusinessSchema;
   await save("schema.json",JSON.stringify(wireSchema));
   // Pre-create files with private permissions before handing paths to the CLI.
   await save("final.json","");await save("events.jsonl","");await save("stderr.log","");logsCreated=true;

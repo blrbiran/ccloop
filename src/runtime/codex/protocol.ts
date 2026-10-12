@@ -41,6 +41,17 @@ export function phaseJsonSchema(phase: CodexPhase): Record<string, unknown> {
   return {anyOf:[optionalReport(fields),optionalReport({...fields,completionStatus:{type:"string",enum:["partial"]},failureType:{type:"string",enum:["timeout","error"]},failureMessage:string})]};
 }
 
+/** Strict provider wire shape: optional taskResult is represented by separate alternatives, not an optional property. */
+export function executeWireJsonSchema(): Record<string, unknown> {
+  const report = object({schema:{type:"string",enum:["task-result-v1"]},goal:string,completedWork:array,conclusions:array,
+    outputs:{type:"array",items:object({path:string,label:string})},limitations:array});
+  const business = phaseJsonSchema("execute") as {anyOf:Array<{properties:Record<string,unknown>}>};
+  return {anyOf:business.anyOf.map((alternative) => {
+    const {taskResult: _optional, ...fields} = alternative.properties;
+    return {anyOf:[object(fields),object({...fields,taskResult:report})]};
+  })};
+}
+
 const record = (x: unknown): x is Record<string,unknown> => x !== null && typeof x === "object" && !Array.isArray(x);
 const integer = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 export type PhaseResults = {plan:AttemptPlan; execute:ExecutionResult; verify:VerificationResult};
