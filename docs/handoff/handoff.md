@@ -1,4 +1,4 @@
-# ccloop Handoff — codex 阶段输出加固已由人合进 main 并推送；Orca 仍使用固定 pin。Orca feedback-followup Tasks 1–14 已本地合 main；push 由人做，关联见文末滚动节。
+# ccloop Handoff — codex 阶段输出加固已由人合进 main 并推送；Orca 切换分支已重钉新固定 pin，本地 main 待人合入。关联见文末滚动节。
 
 > ⚠️ **一律自查，别信本文。** **只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是已固定的历史值，可放心引用。**
 > *** **本文一个当前哈希都不写** —— 提交本文这个动作本身就会改 HEAD 与笔数，**远端也会被人自己推动**。 ***
@@ -415,4 +415,6 @@ Orca 主入口 `/Users/biran/code/skills/loop/Orca/docs/handoff/handoff.md` §4.
 
 本仓最终源码类型／build、两 worker 不筛选全量 1601/1601 零跳过、正式 `verify:control` 793/793 零跳过、known-red 核验和实际 tarball fake-worker plan→execute→verify 均通过；旧默认并发红与诊断 raw 保留。Orca 最终产品源码根级 JSON 3742 通过／30 条逐名条件跳过、Web 987/987、正式 chain、历史保存专用 23/23、默认 pin 3/3、真实本地工具夹具 3/3、全量临时目录残留 0 与隔离浏览器桌面／390px／短高几何均有证据。30 条中 29 条由专用门实跑，真实 launchd 冒烟未跑。完整源版本、命令、RC、raw 哈希与复审见 Orca `.superpowers/sdd/2026-10-11-feedback-followup/` 的 `progress.md`、`task-14-native-gates-report.md`、`task-14-native-evidence-manifest.json`、`task-14-browser-report.md`。
 
-两仓未 push、未发布、未改默认 pin 或真实运行；Orca package/lock 仍 pin `ab824d1`，新安装能力的配对门才显式使用本轮新 ccloop CLI。Orca schema 12 代码原已合入，现加单向 schema 13；真实库备份、旧 owner 退役、升级、面板／daemon／ccmem 数据根切换都未做。本仓 byModel／listAgents.kind／PARTIAL_FLUSH_MARGIN_MS／protocol3 skills 互斥、B4/K4 与进程 flake 旧约束继续有效；测试隔离 HOME/XDG/TMPDIR、去掉 CCMEM_CONFIG_PATH，不触真实配置或付费 provider。
+上述 Task 14 报数是当时基线，之后 ccloop 远端 main 已由人推到主题 `docs(handoff): roll Orca followup state in place`。Orca 新分支 `codex/live-service-cutover` 从其本地 main 拉出，package/lock 现重钉到该已发布 ccloop 提交；仓库脚本验证默认包 12/12、干净副本 `npm ci`，正式 pin 门 3/3。配对测试旧 peer 改为显式旧 `ab824d1` CLI，先因旧隐含路径实测 1 过／2 红，再新旧配对 3/3。Orca 本地 main 未合入这两笔，仍保留旧 pin；切换分支未推远端。完整经过见 Orca `docs/handoff/2026-10-12-live-service-cutover.md`。
+
+Orca 真实两份控制库原 schema 9／7，已备份、演练副本后升至 13，死 owner 锁退役；真实 launchd 面板在 7777 运行，使用已安装固定包和显式真实 ccmem 根。ccmem daemon 未重启、无付费 provider 或真实任务执行；隔离 launchd 冒烟经异步卸载测试修正后 Node 22／24 各 1/1。Results 5 的 21 项 WIP 指纹未变。本仓 byModel／listAgents.kind／PARTIAL_FLUSH_MARGIN_MS／protocol3 skills 互斥、B4/K4 与进程 flake 旧约束继续有效；本仓产品代码本次零改动。
