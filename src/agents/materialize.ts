@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { z } from "zod";
 import { canonicalHash } from "../control/protocol.js";
-import { getDescriptor } from "./registry.js";
+import { descriptorDefaults, getDescriptor } from "./registry.js";
+import { readOmpModels } from "./ompModels.js";
 import { parseInstallation } from "./table.js";
 import {
   AgentError,
@@ -86,16 +87,17 @@ export function agentConfigHash(config: MaterializedAgentConfigV1): string {
 export async function resolveAgent(
   table: AgentsTableV1,
   partial: PartialSelectionV1,
-  deps: { probeVersion?: (command: string[]) => Promise<string | null> } = {},
+  deps: { probeVersion?: (command: string[]) => Promise<string | null>; probeModels?: typeof readOmpModels } = {},
 ): Promise<{ config: MaterializedAgentConfigV1; resolution: AgentResolutionV1 }> {
   if (partial.agent === undefined) throw new AgentError("agent-unselected");
   const installation = Object.hasOwn(table.installations, partial.agent) ? table.installations[partial.agent] : undefined;
   if (installation === undefined) throw new AgentError("agent-installation-missing", partial.agent);
   const descriptor = getDescriptor(installation.kind);
+  const defaults = descriptorDefaults(descriptor, installation);
   const selection = {
     agent: partial.agent,
-    model: partial.model ?? descriptor.defaults.model,
-    contextWindow: partial.contextWindow ?? descriptor.defaults.contextWindow,
+    model: partial.model ?? defaults.model,
+    contextWindow: partial.contextWindow ?? defaults.contextWindow,
   };
   descriptor.validateSelection(selection);
   const config: MaterializedAgentConfigV1 = { schema: "ccloop-agent-config-v1", kind: installation.kind, installation, selection };
@@ -109,6 +111,9 @@ export async function resolveAgent(
   }
   if (observed !== installation.version) {
     throw new AgentError("agent-version-drift", `${partial.agent}: table ${installation.version}, observed ${observed}`);
+  }
+  if (installation.kind === "omp" && !(await (deps.probeModels ?? readOmpModels)(installation)).includes(selection.model)) {
+    throw new AgentError("agent-selection-invalid", `OMP model is not an exact catalog selector: ${selection.model}`);
   }
   return {
     config,

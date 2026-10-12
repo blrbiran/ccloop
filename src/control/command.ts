@@ -4,7 +4,7 @@ import { collectSavedResultEvidence, readSavedResultEvidence, savedResultCollect
 import { z } from "zod";
 import { applyAgentInstallations, observeAgentInstallations, previewAgentInstallations } from "../agents/updates.js";
 import { resolveAgent } from "../agents/materialize.js";
-import { getDescriptor } from "../agents/registry.js";
+import { descriptorDefaults, getDescriptor } from "../agents/registry.js";
 import { assertAgentsTablePath, readAgentsTable } from "../agents/table.js";
 import { AgentError, type CapabilityViewV1 } from "../agents/types.js";
 import {
@@ -233,7 +233,7 @@ async function tableView(agentsTablePath: string): Promise<unknown> {
       return {
         id,
         kind: installation.kind,
-        defaults: descriptor.defaults,
+        defaults: descriptorDefaults(descriptor, installation),
         contextOptions: descriptor.contextOptions,
         version: installation.version,
       };

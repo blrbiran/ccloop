@@ -29,14 +29,18 @@ export function parseInstallation(raw: unknown): InstallationV1 {
   const kind = kindShape.safeParse(raw);
   if (!kind.success) throw invalid("installation has no kind");
   let extras: z.ZodRawShape;
+  let descriptor: ReturnType<typeof getDescriptor>;
   try {
-    extras = getDescriptor(kind.data.kind).installationExtras;
+    descriptor = getDescriptor(kind.data.kind);
+    extras = descriptor.installationExtras;
   } catch {
     throw invalid(`unknown agent kind ${JSON.stringify(kind.data.kind)}`);
   }
   const parsed = z.object({ ...commonInstallation, ...extras }).strict().safeParse(raw);
   if (!parsed.success) throw invalid(parsed.error.message);
-  return parsed.data as InstallationV1;
+  const installation = parsed.data as InstallationV1;
+  descriptor.validateInstallation?.(installation);
+  return installation;
 }
 
 export function parseAgentsTable(raw: unknown): AgentsTableV1 {

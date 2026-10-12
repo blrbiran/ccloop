@@ -2,6 +2,7 @@ import type { z } from "zod";
 import type { RuntimeAdapter } from "../runtime/types.js";
 import { claudeDescriptor } from "./claude.js";
 import { codexDescriptor } from "./codex.js";
+import { ompDescriptor } from "./omp.js";
 import {
   AgentError,
   type AgentSelectionV1,
@@ -19,7 +20,8 @@ export interface AgentDescriptor {
   binary: string;
   searchDirs(input: { home: string; env: NodeJS.ProcessEnv; platform: NodeJS.Platform }): string[];
   configDirEnv: string;
-  defaults: { model: string; contextWindow: ContextWindow };
+  defaults?: { model: string; contextWindow: ContextWindow };
+  defaultsForInstallation?: (installation: MaterializedAgentConfigV1["installation"]) => { model: string; contextWindow: ContextWindow };
   contextOptions: ContextWindow[];
   /** Kind-only installation fields, merged into the strict installation schema. */
   installationExtras: z.ZodRawShape;
@@ -27,6 +29,7 @@ export interface AgentDescriptor {
   draftInstallationExtras: Record<string, unknown>;
   /** Arguments `agents detect` writes after the binary in a draft's `command`; none when absent. */
   draftCommandArgs?: readonly string[];
+  validateInstallation?: (installation: MaterializedAgentConfigV1["installation"]) => void;
   validateSelection(selection: AgentSelectionV1): void;
   capabilities(config: MaterializedAgentConfigV1): CapabilityViewV1;
   /**
@@ -39,7 +42,13 @@ export interface AgentDescriptor {
   createAdapter(config: MaterializedAgentConfigV1, options?: { skillPluginDir?: string; codexSkillsDir?: string }): RuntimeAdapter;
 }
 
-const DESCRIPTORS: readonly AgentDescriptor[] = [claudeDescriptor, codexDescriptor];
+const DESCRIPTORS: readonly AgentDescriptor[] = [claudeDescriptor, codexDescriptor, ompDescriptor];
+
+export function descriptorDefaults(descriptor: AgentDescriptor, installation: MaterializedAgentConfigV1["installation"]): { model: string; contextWindow: ContextWindow } {
+  if (descriptor.defaultsForInstallation !== undefined) return descriptor.defaultsForInstallation(installation);
+  if (descriptor.defaults !== undefined) return descriptor.defaults;
+  throw new AgentError("agent-config-invalid", `missing defaults for ${descriptor.kind}`);
+}
 
 export function getDescriptor(kind: string): AgentDescriptor {
   const descriptor = DESCRIPTORS.find((candidate) => candidate.kind === kind);
