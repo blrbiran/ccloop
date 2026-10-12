@@ -7,7 +7,7 @@ import type { PhaseResults } from "../codex/protocol.js";
 import { decodeOmpPhase, ompUsageLowerBound } from "./ompProtocol.js";
 import { runOmpPhase } from "./runOmpPhase.js";
 import type { OmpPhase } from "./phasePrompt.js";
-import { observedChangedPaths, worktreeSnapshot } from "./worktreeSnapshot.js";
+import { observedChangedPaths, worktreeHead, worktreeSnapshot } from "./worktreeSnapshot.js";
 
 export class OmpAdapter implements RuntimeAdapter {
   constructor(private readonly config: MaterializedAgentConfigV1) {}
@@ -44,7 +44,11 @@ export class OmpAdapter implements RuntimeAdapter {
   plan(context: AttemptContext) { return this.phase("plan", buildPlannerPrompt(context.contract), context); }
   async execute(context: AttemptContext) {
     try {
+      const headBefore = await worktreeHead(context.worktreePath);
       const execution = await this.phase("execute", buildExecutorPrompt(context), context);
+      if (await worktreeHead(context.worktreePath) !== headBefore) {
+        throw Object.assign(new Error("omp-head-mutated"), { observedTokens: execution.tokenUsage });
+      }
       const actual = await observedChangedPaths(context.worktreePath);
       const reported = execution.changedFiles;
       if (new Set(reported).size !== reported.length || JSON.stringify([...reported].sort()) !== JSON.stringify(actual)) {

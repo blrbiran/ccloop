@@ -11,6 +11,7 @@ const OUTPUT_LIMIT = 16 * 1024 * 1024;
 /** Digest tracked changes and untracked file bytes without writing to the target repository. */
 export async function worktreeSnapshot(root: string): Promise<string> {
   const hash = createHash("sha256");
+  hash.update(await worktreeHead(root));
   const { stdout: diff } = await execFileAsync("git", ["diff", "--binary", "HEAD"], { cwd: root, maxBuffer: OUTPUT_LIMIT });
   hash.update(diff);
   const { stdout: other } = await execFileAsync("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: root, maxBuffer: OUTPUT_LIMIT });
@@ -28,9 +29,16 @@ export async function worktreeSnapshot(root: string): Promise<string> {
   return hash.digest("hex");
 }
 
+/** The attempt's base must stay fixed: a clean status after an agent commit is still a mutation. */
+export async function worktreeHead(root: string): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: root, maxBuffer: 1024 });
+  return stdout.trim();
+}
+
 /** Actual Git-visible paths after execute; the agent's `changedFiles` is never the authority for this list. */
 export async function observedChangedPaths(root: string): Promise<string[]> {
   const [tracked, untracked] = await Promise.all([
+    // --no-renames reports both the deleted source and the added destination.
     execFileAsync("git", ["diff", "--name-only", "--no-renames", "-z", "HEAD"], { cwd: root, maxBuffer: OUTPUT_LIMIT }),
     execFileAsync("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: root, maxBuffer: OUTPUT_LIMIT }),
   ]);

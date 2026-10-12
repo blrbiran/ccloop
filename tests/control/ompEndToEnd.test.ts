@@ -23,10 +23,19 @@ const phase=system.includes("execution phase")?"execute":system.includes("verifi
 const mode=${JSON.stringify(mode)};
 appendFileSync(${JSON.stringify(calls)},phase+"\\n");
 if(phase==="execute"){
-  writeFileSync("answer.txt","42\\n");
+  if(mode==="rename-source"){
+    const {execFileSync}=await import("node:child_process");
+    execFileSync("git",["mv","outside.txt","answer.txt"]);
+  } else writeFileSync("answer.txt","42\\n");
   if(mode==="offpath")writeFileSync("outside.txt","unauthorized\\n");
+  if(mode==="committed-offpath"){
+    const {execFileSync}=await import("node:child_process");
+    writeFileSync("outside.txt","unauthorized\\n");
+    execFileSync("git",["add","answer.txt","outside.txt"]);
+    execFileSync("git",["-c","user.name=t","-c","user.email=t@t","commit","-qm","agent committed extra work"]);
+  }
 }
-const result=phase==="plan"?{summary:"Set answer to 42",primaryTargetPaths:["answer.txt"]}:phase==="execute"?{changedFiles:["answer.txt"],diffPatch:"",commandOutputs:[],stdoutStderrLog:"wrote answer"}:{approved:true,rejectCategory:"",primaryTargetPaths:["answer.txt"],failingCommand:null,safeToRetry:false,evidence:["answer is 42"],pauseSignals:[],stopSignals:[]};
+const result=phase==="plan"?{summary:"Set answer to 42",primaryTargetPaths:["answer.txt"]}:phase==="execute"?{changedFiles:mode==="committed-offpath"?[]:mode==="rename-source"?["answer.txt","outside.txt"]:["answer.txt"],diffPatch:"",commandOutputs:[],stdoutStderrLog:"wrote answer"}:{approved:true,rejectCategory:"",primaryTargetPaths:["answer.txt"],failingCommand:null,safeToRetry:false,evidence:["answer is 42"],pauseSignals:[],stopSignals:[]};
 const message={role:"assistant",content:[{type:"text",text:JSON.stringify(result)}],provider:"gateway",model:"model-a",stopReason:"stop",usage:{input:8,output:2,cacheRead:3,cacheWrite:1,totalTokens:14,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};
 for(const row of [{type:"session",id:"fake"},{type:"agent_start"},{type:"message_end",message},{type:"agent_end",isTerminal:true,yielded:true,messages:[message]}])process.stdout.write(JSON.stringify(row)+"\\n");
 `, { mode: 0o700 });
@@ -55,6 +64,26 @@ describe("OMP through the real ccloop controller", () => {
     const f = await fixture("offpath");
     const state = await runLoop(f.contract, f.runDir, new OmpAdapter(f.config));
     expect(state.status).not.toBe("succeeded");
+    expect((await readFile(f.calls, "utf8")).trim().split("\n")).toEqual(["plan", "execute"]);
+  }, 30_000);
+
+  it("refuses a forbidden file committed by OMP even when status is clean and it reports no changed files", async () => {
+    const f = await fixture("committed-offpath");
+    const state = await runLoop(f.contract, f.runDir, new OmpAdapter(f.config));
+    expect(state.status).not.toBe("succeeded");
+    expect((await readFile(f.calls, "utf8")).trim().split("\n")).toEqual(["plan", "execute"]);
+  }, 30_000);
+
+  it("counts both ends of a rename from a forbidden source into an allowed target", async () => {
+    const f = await fixture("rename-source");
+    await exec("git", ["rm", "answer.txt"], { cwd: f.repo });
+    await writeFile(join(f.repo, "outside.txt"), "42\n");
+    await exec("git", ["add", "outside.txt"], { cwd: f.repo });
+    await exec("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fixture source"], { cwd: f.repo });
+    f.contract.safetyPolicy.maxFilesTouched = 2;
+    const state = await runLoop(f.contract, f.runDir, new OmpAdapter(f.config));
+    expect(state.status).toBe("blocked_waiting_human");
+    expect(state.stopReason).toBe("allowlist miss: outside.txt");
     expect((await readFile(f.calls, "utf8")).trim().split("\n")).toEqual(["plan", "execute"]);
   }, 30_000);
 });
