@@ -1,4 +1,4 @@
-# ccloop Handoff — OMP 支线（strict-wire → omp-agent-integration → omp-skills）全在本地待人合并；Orca 关联见文末单节
+# ccloop Handoff — OMP 支线已合并推送；下一件是 Codex 429 临时失败（见「仍然挂着的」）；Orca 关联见文末单节
 
 > ⚠️ **一律自查，别信本文。** 只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是固定历史值。
 > *** **本文不写任何当前哈希** —— 指代某一笔引**提交主题行**（`git log --grep`），指代材料引**路径**。 ***
@@ -40,7 +40,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-## 当前状态：下面三条分支已由人合并进 main 并推送（2026-10-13 晚，`ls-remote` 现测）；以下保留为它们的内容记录
+## 当前状态：OMP 支线已由人合并进 main 并推送、分支与工作树已删（2026-10-13 晚）；下面保留为它们的内容记录
 
 1. **`codex/codex-strict-output-wire`** —— `fix(codex): send strict execute result schema`（＋`docs(handoff): roll Orca OMP line in place`）。
    起因：真实 Codex 在 execute 因 provider strict schema 要求 `taskResult` 在 `required` 而失败；修为 complete／partial × 有／无报告的严格候选，
@@ -72,11 +72,9 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
   没跑 `check-known-reds.mjs`（名单未含 OMP 新测试，跑之前先核名单）。
 - 不要称「全绿」：上面的红是按文件隔离归因的，没有逐条过 `check-known-reds.mjs`。
 
-### 待人做的（按顺序；Tier 0 下 agent 做不成）
+### 待人做的
 
-1. ccloop：`main` `--ff-only` 到 `codex/omp-skills` 并 push（先确认上面那次全量）。
-2. Orca：用推上去的提交跑 `scripts/pin-ccloop.mjs <sha>`（在分支上）、过闸、ff main、push —— 按 Orca 自己的 Rule 15。
-3. 合并后删已合分支与工作树；另有一处**陈旧工作树记录** `/private/tmp/orca-results-ccloop-20261010`（`.git` 指向旧路径，提交已在 main）需 `git worktree prune`／移除。
+- 上一轮的 ff／push／Orca repin／删分支与工作树：人已于 2026-10-13 晚做完。**还剩**一条失效工作树记录 `/private/tmp/orca-results-ccloop-20261010`（`git worktree list` 现测仍在；`.git` 指旧仓路径，提交已在 main）⇒ `git worktree prune`，不行就 `git worktree remove --force`。
 
 ---
 
@@ -87,6 +85,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 | **OMP 单次调用（estimate／clarify／split）不提供** | `singleCallExecution` 对 omp 恒 `null`：OMP 18.10.1 没有每次调用的输出 token 上限（catalog `maxTokens` 只在 pi-ai `resolveOpenAIOutputTokenParam` 条件满足时才发），且 OMP 会自动重试瞬态错误 ⇒ 不满足本仓 §4.4 契约。证据在上面 omp-skill-injection spec §4。**待人复核这个决定** |
 | **OMP 其余延期项** | OMP 子代理、交互式审批桥、omp 的 saved-result 恢复（目前仅 codex）；OMP skills 与 OMP 本体的**真实 provider 验收**（端点已停、额度耗尽）。Git 忽略文件与主机副作用不在 execute 检查范围 |
 | **`ClaudePhaseAborted` 历史交错（B4）** | runner 重复发布竞态与无效答案中止分支已修；精确的历史交错**仍未证成** ⇒ 不能据此宣称真实 provider 稳定性。详见 Orca handoff |
+| **Codex 429 临时失败（外部测试反馈 45–50）** | 现状：codex 非零退出一律 `codex-exit-error`，`src/controller/runLoop.ts` 的 `PhaseExecutionError` 分支直接 `failed`，无分类无退避；「尝试 1/3」不会开第 2 次；`--ephemeral` 仍在。真实样本 `/Users/biran/code/skills/orca/orca_archived_files/recommendations-{1,2}-events.jsonl`：4 行，`turn.started` 后**零 `item.*`**，`error`／`turn.failed` 的 message 为 `exceeded retry limit, last status: 429 Too Many Requests`。**人裁（2026-10-13）**：做「识别 429＋阶段内有限退避」，不去 `--ephemeral`、不做会话续跑／多 provider；**零 item 即 429 失败的那次调用用量记 0**（条件之外仍 null）。控制器建议（未裁）：只在零 item 时重试，有 item 的只改报 `codex-rate-limited`；5xx 无样本不承诺。先写 spec 再 TDD；改既有判据要人逐条点名。完成后可用 `gpt-6-luna` 做一次真 Codex 回归（本机 codex-cli 0.160.0 下 2026-10-13 探针可用；付费，先问人） |
 | **`capabilities` 计算化** | 人裁「分两步」的第二步。今天三个 kind 的 `requestBoundProof` 都恒 `null`（`src/agents/{claude,codex,omp}.ts`）|
 | **Linux** | ccloop 整套在 Linux 上历史上红 5 条；之后只在临时 Ubuntu VM 上跑过 `/usr/bin/flock` 两进程串行（过），**整套未再在 Linux 跑过**。VM 已停，要人开 |
 
@@ -129,7 +128,6 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-13 晚，Orca 会话 `6b7843ec`）
 
-- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md` §3.3。
-- 本仓 main 已由人合并推送（含 strict-wire、OMP、OMP skills）。Orca 合并时**漏了 repin**，repin 现在 Orca 分支 `codex/repin-ccloop-760c314` 上、门已跑，等人合推。
-- 外部测试反馈里的 429（`codex-exit-error`）问题在**本仓**：codex 非零退出不分类、不退避，阶段异常直接 `failed`，`--ephemeral` 仍在。人裁做「识别 429／5xx＋阶段内有限退避」，**等人提供真实 `events.jsonl` 样本**后在本仓先写 spec 再 TDD；改既有判据仍要人逐条点名。
-- `gpt-6-luna` 在本机 codex-cli 0.160.0 下可用（一次探针 `turn.completed`），付费跑每次要人开口。
+- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md` §3.3 与 §4.2 第 0／0b 条。
+- 本仓 OMP 三条分支已合进 main 并推送、分支已删；Orca 已 repin 到本仓那次合并后的 main（Orca `package.json` 现核）并从新路径重装面板服务。
+- 下一件落在**本仓**的活是 429（见上表「Codex 429 临时失败」一行）；Orca 侧对应的未知用量死路由 Orca 自己的 D 处理，本仓不动。
