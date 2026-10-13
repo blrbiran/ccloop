@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { claudeDescriptor, claudeModelArgument } from "../../src/agents/claude.js";
 import { codexDescriptor, toCodexConfig } from "../../src/agents/codex.js";
+import { ompDescriptor } from "../../src/agents/omp.js";
 import { getDescriptor, listDescriptors } from "../../src/agents/registry.js";
 import { AGENT_ERROR_CODES, AgentError, type AgentSelectionV1, type MaterializedAgentConfigV1 } from "../../src/agents/types.js";
 import { ClaudeAgentAdapter } from "../../src/runtime/claude/claudeAgentAdapter.js";
@@ -17,9 +18,11 @@ function config(kind: "claude" | "codex", selection: Partial<AgentSelectionV1> =
 }
 
 describe("agent descriptors", () => {
-  it("registers exactly claude and codex, and names an unknown kind as a missing installation", () => {
-    expect(listDescriptors().map((descriptor) => descriptor.kind)).toEqual(["claude", "codex"]);
+  // Human ruling (2026-10-13, session 808feb6a): OMP is a registered kind; this criterion is rewritten whole, not loosened.
+  it("registers exactly claude, codex and omp, and names an unknown kind as a missing installation", () => {
+    expect(listDescriptors().map((descriptor) => descriptor.kind)).toEqual(["claude", "codex", "omp"]);
     expect(getDescriptor("codex")).toBe(codexDescriptor);
+    expect(getDescriptor("omp")).toBe(ompDescriptor);
     expect(() => getDescriptor("opencode")).toThrow(expect.objectContaining({ code: "agent-installation-missing" }));
   });
 

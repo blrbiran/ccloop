@@ -101,12 +101,14 @@ describe("detecting installed agents (spec §9 criterion 1)", () => {
     expect(result.table.installations.codex).toBeUndefined();
   });
 
+  // Human ruling (2026-10-13, session 808feb6a): detect covers OMP too; this criterion is rewritten whole, not loosened.
   it("leaves a kind with no candidate out of the draft and lists it with no candidates", async () => {
     const r = await root();
     const result = await detectAgents({ home: join(r, "home"), path: join(r, "none"), platform: "linux", probe: async () => null });
     expect(result.schema).toBe("ccloop-agents-detect-v1");
-    expect(Object.keys(result.candidates)).toEqual(["claude", "codex"]);
+    expect(Object.keys(result.candidates)).toEqual(["claude", "codex", "omp"]);
     expect(result.candidates.codex!.every((candidate) => !candidate.runnable)).toBe(true);
+    expect(result.candidates.omp!.every((candidate) => !candidate.runnable)).toBe(true);
     expect(result.table.installations).toEqual({});
   });
 
