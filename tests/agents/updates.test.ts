@@ -136,6 +136,8 @@ describe("configured installation updates", () => {
     expect(receipt.after.installations.claude.command).toEqual(addition!.command);
     expect(receipt.after.installations.claude.version).toBe("2.1.283");
   });
+  // Human ruling (2026-10-13, session 808feb6a): probing the extra omp kind puts this at about 5 s alone (2.8 s
+  // without omp), on the default 5 s timeout; it gets 20 s, its assertions unchanged.
   it("observes without writing, then applies only an accepted version change and replays the receipt", async () => {
     const f = await fixture();
     const before = await readFile(f.path);
@@ -166,5 +168,5 @@ describe("configured installation updates", () => {
     expect(await control("agent-installation-apply", f.path, request)).toEqual(applied);
     const changed = await control("agent-installation-apply", f.path, { ...request, requestDigest: "b".repeat(64) });
     expect(changed.code).toBe(2);
-  });
+  }, 20_000);
 });

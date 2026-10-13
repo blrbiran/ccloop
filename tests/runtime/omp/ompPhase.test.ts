@@ -210,12 +210,16 @@ setInterval(()=>{},1000);
     await expect.poll(() => { try { process.kill(pid, 0); return false; } catch { return true; } }).toBe(true);
   });
 
+  // Human ruling (2026-10-13, session 808feb6a): the fake has no import, so Node 22 parses it as CommonJS and a
+  // top-level for-await is a SyntaxError; the body is wrapped so the criterion no longer depends on PATH's node.
   it("stops an oversized event stream and keeps its evidence within the output bound", async () => {
     const f = await fixture();
     await writeFile(f.binary, `#!/usr/bin/env node
+(async()=>{
 for await(const chunk of process.stdin){}
 process.stdout.write("x".repeat(17*1024*1024));
 setInterval(()=>{},1000);
+})();
 `, { mode: 0o700 });
     const outcome = await runOmpPhase(f.config, "plan", "prompt", f.context);
     expect(outcome.reason).toBe("output-limit");
