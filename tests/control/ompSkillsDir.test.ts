@@ -98,6 +98,13 @@ describe("ompSkillsDir at accept", { timeout: 30_000 }, () => {
     expect(await readdir(f.sourceDir)).toEqual([]);
   });
 
+  it("refuses a directory that does not exist at accept as an invalid request, before anything is persisted", async () => {
+    const f = await setup("omp");
+    const envelope = { ...f.envelope, work: { ...f.envelope.work, ompSkillsDir: join(f.dir, "missing", "skills") } };
+    expect(await runControlCommand(["accept", "--agents", f.path], JSON.stringify(envelope))).toEqual({ code: 2, stdout: "", stderr: "control-request-invalid\n" });
+    expect(await readdir(f.sourceDir)).toEqual([]);
+  });
+
   it.each([["codexSkillsDir"], ["skillPluginDir"]])("refuses %s for an omp installation, before anything is persisted", async (field) => {
     const f = await setup("omp");
     const envelope = { ...f.envelope, work: { ...f.envelope.work, [field]: field === "skillPluginDir" ? join(f.dir, "frozen-skills") : f.skillsDir } };
