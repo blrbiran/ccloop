@@ -17,6 +17,20 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data",c=>{prompt+=c;});
 process.stdin.on("end",()=>{
   writeFileSync(marker,JSON.stringify({args,cwd:process.cwd(),prompt,pid:process.pid}));
+  // Orca session 7f37d261 (2026-10-13), codex rate-limit spec §4: modes `rate-limit-1` (the first call of this marker is
+  // rejected, later calls behave as `integration`), `rate-limit-all`, `rate-limit-all-exit0` and `rate-limit-after-item`
+  // replay the tester's real 429 stdout (Orca orca_archived_files/recommendations-1-events.jsonl), exit 1 unless exit0.
+  if(mode.startsWith("rate-limit")) {
+    const call=readFileSync(marker+".argv","utf8").trim().split("\n").length;
+    if(mode!=="rate-limit-1"||call===1) {
+      const message="exceeded retry limit, last status: 429 Too Many Requests";
+      const rows=[{type:"thread.started",thread_id:"01a13431-3db4-73a1-afd1-154f0477282d"},{type:"turn.started"},
+        ...(mode==="rate-limit-after-item"?[{type:"item.started",item:{id:"item_0",type:"command_execution",command:"ls",status:"in_progress"}}]:[]),
+        {type:"error",message},{type:"turn.failed",error:{message}}];
+      process.stdout.write(rows.map(row=>JSON.stringify(row)).join("\n")+"\n");
+      process.exitCode=mode.endsWith("exit0")?0:1;return;
+    }
+  }
   process.stderr.write("fixture stderr 中文\n");
   if(mode==="skill-integration") appendFileSync(marker+".skills",readFileSync(".agents/skills/selected/SKILL.md","utf8")+"\n");
   if(process.env.FAKE_CODEX_SKILL_PATH) {

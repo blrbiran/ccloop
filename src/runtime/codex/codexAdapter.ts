@@ -4,7 +4,22 @@ import { join } from "node:path";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
 import type { AttemptContext, RuntimeAdapter } from "../types.js";
 import { codexModelUsage, decodeCodexUsage, decodeCodexResult, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
-import { runCodexPhase } from "./runCodexPhase.js";
+import { runCodexPhase, type PhaseOutcome } from "./runCodexPhase.js";
+import { classifyRateLimit } from "./rateLimit.js";
+
+/** Codex rate-limit spec §3.2: waits before each retry of a phase rejected by 429 before any work (three retries). */
+export const RATE_LIMIT_DELAYS_MS: readonly number[] = [30_000, 60_000, 120_000];
+export interface CodexAdapterOptions { rateLimitDelaysMs?: readonly number[] }
+
+/** Resolves after ms, or at once when the signal aborts (the next call then reports the abort through today's path). */
+function wait(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    if (signal?.aborted) { resolve(); return; }
+    const done = () => { clearTimeout(timer); signal?.removeEventListener("abort", done); resolve(); };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
 
 /** Orca handoff delivery C-3: an aborted phase, carrying the usage its stdout showed before the kill (or null). */
 export class CodexPhaseAborted extends Error {
@@ -17,13 +32,42 @@ export class CodexPhaseAborted extends Error {
 export class CodexAdapter implements RuntimeAdapter {
   private readonly config: CodexConfig;
   // Agent selection (2026-09-26): extraEnv carries the installation's config directory (CODEX_HOME) to the CLI.
-  constructor(rawConfig: unknown, private readonly extraEnv?: Record<string, string>, private readonly codexSkillsDir?: string) { this.config = parseCodexConfig(rawConfig); }
+  private readonly rateLimitDelaysMs: readonly number[];
+  constructor(rawConfig: unknown, private readonly extraEnv?: Record<string, string>, private readonly codexSkillsDir?: string, options: CodexAdapterOptions = {}) {
+    this.config = parseCodexConfig(rawConfig);
+    this.rateLimitDelaysMs = options.rateLimitDelaysMs ?? RATE_LIMIT_DELAYS_MS;
+  }
+
+  /**
+   * Spec §3.2–3.3: a call rejected by 429 before any work is called again after a bounded, abortable wait, within the
+   * phase's time limit. Each call keeps its own evidence directory; a rejected one also records rate-limit.json.
+   */
+  private async callWithBackoff(phase: CodexPhase, prompt: string, context: AttemptContext): Promise<PhaseOutcome & { rateLimited: "before-work" | "after-work" | null }> {
+    const startedAt = Date.now(), limitMs = Math.min(this.config.timeoutMs, context.state.budgetSnapshot.timeRemainingMs);
+    for (let call = 1; ; call++) {
+      const elapsed = Date.now() - startedAt;
+      const callContext = call === 1 ? context : { ...context, state: { ...context.state, budgetSnapshot: { ...context.state.budgetSnapshot, timeRemainingMs: context.state.budgetSnapshot.timeRemainingMs - elapsed } } };
+      const outcome = await runCodexPhase(this.config, { phase, prompt, context: callContext }, this.extraEnv, this.codexSkillsDir);
+      const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? classifyRateLimit(outcome.events) : null;
+      if (rateLimited !== "before-work") return { ...outcome, rateLimited };
+      const delay = this.rateLimitDelaysMs[call - 1];
+      const next = delay !== undefined && Date.now() - startedAt + delay < limitMs && !context.abortSignal?.aborted ? delay : null;
+      await writeFile(join(outcome.evidenceDir, "rate-limit.json"), JSON.stringify({ classification: rateLimited, call, nextDelayMs: next }), { mode: 0o600 });
+      if (next === null) return { ...outcome, rateLimited };
+      await wait(next, context.abortSignal);
+    }
+  }
 
   get awaitAbortedPhaseCleanup(): boolean { return this.codexSkillsDir !== undefined; }
 
   private async phase<P extends CodexPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
-    const outcome = await runCodexPhase(this.config, { phase, prompt, context }, this.extraEnv, this.codexSkillsDir);
+    const outcome = await this.callWithBackoff(phase, prompt, context);
     if (outcome.reason === "aborted") throw new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens);
+    // Spec §3.3: named; a rejection before any work books 0 (rateLimitedBeforeWork, observedTokensOf), any other keeps
+    // the usage its stdout showed, or null.
+    if (outcome.rateLimited !== null) {
+      throw Object.assign(new Error(`codex-rate-limited: ${outcome.evidenceDir}`), outcome.rateLimited === "before-work" ? { rateLimitedBeforeWork: true } : { observedTokens: outcome.observedTokens });
+    }
     if (outcome.reason !== "completed" || outcome.final === null) {
       // Orca ruling 26 (session c85d2c4e, 2026-09-28): as the aborted path, a phase that timed out or failed carries the
       // turn usage its stdout showed (runCodexPhase observes it for every outcome but completed), null when none.

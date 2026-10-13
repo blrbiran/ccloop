@@ -114,6 +114,9 @@ class PhaseExecutionError extends Error {
   // *** ERRATUM (crash resume, 2026-10-02, Orca session ece96b67; ccloop spec 2026-10-02-crash-resume-and-orphan-reaping-design.md
   // §3.2) -- "never 0" no longer holds for one case: an error carrying neverStarted books 0 (the runner proved no claude
   // process existed in the call). Every other error is unchanged: observed tokens, or null. ***
+  // *** ERRATUM (codex rate limit, 2026-10-13, Orca session 7f37d261; ccloop spec
+  // 2026-10-13-codex-rate-limit-backoff-design.md §3.3) -- a second case books 0: an error carrying rateLimitedBeforeWork
+  // (Codex rejected the call with HTTP 429 after turn.started and before any item; human ruling, observedTokensOf). ***
   readonly tokenUsage: number | null;
   readonly formatFailure: ExecutionFormatFailure | null;
 

@@ -173,6 +173,8 @@ export function isPartialExecutionResult(result: ExecutionResult): result is Par
  */
 export function observedTokensOf(error: unknown): number | null {
   if (error !== null && typeof error === "object" && (error as { neverStarted?: unknown }).neverStarted === true) return 0;
+  // Codex rate-limit spec (2026-10-13) §3.3, human ruling: a call rejected by 429 before any work booked nothing.
+  if (error !== null && typeof error === "object" && (error as { rateLimitedBeforeWork?: unknown }).rateLimitedBeforeWork === true) return 0;
   const value = error !== null && typeof error === "object" ? (error as { observedTokens?: unknown }).observedTokens : undefined;
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
