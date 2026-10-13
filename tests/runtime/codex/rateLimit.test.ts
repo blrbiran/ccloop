@@ -104,18 +104,18 @@ describe("a codex phase rejected by 429 before any work backs off inside the pha
   });
 
   it("gives a retried call only the time the phase has left", async () => {
-    // First call rejected, the retry hangs: it must time out at the phase's remaining time (6 s minus the 3 s wait),
-    // not after a fresh 6 s.
-    const f = await adapter("rate-limit-1-hang", { delays: [3_000], timeoutMs: 30_000 });
-    const context = { ...f.context, state: { ...f.context.state, budgetSnapshot: { ...f.context.state.budgetSnapshot, timeRemainingMs: 6_000 } } };
+    // First call rejected, the retry hangs: it must time out at the phase's remaining time (10 s minus the 6 s wait),
+    // about 10 s in, not after a fresh 10 s (about 16 s). The 13 s bound leaves 3 s each way for a loaded machine.
+    const f = await adapter("rate-limit-1-hang", { delays: [6_000], timeoutMs: 60_000 });
+    const context = { ...f.context, state: { ...f.context.state, budgetSnapshot: { ...f.context.state.budgetSnapshot, timeRemainingMs: 10_000 } } };
     const started = Date.now();
     const out = await settle(f.a.plan(context)) as { error: Error };
     const elapsed = Date.now() - started;
     expect(String(out.error.message)).toMatch(/^codex-timeout: /);
     expect(await f.calls()).toBe(2);
-    expect(elapsed).toBeGreaterThanOrEqual(5_500);
-    expect(elapsed).toBeLessThan(8_000);
-  }, 30_000);
+    expect(elapsed).toBeGreaterThanOrEqual(9_500);
+    expect(elapsed).toBeLessThan(13_000);
+  }, 40_000);
 
   it("stops retrying when the next wait would pass the phase's time limit", async () => {
     const f = await adapter("rate-limit-all", { delays: [5_000], timeoutMs: 3_000 });
