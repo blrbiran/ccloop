@@ -10,11 +10,11 @@ import type { OmpPhase } from "./phasePrompt.js";
 import { observedChangedPaths, worktreeHead, worktreeSnapshot } from "./worktreeSnapshot.js";
 
 export class OmpAdapter implements RuntimeAdapter {
-  constructor(private readonly config: MaterializedAgentConfigV1) {}
+  constructor(private readonly config: MaterializedAgentConfigV1, private readonly skillsDir?: string) {}
 
   private async phase<P extends OmpPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
     const before = phase === "execute" ? null : await worktreeSnapshot(context.worktreePath);
-    const outcome = await runOmpPhase(this.config, phase, prompt, context);
+    const outcome = await runOmpPhase(this.config, phase, prompt, context, this.skillsDir === undefined ? {} : { skillsDir: this.skillsDir });
     if (before !== null) {
       const after = await worktreeSnapshot(context.worktreePath);
       if (before !== after) {

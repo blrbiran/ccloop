@@ -298,7 +298,7 @@ OMP 的安装只允许一个绝对路径可执行文件，不接受预置命令�
 
 每个 plan／execute／verify 都是独立的一次 OMP print 调用。ccloop 传入该阶段的系统提示，关闭扩展、技能和会话；plan／verify 只开放 read／grep／glob，execute 才开放 edit／write／bash。OMP 即使习惯继续完成整个任务，也必须在本阶段 JSON 回答后停止；事件流中出现额外继续、禁用工具或模型切换会被拒绝。plan／verify 若改动 HEAD 或 Git 可见文件会被拒绝；execute 若自行提交、移动 HEAD 也会被拒绝。execute 的自报 `changedFiles` 必须与 Git 可见的实际变更完全一致，重命名的来源与目标都计入，再由现有路径策略检查。
 
-OMP 用量按每条完整 assistant 消息的 input、output、cacheRead、cacheWrite 相加；中断且只有部分消息时保持用量未知，不把下界当成已知总额。代理返回的零成本字段不代表模型免费。首轮采用受限 CLI 加隔离验收：Git 忽略文件和工作树外的主机副作用仍需外层隔离，不能把这套检查当作完整沙箱。OMP 暂无 syncskill 注入和单次预估能力。
+OMP 用量按每条完整 assistant 消息的 input、output、cacheRead、cacheWrite 相加；中断且只有部分消息时保持用量未知，不把下界当成已知总额。代理返回的零成本字段不代表模型免费。首轮采用受限 CLI 加隔离验收：Git 忽略文件和工作树外的主机副作用仍需外层隔离，不能把这套检查当作完整沙箱。OMP 的 syncskill 注入经 `ompSkillsDir`：ccloop 不开启 OMP 自身的技能发现，而是把冻结快照中每个技能的名称、单行描述与 `SKILL.md` 绝对路径列进每个阶段的系统提示，由模型按需用 read 读取；快照无效时在启动 OMP 前以 `omp-skills-source-invalid:<detail>` 失败。OMP 暂无单次调用（预估／澄清／拆分）：18.10.1 无法封顶单次调用的输出 token，`singleCallExecution` 仍为 null。
 
 ---
 

@@ -78,6 +78,8 @@ export interface LoopWork {
   skillPluginDir?: string;
   /** Orca H6 Codex skills (2026-10-05): canonical absolute per-run snapshot `skills` directory, Codex-only. */
   codexSkillsDir?: string;
+  /** OMP skill injection (2026-10-13): the same snapshot `skills` directory, OMP-only; listed in each phase's system prompt. */
+  ompSkillsDir?: string;
 }
 
 /**
@@ -226,6 +228,9 @@ const inputCheckpointSchema = z
     bundlePath: z.string().min(1),
   })
   .strict();
+function atMostOneSkillDirectory(work: { skillPluginDir?: string; codexSkillsDir?: string; ompSkillsDir?: string }): boolean {
+  return [work.skillPluginDir, work.codexSkillsDir, work.ompSkillsDir].filter((dir) => dir !== undefined).length <= 1;
+}
 const loopWorkSchema = z
   .object({
     kind: z.literal("loop"),
@@ -237,9 +242,10 @@ const loopWorkSchema = z
     // claude loads it with --plugin-dir. Optional so an envelope without it parses and hashes exactly as before.
     skillPluginDir: z.string().min(1).optional(),
     codexSkillsDir: z.string().min(1).optional(),
+    ompSkillsDir: z.string().min(1).optional(),
   })
   .strict()
-  .refine((work) => !(work.skillPluginDir !== undefined && work.codexSkillsDir !== undefined), {
+  .refine((work) => atMostOneSkillDirectory(work), {
     path: ["codexSkillsDir"],
     message: "skill directory fields are mutually exclusive",
   });
@@ -262,8 +268,8 @@ const legacyStartEnvelopeSchema = z.union([
 const nullableLoopWorkSchema = z.object({
   kind: z.literal("loop"), contract: loopContractSchema,
   targetRepo: z.string().min(1), base: z.string().min(1), sourceDir: z.string().min(1),
-  skillPluginDir: z.string().min(1).optional(), codexSkillsDir: z.string().min(1).optional(),
-}).strict().refine(work => !(work.skillPluginDir !== undefined && work.codexSkillsDir !== undefined));
+  skillPluginDir: z.string().min(1).optional(), codexSkillsDir: z.string().min(1).optional(), ompSkillsDir: z.string().min(1).optional(),
+}).strict().refine(work => atMostOneSkillDirectory(work));
 const v4StartEnvelopeSchema = z.object({
   protocol: z.literal(4), contractHash: hashSchema, tokenPolicy: tokenPolicySchema.optional(),
   mode: z.literal("verify-saved-result").optional(), savedResultRecovery: savedResultRecoveryInputSchema.optional(),
@@ -356,9 +362,10 @@ function validateEnvelopePaths(envelope: StartEnvelopeV3, method: ControlMethodV
     if (!isAbsolute(envelope.work.skillPluginDir)) throw new ControlProtocolError("control-request-invalid");
     if (method === "accept") validateCanonicalDirectory(envelope.work.skillPluginDir);
   }
-  if (envelope.work.codexSkillsDir !== undefined) {
-    if (!isAbsolute(envelope.work.codexSkillsDir)) throw new ControlProtocolError("control-request-invalid");
-    if (method === "accept") validateCanonicalDirectory(envelope.work.codexSkillsDir);
+  for (const skillsDir of [envelope.work.codexSkillsDir, envelope.work.ompSkillsDir]) {
+    if (skillsDir === undefined) continue;
+    if (!isAbsolute(skillsDir)) throw new ControlProtocolError("control-request-invalid");
+    if (method === "accept") validateCanonicalDirectory(skillsDir);
   }
   if (envelope.inputCheckpoint === null) return;
   const bundle = validateCanonicalDirectory(envelope.inputCheckpoint.bundlePath);

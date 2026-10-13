@@ -92,7 +92,8 @@ export async function acceptStart(
   if (
     input.work.kind === "loop" &&
     ((input.work.skillPluginDir !== undefined && config.kind !== "claude") ||
-      (input.work.codexSkillsDir !== undefined && config.kind !== "codex"))
+      (input.work.codexSkillsDir !== undefined && config.kind !== "codex") ||
+      (input.work.ompSkillsDir !== undefined && config.kind !== "omp"))
   ) {
     throw new ControlProtocolError("skills-unsupported-agent");
   }

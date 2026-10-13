@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { MaterializedAgentConfigV1 } from "../../agents/types.js";
 import type { AttemptContext } from "../types.js";
+import { ompSkillsPromptBlock } from "./ompSkills.js";
 import { phaseSystemPrompt, type OmpPhase } from "./phasePrompt.js";
 
 const execFileAsync = promisify(execFile);
@@ -19,7 +20,11 @@ export interface OmpPhaseOutcome {
   neverStarted: boolean;
 }
 
-export async function runOmpPhase(config: MaterializedAgentConfigV1, phase: OmpPhase, prompt: string, context: AttemptContext): Promise<OmpPhaseOutcome> {
+export async function runOmpPhase(
+  config: MaterializedAgentConfigV1, phase: OmpPhase, prompt: string, context: AttemptContext, options: { skillsDir?: string } = {},
+): Promise<OmpPhaseOutcome> {
+  // OMP skill injection (spec 2026-10-13): checked before anything is spawned; OMP's own discovery stays off below.
+  const skills = options.skillsDir === undefined ? "" : await ompSkillsPromptBlock(options.skillsDir, context.worktreePath);
   const root = join(context.runDir, "omp", String(context.attempt), phase);
   await mkdir(root, { recursive: true, mode: 0o700 });
   const evidenceDir = await mkdtemp(join(root, "call-"));
@@ -27,7 +32,7 @@ export async function runOmpPhase(config: MaterializedAgentConfigV1, phase: OmpP
   const eventsPath = join(evidenceDir, "events.jsonl");
   const stderrPath = join(evidenceDir, "stderr.log");
   await Promise.all([
-    writeFile(systemPath, phaseSystemPrompt(phase), { mode: 0o600 }),
+    writeFile(systemPath, skills === "" ? phaseSystemPrompt(phase) : `${phaseSystemPrompt(phase)}\n\n${skills}`, { mode: 0o600 }),
     writeFile(eventsPath, "", { mode: 0o600 }),
     writeFile(stderrPath, "", { mode: 0o600 }),
   ]);

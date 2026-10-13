@@ -39,5 +39,5 @@ export const ompDescriptor: AgentDescriptor = {
     };
   },
   singleCallExecution() { return null; },
-  createAdapter(config) { return new OmpAdapter(config); },
+  createAdapter(config, options) { return new OmpAdapter(config, options?.ompSkillsDir); },
 };

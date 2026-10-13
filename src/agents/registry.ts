@@ -38,8 +38,11 @@ export interface AgentDescriptor {
    * key of it: Orca does not intersect it with a profile or freeze it into a task.
    */
   singleCallExecution(config: MaterializedAgentConfigV1): "v1" | null;
-  /** Orca syncskill integration (2026-10-03), spec §10.7: `skillPluginDir` is honoured by claude only (accept refuses it for any other agent). */
-  createAdapter(config: MaterializedAgentConfigV1, options?: { skillPluginDir?: string; codexSkillsDir?: string }): RuntimeAdapter;
+  /**
+   * Orca syncskill integration (2026-10-03), spec §10.7: each skill directory field is honoured by one kind only --
+   * `skillPluginDir` by claude, `codexSkillsDir` by codex (H6), `ompSkillsDir` by omp (2026-10-13); accept refuses the rest.
+   */
+  createAdapter(config: MaterializedAgentConfigV1, options?: { skillPluginDir?: string; codexSkillsDir?: string; ompSkillsDir?: string }): RuntimeAdapter;
 }
 
 const DESCRIPTORS: readonly AgentDescriptor[] = [claudeDescriptor, codexDescriptor, ompDescriptor];
