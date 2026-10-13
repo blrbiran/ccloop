@@ -50,9 +50,10 @@ describe("a codex phase rejected by 429 before any work backs off inside the pha
     const out = await settle(f.a.plan(f.context));
     expect(out).toHaveProperty("value");
     expect(await f.calls()).toBe(2);
-    const [first, second] = await f.callDirs();
-    expect(JSON.parse(await readFile(join(f.runDir, "codex", "1", "plan", first!, "rate-limit.json"), "utf8"))).toEqual({ classification: "before-work", call: 1, nextDelayMs: 40 });
-    await expect(readFile(join(f.runDir, "codex", "1", "plan", second!, "rate-limit.json"), "utf8")).rejects.toThrow();
+    // mkdtemp names the call directories at random, so they are told apart by their contents, not their order.
+    const records = await Promise.all((await f.callDirs()).map(dir => readFile(join(f.runDir, "codex", "1", "plan", dir, "rate-limit.json"), "utf8").then(JSON.parse, () => null)));
+    expect(records.filter(record => record === null)).toHaveLength(1);
+    expect(records.filter(record => record !== null)).toEqual([{ classification: "before-work", call: 1, nextDelayMs: 40 }]);
   });
 
   it("gives up after the bounded retries as codex-rate-limited, booking 0", async () => {
@@ -94,6 +95,27 @@ describe("a codex phase rejected by 429 before any work backs off inside the pha
     expect(Date.now() - started).toBeLessThan(3_000);
     expect(await f.calls()).toBe(1);
   }, 20_000);
+
+  it("does not classify a phase that timed out, even with 429 rows in its stdout", async () => {
+    const f = await adapter("rate-limit-hang", { timeoutMs: 1_000 });
+    const out = await settle(f.a.plan(f.context)) as { error: Error };
+    expect(String(out.error.message)).toMatch(/^codex-timeout: /);
+    expect(await f.calls()).toBe(1);
+  });
+
+  it("gives a retried call only the time the phase has left", async () => {
+    // First call rejected, the retry hangs: it must time out at the phase's remaining time (6 s minus the 3 s wait),
+    // not after a fresh 6 s.
+    const f = await adapter("rate-limit-1-hang", { delays: [3_000], timeoutMs: 30_000 });
+    const context = { ...f.context, state: { ...f.context.state, budgetSnapshot: { ...f.context.state.budgetSnapshot, timeRemainingMs: 6_000 } } };
+    const started = Date.now();
+    const out = await settle(f.a.plan(context)) as { error: Error };
+    const elapsed = Date.now() - started;
+    expect(String(out.error.message)).toMatch(/^codex-timeout: /);
+    expect(await f.calls()).toBe(2);
+    expect(elapsed).toBeGreaterThanOrEqual(5_500);
+    expect(elapsed).toBeLessThan(8_000);
+  }, 30_000);
 
   it("stops retrying when the next wait would pass the phase's time limit", async () => {
     const f = await adapter("rate-limit-all", { delays: [5_000], timeoutMs: 3_000 });
