@@ -1,4 +1,4 @@
-# ccloop Handoff — OMP 支线已合并推送；下一件是 Codex 429 临时失败（见「仍然挂着的」）；Orca 关联见文末单节
+# ccloop Handoff — Codex 429 退避已在分支上完成、等人合推（见「当前状态」）；Orca 关联见文末单节
 
 > ⚠️ **一律自查，别信本文。** 只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是固定历史值。
 > *** **本文不写任何当前哈希** —— 指代某一笔引**提交主题行**（`git log --grep`），指代材料引**路径**。 ***
@@ -36,11 +36,27 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 - 本机 `rm`、`cp` 是 `-i` alias：`rm -rf` 会**静默挂在确认提示上**，`cp` 会**静默拒绝覆盖** ⇒ 用 `/bin/rm -rf`、`cat src > dst`。
 - *** **Orca 的 Tier 0 闸门已生效**：本机 agent 会话里的 合并进 main／push／删分支或 worktree **被机械拦下**（clone 里的 `git pull` 也会被拦，
   要新版本就重新 `clone --local`）。这几件**由人在自己终端里做**，agent 只列命令。 ***
-- **Codex CLI 额度已用尽**（人，2026-10-13）：现在跑不了真 Codex。OMP 用的 LiteLLM 端点已停。本会话**零真实 provider 调用**。
+- 真 Codex：`gpt-6-luna` 在本机 codex-cli 0.160.0 下可用（Orca 会话 `6b7843ec` 2026-10-13 探针），**付费，每次先问人**；别的 Codex 模型额度已用尽。OMP 用的 LiteLLM 端点已停。Orca 会话 `7f37d261` **零真实 provider 调用**。
 
 ---
 
-## 当前状态：OMP 支线已由人合并进 main 并推送、分支与工作树已删（2026-10-13 晚）；下面保留为它们的内容记录
+## 当前状态：`codex/codex-rate-limit-backoff`（Codex 429）完成，等人合推（Orca 会话 `7f37d261`，2026-10-13 夜）
+
+- 工作树 `/Users/biran/code/skills/orca/ccloop-wt/codex-429`（`node_modules` 是软链、未跟踪），从 main 分出，三笔：
+  `docs(spec): recognise Codex 429 and back off inside the phase`、`feat(codex): back off a 429 rejected before any work and book it as zero`、
+  `test(codex): pin the time a retry gets and the outcomes left unclassified`，以及 `test(codex): widen the retry-time criterion's margin`。
+  spec：`docs/superpowers/specs/2026-10-13-codex-rate-limit-backoff-design.md`。
+- 行为：`src/runtime/codex/rateLimit.ts` `classifyRateLimit` 只认 `error.message`／`turn.failed.error.message` 里的 `last status: 429`（5xx 无样本不认）；
+  `turn.started`、零 `item.*`、每行可解析、无 `turn.completed` ⇒ `before-work`，其他 429 ⇒ `after-work`。只对 `exit-error`／`io-error` 结果分类。
+  `CodexAdapter` 对 `before-work` 在阶段内退避 30/60/120 s 重试（构造参数可改，测试用短的），等待可被 abort 打断，排不进阶段剩余时间就不再排，重试调用只拿剩余时间；
+  每次被拒的调用目录写 `rate-limit.json`。用尽 ⇒ `codex-rate-limited: <dir>` ＋ `rateLimitedBeforeWork` ⇒ `observedTokensOf` 返回 **0**（人裁）；`after-work` 不重试，同名原因、用量照旧（观测值或 null）。
+- **零既有判据改动**（只加）：新判据 `tests/runtime/codex/rateLimit.test.ts`、`rateLimitRunLoop.test.ts`（真 runLoop＋真 adapter）；fake codex 新模式 `rate-limit-1`／`-all`／`-all-exit0`／`-after-item`／`-hang`／`-1-hang`，回放测试者真实样本。
+  已发布的 `PhaseExecutionError` 注释（"never 0"）末尾追加了具名 ERRATUM。
+- 变异（独立子代理，副本）：17 条中首轮 15 红，M8（只分类 exit/io 两种结果）与 M17（重试拿剩余时间）无判据 ⇒ 补判据后子代理复跑两条都红；之后放宽 M17 判据的时间余量（变异 16.1 s 对阈值 13 s，仍红——这次复验是写实现的控制器自己做的，未经独立上下文）；首轮还抓到本轮自己写的一条按目录名排序的不稳判据（已修）。
+- 门：typecheck／build 过；全量 1627/1669、7 跳过、35 红，与 Orca 全量并跑，负载峰值 205；红全是超时／native crash marker／撕裂读形状，单文件重跑结果见 Orca `docs/handoff/known-load-flakes.md` 的 `7f37d261` 行。`check-known-reds.mjs` 报 UNEXPECTED（名单未含负载红），**不等于全量绿**。
+- 等人：`--ff-only` 合并并 push；删分支与工作树。之后 Orca 要 repin。
+
+## 上一轮：OMP 支线已由人合并进 main 并推送、分支与工作树已删（2026-10-13 晚）；下面保留为它们的内容记录
 
 1. **`codex/codex-strict-output-wire`** —— `fix(codex): send strict execute result schema`（＋`docs(handoff): roll Orca OMP line in place`）。
    起因：真实 Codex 在 execute 因 provider strict schema 要求 `taskResult` 在 `required` 而失败；修为 complete／partial × 有／无报告的严格候选，
@@ -85,7 +101,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 | **OMP 单次调用（estimate／clarify／split）不提供** | `singleCallExecution` 对 omp 恒 `null`：OMP 18.10.1 没有每次调用的输出 token 上限（catalog `maxTokens` 只在 pi-ai `resolveOpenAIOutputTokenParam` 条件满足时才发），且 OMP 会自动重试瞬态错误 ⇒ 不满足本仓 §4.4 契约。证据在上面 omp-skill-injection spec §4。**待人复核这个决定** |
 | **OMP 其余延期项** | OMP 子代理、交互式审批桥、omp 的 saved-result 恢复（目前仅 codex）；OMP skills 与 OMP 本体的**真实 provider 验收**（端点已停、额度耗尽）。Git 忽略文件与主机副作用不在 execute 检查范围 |
 | **`ClaudePhaseAborted` 历史交错（B4）** | runner 重复发布竞态与无效答案中止分支已修；精确的历史交错**仍未证成** ⇒ 不能据此宣称真实 provider 稳定性。详见 Orca handoff |
-| **Codex 429 临时失败（外部测试反馈 45–50）** | 现状：codex 非零退出一律 `codex-exit-error`，`src/controller/runLoop.ts` 的 `PhaseExecutionError` 分支直接 `failed`，无分类无退避；「尝试 1/3」不会开第 2 次；`--ephemeral` 仍在。真实样本 `/Users/biran/code/skills/orca/orca_archived_files/recommendations-{1,2}-events.jsonl`：4 行，`turn.started` 后**零 `item.*`**，`error`／`turn.failed` 的 message 为 `exceeded retry limit, last status: 429 Too Many Requests`。**人裁（2026-10-13）**：做「识别 429＋阶段内有限退避」，不去 `--ephemeral`、不做会话续跑／多 provider；**零 item 即 429 失败的那次调用用量记 0**（条件之外仍 null）。控制器建议（未裁）：只在零 item 时重试，有 item 的只改报 `codex-rate-limited`；5xx 无样本不承诺。先写 spec 再 TDD；改既有判据要人逐条点名。完成后可用 `gpt-6-luna` 做一次真 Codex 回归（本机 codex-cli 0.160.0 下 2026-10-13 探针可用；付费，先问人） |
+| **Codex 429（外部测试反馈 45–50）** | 已在分支 `codex/codex-rate-limit-backoff` 完成（见「当前状态」），等人合推。剩：5xx 与其他措辞无样本未识别；Orca 侧无 `codex-rate-limited` 专门文案；可用 `gpt-6-luna` 做一次真 Codex 回归（付费，先问人） |
 | **`capabilities` 计算化** | 人裁「分两步」的第二步。今天三个 kind 的 `requestBoundProof` 都恒 `null`（`src/agents/{claude,codex,omp}.ts`）|
 | **Linux** | ccloop 整套在 Linux 上历史上红 5 条；之后只在临时 Ubuntu VM 上跑过 `/usr/bin/flock` 两进程串行（过），**整套未再在 Linux 跑过**。VM 已停，要人开 |
 
@@ -126,8 +142,8 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-13 晚，Orca 会话 `6b7843ec`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-13 夜，Orca 会话 `7f37d261`）
 
-- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md` §3.3 与 §4.2 第 0／0b 条。
-- 本仓 OMP 三条分支已合进 main 并推送、分支已删；Orca 已 repin 到本仓那次合并后的 main（Orca `package.json` 现核）并从新路径重装面板服务。
-- 下一件落在**本仓**的活是 429（见上表「Codex 429 临时失败」一行）；Orca 侧对应的未知用量死路由 Orca 自己的 D 处理，本仓不动。
+- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md` §3.3、§4.1 第 5 条、§4.2 第 0／0b 条。
+- 本仓的 429 退避在分支上（见「当前状态」）；Orca 侧的 D（不限预算 run 的未知用量由 owner 不计量放行、谱系只继承实测用量）在 Orca 分支上，不动本仓。
+- 两边都合推后，Orca 要 repin 到含本仓 429 改动的 main。
