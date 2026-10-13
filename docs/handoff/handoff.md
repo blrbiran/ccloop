@@ -40,7 +40,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-## 当前状态：三条本地分支，叠成一串（都没推；`origin/main` 未动）
+## 当前状态：下面三条分支已由人合并进 main 并推送（2026-10-13 晚，`ls-remote` 现测）；以下保留为它们的内容记录
 
 1. **`codex/codex-strict-output-wire`** —— `fix(codex): send strict execute result schema`（＋`docs(handoff): roll Orca OMP line in place`）。
    起因：真实 Codex 在 execute 因 provider strict schema 要求 `taskResult` 在 `required` 而失败；修为 complete／partial × 有／无报告的严格候选，
@@ -127,9 +127,9 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-13，会话 `808feb6a`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-13 晚，Orca 会话 `6b7843ec`）
 
-- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`（路径 2026-10-13 从 `…/skills/loop/Orca` 迁来）。
-- Orca 配对分支：`codex/codex-wire-repin` → `codex/omp-integration` → `codex/omp-skills`（工作树 `/private/tmp/orca-omp-integration-20261012`），全在本地；
-  其 OMP skills E2E 对**本地构建的 ccloop**通过。Orca 正式 pin 与 launchd 面板服务**尚未**切到本仓任何新分支（面板服务还指向旧路径，要在 repin 后从新路径重装）。
-- 下一步顺序：本仓合并＋推送 → Orca repin＋过闸＋推送 → 重装面板服务。都归人（Tier 0）。
+- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md` §3.3。
+- 本仓 main 已由人合并推送（含 strict-wire、OMP、OMP skills）。Orca 合并时**漏了 repin**，repin 现在 Orca 分支 `codex/repin-ccloop-760c314` 上、门已跑，等人合推。
+- 外部测试反馈里的 429（`codex-exit-error`）问题在**本仓**：codex 非零退出不分类、不退避，阶段异常直接 `failed`，`--ephemeral` 仍在。人裁做「识别 429／5xx＋阶段内有限退避」，**等人提供真实 `events.jsonl` 样本**后在本仓先写 spec 再 TDD；改既有判据仍要人逐条点名。
+- `gpt-6-luna` 在本机 codex-cli 0.160.0 下可用（一次探针 `turn.completed`），付费跑每次要人开口。
