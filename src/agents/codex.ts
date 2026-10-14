@@ -54,6 +54,10 @@ export const codexDescriptor: AgentDescriptor = {
   singleCallExecution() {
     return null;
   },
+  // OMP single call (Orca spec 2026-10-14 §3.2): codex runs no single call; nothing to bound.
+  singleCallOutputCap() {
+    return null;
+  },
   createAdapter(config, options) {
     const { configDir } = config.installation;
     return new CodexAdapter(toCodexConfig(config), configDir === null ? undefined : { CODEX_HOME: configDir }, options?.codexSkillsDir);

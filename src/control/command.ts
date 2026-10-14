@@ -95,6 +95,8 @@ const capabilitiesSchema = z.union([
       killGraceMs: z.number().int().nonnegative().max(60_000),
       capabilities: capabilityViewSchema,
       singleCallExecution: z.enum(["v1"]).nullable(),
+      // OMP single call (Orca spec 2026-10-14 §3.2). Optional, so an answer without it (a handler stand-in) still parses.
+      singleCallOutputCap: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable().optional(),
     })
     .strict(),
 ]);
@@ -249,10 +251,11 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
   if (request.method === "agent-installation-apply") return applyAgentInstallations(context.agentsTablePath, request);
   if (request.method === "capabilities") {
     if (request.agent === null) return await tableView(context.agentsTablePath);
-    const { config, resolution } = await resolveAgent(await readAgentsTable(context.agentsTablePath), request.agent);
+    const { resolution } = await resolveAgent(await readAgentsTable(context.agentsTablePath), request.agent);
     // Orca single-call estimate (2026-09-27), spec §4.4: a sibling of `capabilities`, like timeoutMs and killGraceMs,
     // so the seven-key view (frozen into Orca profiles and task records) stays exactly as it is.
-    return { protocol: 3, ...resolution, singleCallExecution: getDescriptor(config.kind).singleCallExecution(config) };
+    // OMP single call (Orca spec 2026-10-14 §3.2): singleCallExecution and singleCallOutputCap now come with the resolution.
+    return { protocol: 3, ...resolution };
   }
   if (request.method === "accept") {
     return await acceptStart(request.input, { agentsTablePath: context.agentsTablePath });

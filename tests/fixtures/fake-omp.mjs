@@ -7,16 +7,19 @@
 // ccloop drives OMP (system prompt file, prompt on stdin, JSON events on stdout). Per phase it appends the phase name to
 // `<marker>.calls`; when the system prompt lists frozen skills it reads every listed SKILL.md (as a model told to would)
 // and appends each one's bytes to `<marker>.skills`. Execute sets answer.txt to 42.
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const [marker, ...args] = process.argv.slice(2);
 if (args.includes("--version")) {
   process.stdout.write("18.10.1\n");
   process.exit(0);
 }
+// OMP single call (Orca spec 2026-10-14 §5): `<marker>.catalog.json`, when present, is the catalog's rows; without it the
+// one row below, as before.
 if (args.includes("models")) {
-  const row = { provider: "gateway", kind: "chat", id: "model-a", selector: "gateway/model-a", contextWindow: 200000, maxTokens: 8192 };
-  process.stdout.write(`${JSON.stringify({ models: [row] })}\n`);
+  const rows = existsSync(`${marker}.catalog.json`) ? JSON.parse(readFileSync(`${marker}.catalog.json`, "utf8"))
+    : [{ provider: "gateway", kind: "chat", id: "model-a", selector: "gateway/model-a", contextWindow: 200000, maxTokens: 8192 }];
+  process.stdout.write(`${JSON.stringify({ models: rows })}\n`);
   process.exit(0);
 }
 if (args.includes("config")) {

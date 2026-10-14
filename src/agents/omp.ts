@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import { z } from "zod";
 import type { AgentDescriptor } from "./registry.js";
 import { OmpAdapter } from "../runtime/omp/ompAdapter.js";
+import { ompSingleCallExecution } from "./ompModels.js";
 import { AgentError, assertContextOption, assertModel, commonSearchDirs } from "./types.js";
 
 export const ompDescriptor: AgentDescriptor = {
@@ -27,17 +28,19 @@ export const ompDescriptor: AgentDescriptor = {
     assertContextOption(["agent-default"], selection);
     if (!/^[^/\s]+\/.+$/u.test(selection.model)) throw new AgentError("agent-selection-invalid", "omp model must be provider-qualified");
   },
-  capabilities() {
+  capabilities(_config, row) {
     return {
       usageObservation: "phase-end",
       budgetEnforcement: "soft",
       contextObservation: "unavailable",
       handoffControl: "durable",
       handoffExecution: "mechanical-in-run-v1",
-      contextWindowTokens: null,
+      // OMP single call (Orca spec 2026-10-14 §1.2, §3.2): the selected catalog row's window, omp's defaults included.
+      contextWindowTokens: row?.contextWindow ?? null,
       requestBoundProof: null,
     };
   },
-  singleCallExecution() { return null; },
+  singleCallExecution(_config, row) { return ompSingleCallExecution(row); },
+  singleCallOutputCap(_config, row) { return row?.maxTokens ?? null; },
   createAdapter(config, options) { return new OmpAdapter(config, options?.ompSkillsDir); },
 };

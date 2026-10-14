@@ -3,7 +3,6 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { resolveAgent } from "../agents/materialize.js";
-import { getDescriptor } from "../agents/registry.js";
 import { readAgentsTable } from "../agents/table.js";
 import { atomicReplacePrivateFile, ensurePrivateDirectory } from "./paths.js";
 import {
@@ -85,7 +84,8 @@ export async function acceptStart(
   }
   // Orca single-call estimate (2026-09-27), spec §5.1: refused here, before anything is persisted, even when Orca's
   // preflight let it through.
-  if (input.work.kind === "single-call" && getDescriptor(config.kind).singleCallExecution(config) === null) {
+  // OMP single call (Orca spec 2026-10-14 §3.2): the resolution's answer, which for omp comes from the catalog row.
+  if (input.work.kind === "single-call" && resolution.singleCallExecution === null) {
     throw new ControlProtocolError("single-call-unsupported");
   }
   // Orca skill directory fields are paired with the CLI kind whose loader owns them; refuse before anything persists.

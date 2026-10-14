@@ -2,13 +2,14 @@ import { spawn } from "node:child_process";
 import { z } from "zod";
 import { canonicalHash } from "../control/protocol.js";
 import { descriptorDefaults, getDescriptor } from "./registry.js";
-import { readOmpModels } from "./ompModels.js";
+import { readOmpCatalog, readOmpModels } from "./ompModels.js";
 import { parseInstallation } from "./table.js";
 import {
   AgentError,
   agentSelectionSchema,
   type AgentResolutionV1,
   type AgentsTableV1,
+  type CatalogRowV1,
   type MaterializedAgentConfigV1,
   type PartialSelectionV1,
 } from "./types.js";
@@ -87,7 +88,11 @@ export function agentConfigHash(config: MaterializedAgentConfigV1): string {
 export async function resolveAgent(
   table: AgentsTableV1,
   partial: PartialSelectionV1,
-  deps: { probeVersion?: (command: string[]) => Promise<string | null>; probeModels?: typeof readOmpModels } = {},
+  deps: {
+    probeVersion?: (command: string[]) => Promise<string | null>;
+    probeModels?: typeof readOmpModels;
+    probeCatalog?: typeof readOmpCatalog;
+  } = {},
 ): Promise<{ config: MaterializedAgentConfigV1; resolution: AgentResolutionV1 }> {
   if (partial.agent === undefined) throw new AgentError("agent-unselected");
   const installation = Object.hasOwn(table.installations, partial.agent) ? table.installations[partial.agent] : undefined;
@@ -112,8 +117,16 @@ export async function resolveAgent(
   if (observed !== installation.version) {
     throw new AgentError("agent-version-drift", `${partial.agent}: table ${installation.version}, observed ${observed}`);
   }
-  if (installation.kind === "omp" && !(await (deps.probeModels ?? readOmpModels)(installation)).includes(selection.model)) {
-    throw new AgentError("agent-selection-invalid", `OMP model is not an exact catalog selector: ${selection.model}`);
+  // OMP single call (Orca spec 2026-10-14 §3.2): the selected catalog row decides the window, the single-call answer and
+  // its cap. `probeModels` is the selector-only injection older criteria use; its rows declare no numbers.
+  let row: CatalogRowV1 | undefined;
+  if (installation.kind === "omp") {
+    const rows: CatalogRowV1[] = deps.probeCatalog !== undefined ? await deps.probeCatalog(installation)
+      : deps.probeModels !== undefined
+        ? (await deps.probeModels(installation)).map((selector) => ({ selector, provider: selector.slice(0, selector.indexOf("/")), contextWindow: null, maxTokens: null }))
+        : await readOmpCatalog(installation);
+    row = rows.find((candidate) => candidate.selector === selection.model);
+    if (row === undefined) throw new AgentError("agent-selection-invalid", `OMP model is not an exact catalog selector: ${selection.model}`);
   }
   return {
     config,
@@ -122,7 +135,9 @@ export async function resolveAgent(
       configHash: agentConfigHash(config),
       timeoutMs: installation.timeoutMs,
       killGraceMs: installation.killGraceMs,
-      capabilities: descriptor.capabilities(config),
+      capabilities: descriptor.capabilities(config, row),
+      singleCallExecution: descriptor.singleCallExecution(config, row),
+      singleCallOutputCap: descriptor.singleCallOutputCap(config, row),
     },
   };
 }

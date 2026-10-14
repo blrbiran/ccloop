@@ -74,6 +74,10 @@ export const claudeDescriptor: AgentDescriptor = {
   singleCallExecution() {
     return "v1";
   },
+  // OMP single call (Orca spec 2026-10-14 §3.2): CLAUDE_CODE_MAX_OUTPUT_TOKENS takes the request's own cap.
+  singleCallOutputCap() {
+    return null;
+  },
   createAdapter(config, options) {
     return new ClaudeAgentAdapter(config, options);
   },

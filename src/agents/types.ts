@@ -47,6 +47,10 @@ export interface AgentResolutionV1 {
   timeoutMs: number;
   killGraceMs: number;
   capabilities: CapabilityViewV1;
+  /** Orca single-call estimate (2026-09-27) §4.4; decided at resolution since OMP single call (Orca spec 2026-10-14 §3.2). */
+  singleCallExecution: "v1" | null;
+  /** OMP single call (Orca spec 2026-10-14 §3.2): the cap the call actually runs under; null = it honours the request's maxOutputTokens. Never frozen. */
+  singleCallOutputCap: number | null;
 }
 
 /** Every code an AgentError can carry (agent selection spec §7, plus the plan's additions). */
