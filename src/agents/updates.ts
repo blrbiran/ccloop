@@ -139,7 +139,8 @@ function sameRequest(a: ApplyAgentDetection, b: ApplyAgentDetection): boolean {
 async function ompUnavailable(installation: InstallationV1): Promise<DetectionChange["unavailableReason"]> {
   if (installation.kind !== "omp") return undefined;
   try {
-    return (await readOmpModels(installation)).includes(installation.defaultModel as string) ? undefined : "omp-frozen-model-unavailable";
+    // Feedback #58: Apply's re-check exists to see a model that vanished after preview, so it never uses the memo.
+    return (await readOmpModels(installation, { fresh: true })).includes(installation.defaultModel as string) ? undefined : "omp-frozen-model-unavailable";
   } catch { return "omp-frozen-model-unavailable"; }
 }
 

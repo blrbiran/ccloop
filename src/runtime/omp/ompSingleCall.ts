@@ -35,7 +35,7 @@ export class OmpSingleCallRefused extends Error {
  */
 export async function runOmpSingleCall(config: MaterializedAgentConfigV1, request: SingleCallRequest): Promise<OmpPhaseOutcome> {
   let rows: CatalogRowV1[];
-  try { rows = await readOmpCatalog(config.installation); }
+  try { rows = await readOmpCatalog(config.installation, { fresh: true }); }
   catch (error) { throw new OmpSingleCallRefused("omp-single-call-unavailable", `catalog ${error instanceof Error ? error.message : String(error)}`); }
   const row = rows.find((candidate) => candidate.selector === config.selection.model);
   if (row === undefined || row.maxTokens === null || ompSingleCallExecution(row) !== "v1") throw new OmpSingleCallRefused("omp-single-call-unavailable", config.selection.model);

@@ -18,6 +18,16 @@ if (args.includes("--version")) {
 // OMP single call (Orca spec 2026-10-14 §5): `<marker>.catalog.json`, when present, is the catalog's rows; without it the
 // one row below, as before.
 if (args.includes("models")) {
+  // Feedback #58: `<marker>.models.json` ({exitCode?, stderr?, hang?}), when present, records each catalog spawn as a
+  // "models" line in `<marker>.calls`, prints `stderr`, then hangs or exits with `exitCode`; without exitCode or hang it
+  // prints the catalog below. Without the file nothing changes.
+  if (existsSync(`${marker}.models.json`)) {
+    const script = JSON.parse(readFileSync(`${marker}.models.json`, "utf8"));
+    appendFileSync(`${marker}.calls`, "models\n");
+    if (script.stderr !== undefined) await new Promise((done) => process.stderr.write(script.stderr, done));
+    if (script.hang === true) { setInterval(() => {}, 1000); await new Promise(() => {}); }
+    if (script.exitCode !== undefined) process.exit(script.exitCode);
+  }
   const rows = existsSync(`${marker}.catalog.json`) ? JSON.parse(readFileSync(`${marker}.catalog.json`, "utf8"))
     : [{ provider: "gateway", kind: "chat", id: "model-a", selector: "gateway/model-a", contextWindow: 200000, maxTokens: 8192 }];
   process.stdout.write(`${JSON.stringify({ models: rows })}\n`);
