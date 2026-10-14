@@ -9,7 +9,7 @@ const planSchema = z.object({ summary: z.string(), primaryTargetPaths: z.array(z
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const safe = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
-function assistantUsage(message: Record<string, unknown>): { input: number; output: number; cacheRead: number; cacheWrite: number; total: number } {
+export function assistantUsage(message: Record<string, unknown>): { input: number; output: number; cacheRead: number; cacheWrite: number; total: number } {
   if (!record(message.usage)) throw new Error("omp-usage-invalid");
   const { input, output, cacheRead, cacheWrite, totalTokens } = message.usage;
   if (!safe(input) || !safe(output) || !safe(cacheRead) || !safe(cacheWrite) || !safe(totalTokens)

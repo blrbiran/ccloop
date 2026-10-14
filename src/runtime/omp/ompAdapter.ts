@@ -2,10 +2,11 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { MaterializedAgentConfigV1 } from "../../agents/types.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
-import type { AttemptContext, RuntimeAdapter } from "../types.js";
+import type { AttemptContext, RuntimeAdapter, SingleCallRequest, SingleCallResult } from "../types.js";
 import type { PhaseResults } from "../codex/protocol.js";
 import { decodeOmpPhase, ompUsageLowerBound } from "./ompProtocol.js";
 import { runOmpPhase } from "./runOmpPhase.js";
+import { decodeOmpSingleCall, runOmpSingleCall } from "./ompSingleCall.js";
 import type { OmpPhase } from "./phasePrompt.js";
 import { observedChangedPaths, worktreeHead, worktreeSnapshot } from "./worktreeSnapshot.js";
 
@@ -62,4 +63,27 @@ export class OmpAdapter implements RuntimeAdapter {
     }
   }
   verify(context: AttemptContext) { return this.phase("verify", buildVerifierPrompt(context), context); }
+
+  /**
+   * OMP single call (Orca spec 2026-10-14 §3.3): one read-only structured call bounded by the catalog cap, refused before
+   * spawning when that cap exceeds the request's. A process that did not end cleanly books null even after a complete
+   * message (§3.3.7); its observed total stays diagnostic, as for a phase.
+   */
+  async singleCall(request: SingleCallRequest): Promise<SingleCallResult> {
+    const outcome = await runOmpSingleCall(this.config, request);
+    if (outcome.reason !== "completed") {
+      const lowerBound = ompUsageLowerBound(outcome.events);
+      if (lowerBound !== null) await writeFile(join(outcome.evidenceDir, "usage-lower-bound.json"), JSON.stringify({ tokens: lowerBound }), { mode: 0o600 });
+      // Ruling m4: a pre-spawn abort, a timeoutMs <= 0 or a spawn error is neverStarted (books 0, as types.ts observedTokensOf).
+      throw Object.assign(new Error(`omp-${outcome.reason}: ${outcome.evidenceDir}`), { neverStarted: outcome.neverStarted });
+    }
+    try {
+      const result = decodeOmpSingleCall(outcome.events, this.config.selection.model, outcome.evidenceDir);
+      await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(result.usageEvidence), { mode: 0o600 });
+      return result;
+    } catch (error) {
+      await writeFile(join(outcome.evidenceDir, "decode-error.txt"), String(error), { mode: 0o600 });
+      throw error;
+    }
+  }
 }

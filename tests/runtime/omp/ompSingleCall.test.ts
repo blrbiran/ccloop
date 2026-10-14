@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MaterializedAgentConfigV1 } from "../../../src/agents/types.js";
-import { OMP_SINGLE_CALL_OVERLAY, runOmpSingleCall } from "../../../src/runtime/omp/ompSingleCall.js";
-import { observedTokensOf, type SingleCallRequest } from "../../../src/runtime/types.js";
+import { OmpAdapter } from "../../../src/runtime/omp/ompAdapter.js";
+import { OMP_SINGLE_CALL_OVERLAY, decodeOmpSingleCall, parseSingleCallObject, runOmpSingleCall } from "../../../src/runtime/omp/ompSingleCall.js";
+import { observedTokensOf, SingleCallOutputInvalid, type SingleCallRequest } from "../../../src/runtime/types.js";
 
 // OMP single call (Orca spec 2026-10-14-omp-single-call-design.md §3.3). Orca books the catalog cap as the call's output
 // bound; omp cannot take a per-call cap, so a cap that rose above the request's must refuse the call before anything is
@@ -99,5 +100,134 @@ describe("argv (§3.3.2-§3.3.4, criterion 4)", () => {
     const system = await readFile(argv![argv!.indexOf("--system-prompt") + 1]!, "utf8");
     expect(system).toContain("one ccloop single call");
     expect(system).toContain(JSON.stringify(SCHEMA));
+  });
+});
+
+// Controller ruling (Task 4 review): an openrouter row has a cap but pi-ai sends none for it, so the spawn-time check
+// must refuse it as unavailable even when its cap fits -- otherwise the booked bound would not bind the call.
+describe("spawn-time check, openrouter (§3.3.1)", () => {
+  it("refuses an openrouter row as unavailable, never started, even when its cap fits", async () => {
+    const w = await ompWorld({ catalog: [{ provider: "openrouter", kind: "chat", id: "vendor/m", selector: "openrouter/vendor/m", contextWindow: 200000, maxTokens: 4096 }] });
+    const config: MaterializedAgentConfigV1 = { ...w.config, selection: { ...w.config.selection, model: "openrouter/vendor/m" } };
+    const failure = await failureOf(runOmpSingleCall(config, w.request({ maxOutputTokens: 8_192 })));
+    expect(failure).toMatchObject({ code: "omp-single-call-unavailable", neverStarted: true });
+    expect(observedTokensOf(failure)).toBe(0);
+    expect(existsSync(`${w.marker}.calls`)).toBe(false);
+  });
+});
+
+// Controller ruling (Task 4 review): the call's evidence holds the prompt's schema and the overlay; it is private to the
+// operator, as every other evidence directory is -- the modes are set explicitly, never left to the umask.
+describe("evidence modes (§3.3.2)", () => {
+  it("keeps the call's evidence directory 0700 and its overlay and system prompt 0600", async () => {
+    const w = await ompWorld();
+    await runOmpSingleCall(w.config, w.request());
+    const [argv] = (await readFile(`${w.marker}.argv`, "utf8")).trimEnd().split("\n").map((line) => JSON.parse(line) as string[]);
+    const systemPath = argv![argv!.indexOf("--system-prompt") + 1]!;
+    const overlayPath = argv![argv!.indexOf("--config") + 1]!;
+    const mode = async (path: string) => (await stat(path)).mode & 0o777;
+    expect([await mode(dirname(systemPath)), await mode(systemPath), await mode(overlayPath)]).toEqual([0o700, 0o600, 0o600]);
+    expect(dirname(overlayPath)).toBe(dirname(systemPath));
+  });
+});
+
+const usage = { input: 8, output: 2, cacheRead: 3, cacheWrite: 1, totalTokens: 14, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+const message = (over: Record<string, unknown> = {}) => ({ role: "assistant", content: [{ type: "text", text: "{\"answer\":\"42\"}" }], provider: "gateway", model: "model-a", stopReason: "stop", usage, ...over });
+const end = (m: unknown) => ({ type: "message_end", message: m });
+const lines = (...rows: unknown[]) => `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`;
+const decodeFailure = (events: string): unknown => { try { decodeOmpSingleCall(events, "gateway/model-a", "/evidence"); return null; } catch (error) { return error; } };
+
+describe("decode (§3.3.5, criterion 5): one request, no tool, the selected model", () => {
+  it("decodes one complete answer with its usage and per-model breakdown", () => {
+    expect(decodeOmpSingleCall(lines({ type: "agent_start" }, end(message()), { type: "agent_end", isTerminal: true }), "gateway/model-a", "/evidence")).toEqual({
+      output: { answer: "42" }, tokenUsage: 14,
+      usageEvidence: expect.objectContaining({ usageStatus: "present", normalizedTotal: 14 }),
+      modelUsage: [{ model: "gateway/model-a", input: 8, output: 2, cacheRead: 3, cacheWrite: 1 }],
+    });
+  });
+
+  it("C5: refuses two assistant messages as multiple requests, booking both", () => {
+    expect(decodeFailure(lines(end(message()), end(message())))).toMatchObject({ message: "omp-single-call-multiple-requests", observedTokens: 28 });
+  });
+
+  it("C5: refuses a tool event even beside a complete answer, booking what was spent", () => {
+    expect(decodeFailure(lines({ type: "tool_execution_start", toolCallId: "t1", toolName: "read" }, end(message())))).toMatchObject({ message: "omp-phase-tool-forbidden", observedTokens: 14 });
+  });
+
+  it("C5: refuses an extension UI request or a subagent event like a tool event", () => {
+    expect(decodeFailure(lines({ type: "extension_ui_request" }, end(message())))).toMatchObject({ message: "omp-phase-tool-forbidden", observedTokens: 14 });
+    expect(decodeFailure(lines({ type: "subagent_start" }, end(message())))).toMatchObject({ message: "omp-phase-tool-forbidden", observedTokens: 14 });
+  });
+
+  it("C5: refuses an answer from a different model, booking what was spent", () => {
+    expect(decodeFailure(lines(end(message({ model: "model-b" }))))).toMatchObject({ message: "omp-model-mismatch", observedTokens: 14 });
+  });
+
+  it("books null when there is no assistant message or its usage is not readable", () => {
+    for (const events of [lines({ type: "agent_start" }), lines(end(message({ usage: { ...usage, totalTokens: 15 } }))), "not json\n"]) {
+      expect(observedTokensOf(decodeFailure(events))).toBeNull();
+    }
+  });
+});
+
+describe("stop reasons (§3.3.5, criterion 6)", () => {
+  it("C6: a length stop is an output-invalid answer that still books the observed usage", () => {
+    const failure = decodeFailure(lines(end(message({ stopReason: "length", content: [{ type: "text", text: "{\"answer\":\"4\"}" }] }))));
+    expect(failure).toBeInstanceOf(SingleCallOutputInvalid);
+    expect(failure).toMatchObject({ code: "single-call-output-invalid", tokenUsage: 14, usageEvidence: expect.objectContaining({ normalizedTotal: 14 }) });
+  });
+
+  it("C6: another stop reason is the named failure, booking the observed usage", () => {
+    for (const stopReason of ["error", "toolUse", "aborted"]) {
+      expect([stopReason, decodeFailure(lines(end(message({ stopReason }))))]).toEqual([stopReason, expect.objectContaining({ code: `omp-single-call-stop:${stopReason}`, observedTokens: 14 })]);
+    }
+  });
+
+  it("keeps the failure code bounded when the stop reason is not a short word", () => {
+    for (const stopReason of [{ nested: true }, "x".repeat(33), "has space"]) {
+      expect(decodeFailure(lines(end(message({ stopReason }))))).toMatchObject({ code: "omp-single-call-stop:invalid" });
+    }
+  });
+});
+
+describe("output rule (§3.3.6, criterion 7)", () => {
+  it("C7: only one plain object, with at most one fence around it, is an answer", () => {
+    expect(parseSingleCallObject("[{\"answer\":\"42\"}]")).toBeUndefined();
+    expect(parseSingleCallObject("42")).toBeUndefined();
+    expect(parseSingleCallObject("null")).toBeUndefined();
+    expect(parseSingleCallObject("Here: {\"answer\":\"4\"} and {\"answer\":\"2\"}")).toBeUndefined();
+    expect(parseSingleCallObject("```json\n{\"a\":1}\n```\n```json\n{\"a\":2}\n```")).toBeUndefined();
+    expect(parseSingleCallObject("```json\n{\"answer\":\"42\"}\n```")).toEqual({ answer: "42" });
+    expect(parseSingleCallObject("  {\"answer\":\"42\"}\n")).toEqual({ answer: "42" });
+  });
+
+  it("C7: an answer that is not one object is output-invalid and books what the call spent", () => {
+    for (const text of ["[{\"answer\":\"42\"}]", "42", ""]) {
+      const failure = decodeFailure(lines(end(message({ content: [{ type: "text", text }] }))));
+      expect([text, failure instanceof SingleCallOutputInvalid, (failure as { tokenUsage?: unknown } | null)?.tokenUsage]).toEqual([text, true, 14]);
+    }
+  });
+});
+
+describe("OmpAdapter.singleCall (§3.3, §3.3.7)", () => {
+  it("returns the fake's answer through the real process path", async () => {
+    const w = await ompWorld();
+    await expect(new OmpAdapter(w.config).singleCall(w.request())).resolves.toMatchObject({ output: { answer: "42" }, tokenUsage: 14 });
+  });
+
+  it("books null when omp exits non-zero after a complete message, and uses none of it", async () => {
+    const w = await ompWorld({ single: { exitCode: 3 } });
+    const failure = await failureOf(new OmpAdapter(w.config).singleCall(w.request()));
+    expect((failure as Error).message).toMatch(/^omp-exit-error: /);
+    expect(observedTokensOf(failure)).toBeNull();
+  });
+
+  it("stops the call at the request's time limit when it is below the installation's", async () => {
+    const w = await ompWorld({ single: { hang: true }, installationTimeoutMs: 30_000 });
+    const started = Date.now();
+    const failure = await failureOf(new OmpAdapter(w.config).singleCall(w.request({ timeoutMs: 300 })));
+    expect((failure as Error).message).toMatch(/^omp-timeout: /);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(observedTokensOf(failure)).toBeNull();
   });
 });
