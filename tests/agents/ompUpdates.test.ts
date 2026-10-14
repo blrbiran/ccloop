@@ -74,7 +74,9 @@ describe("OMP installation updates", () => {
       const preview = JSON.parse(result.stdout) as { changes: Array<{ kind: string; unavailableReason?: string }> };
       expect(preview.changes).toContainEqual(expect.objectContaining({ kind: "version", unavailableReason: "omp-frozen-model-unavailable" }));
     } finally { await rm(f.dir, { recursive: true, force: true }); }
-  });
+    // Timeout widened 2026-10-14 (human named this criterion, Orca session b39a5527): the control preview spawns the omp
+    // probe, measured 3.1-6.4 s under load against the 5 s default (Orca handoff 3.3a). The assertions are unchanged.
+  }, 20_000);
 
   it("refuses Apply if the model vanishes after preview and preserves the table bytes", async () => {
     const f = await fixture(true);
