@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -228,6 +228,79 @@ describe("OmpAdapter.singleCall (§3.3, §3.3.7)", () => {
     const failure = await failureOf(new OmpAdapter(w.config).singleCall(w.request({ timeoutMs: 300 })));
     expect((failure as Error).message).toMatch(/^omp-timeout: /);
     expect(Date.now() - started).toBeLessThan(10_000);
+    expect(observedTokensOf(failure)).toBeNull();
+  });
+});
+
+// Fix round 1 (Orca session 02f047f6, 2026-10-14). Real omp 18.10.1 (measured in Task 0) prints the assistant message
+// three times -- message_start, message_end and turn_end all carry it with the same usage. Only message_end is the
+// request; counting every event that carries an assistant message would book one call two or three times over (and
+// refuse it as "multiple requests").
+describe("decode, real omp event shape (§3.3.5, §3.3.7)", () => {
+  it("decodes the real stream's one assistant message once, with its usage not doubled", () => {
+    const user = { role: "user", content: [{ type: "text", text: "Estimate the plan below." }] };
+    const answer = message();
+    const events = lines(
+      { type: "session", id: "s1" }, { type: "agent_start" }, { type: "turn_start" },
+      { type: "message_start", message: user }, { type: "message_end", message: user },
+      { type: "message_start", message: answer },
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "{\"answer\":" } },
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "\"42\"}" } },
+      { type: "message_end", message: answer },
+      { type: "turn_end", message: answer, toolResults: [] },
+      { type: "agent_end", isTerminal: true, messages: [user, answer] },
+    );
+    expect(decodeOmpSingleCall(events, "gateway/model-a", "/evidence")).toEqual({
+      output: { answer: "42" }, tokenUsage: 14,
+      usageEvidence: expect.objectContaining({ usageStatus: "present", normalizedTotal: 14 }),
+      modelUsage: [{ model: "gateway/model-a", input: 8, output: 2, cacheRead: 3, cacheWrite: 1 }],
+    });
+  });
+});
+
+// Fix round 1 (Orca session 02f047f6, 2026-10-14). Review Focus 3: an aborted call did not end cleanly, so even a
+// complete assistant message already printed is neither booked (null, §3.3.7) nor used -- the stop was ours, and what
+// omp would have printed next is unknown.
+describe("OmpAdapter.singleCall, abort after a complete message (§3.3.7)", () => {
+  it("books null and uses no output when the request is aborted after a complete message_end", async () => {
+    const w = await ompWorld({ single: { holdOpen: true } });
+    const controller = new AbortController();
+    const root = join(w.request().runDir, "omp", "1", "single-call");
+    const pending = failureOf(new OmpAdapter(w.config).singleCall(w.request({ signal: controller.signal })));
+    // Abort only once ccloop itself has received the complete message (its events file holds the message_end).
+    const received = async (): Promise<boolean> => {
+      for (const name of existsSync(root) ? await readdir(root) : []) {
+        const path = join(root, name, "events.jsonl");
+        if (existsSync(path) && (await readFile(path, "utf8")).includes("\"message_end\"")) return true;
+      }
+      return false;
+    };
+    const deadline = Date.now() + 8_000;
+    while (!(await received()) && Date.now() < deadline) await new Promise((done) => setTimeout(done, 20));
+    expect(await received()).toBe(true);
+    controller.abort();
+    const failure = await pending;
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(/^omp-aborted: /);
+    expect(failure).not.toHaveProperty("output");
+    expect(observedTokensOf(failure)).toBeNull();
+  }, 15_000);
+});
+
+// Fix round 1 (Orca session 02f047f6, 2026-10-14). The diagnostic files are evidence only: a failed write of one must
+// not replace the refusal it describes, or the booking that refusal carries would be lost (a model-mismatch spent 14).
+describe("OmpAdapter.singleCall, diagnostic writes are best-effort", () => {
+  it("keeps the decode refusal and its booking when decode-error.txt cannot be written", async () => {
+    const answer = message({ model: "model-b" });
+    const w = await ompWorld({ single: { blockFiles: ["decode-error.txt"], rows: [{ type: "agent_start" }, end(answer), { type: "agent_end", isTerminal: true, messages: [answer] }] } });
+    const failure = await failureOf(new OmpAdapter(w.config).singleCall(w.request()));
+    expect(failure).toMatchObject({ message: "omp-model-mismatch", observedTokens: 14 });
+  });
+
+  it("keeps the process refusal when usage-lower-bound.json cannot be written", async () => {
+    const w = await ompWorld({ single: { exitCode: 3, blockFiles: ["usage-lower-bound.json"] } });
+    const failure = await failureOf(new OmpAdapter(w.config).singleCall(w.request()));
+    expect((failure as Error).message).toMatch(/^omp-exit-error: /);
     expect(observedTokensOf(failure)).toBeNull();
   });
 });

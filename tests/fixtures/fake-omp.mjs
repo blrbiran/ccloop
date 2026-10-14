@@ -7,7 +7,8 @@
 // ccloop drives OMP (system prompt file, prompt on stdin, JSON events on stdout). Per phase it appends the phase name to
 // `<marker>.calls`; when the system prompt lists frozen skills it reads every listed SKILL.md (as a model told to would)
 // and appends each one's bytes to `<marker>.skills`. Execute sets answer.txt to 42.
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 const [marker, ...args] = process.argv.slice(2);
 if (args.includes("--version")) {
@@ -32,15 +33,18 @@ for await (const chunk of process.stdin) prompt += chunk.toString();
 const system = readFileSync(args[args.indexOf("--system-prompt") + 1], "utf8");
 // OMP single call (Orca spec 2026-10-14 §5): ccloop's single-call system prompt says "one ccloop single call". Records the
 // call and its argv, then prints `<marker>.single.json` ({rows?, exitCode?, hang?}) or one complete {"answer":"42"}.
+// `holdOpen` keeps the process running after the rows (for an abort after a complete message); `blockFiles` makes each
+// named path in the call's evidence directory a directory, so ccloop's write of that diagnostic file fails.
 if (system.includes("one ccloop single call")) {
   appendFileSync(`${marker}.calls`, "single-call\n");
   appendFileSync(`${marker}.argv`, `${JSON.stringify(args)}\n`);
   const script = existsSync(`${marker}.single.json`) ? JSON.parse(readFileSync(`${marker}.single.json`, "utf8")) : {};
+  for (const name of script.blockFiles ?? []) mkdirSync(`${dirname(args[args.indexOf("--system-prompt") + 1])}/${name}`);
   if (script.hang === true) setInterval(() => {}, 1000);
   else {
     const answer = { role: "assistant", content: [{ type: "text", text: "{\"answer\":\"42\"}" }], provider: "gateway", model: "model-a", stopReason: "stop", usage: { input: 8, output: 2, cacheRead: 3, cacheWrite: 1, totalTokens: 14, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     const rows = script.rows ?? [{ type: "agent_start" }, { type: "message_end", message: answer }, { type: "agent_end", isTerminal: true, yielded: true, messages: [answer] }];
-    process.stdout.write(rows.map((row) => `${JSON.stringify(row)}\n`).join(""), () => process.exit(script.exitCode ?? 0));
+    process.stdout.write(rows.map((row) => `${JSON.stringify(row)}\n`).join(""), () => { if (script.holdOpen === true) setInterval(() => {}, 1000); else process.exit(script.exitCode ?? 0); });
   }
   await new Promise(() => {});
 }

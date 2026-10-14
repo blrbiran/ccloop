@@ -228,7 +228,7 @@ export interface RuntimeAdapter {
   execute(context: AttemptContext): Promise<ExecutePhaseResult>;
   verify(context: AttemptContext): Promise<VerificationResult>;
   /** Orca single-call estimate (2026-09-27): only a kind whose descriptor answers singleCallExecution "v1" has it.
-   * *** ERRATUM (OMP single call, Orca spec 2026-10-14 §3.2, session 7ea088aa) -- the omp adapter has it while its
+   * *** ERRATUM (OMP single call, Orca spec 2026-10-14 §3.2, Orca session 02f047f6, 2026-10-14) -- the omp adapter has it while its
    * descriptor answers "v1" only for some catalog rows: for omp the answer is decided per selected catalog row (accept
    * refuses the rest by the resolution) and re-checked at spawn, where the adapter refuses again. *** */
   singleCall?(request: SingleCallRequest): Promise<SingleCallResult>;
