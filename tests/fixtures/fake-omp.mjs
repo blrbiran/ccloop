@@ -30,6 +30,20 @@ if (args.includes("config")) {
 let prompt = "";
 for await (const chunk of process.stdin) prompt += chunk.toString();
 const system = readFileSync(args[args.indexOf("--system-prompt") + 1], "utf8");
+// OMP single call (Orca spec 2026-10-14 §5): ccloop's single-call system prompt says "one ccloop single call". Records the
+// call and its argv, then prints `<marker>.single.json` ({rows?, exitCode?, hang?}) or one complete {"answer":"42"}.
+if (system.includes("one ccloop single call")) {
+  appendFileSync(`${marker}.calls`, "single-call\n");
+  appendFileSync(`${marker}.argv`, `${JSON.stringify(args)}\n`);
+  const script = existsSync(`${marker}.single.json`) ? JSON.parse(readFileSync(`${marker}.single.json`, "utf8")) : {};
+  if (script.hang === true) setInterval(() => {}, 1000);
+  else {
+    const answer = { role: "assistant", content: [{ type: "text", text: "{\"answer\":\"42\"}" }], provider: "gateway", model: "model-a", stopReason: "stop", usage: { input: 8, output: 2, cacheRead: 3, cacheWrite: 1, totalTokens: 14, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    const rows = script.rows ?? [{ type: "agent_start" }, { type: "message_end", message: answer }, { type: "agent_end", isTerminal: true, yielded: true, messages: [answer] }];
+    process.stdout.write(rows.map((row) => `${JSON.stringify(row)}\n`).join(""), () => process.exit(script.exitCode ?? 0));
+  }
+  await new Promise(() => {});
+}
 const phase = system.includes("execution phase") ? "execute" : system.includes("verification phase") ? "verify" : "plan";
 appendFileSync(`${marker}.calls`, `${phase}\n`);
 for (const match of system.matchAll(/\(SKILL\.md: ([^)]+)\)$/gmu)) appendFileSync(`${marker}.skills`, readFileSync(match[1], "utf8"));

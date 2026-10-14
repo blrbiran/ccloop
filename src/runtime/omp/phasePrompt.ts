@@ -14,3 +14,15 @@ export function phaseSystemPrompt(phase: OmpPhase): string {
     ...(phase === "verify" ? ['In the final JSON, rejectCategory must be a string; use "" when approved, never null. safeToRetry must be false when approved.'] : []),
   ].join("\n");
 }
+
+/**
+ * OMP single call (Orca spec 2026-10-14 §3.3.4): the whole answer is one JSON object satisfying the request's schema.
+ * Task 0 measured this prompt's request-body overhead against the operator's framingTokenOverhead (spec §7).
+ */
+export function singleCallSystemPrompt(responseSchema: Record<string, unknown>): string {
+  return [
+    "This invocation is one ccloop single call: answer the user prompt once, with no tools and no follow-up.",
+    "Reply with exactly one JSON object that satisfies the JSON Schema below, and nothing else: no prose before or after it.",
+    JSON.stringify(responseSchema),
+  ].join("\n");
+}

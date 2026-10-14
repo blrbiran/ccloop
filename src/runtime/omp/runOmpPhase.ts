@@ -23,6 +23,7 @@ export interface OmpPhaseOutcome {
 /**
  * OMP single call (Orca spec 2026-10-14 §3.3): what one omp process needs. A phase and a single call differ only in these:
  * their argv, cwd, evidence directory, time limit and the name written into the process registration.
+ * Precondition: evidenceDir must already exist; runOmpProcess never creates it (each caller mkdtemps its own, mode 0700).
  */
 export interface OmpProcessInput {
   args: string[];
