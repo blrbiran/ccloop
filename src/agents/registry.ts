@@ -39,7 +39,7 @@ export interface AgentDescriptor {
    * an output-token cap and every tool turned off; null when either cannot be done. A sibling of capabilities, not a
    * key of it: Orca does not intersect it with a profile or freeze it into a task.
    *
-   * *** ERRATUM (OMP single call, Orca spec 2026-10-14 §3.2) *** "when this kind can run" no longer holds for omp: its
+   * *** ERRATUM (OMP single call, Orca spec 2026-10-14 §3.2, Orca session 02f047f6, 2026-10-14) *** "when this kind can run" no longer holds for omp: its
    * answer is decided per selected catalog row (`row`, at resolution), not per kind -- "v1" only when that row declares
    * a maxTokens and its provider is not openrouter. Claude and codex still answer per kind.
    */
