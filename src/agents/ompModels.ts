@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { InstallationV1 } from "./types.js";
+import type { CatalogRowV1, InstallationV1 } from "./types.js";
 
 const OUTPUT_LIMIT = 1024 * 1024;
 const PROBE_TIMEOUT_MS = 10_000;
@@ -47,20 +47,37 @@ async function runOmpJson(installation: InstallationV1, args: string[]): Promise
   });
 }
 
-/** Read the catalog under the same structured profile/configuration as a phase. This never sends a model prompt. */
-export async function readOmpModels(installation: InstallationV1): Promise<string[]> {
+const positiveSafe = (value: unknown): number | null => (typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null);
+
+/**
+ * OMP single call (Orca spec 2026-10-14 §3.1): the catalog's rows from its one spawn, read under the same structured
+ * profile/configuration as a phase. A number is kept only when it is a positive safe integer. This never sends a model prompt.
+ */
+export async function readOmpCatalog(installation: InstallationV1): Promise<CatalogRowV1[]> {
   const parsed = await runOmpJson(installation, ["models", "--json"]);
   if (parsed === null || typeof parsed !== "object" || !Array.isArray((parsed as { models?: unknown }).models)) throw new Error("omp-model-catalog-invalid");
-  const rows = (parsed as { models: unknown[] }).models;
-  const selectors = rows.map((row) => {
+  const rows = (parsed as { models: unknown[] }).models.map((row): CatalogRowV1 => {
     if (row === null || typeof row !== "object") throw new Error("omp-model-catalog-invalid");
     const value = row as Record<string, unknown>;
     if (typeof value.provider !== "string" || typeof value.id !== "string" || typeof value.selector !== "string"
       || value.selector !== `${value.provider}/${value.id}` || value.selector.length > 200) throw new Error("omp-model-catalog-invalid");
-    return value.selector;
+    return { selector: value.selector, provider: value.provider, contextWindow: positiveSafe(value.contextWindow), maxTokens: positiveSafe(value.maxTokens) };
   });
-  if (new Set(selectors).size !== selectors.length) throw new Error("omp-model-catalog-invalid");
-  return selectors;
+  if (new Set(rows.map((row) => row.selector)).size !== rows.length) throw new Error("omp-model-catalog-invalid");
+  return rows;
+}
+
+/** Read the catalog under the same structured profile/configuration as a phase. This never sends a model prompt. */
+export async function readOmpModels(installation: InstallationV1): Promise<string[]> {
+  return (await readOmpCatalog(installation)).map((row) => row.selector);
+}
+
+/**
+ * OMP single call (Orca spec 2026-10-14 §2, §3.2): "v1" only when the row declares the cap pi-ai sends (maxTokens) and its
+ * provider is not openrouter, for which pi-ai sends no cap unless one is given explicitly.
+ */
+export function ompSingleCallExecution(row: CatalogRowV1 | undefined): "v1" | null {
+  return row !== undefined && row.maxTokens !== null && row.provider !== "openrouter" ? "v1" : null;
 }
 
 export async function readOmpConfiguredDefault(installation: InstallationV1): Promise<string | null> {

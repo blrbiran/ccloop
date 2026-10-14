@@ -30,6 +30,11 @@ export interface CapabilityViewV1 {
     evidenceKind: string;
   } | null;
 }
+/**
+ * OMP single call (Orca spec 2026-10-14-omp-single-call-design.md §3.1): one row of a kind's model catalog, as ccloop uses
+ * it. A number is kept only when the catalog gave a positive safe integer; anything else is null.
+ */
+export interface CatalogRowV1 { selector: string; provider: string; contextWindow: number | null; maxTokens: number | null }
 export interface MaterializedAgentConfigV1 {
   schema: "ccloop-agent-config-v1";
   kind: string;
