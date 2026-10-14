@@ -76,20 +76,13 @@ async function runOmpJson(installation: InstallationV1, args: string[], timeoutM
   });
 }
 
-const catalogMemo = new Map<string, CatalogRowV1[]>();
-
 const positiveSafe = (value: unknown): number | null => (typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null);
 
 /**
  * OMP single call (Orca spec 2026-10-14 §3.1): the catalog's rows from its one spawn, read under the same structured
  * profile/configuration as a phase. A number is kept only when it is a positive safe integer. This never sends a model prompt.
  */
-export async function readOmpCatalog(installation: InstallationV1, options: { fresh?: boolean; timeoutMs?: number } = {}): Promise<CatalogRowV1[]> {
-  // Feedback #58: one ccloop process (a control call, a run, a worker) reads each installation's catalog once; only a
-  // successful read is kept. `fresh` (the single call's spawn-time re-read, §3.3.1) always spawns.
-  const key = JSON.stringify([installation.command, installation.profile ?? null, installation.configDir]);
-  const memoised = options.fresh === true ? undefined : catalogMemo.get(key);
-  if (memoised !== undefined) return memoised;
+export async function readOmpCatalog(installation: InstallationV1, options: { timeoutMs?: number } = {}): Promise<CatalogRowV1[]> {
   const parsed = await runOmpJson(installation, ["models", "--json"], options.timeoutMs);
   if (parsed === null || typeof parsed !== "object" || !Array.isArray((parsed as { models?: unknown }).models)) throw new Error("omp-model-catalog-invalid");
   const rows = (parsed as { models: unknown[] }).models.map((row): CatalogRowV1 => {
@@ -100,13 +93,12 @@ export async function readOmpCatalog(installation: InstallationV1, options: { fr
     return { selector: value.selector, provider: value.provider, contextWindow: positiveSafe(value.contextWindow), maxTokens: positiveSafe(value.maxTokens) };
   });
   if (new Set(rows.map((row) => row.selector)).size !== rows.length) throw new Error("omp-model-catalog-invalid");
-  catalogMemo.set(key, rows);
   return rows;
 }
 
 /** Read the catalog under the same structured profile/configuration as a phase. This never sends a model prompt. */
-export async function readOmpModels(installation: InstallationV1, options: { fresh?: boolean } = {}): Promise<string[]> {
-  return (await readOmpCatalog(installation, options)).map((row) => row.selector);
+export async function readOmpModels(installation: InstallationV1): Promise<string[]> {
+  return (await readOmpCatalog(installation)).map((row) => row.selector);
 }
 
 /**
