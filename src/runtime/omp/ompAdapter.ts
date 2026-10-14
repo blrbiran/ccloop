@@ -80,7 +80,8 @@ export class OmpAdapter implements RuntimeAdapter {
     }
     try {
       const result = decodeOmpSingleCall(outcome.events, this.config.selection.model, outcome.evidenceDir);
-      await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(result.usageEvidence), { mode: 0o600 });
+      // Best-effort evidence: a failed write must not turn the decoded, observed answer into a null-booked failure.
+      await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(result.usageEvidence), { mode: 0o600 }).catch(() => undefined);
       return result;
     } catch (error) {
       // Best-effort diagnostic: a failed write must not replace the decode refusal and its booking.

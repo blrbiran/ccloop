@@ -304,3 +304,14 @@ describe("OmpAdapter.singleCall, diagnostic writes are best-effort", () => {
     expect(observedTokensOf(failure)).toBeNull();
   });
 });
+
+// Final fix wave (Orca session 02f047f6, 2026-10-14). usage.json is evidence of an answer already decoded and observed:
+// a failed write of it must not turn that good answer into a failure, which would book null instead of the 14 spent.
+describe("OmpAdapter.singleCall, the usage evidence write is best-effort", () => {
+  it("returns the decoded answer and its observed usage when usage.json cannot be written", async () => {
+    const w = await ompWorld({ single: { blockFiles: ["usage.json"] } });
+    await expect(new OmpAdapter(w.config).singleCall(w.request())).resolves.toMatchObject({
+      output: { answer: "42" }, tokenUsage: 14, usageEvidence: expect.objectContaining({ usageStatus: "present", normalizedTotal: 14 }),
+    });
+  });
+});
