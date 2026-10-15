@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 const mode=process.argv[2], marker=process.argv[3];
 // Orca agent selection (2026-09-26), spec §4.8: `--version` with no `exec` answers a fixed version and
@@ -7,7 +7,27 @@ const mode=process.argv[2], marker=process.argv[3];
 // Orca retire-legacy-orca-run (2026-10-01), spec §3.4: mode `frames`, argv `frames <marker> <framesFile>`, plays
 // the frame of the attempt number (the working directory's `attempt-<n>`, minus one) from the framesFile list of
 // the task named in the prompt (else the `"*"` list); no frame ⇒ stderr `no frame for <task> attempt <n>`, exit 3.
-if(process.argv.at(-1)==="--version"&&!process.argv.includes("exec")) {await new Promise(resolve=>process.stdout.write("9.9.9-fake\n",resolve));process.exit(0);}
+// Every-agent requirement chain (Orca spec 2026-10-15 §9): `--version` appends `version` to `<marker>.version-calls`;
+// `debug models` and `features list` answer the catalog and the feature list and append `debug-models` / `features-list`
+// to `<marker>.catalog-calls`, before anything below runs, so `<marker>.argv` and `<marker>.calls` never see them.
+// `<marker>.catalog.json` ({rows?, sleepMs?, exitCode?, stderr?}) overrides the rows, sleeps first, or fails.
+if(process.argv.at(-1)==="--version"&&!process.argv.includes("exec")) {appendFileSync(marker+".version-calls","version\n");await new Promise(resolve=>process.stdout.write("9.9.9-fake\n",resolve));process.exit(0);}
+const catalogCall=process.argv.includes("debug")&&process.argv.includes("models")?"debug-models":process.argv.includes("features")&&process.argv.includes("list")?"features-list":null;
+if(catalogCall!==null&&!process.argv.includes("exec")) {
+  appendFileSync(marker+".catalog-calls",catalogCall+"\n");
+  const script=existsSync(marker+".catalog.json")?JSON.parse(readFileSync(marker+".catalog.json","utf8")):{};
+  if(script.sleepMs!==undefined) await new Promise(resolve=>setTimeout(resolve,script.sleepMs));
+  if(script.stderr!==undefined) await new Promise(resolve=>process.stderr.write(script.stderr,resolve));
+  if(script.exitCode!==undefined) process.exit(script.exitCode);
+  if(catalogCall==="debug-models") {
+    const rows=script.rows??[{slug:"gpt-6-sol",context_window:272000,visibility:"list"},{slug:"gpt-6-luna",context_window:272000,visibility:"list"},{slug:"gpt-reserve",context_window:272000,visibility:"hide"}];
+    await new Promise(resolve=>process.stdout.write(JSON.stringify({models:rows})+"\n",resolve));
+  } else {
+    const flags=["apps","browser_use","image_generation","multi_agent","plugins","shell_tool","skip_host_skill_discovery","unified_exec","view_image"];
+    await new Promise(resolve=>process.stdout.write(flags.map(flag=>`${flag.padEnd(40)} stable             true`).join("\n")+"\n",resolve));
+  }
+  process.exit(0);
+}
 appendFileSync(marker+".argv",JSON.stringify(process.argv.slice(process.argv.indexOf("exec")))+"\n");
 const CONTINUATION="Treat continuation input fields unfinished, pendingDecisions, and awaitingHuman as required planning inputs.";
 const args=process.argv.slice(process.argv.indexOf("exec")+1);

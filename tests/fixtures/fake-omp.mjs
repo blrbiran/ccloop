@@ -7,21 +7,27 @@
 // ccloop drives OMP (system prompt file, prompt on stdin, JSON events on stdout). Per phase it appends the phase name to
 // `<marker>.calls`; when the system prompt lists frozen skills it reads every listed SKILL.md (as a model told to would)
 // and appends each one's bytes to `<marker>.skills`. Execute sets answer.txt to 42.
+// Every-agent requirement chain (Orca spec 2026-10-15 §9): `--version` appends to `<marker>.version-calls`, `models` appends
+// to `<marker>.catalog-calls` and writes its pid to `<marker>.models.pid`; `<marker>.models.json` also takes `sleepMs`.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 const [marker, ...args] = process.argv.slice(2);
 if (args.includes("--version")) {
+  appendFileSync(`${marker}.version-calls`, "version\n");
   process.stdout.write("18.10.1\n");
   process.exit(0);
 }
 // OMP single call (Orca spec 2026-10-14 §5): `<marker>.catalog.json`, when present, is the catalog's rows; without it the
 // one row below, as before.
 if (args.includes("models")) {
+  appendFileSync(`${marker}.catalog-calls`, "models\n");
+  writeFileSync(`${marker}.models.pid`, String(process.pid));
   // Feedback #58: `<marker>.models.json` ({exitCode?, stderr?, hang?}), when present, prints `stderr`, then hangs or exits
   // with `exitCode`; without exitCode or hang it prints the catalog below. Without the file nothing changes.
   if (existsSync(`${marker}.models.json`)) {
     const script = JSON.parse(readFileSync(`${marker}.models.json`, "utf8"));
+    if (script.sleepMs !== undefined) await new Promise((done) => setTimeout(done, script.sleepMs));
     if (script.stderr !== undefined) await new Promise((done) => process.stderr.write(script.stderr, done));
     if (script.hang === true) { setInterval(() => {}, 1000); await new Promise(() => {}); }
     if (script.exitCode !== undefined) process.exit(script.exitCode);
