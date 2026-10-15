@@ -77,7 +77,8 @@ describe("agent descriptors", () => {
   });
 
   // Spec §12 I6: a requested window is not an observation; only claude's verified 1M mapping is reported.
-  it("reports contextWindowTokens only for claude's verified 1M mapping and null otherwise", () => {
+  // Human ruling (2026-10-15, Orca session 026d10e3): title renamed only -- omp reports its catalog row's contextWindow (src/agents/omp.ts capabilities), which this criterion does not assert; its assertions are unchanged.
+  it("reports claude's contextWindowTokens only for its verified 1M mapping and codex's as null (omp reads its own from its catalog row)", () => {
     expect(claudeDescriptor.capabilities(config("claude", { contextWindow: 1_000_000 })).contextWindowTokens).toBe(1_000_000);
     expect(claudeDescriptor.capabilities(config("claude")).contextWindowTokens).toBeNull();
     expect(codexDescriptor.capabilities(config("codex"))).toEqual({
