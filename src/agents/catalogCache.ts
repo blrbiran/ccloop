@@ -37,13 +37,23 @@ async function stamp(path: string): Promise<CatalogStampV1> {
 
 const ENV_OF_KIND: Record<string, string> = { omp: "PI_CODING_AGENT_DIR", codex: "CODEX_HOME" };
 
-/** Spec issue 7(d): omp 18.10.1 `pi-utils/src/dirs.ts:119-133`; codex: `$CODEX_HOME/config.toml` (default `~/.codex`). */
+/**
+ * Spec issue 7(d). omp 18.10.1 `pi-utils/src/dirs.ts`: `normalizeProfileName` maps a trimmed ""/"default" to the default
+ * profile; a NAMED profile always uses `<HOME>/.omp/profiles/<name>/agent` (the `DirResolver` constructor drops
+ * `agentDirOverride` and `resolveActiveAgentDirOverride` returns undefined when a profile is active); only the default
+ * profile honours `PI_CODING_AGENT_DIR` (ccloop's configDir, else the inherited one). codex: `$CODEX_HOME/config.toml`
+ * (default `~/.codex`). An inherited dir that is empty or relative is treated as unset, never joined cwd-relative.
+ */
 function configFilesOf(installation: InstallationV1, env: NodeJS.ProcessEnv): string[] {
-  const inherited = ENV_OF_KIND[installation.kind] === undefined ? undefined : env[ENV_OF_KIND[installation.kind]!];
+  const raw = ENV_OF_KIND[installation.kind] === undefined ? undefined : env[ENV_OF_KIND[installation.kind]!];
+  const inherited = raw && isAbsolute(raw) ? raw : null;
   const home = env.HOME && isAbsolute(env.HOME) ? env.HOME : null;
   if (installation.kind === "omp") {
-    const profile = installation.profile as string | null;
-    const agentDir = installation.configDir ?? inherited ?? (home === null ? null : profile ? join(home, ".omp", "profiles", profile, "agent") : join(home, ".omp", "agent"));
+    const profile = (installation.profile as string | null | undefined)?.trim();
+    const named = profile && profile !== "default" ? profile : null;
+    const agentDir = named !== null
+      ? (home === null ? null : join(home, ".omp", "profiles", named, "agent"))
+      : installation.configDir ?? inherited ?? (home === null ? null : join(home, ".omp", "agent"));
     return agentDir === null ? [] : [join(agentDir, "config.yml"), join(agentDir, "models.yaml")];
   }
   if (installation.kind === "codex") {
@@ -55,9 +65,9 @@ function configFilesOf(installation: InstallationV1, env: NodeJS.ProcessEnv): st
 
 export async function catalogKey(installation: InstallationV1, env: NodeJS.ProcessEnv): Promise<CatalogKeyV1> {
   const argvFiles: CatalogStampV1[] = [];
-  for (const [index, part] of installation.command.entries()) {
+  for (const part of installation.command) {
     const s = await stamp(part);
-    if (index === 0 || s.mtimeMs !== null) argvFiles.push(s);
+    if (s.mtimeMs !== null) argvFiles.push(s);
   }
   const variable = ENV_OF_KIND[installation.kind];
   return {
