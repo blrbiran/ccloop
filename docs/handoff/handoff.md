@@ -144,7 +144,9 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-15，Orca 会话 `026d10e3`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-15 晚，Orca 会话 `ec9ce319`）
 
-- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md` 的「当前状态」与「下一件事」（在 Orca 分支 `feat/error-codes-start-guard` 上，人 ff 进 main 后 main 上可见）。
-- Orca 本轮：repin 到本仓 dc51022（已在 Orca main）；Orca 侧把 ccloop 的 stderr 码与 single-call `errorCode` 显示到面板（不改本仓）；#53 start 守卫。本仓新提交（上面「当前状态」）合推后，Orca 要再 repin 一次（`scripts/pin-ccloop.mjs`，在装了真实 `node_modules` 的工作树里）。
+- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md` 的 §3.3 与 §4（在 Orca 分支 `codex/round-20261015b` 上，人合进 main 后可见）。
+- 本仓 `codex/attempt-commit-no-hooks` 已由人合推（`ls-remote` 现核）；Orca 已在其分支上 repin 到 `71053e3`。本地分支 `codex/attempt-commit-no-hooks` 与 main 同一笔，删归人。
+- **下一轮落在本仓的大头**（Orca spec `docs/superpowers/specs/2026-10-15-every-agent-requirement-chain-design.md`，人审中、未批准）：新 control 方法 `models`／`agents models`；**目录与 `--version` 的文件缓存**（`$CCLOOP_CACHE_DIR` 改道，0700／0600，键含二进制与配置 mtime，30 分钟）；探测进调用方时限与 abort；codex `singleCallExecution: "v1-soft"`＋从 `codex debug models` 取窗口＋私有 HOME／`CODEX_HOME` 隔离的单次调用；claude `agent-default` 报 200000。会改本仓既有判据的地方，实施前按本仓 Rule 15 逐条点名给人。
+- 零成本实测（结论在 Orca spec §2）：omp 18.10.1 stdin 非 TTY 不卡；codex 0.160.0 仍无单次输出上限、feature flag 去不掉注入的 skills／AGENTS.md——**本仓现有 codex phase 调用也带着操作者的 skills**（登记）。
