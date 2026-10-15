@@ -21,8 +21,9 @@ const VERSION_TIMEOUT_MS = 10_000;
 /**
  * Runs `<command> --version` once (spec §4.2 / §12 C6) and answers the first `x.y.z[-tag]` in its stdout, or
  * null when it cannot be run, exits non-zero, prints no version, prints too much, or outlives the timeout.
+ * Every-agent requirement chain (Orca spec 2026-10-15 §4.3): also null when the caller's `signal` aborts it.
  */
-export function probeVersion(command: string[], options: { timeoutMs?: number } = {}): Promise<string | null> {
+export function probeVersion(command: string[], options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<string | null> {
   return new Promise((resolve) => {
     let settled = false;
     let aborted = false;
@@ -33,6 +34,7 @@ export function probeVersion(command: string[], options: { timeoutMs?: number } 
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abortTree);
       resolve(value);
     };
     const abortTree = (): void => {
@@ -45,6 +47,8 @@ export function probeVersion(command: string[], options: { timeoutMs?: number } 
     const timer = setTimeout(() => {
       abortTree();
     }, options.timeoutMs ?? VERSION_TIMEOUT_MS);
+    options.signal?.addEventListener("abort", abortTree, { once: true });
+    if (options.signal?.aborted) abortTree();
     child.stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString("utf8");
       if (output.length > VERSION_OUTPUT_LIMIT) {
