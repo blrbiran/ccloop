@@ -34,8 +34,12 @@ export async function createAttemptWorkspace(repoPath: string, runDir: string, a
  * clones or CI checkouts with no user.email set, where `git commit` fails
  * outright. Depending on ambient config would make publishing break in
  * exactly the setups it exists to serve.
+ *
+ * Hooks are off for the same reason: the attempt commit is ccloop's own bookkeeping, and the target repository's
+ * hooks (shared by every worktree through the main .git/hooks) would otherwise run, slow or refuse it
+ * (savedResultRecovery.ts and executionFormatFailure.ts already pass the same flag).
  */
-const ATTEMPT_IDENTITY = ["-c", "user.name=ccloop", "-c", "user.email=ccloop@invalid"];
+const ATTEMPT_IDENTITY = ["-c", "user.name=ccloop", "-c", "user.email=ccloop@invalid", "-c", "core.hooksPath=/dev/null"];
 
 export interface AttemptCommit {
   /** The commit the attempt produced. */

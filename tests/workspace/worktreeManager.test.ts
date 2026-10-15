@@ -223,3 +223,25 @@ it("resume residual cleanup cannot publish an interrupted skill link",async()=>{
  await cleanupAttemptWorkspaceBestEffort(repoDir,worktreePath,runDir,"best-effort cleanup of residual worktree before resume");
  const {stdout}=await execFileAsync("git",["for-each-ref","refs/ccloop/"],{cwd:repoDir});expect(stdout).toBe("");expect(await readFile(join(runDir,"events.jsonl"),"utf8")).toContain("codex-skills-cleanup-failed:pending");expect(await readFile(join(repoDir,"README.md"),"utf8")).toBe("hello\n");
 });
+
+/**
+ * The attempt commit is ccloop's own bookkeeping commit in the target repository, so the repository's hooks must not
+ * run on it: an operator's pre-commit (lint, a tracker, a slow tool) would otherwise refuse or slow every attempt. Hooks
+ * are installed in the main repository's .git/hooks, which a worktree shares — the shape every attempt has.
+ */
+describe("publishAttemptCommit ignores the target repository's hooks", () => {
+  it("commits although a pre-commit hook refuses, and runs neither pre-commit nor post-commit", async () => {
+    const { repoDir, worktreePath } = await seedRepoAndWorktree(true);
+    const marker = join(repoDir, "..", `${repoDir.split("/").pop()}-hook-marker`);
+    for (const hook of ["pre-commit", "post-commit"]) {
+      await writeFile(join(repoDir, ".git", "hooks", hook), `#!/bin/sh\necho ${hook} >> '${marker}'\n${hook === "pre-commit" ? "exit 1\n" : ""}`, { mode: 0o755 });
+    }
+    await writeFile(join(worktreePath, "README.md"), "changed by the agent\n");
+
+    const published = await publishAttemptCommit(worktreePath);
+
+    const { stdout: message } = await execFileAsync("git", ["log", "-1", "--format=%s", published.sha], { cwd: repoDir });
+    expect(message.trim()).toBe(`ccloop attempt: ${published.ref}`);
+    await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
