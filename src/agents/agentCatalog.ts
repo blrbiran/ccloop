@@ -50,13 +50,19 @@ export async function readAgentCatalog(installation: InstallationV1, options: Re
   let rows: CatalogRowV1[] | null = null, codexFeatures: string[] | null = null, codexMcpServers: string[] | null = null, catalogError: string | null = null;
   try {
     if (installation.kind === "omp") rows = await readOmpCatalog(installation, { deadline, signal: options.signal });
-    else if (installation.kind === "codex") ({ rows, features: codexFeatures, mcpServers: codexMcpServers } = await readCodexCatalog(installation, { deadline, signal: options.signal }));
+    else if (installation.kind === "codex") {
+      let mcpError: string | null;
+      ({ rows, features: codexFeatures, mcpServers: codexMcpServers, mcpError } = await readCodexCatalog(installation, { deadline, signal: options.signal }));
+      // Task 8 fix round 3: rows and features stand; the missing MCP list is logged and keeps the entry unwritten (a codex
+      // entry without the list would be a miss anyway), so the next read tries the list again.
+      if (mcpError !== null) log(`ccloop-agent-catalog: probe-failed codex mcp ${mcpError}`);
+    }
   } catch (error) {
     catalogError = error instanceof Error ? error.message : String(error);
     log(`ccloop-agent-catalog: probe-failed ${installation.kind} ${catalogError}`);
   }
   const observedAt = new Date(now()).toISOString();
-  if (dir !== null && version !== null && catalogError === null) {
+  if (dir !== null && version !== null && catalogError === null && !(installation.kind === "codex" && codexMcpServers === null)) {
     await writeCatalogEntry(dir, { schema: "ccloop-agent-catalog-v1", key, observedAt, version, rows, codexFeatures, codexMcpServers });
   }
   return { source: "probe", observedAt, version, rows, codexFeatures, codexMcpServers, catalogError };

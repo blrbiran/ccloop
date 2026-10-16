@@ -146,6 +146,9 @@ describe("codex catalog decode (spec §3, §6.1)", () => {
       // Ruling: rewritten under the human's blanket naming (Orca session a852f96a, 2026-10-16) -- Task 8 fix round 2 adds the
       // MCP server names (`codex mcp list --json`; the fake lists none by default) to the codex catalog read. Still exact.
       mcpServers: [],
+      // Ruling: rewritten under the human's blanket naming (Orca session a852f96a, 2026-10-16) -- Task 8 fix round 3: an MCP
+      // list failure no longer fails the catalog, so the answer also carries its reason, null here. Still exact.
+      mcpError: null,
     });
   });
 

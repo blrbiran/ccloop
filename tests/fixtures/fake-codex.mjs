@@ -13,7 +13,11 @@ const mode=process.argv[2], marker=process.argv[3];
 // `<marker>.catalog.json` ({rows?, sleepMs?, exitCode?, stderr?}) overrides the rows, sleeps first, or fails.
 // Task 8 of that plan: its `features?` (a list of flag names) overrides the flags `features list` prints. Task 8 fix
 // round 2: `mcp list --json` appends `mcp-list` and prints `mcp?` (default []) as codex-cli 0.160.0's JSON array of
-// `{name, enabled, ...}` objects; `mcpExitCode?` fails that call alone.
+// `{name, enabled, ...}` objects; `mcpExitCode?` fails that call alone. Fix round 3 (paid check P1b): `mcp` are the
+// servers the linked config.toml defines; `mcpPlugins?` are servers the person's own CODEX_HOME adds (~/.codex/plugins),
+// listed only when the call is NOT isolated (its CODEX_HOME/config.toml is not a symlink or `-c features.plugins=false`
+// is absent). `mcp list` records {HOME, CODEX_HOME, c} in <marker>.mcp-env.json. A single call that turns off a server
+// `mcp` does not define fails as the real codex-cli 0.160.0 does: stderr "invalid transport in `mcp_servers.<name>`", exit 1.
 if(process.argv.at(-1)==="--version"&&!process.argv.includes("exec")) {appendFileSync(marker+".version-calls","version\n");await new Promise(resolve=>process.stdout.write("9.9.9-fake\n",resolve));process.exit(0);}
 const catalogCall=process.argv.includes("debug")&&process.argv.includes("models")?"debug-models":process.argv.includes("features")&&process.argv.includes("list")?"features-list":process.argv.includes("mcp")&&process.argv.includes("list")?"mcp-list":null;
 if(catalogCall!==null&&!process.argv.includes("exec")) {
@@ -24,7 +28,11 @@ if(catalogCall!==null&&!process.argv.includes("exec")) {
   if(script.exitCode!==undefined) process.exit(script.exitCode);
   if(catalogCall==="mcp-list") {
     if(script.mcpExitCode!==undefined) process.exit(script.mcpExitCode);
-    await new Promise(resolve=>process.stdout.write(JSON.stringify(script.mcp??[])+"\n",resolve));
+    const c=process.argv.flatMap((arg,i)=>arg==="-c"?[process.argv[i+1]]:[]);
+    let linked=false; try{linked=lstatSync(`${process.env.CODEX_HOME}/config.toml`).isSymbolicLink();}catch{}
+    const isolated=linked&&c.includes("features.plugins=false");
+    writeFileSync(marker+".mcp-env.json",JSON.stringify({HOME:process.env.HOME,CODEX_HOME:process.env.CODEX_HOME,c}));
+    await new Promise(resolve=>process.stdout.write(JSON.stringify([...(script.mcp??[]),...(isolated?[]:script.mcpPlugins??[])])+"\n",resolve));
   } else if(catalogCall==="debug-models") {
     const rows=script.rows??[{slug:"gpt-6-sol",context_window:272000,visibility:"list"},{slug:"gpt-6-luna",context_window:272000,visibility:"list"},{slug:"gpt-reserve",context_window:272000,visibility:"hide"}];
     await new Promise(resolve=>process.stdout.write(JSON.stringify({models:rows})+"\n",resolve));
@@ -55,6 +63,10 @@ process.stdin.on("end",()=>{
 // /private/tmp/p1-pJnD events.jsonl, item lines copied verbatim), as a real single call does.
   if(args.includes("--skip-git-repo-check")) {
     appendFileSync(marker+".calls","single-call\n");
+    const catalogScript=existsSync(marker+".catalog.json")?JSON.parse(readFileSync(marker+".catalog.json","utf8")):{};
+    const defined=new Set((catalogScript.mcp??[]).map(server=>server.name));
+    const undefinedServer=args.flatMap((arg,i)=>arg==="-c"?[args[i+1]]:[]).map(value=>/^mcp_servers\.(.+)\.enabled=false$/.exec(value)?.[1]).find(name=>name!==undefined&&!defined.has(name));
+    if(undefinedServer!==undefined){process.stderr.write(`Error: failed to load bootstrap configuration\n\nCaused by:\n    invalid transport\n    in \`mcp_servers.${undefinedServer}\`\n`,()=>{process.exitCode=1;});return;}
     let authIsLink=null; try{authIsLink=lstatSync(`${process.env.CODEX_HOME}/auth.json`).isSymbolicLink();}catch{}
     writeFileSync(marker+".single-env.json",JSON.stringify({HOME:process.env.HOME,CODEX_HOME:process.env.CODEX_HOME,authIsLink}));
     const script=existsSync(marker+".single.json")?JSON.parse(readFileSync(marker+".single.json","utf8")):{};

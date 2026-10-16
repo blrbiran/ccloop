@@ -1,11 +1,11 @@
 import { normalizeExecutionFinal, ExecutionFormatFailure } from "../executionNormalizer.js";
 import { access, writeFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import { readAgentCatalog } from "../../agents/agentCatalog.js";
 import type { InstallationV1 } from "../../agents/types.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
 import type { AttemptContext, RuntimeAdapter, SingleCallRequest, SingleCallResult } from "../types.js";
-import { addressableMcpServer, codexSingleCallArgs, codexSingleCallHome, decodeCodexSingleCall } from "./codexSingleCall.js";
+import { addressableMcpServer, codexSingleCallArgs, codexSingleCallHome, decodeCodexSingleCall, effectiveCodexHome } from "./codexSingleCall.js";
 import { codexModelUsage, decodeCodexUsage, decodeCodexResult, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
 import { runCodexPhase, type PhaseOutcome } from "./runCodexPhase.js";
 import { classifyRateLimit } from "./rateLimit.js";
@@ -150,19 +150,23 @@ export class CodexAdapter implements RuntimeAdapter {
     if (this.installation === undefined) throw new Error("single-call-unsupported");
     const deadline = Date.now() + Math.min(request.timeoutMs, this.config.timeoutMs);
     const catalog = await readAgentCatalog(this.installation, { deadline, signal: request.signal, log: (line) => { process.stderr.write(`${line}\n`); } });
-    // Task 8 fix round 2: the MCP server names are needed as much as the feature list (their servers would start otherwise).
-    if (catalog.codexFeatures === null || catalog.codexMcpServers === null) {
-      throw Object.assign(new Error(`codex-single-call-unavailable: ${catalog.catalogError ?? "no feature or MCP server list"}`), { code: "codex-single-call-unavailable", neverStarted: true });
+    if (catalog.codexFeatures === null) {
+      throw Object.assign(new Error(`codex-single-call-unavailable: ${catalog.catalogError ?? "no feature list"}`), { code: "codex-single-call-unavailable", neverStarted: true });
     }
-    const features = catalog.codexFeatures, mcpServers = catalog.codexMcpServers;
+    const features = catalog.codexFeatures;
+    // Fix round 3: the private homes are checked before the MCP list's absence is reported, so a symlinked private dir (which
+    // also made the isolated MCP probe fail) is named as such, not as a missing list.
+    const source = effectiveCodexHome(this.installation, process.env);
+    const isolated = await codexSingleCallHome({ runDir: request.runDir, sourceCodexHome: source, executable: this.config.command[0], env: process.env });
+    // Task 8 fix round 2: the MCP server names are needed as much as the feature list (their servers would start otherwise).
+    if (catalog.codexMcpServers === null) {
+      throw Object.assign(new Error("codex-single-call-unavailable: no MCP server list"), { code: "codex-single-call-unavailable", neverStarted: true });
+    }
+    const mcpServers = catalog.codexMcpServers;
     const unaddressable = mcpServers.find((name) => !addressableMcpServer(name));
     if (unaddressable !== undefined) {
       throw Object.assign(new Error(`codex-single-call-unavailable: MCP server ${JSON.stringify(unaddressable)} cannot be turned off by -c`), { code: "codex-single-call-unavailable", neverStarted: true });
     }
-    // The installation's effective CODEX_HOME: its configDir, else an inherited absolute CODEX_HOME, else <HOME>/.codex.
-    const inherited = process.env.CODEX_HOME, home = process.env.HOME;
-    const source = this.installation.configDir ?? (inherited && isAbsolute(inherited) ? inherited : home && isAbsolute(home) ? join(home, ".codex") : null);
-    const isolated = await codexSingleCallHome({ runDir: request.runDir, sourceCodexHome: source, executable: this.config.command[0], env: process.env });
     const context = { runDir: request.runDir, attempt: 1, worktreePath: request.cwd, abortSignal: request.signal, onProcessRegistered: request.onProcessRegistered,
       state: { budgetSnapshot: { timeRemainingMs: Math.max(1, deadline - Date.now()) } } } as unknown as AttemptContext;
     const outcome = await runCodexPhase(this.config, { phase: "single-call", prompt: request.prompt, context, spawn: {

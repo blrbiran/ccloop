@@ -318,6 +318,33 @@ describe("codex single call (spec §6.1)", { timeout: 30_000 }, () => {
     expect(existsSync(`${w.marker}.calls`)).toBe(false);
   });
 
+  // Fix round 3 (paid check P1b, codex-cli 0.160.0): listed against the person's own CODEX_HOME, codex also named the
+  // ~/.codex/plugins servers, which the call's isolated config does not define -- and turning one of those off broke the
+  // call's config load ("invalid transport"). The list is taken under the call's own isolation; the fake models both.
+  it("C8.10d: lists the MCP servers under the call's own isolation, so it never turns off one the call's config lacks", async () => {
+    const w = await world();
+    await writeFile(`${w.marker}.catalog.json`, JSON.stringify({ mcp: [{ name: "figma", enabled: true }], mcpPlugins: [{ name: "code-review", enabled: true }] }));
+    expect(await w.adapter.singleCall!(w.request)).toMatchObject({ output: { answer: "42" } });
+    expect(configValues(lastArgv(w.marker)).slice(-2)).toEqual(["features.view_image=false", "mcp_servers.figma.enabled=false"]);
+    const probe = JSON.parse(readFileSync(`${w.marker}.mcp-env.json`, "utf8")) as { HOME: string; CODEX_HOME: string; c: string[] };
+    const call = singleEnv(w.marker);
+    expect([probe.HOME, probe.CODEX_HOME]).toEqual([call.HOME, call.CODEX_HOME]);
+    expect(probe.c).toEqual(["include_permissions_instructions=false", "include_apps_instructions=false", "include_collaboration_mode_instructions=false",
+      "include_environment_context=false", "project_doc_max_bytes=0", "features.plugins=false"]);
+  });
+
+  // Fix round 3 (promoted minor, plan issue 5): only a single call needs the MCP list, so a list that cannot be read keeps
+  // the rows (the model drop-down, the window) and the features; nothing is cached, so the next read tries again.
+  it("C8.10e: an MCP list that cannot be read keeps the catalog's rows and features and is not cached", async () => {
+    const w = await world();
+    await writeFile(`${w.marker}.catalog.json`, JSON.stringify({ mcpExitCode: 4 }));
+    const catalog = await readAgentCatalog(w.config.installation);
+    expect(catalog).toMatchObject({ source: "probe", catalogError: null, codexMcpServers: null });
+    expect(catalog.rows?.map((row) => [row.selector, row.contextWindow])).toEqual([["gpt-6-sol", 272000], ["gpt-6-luna", 272000], ["gpt-reserve", 272000]]);
+    expect(catalog.codexFeatures).toHaveLength(8);
+    expect(existsSync(join(process.env.CCLOOP_CACHE_DIR!, entryFileName(await catalogKey(w.config.installation, process.env))))).toBe(false);
+  });
+
   // A codex cache entry written before the names were cached cannot answer them, so it is a miss, not a hit with none.
   it("C8.10c: a cached codex entry without MCP server names is a miss", async () => {
     const w = await world();
