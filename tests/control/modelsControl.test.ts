@@ -107,6 +107,40 @@ describe("control models (spec §3)", { timeout: 30_000 }, () => {
     expect(written[0]).toMatch(/^ccloop-agent-catalog: miss codex [0-9a-f]{12}\n$/);
   });
 
+  it("`ccloop agents models --refresh` probes again over a warm cache", async () => {
+    const w = await world();
+    const probes = () => readFileSync(`${w.codexMarker}.catalog-calls`, "utf8").split("\n").filter((line) => line === "debug-models").length;
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      expect((await runAgentsCommand(["models", "--agents", w.path, "--installation", "codex"])).code).toBe(0);
+      expect(probes()).toBe(1);
+      expect((await runAgentsCommand(["models", "--agents", w.path, "--installation", "codex"])).code).toBe(0);
+      expect(probes()).toBe(1);
+      const refreshed = await runAgentsCommand(["models", "--agents", w.path, "--installation", "codex", "--refresh"]);
+      expect(refreshed.code).toBe(0);
+      expect(JSON.parse(refreshed.stdout).source).toBe("probe");
+      expect(probes()).toBe(2);
+    } finally { spy.mockRestore(); }
+  });
+
+  // Fix round 1 (controller ruling, 2026-10-16): the vitest setup points CODEX_HOME at an empty temp dir, so a codex
+  // installation with no configDir answers the fake catalog's window, never a config.toml under HOME/.codex.
+  it("a codex installation with no configDir never reads a window from HOME/.codex", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-models-home-")));
+    await mkdir(join(dir, "home", ".codex"), { recursive: true, mode: 0o700 });
+    await writeFile(join(dir, "home", ".codex", "config.toml"), "model_context_window = 999999\n", { mode: 0o600 });
+    const t = await writeAgentsTable({
+      codex: await codexInstallation({ command: [process.execPath, FAKE_CODEX, "integration", join(dir, "codex-marker")], sandbox: "read-only", budgetMode: "soft", timeoutMs: 60_000, killGraceMs: 100 }),
+    }, dir);
+    expect(t.table.installations.codex!.configDir).toBeNull();
+    const home = process.env.HOME;
+    process.env.HOME = join(dir, "home");
+    let answer: Awaited<ReturnType<typeof models>>;
+    try { answer = await models(t.path, "codex"); } finally { process.env.HOME = home; }
+    expect(answer.code, answer.stderr).toBe(0);
+    expect(JSON.parse(answer.stdout).models.map((row: { contextWindowTokens: number }) => row.contextWindowTokens)).toEqual([272000, 272000]);
+  });
+
   it("refuses any other `ccloop agents models` shape", async () => {
     const w = await world();
     for (const argv of [["models", "--agents", w.path], ["models", "--installation", "codex", "--agents", w.path, "--refresh", "--refresh"], ["models", "--agents", w.path, "--installation", "codex", "--fresh"]]) {
