@@ -107,7 +107,9 @@ describe("control over the installation table (agent selection)", { timeout: 30_
       configHash: canonicalHash({ schema: "ccloop-agent-config-v1", kind: "claude", installation: hashed(table.installations.claude!), selection: claudeSelection }),
       timeoutMs: table.installations.claude!.timeoutMs,
       killGraceMs: table.installations.claude!.killGraceMs,
-      capabilities: { contextWindowTokens: null },
+      // Rewritten for the every-agent requirement chain (Orca spec 2026-10-15 §2.3, §7, ruling R5; human named E5 on 2026-10-15):
+      // claude's agent-default window is the 200000 lower bound. Ruling: human named E5 in Orca session a852f96a, 2026-10-15.
+      capabilities: { contextWindowTokens: 200_000 },
     });
 
     const codex = await runControlCommand(["capabilities", "--agents", path], JSON.stringify({ agent: { agent: "codex" } }));

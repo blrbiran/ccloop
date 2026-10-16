@@ -53,6 +53,8 @@ export const claudeDescriptor: AgentDescriptor = {
     // 1M window (claudeModelArgument above), so a model that already carries one would get 1M under "agent-default"
     // -- with capabilities answering contextWindowTokens null -- or be sent as `[1m][1m]`. Refused, never rewritten:
     // the window is chosen by contextWindow alone.
+    // *** ERRATUM (Orca spec 2026-10-15 §2.3, §7, ruling R5) -- the "contextWindowTokens null" above is superseded:
+    // "agent-default" is now reported as 200000 (see the capabilities note below); the refusal itself is unchanged. ***
     if (/\[1m\]$/i.test(selection.model)) {
       throw new AgentError("agent-context-unsupported", `model ${JSON.stringify(selection.model)} carries the [1m] suffix; choose contextWindow ${ONE_MILLION} instead`);
     }
@@ -65,7 +67,10 @@ export const claudeDescriptor: AgentDescriptor = {
       handoffControl: "durable",
       handoffExecution: "mechanical-in-run-v1",
       // Spec §12 I6: only a mapping Task 0 verified is reported; "agent-default" stays unknown (null).
-      contextWindowTokens: config.selection.contextWindow === ONE_MILLION ? ONE_MILLION : null,
+      // *** ERRATUM (Orca spec 2026-10-15 §2.3, §7, ruling R5) -- "agent-default" is now reported as 200000: every model in
+      // claude-code 2.1.300's built-in model table has a window of at least 200000 (read from the binary, no model called);
+      // a native-1M model is under-reported, which only makes input-too-large trip earlier. ***
+      contextWindowTokens: config.selection.contextWindow === ONE_MILLION ? ONE_MILLION : 200_000,
       requestBoundProof: null,
     };
   },

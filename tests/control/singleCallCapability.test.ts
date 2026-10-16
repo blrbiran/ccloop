@@ -52,7 +52,9 @@ describe("single-call capability and its accept gate (Orca single-call estimate)
     const claude = await runControlCommand(["capabilities", "--agents", path], JSON.stringify({ agent: { agent: "claude" } }));
     expect(claude.code, claude.stderr).toBe(0);
     const claudeResolution = (await resolveAgent(table, { agent: "claude" })).resolution;
-    expect(claudeResolution.capabilities).toEqual(SEVEN);
+    // Rewritten for the every-agent requirement chain (Orca spec 2026-10-15 §2.3, §7, ruling R5; human named E1 on 2026-10-15):
+    // claude's agent-default window is the 200000 lower bound. Ruling: human named E1 in Orca session a852f96a, 2026-10-15.
+    expect(claudeResolution.capabilities).toEqual({ ...SEVEN, contextWindowTokens: 200000 });
     expect(JSON.parse(claude.stdout)).toEqual({ protocol: 3, ...claudeResolution, singleCallExecution: "v1" });
 
     const codex = await runControlCommand(["capabilities", "--agents", path], JSON.stringify({ agent: { agent: "codex" } }));
