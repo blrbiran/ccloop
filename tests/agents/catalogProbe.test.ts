@@ -143,6 +143,9 @@ describe("codex catalog decode (spec §3, §6.1)", () => {
         { selector: "gpt-reserve", provider: "codex", contextWindow: 272000, maxTokens: null, listed: false },
       ],
       features: ["apps", "image_generation", "multi_agent", "plugins", "shell_tool", "skip_host_skill_discovery", "unified_exec", "view_image"],
+      // Ruling: rewritten under the human's blanket naming (Orca session a852f96a, 2026-10-16) -- Task 8 fix round 2 adds the
+      // MCP server names (`codex mcp list --json`; the fake lists none by default) to the codex catalog read. Still exact.
+      mcpServers: [],
     });
   });
 

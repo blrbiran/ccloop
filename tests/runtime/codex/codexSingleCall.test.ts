@@ -3,7 +3,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { readAgentCatalog } from "../../../src/agents/agentCatalog.js";
+import { catalogKey, entryFileName } from "../../../src/agents/catalogCache.js";
 import { codexDescriptor } from "../../../src/agents/codex.js";
 import type { MaterializedAgentConfigV1 } from "../../../src/agents/types.js";
 import { codexSingleCallHome } from "../../../src/runtime/codex/codexSingleCall.js";
@@ -265,6 +267,67 @@ describe("codex single call (spec §6.1)", { timeout: 30_000 }, () => {
     expect((error as Error).message).toMatch(/^codex-spawn-error: /);
     expect(observedTokensOf(error)).toBe(0);
     expect(existsSync(`${w.marker}.calls`)).toBe(false);
+  });
+
+  // Task 8 fix round 2 (paid check P1, codex-cli 0.160.0): codex printed three `error` items -- config warnings -- and one
+  // answer in one turn; they are diagnostics, logged and kept in events.jsonl, never a reason to refuse. The fake's
+  // default stream carries those three items verbatim.
+  it("C8.11: decodes a single call whose stream carries codex's error items, logging each on stderr", async () => {
+    const w = await world();
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => { written.push(String(chunk)); return true; });
+    let result: unknown;
+    try { result = await w.adapter.singleCall!(w.request); } finally { spy.mockRestore(); }
+    expect(result).toMatchObject({ output: { answer: "42" }, tokenUsage: 24 });
+    const items = written.filter((line) => line.startsWith("ccloop-codex-single-call: codex error item "));
+    expect(items).toHaveLength(3);
+    expect(items[2]).toMatch(/Under-development features enabled: skip_host_skill_discovery/);
+  });
+
+  it("C8.11b: still refuses an item type it does not know, as a tool", async () => {
+    const w = await world({ rows: [{ type: "item.completed", item: { id: "i", type: "some_future_tool_call", status: "completed" } }, { type: "item.completed", item: { type: "agent_message", text: "{\"answer\":\"42\"}" } }, { type: "turn.completed", usage: { input_tokens: 30, output_tokens: 6 } }] });
+    const error = await failure(w.adapter.singleCall!(w.request));
+    expect(error).toMatchObject({ code: "codex-single-call-not-single:tool" });
+    expect(observedTokensOf(error)).toBe(36);
+  });
+
+  // Task 8 fix round 2, spec §6.1 ("the matching -c override"): the MCP servers the linked config.toml defines would start
+  // inside the call (P1: figma's auth error on stderr). Each listed server is turned off by name; measured on codex-cli
+  // 0.160.0 that `-c mcp_servers={}` leaves them on and an unknown name breaks the config, so the names come from the
+  // installation's own `codex mcp list --json`, read with the catalog and cached with it.
+  it("C8.10: turns off every MCP server the installation lists, by name", async () => {
+    const w = await world();
+    await writeFile(`${w.marker}.catalog.json`, JSON.stringify({ mcp: [{ name: "figma", enabled: true }, { name: "node_repl", enabled: true }, { name: "computer-use", enabled: false }] }));
+    await w.adapter.singleCall!(w.request);
+    expect(configValues(lastArgv(w.marker)).slice(-4)).toEqual([
+      "features.view_image=false", "mcp_servers.figma.enabled=false", "mcp_servers.node_repl.enabled=false", "mcp_servers.computer-use.enabled=false",
+    ]);
+  });
+
+  it.each([
+    ["the list fails", { mcpExitCode: 4 }],
+    ["a server has no name", { mcp: [{ enabled: true }] }],
+    // Measured on codex-cli 0.160.0: `-c mcp_servers."figma".enabled=false` breaks the config, so a dotted name cannot be turned off.
+    ["a server name -c cannot address", { mcp: [{ name: "figma", enabled: true }, { name: "a.b", enabled: true }] }],
+  ])("C8.10b: refuses before spawning, booking 0, when the MCP server list cannot be read (%s)", async (_label, catalog) => {
+    const w = await world();
+    await writeFile(`${w.marker}.catalog.json`, JSON.stringify(catalog));
+    const error = await failure(w.adapter.singleCall!(w.request));
+    expect(error).toMatchObject({ code: "codex-single-call-unavailable", neverStarted: true });
+    expect(observedTokensOf(error)).toBe(0);
+    expect(existsSync(`${w.marker}.calls`)).toBe(false);
+  });
+
+  // A codex cache entry written before the names were cached cannot answer them, so it is a miss, not a hit with none.
+  it("C8.10c: a cached codex entry without MCP server names is a miss", async () => {
+    const w = await world();
+    expect((await readAgentCatalog(w.config.installation)).codexMcpServers).toEqual([]);
+    const file = join(process.env.CCLOOP_CACHE_DIR!, entryFileName(await catalogKey(w.config.installation, process.env)));
+    const entry = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    expect(entry.codexMcpServers).toEqual([]);
+    delete entry.codexMcpServers;
+    await writeFile(file, JSON.stringify(entry));
+    expect((await readAgentCatalog(w.config.installation)).source).toBe("probe");
   });
 
   it("C8.6: an answer that is not one object is single-call-output-invalid with its usage", async () => {

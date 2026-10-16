@@ -13,7 +13,7 @@ import { probeVersion } from "./versionProbe.js";
  */
 export interface AgentCatalogV1 {
   source: "cache" | "probe"; observedAt: string; version: string | null;
-  rows: CatalogRowV1[] | null; codexFeatures: string[] | null; catalogError: string | null;
+  rows: CatalogRowV1[] | null; codexFeatures: string[] | null; codexMcpServers: string[] | null; catalogError: string | null;
 }
 export interface ReadAgentCatalogOptions {
   deadline?: number; signal?: AbortSignal; refresh?: boolean; env?: NodeJS.ProcessEnv; log?: (line: string) => void; now?: () => number;
@@ -28,7 +28,11 @@ function wellFormed(entry: CatalogEntryV1): boolean {
     return typeof value.selector === "string" && typeof value.provider === "string" && numberOrNull(value.contextWindow)
       && numberOrNull(value.maxTokens) && (value.listed === undefined || typeof value.listed === "boolean");
   });
-  return rows && (entry.codexFeatures === null || entry.codexFeatures.every((name: unknown) => typeof name === "string"));
+  const strings = (list: unknown[]) => list.every((name: unknown) => typeof name === "string");
+  // Task 8 fix round 2: a codex entry written before the MCP server names were cached (or without them) is a miss.
+  const mcp = entry.codexMcpServers;
+  const mcpOk = entry.key.kind === "codex" ? Array.isArray(mcp) && strings(mcp) : mcp === undefined || mcp === null;
+  return rows && mcpOk && (entry.codexFeatures === null || strings(entry.codexFeatures));
 }
 
 export async function readAgentCatalog(installation: InstallationV1, options: ReadAgentCatalogOptions = {}): Promise<AgentCatalogV1> {
@@ -38,22 +42,22 @@ export async function readAgentCatalog(installation: InstallationV1, options: Re
   const key = await catalogKey(installation, env);
   if (dir !== null && options.refresh !== true) {
     const hit = await readCatalogEntry(dir, key, now());
-    if (hit !== null && wellFormed(hit)) return { source: "cache", observedAt: hit.observedAt, version: hit.version, rows: hit.rows, codexFeatures: hit.codexFeatures, catalogError: null };
+    if (hit !== null && wellFormed(hit)) return { source: "cache", observedAt: hit.observedAt, version: hit.version, rows: hit.rows, codexFeatures: hit.codexFeatures, codexMcpServers: hit.codexMcpServers ?? null, catalogError: null };
     log(`ccloop-agent-catalog: miss ${installation.kind} ${entryFileName(key).slice(0, 12)}`);
   }
   // The probes measure the deadline on the real clock, as runProbe does; `now` only dates the entry and its age.
   const version = await probeVersion(installation.command, { timeoutMs: Math.min(10_000, probeTimeoutMs(deadline)), signal: options.signal });
-  let rows: CatalogRowV1[] | null = null, codexFeatures: string[] | null = null, catalogError: string | null = null;
+  let rows: CatalogRowV1[] | null = null, codexFeatures: string[] | null = null, codexMcpServers: string[] | null = null, catalogError: string | null = null;
   try {
     if (installation.kind === "omp") rows = await readOmpCatalog(installation, { deadline, signal: options.signal });
-    else if (installation.kind === "codex") ({ rows, features: codexFeatures } = await readCodexCatalog(installation, { deadline, signal: options.signal }));
+    else if (installation.kind === "codex") ({ rows, features: codexFeatures, mcpServers: codexMcpServers } = await readCodexCatalog(installation, { deadline, signal: options.signal }));
   } catch (error) {
     catalogError = error instanceof Error ? error.message : String(error);
     log(`ccloop-agent-catalog: probe-failed ${installation.kind} ${catalogError}`);
   }
   const observedAt = new Date(now()).toISOString();
   if (dir !== null && version !== null && catalogError === null) {
-    await writeCatalogEntry(dir, { schema: "ccloop-agent-catalog-v1", key, observedAt, version, rows, codexFeatures });
+    await writeCatalogEntry(dir, { schema: "ccloop-agent-catalog-v1", key, observedAt, version, rows, codexFeatures, codexMcpServers });
   }
-  return { source: "probe", observedAt, version, rows, codexFeatures, catalogError };
+  return { source: "probe", observedAt, version, rows, codexFeatures, codexMcpServers, catalogError };
 }

@@ -29,8 +29,28 @@ export function codexFeatureNames(listed: string): Set<string> {
   return names;
 }
 
-/** The codex catalog (`codex debug models`) and its installed feature flags (`codex features list`), under one deadline. */
-export async function readCodexCatalog(installation: InstallationV1, options: { deadline?: number; signal?: AbortSignal }): Promise<{ rows: CatalogRowV1[]; features: string[] }> {
+/**
+ * Task 8 fix round 2 (P1, codex-cli 0.160.0): the MCP server names `codex mcp list --json` prints (a JSON array of
+ * `{name, enabled, ...}`), so a single call can turn each one off by name -- a whole-table `-c mcp_servers={}` is merged,
+ * not replaced, and a name codex does not know breaks its config ("invalid transport"). Anything else is stage decode.
+ */
+export function codexMcpServerNames(listed: string): string[] {
+  const parsed = JSON.parse(listed) as unknown;
+  if (!Array.isArray(parsed)) throw new Error("not a list");
+  const names = parsed.map((server) => {
+    const name = server !== null && typeof server === "object" ? (server as { name?: unknown }).name : undefined;
+    if (typeof name !== "string" || name.length === 0 || name.length > 200) throw new Error("bad name");
+    return name;
+  });
+  if (new Set(names).size !== names.length) throw new Error("duplicate name");
+  return names;
+}
+
+/**
+ * The codex catalog (`codex debug models`), its installed feature flags (`codex features list`) and its configured MCP
+ * servers (`codex mcp list --json`, Task 8 fix round 2), under one deadline.
+ */
+export async function readCodexCatalog(installation: InstallationV1, options: { deadline?: number; signal?: AbortSignal }): Promise<{ rows: CatalogRowV1[]; features: string[]; mcpServers: string[] }> {
   const env: NodeJS.ProcessEnv = { ...process.env, ...(installation.configDir === null ? {} : { CODEX_HOME: installation.configDir }) };
   const deadline = options.deadline ?? Date.now() + 30_000;
   const startedAt = Date.now();
@@ -52,5 +72,9 @@ export async function readCodexCatalog(installation: InstallationV1, options: { 
   if (window !== null) rows = rows.map((row) => ({ ...row, contextWindow: window }));
   const listed = await runProbe(CODE, installation.command[0], [...installation.command.slice(1), "features", "list"], env, { timeoutMs: probeTimeoutMs(deadline), signal: options.signal });
   const names = codexFeatureNames(listed);
-  return { rows, features: CODEX_SINGLE_CALL_FEATURES.filter((name) => names.has(name)) };
+  const mcpStartedAt = Date.now();
+  const mcp = await runProbe(CODE, installation.command[0], [...installation.command.slice(1), "mcp", "list", "--json"], env, { timeoutMs: probeTimeoutMs(deadline), signal: options.signal });
+  let mcpServers: string[];
+  try { mcpServers = codexMcpServerNames(mcp); } catch { throw probeFailure(CODE, "decode", "decode", mcpStartedAt); }
+  return { rows, features: CODEX_SINGLE_CALL_FEATURES.filter((name) => names.has(name)), mcpServers };
 }

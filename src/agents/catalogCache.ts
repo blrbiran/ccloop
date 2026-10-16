@@ -18,6 +18,8 @@ export interface CatalogKeyV1 {
 export interface CatalogEntryV1 {
   schema: "ccloop-agent-catalog-v1"; key: CatalogKeyV1; observedAt: string; version: string;
   rows: CatalogRowV1[] | null; codexFeatures: string[] | null;
+  /** Task 8 fix round 2: codex's configured MCP server names; an entry without them is a miss for codex (agentCatalog.ts). */
+  codexMcpServers?: string[] | null;
 }
 
 export function catalogCacheDir(env: NodeJS.ProcessEnv): string | null {

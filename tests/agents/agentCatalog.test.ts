@@ -39,7 +39,9 @@ describe("criterion 1: a warm cache spawns nothing (spec §4.1)", { timeout: 30_
     }
     const warm = [spawns(t.ompMarker), spawns(t.codexMarker)];
     // omp 2 = 1 version + 1 models; codex 4 = 1 version by codexInstallation (agentsFixture.ts:28-41) + 1 version + debug-models + features-list.
-    expect(warm).toEqual([2, 4]);
+    // Ruling: rewritten under the human's blanket naming (Orca session a852f96a, 2026-10-16) -- Task 8 fix round 2 adds the
+    // catalog probe `mcp list --json` (spec §6.1 MCP override), so codex is 5 = the four above + mcp-list. Not loosened: exact.
+    expect(warm).toEqual([2, 5]);
     for (const agent of ["omp", "codex", "omp", "codex"]) {
       expect((await runControlCommand(["capabilities", "--agents", t.path], JSON.stringify({ agent: { agent } }))).code).toBe(0);
     }

@@ -11,16 +11,21 @@ const mode=process.argv[2], marker=process.argv[3];
 // `debug models` and `features list` answer the catalog and the feature list and append `debug-models` / `features-list`
 // to `<marker>.catalog-calls`, before anything below runs, so `<marker>.argv` and `<marker>.calls` never see them.
 // `<marker>.catalog.json` ({rows?, sleepMs?, exitCode?, stderr?}) overrides the rows, sleeps first, or fails.
-// Task 8 of that plan: its `features?` (a list of flag names) overrides the flags `features list` prints.
+// Task 8 of that plan: its `features?` (a list of flag names) overrides the flags `features list` prints. Task 8 fix
+// round 2: `mcp list --json` appends `mcp-list` and prints `mcp?` (default []) as codex-cli 0.160.0's JSON array of
+// `{name, enabled, ...}` objects; `mcpExitCode?` fails that call alone.
 if(process.argv.at(-1)==="--version"&&!process.argv.includes("exec")) {appendFileSync(marker+".version-calls","version\n");await new Promise(resolve=>process.stdout.write("9.9.9-fake\n",resolve));process.exit(0);}
-const catalogCall=process.argv.includes("debug")&&process.argv.includes("models")?"debug-models":process.argv.includes("features")&&process.argv.includes("list")?"features-list":null;
+const catalogCall=process.argv.includes("debug")&&process.argv.includes("models")?"debug-models":process.argv.includes("features")&&process.argv.includes("list")?"features-list":process.argv.includes("mcp")&&process.argv.includes("list")?"mcp-list":null;
 if(catalogCall!==null&&!process.argv.includes("exec")) {
   appendFileSync(marker+".catalog-calls",catalogCall+"\n");
   const script=existsSync(marker+".catalog.json")?JSON.parse(readFileSync(marker+".catalog.json","utf8")):{};
   if(script.sleepMs!==undefined) await new Promise(resolve=>setTimeout(resolve,script.sleepMs));
   if(script.stderr!==undefined) await new Promise(resolve=>process.stderr.write(script.stderr,resolve));
   if(script.exitCode!==undefined) process.exit(script.exitCode);
-  if(catalogCall==="debug-models") {
+  if(catalogCall==="mcp-list") {
+    if(script.mcpExitCode!==undefined) process.exit(script.mcpExitCode);
+    await new Promise(resolve=>process.stdout.write(JSON.stringify(script.mcp??[])+"\n",resolve));
+  } else if(catalogCall==="debug-models") {
     const rows=script.rows??[{slug:"gpt-6-sol",context_window:272000,visibility:"list"},{slug:"gpt-6-luna",context_window:272000,visibility:"list"},{slug:"gpt-reserve",context_window:272000,visibility:"hide"}];
     await new Promise(resolve=>process.stdout.write(JSON.stringify({models:rows})+"\n",resolve));
   } else {
@@ -30,6 +35,11 @@ if(catalogCall!==null&&!process.argv.includes("exec")) {
   process.exit(0);
 }
 appendFileSync(marker+".argv",JSON.stringify(process.argv.slice(process.argv.indexOf("exec")))+"\n");
+const P1_ERROR_ITEMS=[
+  {"type":"item.completed","item":{"id":"item_0","type":"error","message":"Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  user (/private/tmp/p1-pJnD/cache/codex-home/6c50abddd3e7b8e015da354e559a9f48f1b2d2bac85d91aaee0a9509b61ec74c/codex-home/config.toml): `features.rmcp_client` is ignored."}},
+  {"type":"item.completed","item":{"id":"item_1","type":"error","message":"Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  user (/private/tmp/p1-pJnD/cache/codex-home/6c50abddd3e7b8e015da354e559a9f48f1b2d2bac85d91aaee0a9509b61ec74c/codex-home/config.toml): `features.rmcp_client` is ignored."}},
+  {"type":"item.completed","item":{"id":"item_2","type":"error","message":"Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /private/tmp/p1-pJnD/cache/codex-home/6c50abddd3e7b8e015da354e559a9f48f1b2d2bac85d91aaee0a9509b61ec74c/codex-home/config.toml."}},
+];
 const CONTINUATION="Treat continuation input fields unfinished, pendingDecisions, and awaitingHuman as required planning inputs.";
 const args=process.argv.slice(process.argv.indexOf("exec")+1);
 const value=flag=>args[args.indexOf(flag)+1];
@@ -40,14 +50,16 @@ process.stdin.on("end",()=>{
   // Every-agent requirement chain (Orca spec 2026-10-15 §6.1, §9): a single call is the only codex call with
   // --skip-git-repo-check. It records HOME, CODEX_HOME and whether auth.json there is a symlink in <marker>.single-env.json,
   // appends `single-call` to <marker>.calls, then plays <marker>.single.json ({rows?, final?, exitCode?, hang?}) or one
-  // complete {"answer":"42"} with usage input 20 (5 cached) and output 4.
+  // complete {"answer":"42"} with usage input 20 (5 cached) and output 4. Task 8 fix round 2: the default rows carry the
+// three `error` items the real codex-cli 0.160.0 printed in paid check P1 (Orca session a852f96a, 2026-10-16;
+// /private/tmp/p1-pJnD events.jsonl, item lines copied verbatim), as a real single call does.
   if(args.includes("--skip-git-repo-check")) {
     appendFileSync(marker+".calls","single-call\n");
     let authIsLink=null; try{authIsLink=lstatSync(`${process.env.CODEX_HOME}/auth.json`).isSymbolicLink();}catch{}
     writeFileSync(marker+".single-env.json",JSON.stringify({HOME:process.env.HOME,CODEX_HOME:process.env.CODEX_HOME,authIsLink}));
     const script=existsSync(marker+".single.json")?JSON.parse(readFileSync(marker+".single.json","utf8")):{};
     if(script.hang===true){setInterval(()=>{},1000);return;}
-    const rows=script.rows??[{type:"thread.started",thread_id:"t"},{type:"turn.started"},{type:"item.completed",item:{id:"item_0",type:"agent_message",text:"{\"answer\":\"42\"}"}},{type:"turn.completed",usage:{input_tokens:20,cached_input_tokens:5,output_tokens:4}}];
+    const rows=script.rows??[{type:"thread.started",thread_id:"t"},...P1_ERROR_ITEMS,{type:"turn.started"},{type:"item.completed",item:{id:"item_0",type:"agent_message",text:"{\"answer\":\"42\"}"}},{type:"turn.completed",usage:{input_tokens:20,cached_input_tokens:5,output_tokens:4}}];
     writeFileSync(value("-o"),script.final??"{\"answer\":\"42\"}");
     process.stdout.write(rows.map(row=>JSON.stringify(row)).join("\n")+"\n",()=>{process.exitCode=script.exitCode??0;});
     return;
