@@ -72,9 +72,26 @@ async function ensureLink(path: string, target: string | null): Promise<void> {
  * (never copies). Ruling (Task 8, Orca session a852f96a, 2026-10-16, answering the human): ONE pair per installation,
  * reused, under `<catalog cache dir>/codex-home/<sha256 of realpath(executable) NUL sourceCodexHome>/` -- codex writes
  * ~2.4 MB of its own state plus a remote models fetch into a fresh CODEX_HOME (Task 0). The links are re-checked on every
- * call. Out-of-repo write: that path; writer = a ccloop control worker running a codex single call; residue on failure =
- * at most one `.<uuid>.link` temp link, plus any `<name>.displaced-<ms>` file moved aside. With no cache dir, a pair per
- * call under the run directory.
+ * call.
+ *
+ * Out-of-repo write (Orca Rule 17 / ccloop's equivalent; registration rewritten in Task 8 fix round 4):
+ * - Path: `<catalog cache dir>/codex-home/<sha256>/{home,codex-home}` (cache dir = $CCLOOP_CACHE_DIR, else
+ *   $XDG_CACHE_HOME/ccloop/agent-catalog, else <HOME>/.cache/ccloop/agent-catalog; catalogCache.ts).
+ * - Writers and triggers: (1) any ccloop process whose codex catalog read MISSES the cache -- `control capabilities` /
+ *   `control models` / `ccloop agents models`, codex resolution for loop phases and accept (materialize.ts, e.g. `run
+ *   --agents`) -- through the isolated `codex mcp list --json` probe (codexCatalog.ts; agents updates read the catalog
+ *   for omp only, so they never write here); (2) the control worker
+ *   running a codex single call (CodexAdapter.singleCall), on every call.
+ * - What is written: by ccloop, the missing dirs (0700, set explicitly; an existing dir's mode is left alone) and the
+ *   two symlinks `codex-home/{auth.json,config.toml}` -> the installation's own files (never copies); by codex itself
+ *   (its own modes), its runtime state in that codex-home -- models_cache.json, sqlite state/logs, installation_id,
+ *   skills/, tmp/, shell_snapshots/, mcp-oauth-locks/ -- for both the probe and the call. `home` stays empty unless codex
+ *   writes there.
+ * - Residue on failure: at most one `.<uuid>.link` temp link; any regular file found where a link belongs is kept as
+ *   `<name>.displaced-<epoch ms>` (never deleted); whatever codex wrote before it failed. The dirs are never removed.
+ * - No cache dir: the single call makes a pair per call under its run directory (`<runDir>/codex/1/single-call/home-*`);
+ *   the catalog probe makes a pair under a fresh `mkdtemp(<tmpdir>/ccloop-codex-mcp-*)` removed in `finally` -- a
+ *   crash before that leaves the temp dir (its links and codex's state) behind.
  */
 export async function codexSingleCallHome(input: { runDir: string; sourceCodexHome: string | null; executable: string; env: NodeJS.ProcessEnv }): Promise<{ home: string; codexHome: string }> {
   const cache = catalogCacheDir(input.env);
