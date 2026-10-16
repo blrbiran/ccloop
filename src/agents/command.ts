@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { detectAgents } from "./detect.js";
 import { probeVersion } from "./materialize.js";
+import { listAgentModels } from "./models.js";
 import { readAgentsTable } from "./table.js";
 import { AgentError } from "./types.js";
 
@@ -22,6 +23,7 @@ function detectFlags(argv: string[]): { home?: string; path?: string } {
 }
 
 /** `ccloop agents detect [--home <dir>] [--path <PATH>]` and `ccloop agents validate <table>` (spec §4.3, §4.4). */
+// Every-agent requirement chain (Orca spec 2026-10-15 §3): also `ccloop agents models --agents <table> --installation <id> [--refresh]`.
 export async function runAgentsCommand(
   argv: string[],
   deps: { probe?: typeof probeVersion } = {},
@@ -50,6 +52,11 @@ export async function runAgentsCommand(
         stdout: `${JSON.stringify({ installations })}\n`,
         stderr: "",
       };
+    }
+    if (argv[0] === "models" && (argv.length === 5 || (argv.length === 6 && argv[5] === "--refresh")) && argv[1] === "--agents" && argv[3] === "--installation") {
+      // The `ccloop-agent-catalog: miss|probe-failed ...` lines go to stderr here (plan issue 3); `control models` prints none.
+      const answer = await listAgentModels(argv[2]!, argv[4]!, { refresh: argv.length === 6, log: (line) => process.stderr.write(`${line}\n`) });
+      return { code: 0, stdout: `${JSON.stringify(answer)}\n`, stderr: "" };
     }
     throw new AgentError("agents-command-invalid");
   } catch (error) {

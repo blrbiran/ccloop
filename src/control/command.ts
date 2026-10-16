@@ -4,6 +4,7 @@ import { collectSavedResultEvidence, readSavedResultEvidence, savedResultCollect
 import { z } from "zod";
 import { applyAgentInstallations, observeAgentInstallations, previewAgentInstallations } from "../agents/updates.js";
 import { resolveAgent } from "../agents/materialize.js";
+import { listAgentModels } from "../agents/models.js";
 import { descriptorDefaults, getDescriptor } from "../agents/registry.js";
 import { assertAgentsTablePath, readAgentsTable } from "../agents/table.js";
 import { AgentError, type CapabilityViewV1 } from "../agents/types.js";
@@ -100,6 +101,13 @@ const capabilitiesSchema = z.union([
     })
     .strict(),
 ]);
+// Every-agent requirement chain (Orca spec 2026-10-15 §3): refused here rather than printed for Orca to refuse whole.
+const modelsSchema = z.object({
+  schema: z.literal("ccloop-models-v1"), installation: z.string().min(1), kind: z.string().min(1), source: z.enum(["cache", "probe", "none"]),
+  observedAt: z.string().datetime().nullable(),
+  models: z.array(z.object({ model: z.string().min(1).max(200), contextWindowTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable(),
+    maxOutputTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable(), singleCallExecution: z.enum(["v1", "v1-soft"]).nullable() }).strict()),
+}).strict();
 const executionStatusSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("absent") }).strict(),
   z.object({ kind: z.literal("accepted"), executionId: z.string().min(1), configHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
@@ -198,6 +206,7 @@ const METHODS = new Set<ControlMethodV1>([
   "agent-installation-preview",
   "agent-installation-apply",
   "capabilities",
+  "models",
   "accept",
   "inspect",
   "handoff",
@@ -257,6 +266,9 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
     // OMP single call (Orca spec 2026-10-14 §3.2): singleCallExecution and singleCallOutputCap now come with the resolution.
     return { protocol: 3, ...resolution };
   }
+  // Every-agent requirement chain (Orca spec 2026-10-15 §3): no `log` here -- the wire path prints nothing on stderr on
+  // success, since Orca reads ccloop's code from the start of stderr.
+  if (request.method === "models") return await listAgentModels(context.agentsTablePath, request.installation, { refresh: request.refresh });
   if (request.method === "accept") {
     return await acceptStart(request.input, { agentsTablePath: context.agentsTablePath });
   }
@@ -297,6 +309,7 @@ function validateResponse(method: ControlMethodV1, value: unknown, protocol = 3)
     if (method === "agent-installation-preview") return previewSchema.parse(value);
     if (method === "agent-installation-apply") return receiptSchema.parse(value);
     if (method === "capabilities") return capabilitiesSchema.parse(value);
+    if (method === "models") return modelsSchema.parse(value);
     if (method === "accept" || method === "inspect") return executionStatusSchema.parse(value);
     if (method === "handoff") return handoffAckSchema.parse(value);
     if (method === "collect") return (protocol === 4 ? collectionSchema.extend({

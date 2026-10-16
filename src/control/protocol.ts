@@ -12,6 +12,7 @@ export type ControlMethodV1 =
   | "agent-installation-preview"
   | "agent-installation-apply"
   | "capabilities"
+  | "models"
   | "accept"
   | "inspect"
   | "handoff"
@@ -135,6 +136,7 @@ export type ControlRequestV1 =
   | { method: "agent-installation-preview" }
   | { method: "agent-installation-apply"; opId: string; requestDigest: string; previewId: string; baseTableHash: string; acceptedChangeIds: string[] }
   | { method: "capabilities"; agent: PartialSelectionV1 | null }
+  | { method: "models"; installation: string; refresh: boolean }
   | { method: "accept"; input: StartEnvelopeV3 }
   | { method: "inspect"; input: StartEnvelopeV3 }
   | { method: "handoff"; input: StartEnvelopeV3; request: HandoffRequestV1 }
@@ -153,6 +155,7 @@ export type ControlPayloadV1 =
   | { opId: string; requestDigest: string; previewId: string; baseTableHash: string; acceptedChangeIds: string[] }
   | { input: SavedResultSourceInput }
   | CapabilitiesRequestV3
+  | { installation: string; refresh: boolean }
   | StartEnvelopeV3
   | { input: StartEnvelopeV3; request: HandoffRequestV1 }
   | { input: StartEnvelopeV3; afterSeq: number }
@@ -294,6 +297,8 @@ const payloadSchemas = {
   "agent-installation-preview": z.object({}).strict(),
   "agent-installation-apply": z.object({ opId: idSchema, requestDigest: hashSchema, previewId: idSchema, baseTableHash: hashSchema, acceptedChangeIds: z.array(idSchema).min(1) }).strict(),
   capabilities: z.object({ agent: partialSelectionSchema.nullable() }).strict(),
+  // Every-agent requirement chain (Orca spec 2026-10-15 §3): one installation's models; refresh skips the cache.
+  models: z.object({ installation: idSchema, refresh: z.boolean() }).strict(),
   accept: startEnvelopeSchema,
   inspect: startEnvelopeSchema,
   handoff: z.object({ input: startEnvelopeSchema, request: handoffRequestSchema }).strict(),
