@@ -6,8 +6,15 @@ import { probeFailure, probeTimeoutMs, runProbe } from "./catalogProbe.js";
 import { CODEX_SINGLE_CALL_CONFIG, codexSingleCallHome, effectiveCodexHome } from "./codexIsolation.js";
 import type { CatalogRowV1, InstallationV1 } from "./types.js";
 
-/** Spec 2026-10-15 §2.4/§6.1: the tool flags a codex single call turns off, plus skip_host_skill_discovery (turned on). */
-export const CODEX_SINGLE_CALL_FEATURES = ["apps", "image_generation", "multi_agent", "plugins", "shell_tool", "skip_host_skill_discovery", "unified_exec", "view_image"] as const;
+/**
+ * Spec 2026-10-15 §2.4/§6.1: the tool flags a codex single call turns off, plus skip_host_skill_discovery (turned on).
+ * Final-review I4 (Orca session a852f96a, 2026-10-16): also the tool-like flags plan Task 0 found stable and on in
+ * codex-cli 0.160.0 outside the spec's list (browser_use .. tool_suggest; browser_use_full_cdp_access is moot once
+ * browser_use is off). Like the others, each is sent only when the installed `codex features list` names it.
+ */
+export const CODEX_SINGLE_CALL_FEATURES = ["apps", "browser_use", "browser_use_external", "code_mode_host", "computer_use", "goals", "hooks", "image_generation", "in_app_browser",
+  "multi_agent", "plugins", "realtime_conversation", "remote_plugin", "shell_tool", "skill_search", "skip_host_skill_discovery", "sleep_tool", "tool_suggest", "unified_exec",
+  "view_image"] as const;
 const CODE = "agent-catalog-unavailable";
 const positiveSafe = (value: unknown): number | null => (typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null);
 

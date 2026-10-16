@@ -12,10 +12,12 @@ import type { InstallationV1 } from "./types.js";
  * Every-agent requirement chain (Orca spec 2026-10-15 §2.5 last row, §6.1; values from plan Task 0 on codex-cli 0.160.0).
  * `features.plugins=false` is here, not only among the tool flags: Task 0 measured that it removes the
  * <recommended_plugins> block a linked config.toml injects (`features.recommended_plugins=false` does not).
+ * Final-review I4 (Orca session a852f96a, 2026-10-16): `notify=[]`, so a `notify` program in the linked config.toml is
+ * never run by a single call (zero-cost check on codex-cli 0.160.0: `debug prompt-input` with it RC 0, empty stderr).
  */
 export const CODEX_SINGLE_CALL_CONFIG: readonly string[] = [
   "include_permissions_instructions=false", "include_apps_instructions=false", "include_collaboration_mode_instructions=false",
-  "include_environment_context=false", "project_doc_max_bytes=0", "features.plugins=false",
+  "include_environment_context=false", "project_doc_max_bytes=0", "features.plugins=false", "notify=[]",
 ];
 
 /**

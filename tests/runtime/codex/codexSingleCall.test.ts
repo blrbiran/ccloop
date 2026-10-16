@@ -34,9 +34,11 @@ const configValues = (argv: string[]) => argv.flatMap((arg, i) => (arg === "-c" 
 type SingleEnv = { HOME: string; CODEX_HOME: string; authIsLink: boolean };
 const singleEnv = (marker: string): SingleEnv => JSON.parse(readFileSync(`${marker}.single-env.json`, "utf8")) as SingleEnv;
 const mode = async (path: string) => (await lstat(path)).mode & 0o777;
+// Final-review I4 (Orca session a852f96a, 2026-10-16): `notify=[]` joins the isolation keys, so a linked config.toml's
+// notify program never runs.
 const ISOLATION = [
   "include_permissions_instructions=false", "include_apps_instructions=false", "include_collaboration_mode_instructions=false",
-  "include_environment_context=false", "project_doc_max_bytes=0", "features.plugins=false",
+  "include_environment_context=false", "project_doc_max_bytes=0", "features.plugins=false", "notify=[]",
 ];
 
 describe("codex single call (spec §6.1)", { timeout: 30_000 }, () => {
@@ -56,9 +58,14 @@ describe("codex single call (spec §6.1)", { timeout: 30_000 }, () => {
     expect(argv.slice(0, 7)).toEqual(["exec", "--json", "--ephemeral", "--color", "never", "--skip-git-repo-check", "--model"]);
     expect(argv[argv.indexOf("--sandbox") + 1]).toBe("read-only");
     expect(argv[argv.indexOf("-C") + 1]).toBe(w.request.cwd);
+    // Final-review I4 (Orca session a852f96a, 2026-10-16): the remaining tool-like flags Task 0 found on in codex-cli 0.160.0
+    // are off too; the fake's browser_use_full_cdp_access is listed but not ccloop's, so it is never sent.
     expect(configValues(argv)).toEqual([...ISOLATION,
-      "features.apps=false", "features.image_generation=false", "features.multi_agent=false",
-      "features.shell_tool=false", "features.skip_host_skill_discovery=true", "features.unified_exec=false", "features.view_image=false",
+      "features.apps=false", "features.browser_use=false", "features.browser_use_external=false", "features.code_mode_host=false",
+      "features.computer_use=false", "features.goals=false", "features.hooks=false", "features.image_generation=false", "features.in_app_browser=false",
+      "features.multi_agent=false", "features.realtime_conversation=false", "features.remote_plugin=false", "features.shell_tool=false",
+      "features.skill_search=false", "features.skip_host_skill_discovery=true", "features.sleep_tool=false", "features.tool_suggest=false",
+      "features.unified_exec=false", "features.view_image=false",
     ]);
     expect(argv.at(-1)).toBe("-");
   });
@@ -205,9 +212,11 @@ describe("codex single call (spec §6.1)", { timeout: 30_000 }, () => {
   // Codex refuses an unknown flag ("Unknown feature flag"), so only the flags the installed version lists are sent.
   it("C8.4b: turns off only the tool flags the installed codex lists", async () => {
     const w = await world();
-    await writeFile(`${w.marker}.catalog.json`, JSON.stringify({ features: ["apps", "browser_use", "shell_tool"] }));
+    // Final-review I4 (Orca session a852f96a, 2026-10-16): browser_use is ccloop's now, so the listed-but-not-ccloop's flag
+    // is browser_use_full_cdp_access; hooks stands for the I4 additions.
+    await writeFile(`${w.marker}.catalog.json`, JSON.stringify({ features: ["apps", "browser_use_full_cdp_access", "hooks", "shell_tool"] }));
     await w.adapter.singleCall!(w.request);
-    expect(configValues(lastArgv(w.marker))).toEqual([...ISOLATION, "features.apps=false", "features.shell_tool=false"]);
+    expect(configValues(lastArgv(w.marker))).toEqual([...ISOLATION, "features.apps=false", "features.hooks=false", "features.shell_tool=false"]);
   });
 
   it.each([
@@ -330,7 +339,7 @@ describe("codex single call (spec §6.1)", { timeout: 30_000 }, () => {
     const call = singleEnv(w.marker);
     expect([probe.HOME, probe.CODEX_HOME]).toEqual([call.HOME, call.CODEX_HOME]);
     expect(probe.c).toEqual(["include_permissions_instructions=false", "include_apps_instructions=false", "include_collaboration_mode_instructions=false",
-      "include_environment_context=false", "project_doc_max_bytes=0", "features.plugins=false"]);
+      "include_environment_context=false", "project_doc_max_bytes=0", "features.plugins=false", "notify=[]"]);
   });
 
   // Fix round 3 (promoted minor, plan issue 5): only a single call needs the MCP list, so a list that cannot be read keeps
@@ -341,7 +350,8 @@ describe("codex single call (spec §6.1)", { timeout: 30_000 }, () => {
     const catalog = await readAgentCatalog(w.config.installation);
     expect(catalog).toMatchObject({ source: "probe", catalogError: null, codexMcpServers: null });
     expect(catalog.rows?.map((row) => [row.selector, row.contextWindow])).toEqual([["gpt-6-sol", 272000], ["gpt-6-luna", 272000], ["gpt-reserve", 272000]]);
-    expect(catalog.codexFeatures).toHaveLength(8);
+    // Final-review I4 (Orca session a852f96a, 2026-10-16): the fake lists 21 flags, 20 of them ccloop's.
+    expect(catalog.codexFeatures).toHaveLength(20);
     expect(existsSync(join(process.env.CCLOOP_CACHE_DIR!, entryFileName(await catalogKey(w.config.installation, process.env))))).toBe(false);
   });
 

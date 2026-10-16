@@ -21,7 +21,10 @@ describe("fake catalog answers (spec 2026-10-15 §9)", () => {
     const features = spawnSync(process.execPath, [FAKE_CODEX, "integration", marker, "features", "list"], { encoding: "utf8" });
     expect(features.status).toBe(0);
     expect(features.stdout.split("\n").filter(Boolean).map((line) => line.split(/\s+/)[0]))
-      .toEqual(["apps", "browser_use", "image_generation", "multi_agent", "plugins", "shell_tool", "skip_host_skill_discovery", "unified_exec", "view_image"]);
+      // Final-review I4 (Orca session a852f96a, 2026-10-16): the fake lists every flag ccloop turns off plus one it does not send.
+      .toEqual(["apps", "browser_use", "browser_use_external", "browser_use_full_cdp_access", "code_mode_host", "computer_use", "goals", "hooks", "image_generation",
+        "in_app_browser", "multi_agent", "plugins", "realtime_conversation", "remote_plugin", "shell_tool", "skill_search", "skip_host_skill_discovery", "sleep_tool",
+        "tool_suggest", "unified_exec", "view_image"]);
     spawnSync(process.execPath, [FAKE_CODEX, "integration", marker, "--version"], { encoding: "utf8" });
     expect(lines(`${marker}.catalog-calls`)).toEqual(["debug-models", "features-list"]);
     expect(lines(`${marker}.version-calls`)).toEqual(["version"]);

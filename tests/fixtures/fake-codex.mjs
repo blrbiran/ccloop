@@ -11,7 +11,9 @@ const mode=process.argv[2], marker=process.argv[3];
 // `debug models` and `features list` answer the catalog and the feature list and append `debug-models` / `features-list`
 // to `<marker>.catalog-calls`, before anything below runs, so `<marker>.argv` and `<marker>.calls` never see them.
 // `<marker>.catalog.json` ({rows?, sleepMs?, exitCode?, stderr?}) overrides the rows, sleeps first, or fails.
-// Task 8 of that plan: its `features?` (a list of flag names) overrides the flags `features list` prints. Task 8 fix
+// Task 8 of that plan: its `features?` (a list of flag names) overrides the flags `features list` prints (final-review I4:
+// the default is every flag ccloop turns off, as codex-cli 0.160.0 lists them, plus browser_use_full_cdp_access, which
+// ccloop does not send). Task 8 fix
 // round 2: `mcp list --json` appends `mcp-list` and prints `mcp?` (default []) as codex-cli 0.160.0's JSON array of
 // `{name, enabled, ...}` objects; `mcpExitCode?` fails that call alone. Fix round 3 (paid check P1b): `mcp` are the
 // servers the linked config.toml defines; `mcpPlugins?` are servers the person's own CODEX_HOME adds (~/.codex/plugins),
@@ -37,7 +39,7 @@ if(catalogCall!==null&&!process.argv.includes("exec")) {
     const rows=script.rows??[{slug:"gpt-6-sol",context_window:272000,visibility:"list"},{slug:"gpt-6-luna",context_window:272000,visibility:"list"},{slug:"gpt-reserve",context_window:272000,visibility:"hide"}];
     await new Promise(resolve=>process.stdout.write(JSON.stringify({models:rows})+"\n",resolve));
   } else {
-    const flags=script.features??["apps","browser_use","image_generation","multi_agent","plugins","shell_tool","skip_host_skill_discovery","unified_exec","view_image"];
+    const flags=script.features??["apps","browser_use","browser_use_external","browser_use_full_cdp_access","code_mode_host","computer_use","goals","hooks","image_generation","in_app_browser","multi_agent","plugins","realtime_conversation","remote_plugin","shell_tool","skill_search","skip_host_skill_discovery","sleep_tool","tool_suggest","unified_exec","view_image"];
     await new Promise(resolve=>process.stdout.write(flags.map(flag=>`${flag.padEnd(40)} stable             true`).join("\n")+"\n",resolve));
   }
   process.exit(0);

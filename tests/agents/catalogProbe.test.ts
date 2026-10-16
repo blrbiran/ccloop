@@ -142,7 +142,11 @@ describe("codex catalog decode (spec §3, §6.1)", () => {
         { selector: "gpt-6-luna", provider: "codex", contextWindow: 272000, maxTokens: null, listed: true },
         { selector: "gpt-reserve", provider: "codex", contextWindow: 272000, maxTokens: null, listed: false },
       ],
-      features: ["apps", "image_generation", "multi_agent", "plugins", "shell_tool", "skip_host_skill_discovery", "unified_exec", "view_image"],
+      // Final-review I4 (Orca session a852f96a, 2026-10-16): the off-list grew by the tool-like flags Task 0 found on in
+      // codex-cli 0.160.0; the fake also lists browser_use_full_cdp_access, which is not ccloop's and is dropped. Still exact.
+      features: ["apps", "browser_use", "browser_use_external", "code_mode_host", "computer_use", "goals", "hooks", "image_generation", "in_app_browser",
+        "multi_agent", "plugins", "realtime_conversation", "remote_plugin", "shell_tool", "skill_search", "skip_host_skill_discovery", "sleep_tool", "tool_suggest",
+        "unified_exec", "view_image"],
       // Ruling: rewritten under the human's blanket naming (Orca session a852f96a, 2026-10-16) -- Task 8 fix round 2 adds the
       // MCP server names (`codex mcp list --json`; the fake lists none by default) to the codex catalog read. Still exact.
       mcpServers: [],
