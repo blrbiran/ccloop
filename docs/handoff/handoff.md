@@ -111,7 +111,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 | 挂账 | 现场 |
 |---|---|
-| **OMP 单次调用（estimate／clarify／split）** | 已在 main；2026-10-15 真 provider 各跑一次（见「当前状态」）：传输链路通过，estimate 的答案质量（同一任务列两遍）未验收。遗留：provider 层首 token 前重试关不掉；`omitMaxOutputTokens` 模型与 OpenRouter 不发上限（后者按名拒）。「spawn 时目录探测不在时限与 abort 内」已在分支 `codex/every-agent-chain` 修（`feat(agents): catalog probes honour the caller's deadline…`），未合 |
+| **OMP 单次调用（estimate／clarify／split）** | 已在 main；2026-10-15 真 provider 各跑一次（见「当前状态」）：传输链路通过，estimate 的答案质量（同一任务列两遍）未验收。遗留：provider 层首 token 前重试关不掉；`omitMaxOutputTokens` 模型与 OpenRouter 不发上限（后者按名拒）。「spawn 时目录探测不在时限与 abort 内」已修（`feat(agents): catalog probes honour the caller's deadline…`，已在 main） |
 | **OMP 其余延期项** | OMP 子代理、交互式审批桥、omp 的 saved-result 恢复（目前仅 codex）；OMP skills 的**真实 provider 验收**未做（OMP 本体已在 2026-10-12～13、10-15、10-16 真跑过，见 Orca handoff §3.2）。Git 忽略文件与主机副作用不在 execute 检查范围 |
 | **`ClaudePhaseAborted` 历史交错（B4）** | runner 重复发布竞态与无效答案中止分支已修；精确的历史交错**仍未证成** ⇒ 不能据此宣称真实 provider 稳定性。详见 Orca handoff |
 | **Codex 429（外部测试反馈 45–50、62）** | 已合进 main。剩：5xx 与其他措辞无样本未识别；Orca 侧 `codex-rate-limited` 文案已在 Orca main；可用 `gpt-6-luna` 做一次真 Codex 回归（付费，先问人） |
