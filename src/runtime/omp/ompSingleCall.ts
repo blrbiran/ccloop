@@ -41,8 +41,10 @@ export async function runOmpSingleCall(config: MaterializedAgentConfigV1, reques
   // Every-agent requirement chain (Orca spec 2026-10-15 §4.1, §4.3, R6, R8): the re-check reads through the same cache key
   // and the call's own deadline and signal; a provider-side cap change without a config change is the accepted risk.
   // The worker's stderr is not the control wire, so it says whether the cache missed or the probe failed (plan issue 3).
+  // Spec R6: the re-check lives inside the call's deadline, computed once; the spawn gets only what the re-check left.
+  const deadline = Date.now() + Math.min(request.timeoutMs, config.installation.timeoutMs);
   const catalog = await readAgentCatalog(config.installation, {
-    deadline: Date.now() + Math.min(request.timeoutMs, config.installation.timeoutMs), signal: request.signal,
+    deadline, signal: request.signal,
     log: (line) => { process.stderr.write(`${line}\n`); },
   });
   if (catalog.catalogError !== null || catalog.rows === null) throw new OmpSingleCallRefused("omp-single-call-unavailable", `catalog ${catalog.catalogError ?? "absent"}`);
@@ -65,7 +67,7 @@ export async function runOmpSingleCall(config: MaterializedAgentConfigV1, reques
     "--system-prompt", systemPath, "--cwd", request.cwd, "--config", overlayPath];
   return runOmpProcess(config, {
     args, prompt: request.prompt, cwd: request.cwd, evidenceDir, phase: "single-call",
-    timeoutMs: Math.min(request.timeoutMs, config.installation.timeoutMs),
+    timeoutMs: Math.max(1, deadline - Date.now()),
     abortSignal: request.signal, onProcessRegistered: request.onProcessRegistered,
   });
 }

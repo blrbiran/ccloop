@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAgentCatalog } from "../../../src/agents/agentCatalog.js";
 import type { MaterializedAgentConfigV1 } from "../../../src/agents/types.js";
 import { OmpAdapter } from "../../../src/runtime/omp/ompAdapter.js";
@@ -17,6 +17,19 @@ const FAKE_OMP = resolve("tests/fixtures/fake-omp.mjs");
 const SCHEMA = { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false };
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
+// Every-agent requirement chain (Task 4 fix round 1): the spawn-time re-check prints `ccloop-agent-catalog:` lines on the
+// worker's stderr (plan issue 3); in-process calls here would print them into the test output, so each test captures them
+// in `catalogLines` and passes every other write through.
+let catalogLines: string[] = [];
+beforeEach(() => {
+  catalogLines = [];
+  const write = process.stderr.write.bind(process.stderr) as (...args: unknown[]) => boolean;
+  vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown, ...rest: unknown[]) => {
+    if (String(chunk).startsWith("ccloop-agent-catalog:")) { catalogLines.push(String(chunk)); return true; }
+    return write(chunk, ...rest);
+  }) as typeof process.stderr.write);
+});
+afterEach(() => { vi.restoreAllMocks(); });
 
 async function ompWorld(options: { catalog?: unknown; single?: unknown; installationTimeoutMs?: number } = {}) {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-omp-single-")));
@@ -249,6 +262,26 @@ describe("OmpAdapter.singleCall (§3.3, §3.3.7)", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(observedTokensOf(failure)).toBe(0);
     expect(existsSync(`${w.marker}.calls`)).toBe(false);
+    expect(catalogLines).toEqual([
+      expect.stringMatching(/^ccloop-agent-catalog: miss omp [0-9a-f]{12}\n$/),
+      expect.stringMatching(/^ccloop-agent-catalog: probe-failed omp omp-model-catalog-unavailable: timeout \d+ms · stage timeout · elapsedMs \d+\n$/),
+    ]);
+  }, 20_000);
+
+  // Task 4 fix round 1 (spec R6): the re-check and the call share ONE deadline. A cold re-check that takes over 2 s of a 6 s
+  // limit leaves the hanging call the rest, so the whole call ends near 6 s -- not 2 s + another full 6 s (~8.5 s).
+  it("stops a call after a slow cold re-check at the original deadline, not a fresh full limit", async () => {
+    const w = await ompWorld({ single: { hang: true }, installationTimeoutMs: 30_000 });
+    await writeFile(`${w.marker}.models.json`, JSON.stringify({ sleepMs: 2_000 }));
+    const started = Date.now();
+    const failure = await failureOf(new OmpAdapter(w.config).singleCall(w.request({ timeoutMs: 6_000 })));
+    const elapsed = Date.now() - started;
+    expect((failure as Error).message).toMatch(/^omp-timeout: /);
+    expect(observedTokensOf(failure)).toBeNull();
+    expect(await readFile(`${w.marker}.calls`, "utf8")).toBe("single-call\n");
+    expect(elapsed).toBeGreaterThanOrEqual(5_900);
+    expect(elapsed).toBeLessThan(7_500);
+    expect(catalogLines).toEqual([expect.stringMatching(/^ccloop-agent-catalog: miss omp [0-9a-f]{12}\n$/)]);
   }, 20_000);
 });
 
