@@ -1,4 +1,4 @@
-# ccloop Handoff — 「每个 agent 都能跑需求链」一轮（目录文件缓存、`agents models`、codex 软单次调用、claude 200000）在分支 `codex/every-agent-chain` 上、等人 push／合；attempt 提交关钩子与 OMP single-call 已在 main；Orca 关联见文末单节
+# ccloop Handoff — 「每个 agent 都能跑需求链」一轮（目录文件缓存、`agents models`、codex 软单次调用、claude 200000）已在 main（人已合推，Orca 已 repin）；attempt 提交关钩子与 OMP single-call 也在 main；Orca 关联见文末单节
 
 > ⚠️ **一律自查，别信本文。** 只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是固定历史值。
 > *** **本文不写任何当前哈希** —— 指代某一笔引**提交主题行**（`git log --grep`），指代材料引**路径**。 ***
@@ -42,7 +42,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态（Orca 会话 `a852f96a`，2026-10-15～16）
 
-- ⛔ **等人 push**：分支 `codex/every-agent-chain`（工作树 `/Users/biran/code/skills/orca/ccloop-wt/every-agent-chain`，从 main 切，**没 push**），main `--ff-only` 到它，push main。命令与顺序在 Orca handoff §4.1 第 1 条（H1）；推完后 Orca 才能 repin（Orca 计划 Task 15）。依据：Orca spec `docs/superpowers/specs/2026-10-15-every-agent-requirement-chain-design.md`（**末尾 §11 优先于正文**）＋计划 `docs/superpowers/plans/2026-10-15-every-agent-requirement-chain.md` Task 1–9；台账在 Orca 仓 `.superpowers/sdd/2026-10-15-every-agent-requirement-chain/progress.md`（Orca 分支 `codex/every-agent-chain` 上入库）。
+- ✅ **已合推**（Orca 会话 `4de777f4`，2026-10-17 `ls-remote` 现核）：分支 `codex/every-agent-chain` 已由人 `--ff-only` 合进 main 并推；Orca 已 repin 到它（主题行 `chore(deps): repin ccloop to 02cbacc…`，repin 门过）。其后 main 上多一笔名单：`test(roster): add the outer-watchdog load flake to the known reds (ERRATUM)`（人裁只加 `codexAdapter`「outer watchdog kills…」，`verifySavedResult`「r1 command interruption…」不加：下次红先按 `systematic-debugging` 在 clone 里查）。依据：Orca spec `docs/superpowers/specs/2026-10-15-every-agent-requirement-chain-design.md`（**末尾 §11 优先于正文**）＋计划 `docs/superpowers/plans/2026-10-15-every-agent-requirement-chain.md` Task 1–9；台账在 Orca 仓 `.superpowers/sdd/2026-10-15-every-agent-requirement-chain/progress.md`（已在 Orca main）。
 - **分支内容**（按主题行）：
   - 夹具：`test(fixtures): fake codex and omp answer and count catalog probes`。
   - **目录与 `--version` 的文件缓存**：`feat(agents): cache file for agent catalogs, keyed by binary and config stamps`、`fix(agents): stamp the config files omp actually reads for a named profile`、`feat(agents): read every catalog and version through the file cache`。`$CCLOOP_CACHE_DIR`（缺省 `~/.cache/ccloop`），0700／0600 显式给，键含二进制与配置 stamp，30 分钟；版本号也缓存（人裁 Orca 计划第 8 条）；检测、`agents validate`、`updates.ts` 的版本探测与 Apply 复核**按设计保持实时**。
@@ -103,7 +103,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ### 待人做的
 
-- 删归人（H1 之后；删前 `merge-base --is-ancestor` 现核）：`codex/attempt-commit-no-hooks`（`ccloop-wt/attempt-commit-no-hooks`，已是 main 的祖先）；`codex/every-agent-chain`（`ccloop-wt/every-agent-chain`，其 `node_modules` 是指主仓的软链，`worktree remove --force` 只删链）。上一版列的两条 prunable 记录、三条已合分支与工作树（`omp-updates-timeout`、`omp-single-call`、`omp-catalog-diagnostics`）以及四个孤儿 `worker.js`（6165、14693、23125、66086）本会话（Orca `a852f96a`）现核都已不在（`worktree list`、`branch -vv`、`ps -p`）。
+- 无。上一版列的删除（`codex/attempt-commit-no-hooks`、`codex/every-agent-chain` 及其工作树）人已做完（Orca 会话 `4de777f4` 现核 `branch -vv`、`worktree list`）。
 
 ---
 
@@ -155,8 +155,8 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-16，Orca 会话 `a852f96a`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-17，Orca 会话 `4de777f4`）
 
-- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md` 的 §3.3 与 §4（在 Orca 分支 `codex/every-agent-chain` 上，人合进 main 后可见）。
-- 本仓分支 `codex/every-agent-chain` 是 Orca 计划 Task 1–9（见上「当前状态」）；Orca 同名分支是 Task 10–14＋终审修复，**仍钉旧 pin**（历史 `71053e3`，上一轮 `codex/attempt-commit-no-hooks` 合推后 repin 的）。顺序：人 push 本仓（H1）→ Orca agent repin 到推上去的 sha 并跑 repin 门（Task 15）→ 人合推 Orca（H2）。Orca 分支在旧 pin 上运行期安全但模型框全不可用 ⇒ 与 repin 同落（Orca spec §8.2）。
+- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md` 的 §3.3 与 §4。
+- 本仓 Task 1–9（见上「当前状态」）与 Orca Task 10–15 都已在两仓 main；Orca 钉 `02cbacc`（`scripts/pin-ccloop.mjs` 现核）。⚠️ Orca 主仓／服务用的是 `node_modules` 里装的 ccloop：合进新 pin 后要 `npm ci`，只 `npm run build` 不会更新它（实测曾停在 `3069dbf`）。
 - 本轮零成本实测与真跑的结论在 Orca spec §2 与 §11（omp stdin 非 TTY 不卡；codex 仍无单次输出上限；**本仓现有 codex phase 调用也带着操作者的 skills**，登记未修）。
