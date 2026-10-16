@@ -47,6 +47,15 @@
 // when the observation file becomes unwritable" (a timing budget too tight under load, plus an rm -> mkdir race with
 // the watchdog's tick). The roster sizes stated above are history; the set below is the roster. See the ledger
 // .superpowers/sdd/2026-10-02-crash-resume-and-orphan-reaping/progress.md, section "Human ruling 139". ***
+//
+// *** ERRATUM (HUMAN RULING 2026-10-16, Orca session 4de777f4: "同意按你的建议走") -- one name joins the roster:
+// "isolated Codex acceptance harness > outer watchdog kills a previously observed TERM-ignoring detached Codex". Its
+// budgets are wall-clock (1500 ms marker poll, 1800 ms outer timeout, 1000 ms reap poll), not a 5000 ms test timeout;
+// it went red in gate runs 2 and 3 of the every-agent chain round and passed 3/3 alone each time (Orca
+// docs/handoff/known-load-flakes.md, ccloop section). The same ruling keeps verifySavedResult "r1 command
+// interruption modified=true..." OFF the roster: it fails on an assertion, not a timeout, once went 2/3 red alone, and
+// its modified=false sibling has gone red too -- a possible real race in saved-result recovery, which a by-name
+// roster entry would wave through. ***
 import { readFileSync } from "node:fs";
 
 const KNOWN_REDS = new Set([
@@ -62,6 +71,8 @@ const KNOWN_REDS = new Set([
   // *** ERRATUM (HUMAN RULING 139): the codexWatchdog pair is removed; see the header ERRATUM. ***
   "isolated Codex acceptance harness > succeeds only with real controller, three phases and published answer",
   "accepts the controller's zero-clamped soft budget and records the overrun",
+  // Human ruling 2026-10-16 (see the header ERRATUM): a wall-clock budget under load, not a 5000 ms timeout.
+  "isolated Codex acceptance harness > outer watchdog kills a previously observed TERM-ignoring detached Codex",
 ]);
 
 const reportPath = process.argv[2];
