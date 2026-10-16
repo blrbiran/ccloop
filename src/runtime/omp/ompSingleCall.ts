@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ompSingleCallExecution, readOmpCatalog } from "../../agents/ompModels.js";
+import { readAgentCatalog } from "../../agents/agentCatalog.js";
+import { ompSingleCallExecution } from "../../agents/ompModels.js";
 import type { CatalogRowV1, MaterializedAgentConfigV1 } from "../../agents/types.js";
 import type { ModelUsageV1 } from "../../control/usage.js";
 import { SingleCallOutputInvalid, type SingleCallRequest, type SingleCallResult, type UsageEvidence } from "../types.js";
@@ -32,11 +33,20 @@ export class OmpSingleCallRefused extends Error {
 /**
  * §3.3.1-§3.3.4: re-reads the selected catalog row immediately before spawning and runs only when it still answers "v1"
  * and its cap is at most the request's maxOutputTokens; then one `omp -p` with tools, rules and LSP off under the overlay.
+ *
+ * *** ERRATUM (Orca spec 2026-10-15 §4.1, R8) -- "re-reads" now reads through the catalog cache (30-minute lifetime,
+ * config-stamped key); a cap raised on the provider side without a config change is not seen until the entry expires. ***
  */
 export async function runOmpSingleCall(config: MaterializedAgentConfigV1, request: SingleCallRequest): Promise<OmpPhaseOutcome> {
-  let rows: CatalogRowV1[];
-  try { rows = await readOmpCatalog(config.installation); }
-  catch (error) { throw new OmpSingleCallRefused("omp-single-call-unavailable", `catalog ${error instanceof Error ? error.message : String(error)}`); }
+  // Every-agent requirement chain (Orca spec 2026-10-15 §4.1, §4.3, R6, R8): the re-check reads through the same cache key
+  // and the call's own deadline and signal; a provider-side cap change without a config change is the accepted risk.
+  // The worker's stderr is not the control wire, so it says whether the cache missed or the probe failed (plan issue 3).
+  const catalog = await readAgentCatalog(config.installation, {
+    deadline: Date.now() + Math.min(request.timeoutMs, config.installation.timeoutMs), signal: request.signal,
+    log: (line) => { process.stderr.write(`${line}\n`); },
+  });
+  if (catalog.catalogError !== null || catalog.rows === null) throw new OmpSingleCallRefused("omp-single-call-unavailable", `catalog ${catalog.catalogError ?? "absent"}`);
+  const rows: CatalogRowV1[] = catalog.rows;
   const row = rows.find((candidate) => candidate.selector === config.selection.model);
   if (row === undefined || row.maxTokens === null || ompSingleCallExecution(row) !== "v1") throw new OmpSingleCallRefused("omp-single-call-unavailable", config.selection.model);
   if (row.maxTokens > request.maxOutputTokens) throw new OmpSingleCallRefused("omp-single-call-cap-exceeded", `catalog maxTokens ${row.maxTokens} > maxOutputTokens ${request.maxOutputTokens}`);

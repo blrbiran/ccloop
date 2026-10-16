@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
 import { draftCommandForCandidate, draftInstallationForCandidate, findAgentCandidatePaths } from "./detect.js";
 import { probeVersion } from "./materialize.js";
-import { readOmpModels } from "./ompModels.js";
+import { readAgentCatalog } from "./agentCatalog.js";
 import { assertAgentsTableLocation, parseAgentsTable, readAgentsTableSnapshot } from "./table.js";
 import { AgentError, type AgentsTableV1, type InstallationV1 } from "./types.js";
 import { assertUpdatesRoot, cleanupOperationTemporary, readOwnedJson, replaceTableDurably, sha256, withTableUpdateLock, writeOwnedJson } from "./updateReceipt.js";
@@ -136,10 +136,13 @@ function sameRequest(a: ApplyAgentDetection, b: ApplyAgentDetection): boolean {
   return a.opId === b.opId && a.requestDigest === b.requestDigest && a.previewId === b.previewId && a.baseTableHash === b.baseTableHash && JSON.stringify(a.acceptedChangeIds) === JSON.stringify(b.acceptedChangeIds);
 }
 
-async function ompUnavailable(installation: InstallationV1): Promise<DetectionChange["unavailableReason"]> {
+async function ompUnavailable(installation: InstallationV1, refresh = false): Promise<DetectionChange["unavailableReason"]> {
   if (installation.kind !== "omp") return undefined;
   try {
-    return (await readOmpModels(installation)).includes(installation.defaultModel as string) ? undefined : "omp-frozen-model-unavailable";
+    // Every-agent requirement chain (Orca spec 2026-10-15 §4.1): read through the catalog cache like every other reader.
+    const answer = await readAgentCatalog(installation, { refresh });
+    if (answer.catalogError !== null) return "omp-frozen-model-unavailable";
+    return answer.rows!.some((row) => row.selector === installation.defaultModel) ? undefined : "omp-frozen-model-unavailable";
   } catch { return "omp-frozen-model-unavailable"; }
 }
 
@@ -151,7 +154,9 @@ async function recheck(change: DetectionChange, probe: typeof probeVersion, tabl
   if (version !== change.version) stale();
   const old = table.installations[change.installationId];
   const selected = change.kind === "addition" ? change.installation : old === undefined ? undefined : { ...old, command: change.command as [string, ...string[]], version: change.version };
-  if (selected !== undefined && await ompUnavailable(selected)) fail("omp-frozen-model-unavailable");
+  // Every-agent requirement chain (Task 4 ruling, Orca session a852f96a): Apply is a deliberate owner action that must see the
+  // live catalog -- the cache key cannot see a provider-side or state change since preview -- so it re-probes.
+  if (selected !== undefined && await ompUnavailable(selected, true)) fail("omp-frozen-model-unavailable");
 }
 
 export async function applyAgentInstallations(tablePath: string, request: ApplyAgentDetection, deps: { probe?: typeof probeVersion } = {}): Promise<AgentDetectionReceipt> {

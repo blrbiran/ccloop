@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readAgentCatalog } from "../../../src/agents/agentCatalog.js";
 import type { MaterializedAgentConfigV1 } from "../../../src/agents/types.js";
 import { OmpAdapter } from "../../../src/runtime/omp/ompAdapter.js";
 import { OMP_SINGLE_CALL_OVERLAY, decodeOmpSingleCall, parseSingleCallObject, runOmpSingleCall } from "../../../src/runtime/omp/ompSingleCall.js";
@@ -222,14 +223,33 @@ describe("OmpAdapter.singleCall (§3.3, §3.3.7)", () => {
     expect(observedTokensOf(failure)).toBeNull();
   });
 
+  // Ruling: human named this criterion in Orca session a852f96a, 2026-10-16 — the spawn-time re-check shares the call's
+  // deadline (spec 2026-10-15 §4.3, R6), so a cold cache spends it; the cold case is pinned by the next criterion.
+  // Rewritten whole: the cache is warmed first, so the 300 ms belong to the call itself, which must be spawned and stopped.
   it("stops the call at the request's time limit when it is below the installation's", async () => {
     const w = await ompWorld({ single: { hang: true }, installationTimeoutMs: 30_000 });
+    expect((await readAgentCatalog(w.config.installation)).catalogError).toBeNull();
     const started = Date.now();
     const failure = await failureOf(new OmpAdapter(w.config).singleCall(w.request({ timeoutMs: 300 })));
     expect((failure as Error).message).toMatch(/^omp-timeout: /);
     expect(Date.now() - started).toBeLessThan(10_000);
     expect(observedTokensOf(failure)).toBeNull();
+    expect(await readFile(`${w.marker}.calls`, "utf8")).toBe("single-call\n");
   });
+
+  // Every-agent requirement chain (Orca spec 2026-10-15 §4.3, R6): on a cold cache the re-check's probes share the call's
+  // own deadline; a probe that outlives it refuses the call before anything is sent, naming stage and elapsed time.
+  it("refuses before spawning, naming stage and elapsed time, when a cold re-check outlives the call's deadline", async () => {
+    const w = await ompWorld({ installationTimeoutMs: 30_000 });
+    await writeFile(`${w.marker}.models.json`, JSON.stringify({ sleepMs: 10_000 }));
+    const started = Date.now();
+    const failure = await failureOf(runOmpSingleCall(w.config, w.request({ timeoutMs: 1_000 })));
+    expect(failure).toMatchObject({ code: "omp-single-call-unavailable", neverStarted: true });
+    expect((failure as Error).message).toMatch(/^omp-single-call-unavailable: catalog omp-model-catalog-unavailable: timeout \d+ms · stage timeout · elapsedMs \d+$/);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(observedTokensOf(failure)).toBe(0);
+    expect(existsSync(`${w.marker}.calls`)).toBe(false);
+  }, 20_000);
 });
 
 // Fix round 1 (Orca session 02f047f6, 2026-10-14). Real omp 18.10.1 (measured in Task 0) prints the assistant message

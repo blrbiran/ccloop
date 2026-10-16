@@ -1,9 +1,10 @@
-import { spawn } from "node:child_process";
 import { z } from "zod";
 import { canonicalHash } from "../control/protocol.js";
+import { readAgentCatalog } from "./agentCatalog.js";
 import { descriptorDefaults, getDescriptor } from "./registry.js";
 import { readOmpCatalog, readOmpModels } from "./ompModels.js";
 import { parseInstallation } from "./table.js";
+import { probeVersion } from "./versionProbe.js";
 import {
   AgentError,
   agentSelectionSchema,
@@ -14,51 +15,9 @@ import {
   type PartialSelectionV1,
 } from "./types.js";
 
-const VERSION_PATTERN = /\d+\.\d+\.\d+(?:-[\w.]+)?/;
-const VERSION_OUTPUT_LIMIT = 64 * 1024;
-const VERSION_TIMEOUT_MS = 10_000;
-
-/**
- * Runs `<command> --version` once (spec §4.2 / §12 C6) and answers the first `x.y.z[-tag]` in its stdout, or
- * null when it cannot be run, exits non-zero, prints no version, prints too much, or outlives the timeout.
- * Every-agent requirement chain (Orca spec 2026-10-15 §4.3): also null when the caller's `signal` aborts it.
- */
-export function probeVersion(command: string[], options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<string | null> {
-  return new Promise((resolve) => {
-    let settled = false;
-    let aborted = false;
-    let output = "";
-    // A private process group lets timeout/overflow reap descendants that a CLI leaves behind.
-    const child = spawn(command[0]!, [...command.slice(1), "--version"], { stdio: ["ignore", "pipe", "ignore"], env: process.env, detached: true });
-    const finish = (value: string | null): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", abortTree);
-      resolve(value);
-    };
-    const abortTree = (): void => {
-      if (aborted) return;
-      aborted = true;
-      if (child.pid !== undefined) {
-        try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
-      }
-    };
-    const timer = setTimeout(() => {
-      abortTree();
-    }, options.timeoutMs ?? VERSION_TIMEOUT_MS);
-    options.signal?.addEventListener("abort", abortTree, { once: true });
-    if (options.signal?.aborted) abortTree();
-    child.stdout.on("data", (chunk: Buffer) => {
-      output += chunk.toString("utf8");
-      if (output.length > VERSION_OUTPUT_LIMIT) {
-        abortTree();
-      }
-    });
-    child.on("error", () => finish(null));
-    child.on("close", (code) => finish(!aborted && code === 0 ? (VERSION_PATTERN.exec(output)?.[0] ?? null) : null));
-  });
-}
+// Every-agent requirement chain (Orca plan ruling P12): probeVersion lives in a leaf module so agentCatalog.ts can use it
+// without importing this file (and through it registry.ts's top-level DESCRIPTORS); re-exported for existing importers.
+export { probeVersion };
 
 /**
  * The canonical hash of the materialized config without the installation's `version` (Orca final review I-2, human
@@ -96,6 +55,8 @@ export async function resolveAgent(
     probeVersion?: (command: string[]) => Promise<string | null>;
     probeModels?: typeof readOmpModels;
     probeCatalog?: typeof readOmpCatalog;
+    deadline?: number;
+    signal?: AbortSignal;
   } = {},
 ): Promise<{ config: MaterializedAgentConfigV1; resolution: AgentResolutionV1 }> {
   if (partial.agent === undefined) throw new AgentError("agent-unselected");
@@ -110,7 +71,12 @@ export async function resolveAgent(
   };
   descriptor.validateSelection(selection);
   const config: MaterializedAgentConfigV1 = { schema: "ccloop-agent-config-v1", kind: installation.kind, installation, selection };
-  const observed = await (deps.probeVersion ?? probeVersion)(installation.command);
+  // Every-agent requirement chain (Orca spec 2026-10-15 §4.1): without injected probes, the version and the catalog come
+  // through the file cache under one deadline (plan issue 4); injected probes keep the uncached path older criteria use.
+  // A codex catalog that cannot be read is not a refusal here (plan issue 5): loop phases do not need it.
+  const injected = deps.probeVersion !== undefined || deps.probeModels !== undefined || deps.probeCatalog !== undefined;
+  const catalog = injected ? null : await readAgentCatalog(installation, { deadline: deps.deadline, signal: deps.signal });
+  const observed = catalog !== null ? catalog.version : await (deps.probeVersion ?? probeVersion)(installation.command);
   // Orca wave-2 review I-3 (2026-09-26): a probe that observed no version at all (spawn failure, non-zero exit, no
   // x.y.z, oversized output, timeout) may be transient, so it is NOT the named refusal agent-version-drift. It is a
   // plain Error: `control` exits 1 (Orca treats it as unknown and retries) and `run --agents` exits 1 with a message
@@ -125,10 +91,13 @@ export async function resolveAgent(
   // its cap. `probeModels` is the selector-only injection older criteria use; its rows declare no numbers.
   let row: CatalogRowV1 | undefined;
   if (installation.kind === "omp") {
-    const rows: CatalogRowV1[] = deps.probeCatalog !== undefined ? await deps.probeCatalog(installation)
-      : deps.probeModels !== undefined
-        ? (await deps.probeModels(installation)).map((selector) => ({ selector, provider: selector.slice(0, selector.indexOf("/")), contextWindow: null, maxTokens: null }))
-        : await readOmpCatalog(installation);
+    let rows: CatalogRowV1[];
+    if (catalog !== null) {
+      if (catalog.catalogError !== null) throw new Error(catalog.catalogError);
+      rows = catalog.rows!;
+    } else if (deps.probeCatalog !== undefined) rows = await deps.probeCatalog(installation);
+    else if (deps.probeModels !== undefined) rows = (await deps.probeModels(installation)).map((selector) => ({ selector, provider: selector.slice(0, selector.indexOf("/")), contextWindow: null, maxTokens: null }));
+    else rows = await readOmpCatalog(installation);
     row = rows.find((candidate) => candidate.selector === selection.model);
     if (row === undefined) throw new AgentError("agent-selection-invalid", `OMP model is not an exact catalog selector: ${selection.model}`);
   }
