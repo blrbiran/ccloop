@@ -102,12 +102,21 @@ describe("criterion 1: a warm cache spawns nothing (spec §4.1)", { timeout: 30_
     const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR };
     const run = spawnSync(process.execPath, [resolve("dist/cli.js"), "control", "capabilities", "--agents", t.path], { input: JSON.stringify({ agent: { agent: "omp" } }), env, encoding: "utf8" });
     expect(run.status, run.stderr).toBe(0);
-    expect((await readdir(join(home, ".cache", "ccloop", "agent-catalog"))).length).toBe(1);
+    // Corrected in Task 8 fix round 5 (criterion new on this branch, Task 4): since fix round 3 a codex catalog read also
+    // creates the single call's private homes, `codex-home/`, beside the entries, so entries and that dir are counted apart.
+    // An omp read writes one entry and no codex-home.
+    const listing = async (dir: string) => (await readdir(dir)).sort();
+    const defaultPath = join(home, ".cache", "ccloop", "agent-catalog");
+    expect(await listing(defaultPath)).toEqual([expect.stringMatching(/^[0-9a-f]{64}\.json$/)]);
     const redirected = join(t.dir, "redirected");
     const again = spawnSync(process.execPath, [resolve("dist/cli.js"), "control", "capabilities", "--agents", t.path], { input: JSON.stringify({ agent: { agent: "codex" } }), env: { ...env, CCLOOP_CACHE_DIR: redirected }, encoding: "utf8" });
     expect(again.status, again.stderr).toBe(0);
-    expect((await readdir(join(home, ".cache", "ccloop", "agent-catalog"))).length).toBe(1);
-    expect((await readdir(redirected)).length).toBe(1);
+    // The redirected codex read writes nothing under the default path; under CCLOOP_CACHE_DIR it writes one entry and,
+    // because it read a codex catalog, the codex-home dir.
+    expect(await listing(defaultPath)).toEqual([expect.stringMatching(/^[0-9a-f]{64}\.json$/)]);
+    const written = await listing(redirected);
+    expect(written.filter((name) => name !== "codex-home")).toEqual([expect.stringMatching(/^[0-9a-f]{64}\.json$/)]);
+    expect(written).toContain("codex-home");
   });
 
   it("reads the omp spawn-time re-check through the cache (R8)", async () => {
