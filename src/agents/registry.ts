@@ -42,8 +42,10 @@ export interface AgentDescriptor {
    * *** ERRATUM (OMP single call, Orca spec 2026-10-14 §3.2, Orca session 02f047f6, 2026-10-14) *** "when this kind can run" no longer holds for omp: its
    * answer is decided per selected catalog row (`row`, at resolution), not per kind -- "v1" only when that row declares
    * a maxTokens and its provider is not openrouter. Claude and codex still answer per kind.
+   *
+   * *** ERRATUM (Orca spec 2026-10-15 §6.1, R2) -- a third answer, "v1-soft": one structured call with tools off whose output bound the CLI cannot enforce (codex); Orca accepts it only in soft estimate mode. Codex now also answers per selected catalog row: "v1-soft" when the row is found, null otherwise. ***
    */
-  singleCallExecution(config: MaterializedAgentConfigV1, row?: CatalogRowV1): "v1" | null;
+  singleCallExecution(config: MaterializedAgentConfigV1, row?: CatalogRowV1): "v1" | "v1-soft" | null;
   /**
    * OMP single call (Orca spec 2026-10-14 §3.2): the output cap the kind's single call actually runs under, from its catalog
    * row; null means the call honours the request's maxOutputTokens. A sibling of singleCallExecution: never in the

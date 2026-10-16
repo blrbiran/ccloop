@@ -61,6 +61,22 @@ describe("criterion 1: a warm cache spawns nothing (spec §4.1)", { timeout: 30_
     }
   });
 
+  // Task 6 (Orca spec 2026-10-15 §6.1, only-add): codex answers v1-soft, so accept admits its single-call work; on a warm
+  // key the re-resolution inside accept reads the cache and spawns nothing.
+  it("accept for codex probes nothing on a warm key", async () => {
+    const t = await table();
+    for (const agent of ["codex"] as const) {
+      const { resolution } = await resolveAgent(t.table, { agent });
+      const before = spawns(t.codexMarker);
+      const sourceDir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-agent-catalog-accept-")));
+      const status = await acceptStart(singleCallEnvelope({ sourceDir, agent: resolution.selection, configHash: resolution.configHash }), {
+        agentsTablePath: t.path, workerCommand: [resolve("node_modules/.bin/tsx"), resolve("tests/fixtures/control-worker.mjs")], receiptTimeoutMs: 2_000,
+      });
+      expect(status.kind).toBe("accepted");
+      expect(spawns(t.codexMarker)).toBe(before);
+    }
+  });
+
   it("refresh skips the read, probes, and rewrites", async () => {
     const t = await table();
     const installation = t.table.installations.omp!;

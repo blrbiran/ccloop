@@ -38,23 +38,28 @@ export const codexDescriptor: AgentDescriptor = {
     assertModel(selection.model);
     assertContextOption(CONTEXT_OPTIONS, selection);
   },
-  capabilities() {
+  capabilities(_config, row) {
     return {
       usageObservation: "phase-end",
       budgetEnforcement: "soft",
       contextObservation: "unavailable",
       handoffControl: "durable",
       handoffExecution: "mechanical-in-run-v1",
-      contextWindowTokens: null,
+      // Every-agent requirement chain (Orca spec 2026-10-15 §6.1): the catalog row's context_window (config.toml's
+      // model_context_window wins), not scaled by effective_context_window_percent; no row => unknown.
+      contextWindowTokens: row?.contextWindow ?? null,
       requestBoundProof: null,
     };
   },
   // Orca single-call estimate (2026-09-27), Task 0 item 1 (codex-cli 0.155.1): no config caps the model's output, so a
   // single call cannot be bounded the way spec §4.4 asks.
-  singleCallExecution() {
-    return null;
+  // *** ERRATUM (Orca spec 2026-10-15 §6.1, ruling R2) -- the bound is now checked after the fact: codex answers "v1-soft"
+  // (one structured call, tools off, output bound not enforced by the CLI) when its catalog row is found. ***
+  singleCallExecution(_config, row) {
+    return row !== undefined ? "v1-soft" : null;
   },
   // OMP single call (Orca spec 2026-10-14 §3.2): codex runs no single call; nothing to bound.
+  // *** ERRATUM (Orca spec 2026-10-15 §6.1) -- codex runs a soft single call; it still has no cap, so this stays null. ***
   singleCallOutputCap() {
     return null;
   },

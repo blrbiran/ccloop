@@ -101,6 +101,9 @@ export async function resolveAgent(
     row = rows.find((candidate) => candidate.selector === selection.model);
     if (row === undefined) throw new AgentError("agent-selection-invalid", `OMP model is not an exact catalog selector: ${selection.model}`);
   }
+  // Every-agent requirement chain (Orca spec 2026-10-15 §6.1, plan issue 5): a codex row (any visibility) decides the
+  // window and the soft single call; a catalog that could not be read leaves both unknown rather than refusing.
+  if (installation.kind === "codex" && catalog !== null && catalog.rows !== null) row = catalog.rows.find((candidate) => candidate.selector === selection.model);
   return {
     config,
     resolution: {

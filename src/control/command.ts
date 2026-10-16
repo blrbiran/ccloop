@@ -95,7 +95,7 @@ const capabilitiesSchema = z.union([
       timeoutMs: z.number().int().positive().max(2_147_483_647),
       killGraceMs: z.number().int().nonnegative().max(60_000),
       capabilities: capabilityViewSchema,
-      singleCallExecution: z.enum(["v1"]).nullable(),
+      singleCallExecution: z.enum(["v1", "v1-soft"]).nullable(),
       // OMP single call (Orca spec 2026-10-14 §3.2). Optional, so an answer without it (a handler stand-in) still parses.
       singleCallOutputCap: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable().optional(),
     })

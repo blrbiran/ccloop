@@ -45,7 +45,9 @@ async function twoAgentTable() {
 }
 
 describe("single-call capability and its accept gate (Orca single-call estimate)", { timeout: 30_000 }, () => {
-  it("C1: answers singleCallExecution beside an unchanged seven-key view: v1 for claude, null for codex", async () => {
+  // Rewritten for the every-agent requirement chain (Orca spec 2026-10-15 §6.1, ruling R2; human named E2 on 2026-10-15):
+  // codex now answers "v1-soft" beside the view. Ruling: human named E2 in Orca session a852f96a, 2026-10-15.
+  it("C1: answers singleCallExecution beside the seven-key view: v1 for claude, v1-soft for codex", async () => {
     const { path, table } = await twoAgentTable();
     const claude = await runControlCommand(["capabilities", "--agents", path], JSON.stringify({ agent: { agent: "claude" } }));
     expect(claude.code, claude.stderr).toBe(0);
@@ -56,8 +58,12 @@ describe("single-call capability and its accept gate (Orca single-call estimate)
     const codex = await runControlCommand(["capabilities", "--agents", path], JSON.stringify({ agent: { agent: "codex" } }));
     expect(codex.code, codex.stderr).toBe(0);
     const codexResolution = (await resolveAgent(table, { agent: "codex" })).resolution;
-    expect(codexResolution.capabilities).toEqual(SEVEN);
-    expect(JSON.parse(codex.stdout)).toEqual({ protocol: 3, ...codexResolution, singleCallExecution: null });
+    // Rewritten for the every-agent requirement chain (Orca spec 2026-10-15 §6.1, ruling R2; human named E1 on 2026-10-15):
+    // codex's window is its fake catalog row's context_window (gpt-6-sol: 272000); the claude half is Task 7.
+    // Ruling: human named E1 in Orca session a852f96a, 2026-10-15.
+    expect(codexResolution.capabilities).toEqual({ ...SEVEN, contextWindowTokens: 272000 });
+    // Ruling: human named E2 in Orca session a852f96a, 2026-10-15.
+    expect(JSON.parse(codex.stdout)).toEqual({ protocol: 3, ...codexResolution, singleCallExecution: "v1-soft" });
   });
 
   it("C2: leaves the table view without it", async () => {
@@ -67,14 +73,35 @@ describe("single-call capability and its accept gate (Orca single-call estimate)
     expect(Object.keys(JSON.parse(view.stdout)).sort()).toEqual(["installations", "protocol"]);
   });
 
-  it("C3: accept refuses single-call work for an agent that answers null, by name and before anything is persisted", async () => {
+  // Rewritten for the every-agent requirement chain (Orca spec 2026-10-15 §6.1, ruling R2; human named E3 on 2026-10-15):
+  // the refusal now holds for a codex model the catalog does not list ("fixture"), whose resolution answers null.
+  // Ruling: human named E3 in Orca session a852f96a, 2026-10-15.
+  it("C3: accept refuses single-call work for an agent that answers null (a codex model the catalog does not list), by name and before anything is persisted", async () => {
     const { path, table } = await twoAgentTable();
     const sourceDir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-single-call-refused-")));
     dirs.push(sourceDir);
-    const { resolution } = await resolveAgent(table, { agent: "codex" });
+    const { resolution } = await resolveAgent(table, { agent: "codex", model: "fixture" });
     const envelope = singleCallEnvelope({ sourceDir, agent: resolution.selection, configHash: resolution.configHash });
     expect(await runControlCommand(["accept", "--agents", path], JSON.stringify(envelope))).toEqual({ code: 2, stdout: "", stderr: "single-call-unsupported\n" });
     expect(await readdir(sourceDir)).toEqual([]);
+  });
+
+  // Every-agent requirement chain (Orca spec 2026-10-15 §6.1, R2; only-add): a codex catalog model answers v1-soft, so
+  // accept admits its single-call work exactly as C4 admits claude's.
+  it("C3b: accept admits codex single-call work for a catalog model (v1-soft)", async () => {
+    const { path, table } = await twoAgentTable();
+    const sourceDir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-single-call-admitted-")));
+    dirs.push(sourceDir);
+    const { resolution } = await resolveAgent(table, { agent: "codex" });
+    expect(resolution.singleCallExecution).toBe("v1-soft");
+    const envelope = singleCallEnvelope({ sourceDir, agent: resolution.selection, configHash: resolution.configHash });
+    const status = await acceptStart(envelope, {
+      agentsTablePath: path,
+      workerCommand: [resolve("node_modules/.bin/tsx"), resolve("tests/fixtures/control-worker.mjs")],
+      receiptTimeoutMs: 2_000,
+    });
+    expect(status.kind).toBe("accepted");
+    expect(JSON.parse(await readFile(join(sourceDir, "control", "envelope.json"), "utf8"))).toEqual(envelope);
   });
 
   it("C4: accept admits single-call work for claude and seals its envelope", async () => {
