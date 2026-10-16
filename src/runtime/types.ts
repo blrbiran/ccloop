@@ -230,6 +230,9 @@ export interface RuntimeAdapter {
   /** Orca single-call estimate (2026-09-27): only a kind whose descriptor answers singleCallExecution "v1" has it.
    * *** ERRATUM (OMP single call, Orca spec 2026-10-14 §3.2, Orca session 02f047f6, 2026-10-14) -- the omp adapter has it while its
    * descriptor answers "v1" only for some catalog rows: for omp the answer is decided per selected catalog row (accept
-   * refuses the rest by the resolution) and re-checked at spawn, where the adapter refuses again. *** */
+   * refuses the rest by the resolution) and re-checked at spawn, where the adapter refuses again. ***
+   * *** ERRATUM (Orca spec 2026-10-15 §6.1, every-agent requirement chain Task 8, Orca session a852f96a, 2026-10-16) -- codex
+   * has it too: its descriptor answers "v1-soft" (not "v1") per catalog row; the adapter refuses again at spawn when the
+   * installed feature list is unknown. *** */
   singleCall?(request: SingleCallRequest): Promise<SingleCallResult>;
 }

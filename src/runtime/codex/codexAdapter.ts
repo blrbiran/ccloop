@@ -1,15 +1,22 @@
 import { normalizeExecutionFinal, ExecutionFormatFailure } from "../executionNormalizer.js";
 import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { readAgentCatalog } from "../../agents/agentCatalog.js";
+import type { InstallationV1 } from "../../agents/types.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
-import type { AttemptContext, RuntimeAdapter } from "../types.js";
+import type { AttemptContext, RuntimeAdapter, SingleCallRequest, SingleCallResult } from "../types.js";
+import { codexSingleCallArgs, codexSingleCallHome, decodeCodexSingleCall } from "./codexSingleCall.js";
 import { codexModelUsage, decodeCodexUsage, decodeCodexResult, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
 import { runCodexPhase, type PhaseOutcome } from "./runCodexPhase.js";
 import { classifyRateLimit } from "./rateLimit.js";
 
 /** Codex rate-limit spec §3.2: waits before each retry of a phase rejected by 429 before any work (three retries). */
 export const RATE_LIMIT_DELAYS_MS: readonly number[] = [30_000, 60_000, 120_000];
-export interface CodexAdapterOptions { rateLimitDelaysMs?: readonly number[] }
+export interface CodexAdapterOptions {
+  rateLimitDelaysMs?: readonly number[];
+  /** Every-agent requirement chain (Orca spec 2026-10-15 §6.1): the installation a single call re-reads its catalog for. */
+  installation?: InstallationV1;
+}
 
 /** Resolves after ms, or at once when the signal aborts (the next call then reports the abort through today's path). */
 function wait(ms: number, signal?: AbortSignal): Promise<void> {
@@ -33,9 +40,11 @@ export class CodexAdapter implements RuntimeAdapter {
   private readonly config: CodexConfig;
   // Agent selection (2026-09-26): extraEnv carries the installation's config directory (CODEX_HOME) to the CLI.
   private readonly rateLimitDelaysMs: readonly number[];
+  private readonly installation: InstallationV1 | undefined;
   constructor(rawConfig: unknown, private readonly extraEnv?: Record<string, string>, private readonly codexSkillsDir?: string, options: CodexAdapterOptions = {}) {
     this.config = parseCodexConfig(rawConfig);
     this.rateLimitDelaysMs = options.rateLimitDelaysMs ?? RATE_LIMIT_DELAYS_MS;
+    this.installation = options.installation;
   }
 
   /**
@@ -130,4 +139,33 @@ export class CodexAdapter implements RuntimeAdapter {
     }
   }
   verify(context: AttemptContext) { return this.phase("verify", buildVerifierPrompt(context), context); }
+
+  /**
+   * Every-agent requirement chain (Orca spec 2026-10-15 §6.1, R2, R9): one structured call, tools off, in a private HOME and
+   * CODEX_HOME. Codex cannot cap the output; the bound is checked by Orca after the fact. Refused before spawning when the
+   * installed feature list is unknown, since the tool flags could not be turned off (plan spec issue 9). As omp's (R6), the
+   * re-check lives inside the call's deadline, computed once; the spawn gets only what the re-check left.
+   */
+  async singleCall(request: SingleCallRequest): Promise<SingleCallResult> {
+    if (this.installation === undefined) throw new Error("single-call-unsupported");
+    const deadline = Date.now() + Math.min(request.timeoutMs, this.config.timeoutMs);
+    const catalog = await readAgentCatalog(this.installation, { deadline, signal: request.signal, log: (line) => { process.stderr.write(`${line}\n`); } });
+    if (catalog.codexFeatures === null) {
+      throw Object.assign(new Error(`codex-single-call-unavailable: ${catalog.catalogError ?? "no feature list"}`), { code: "codex-single-call-unavailable", neverStarted: true });
+    }
+    const features = catalog.codexFeatures;
+    // The installation's effective CODEX_HOME: its configDir, else an inherited absolute CODEX_HOME, else <HOME>/.codex.
+    const inherited = process.env.CODEX_HOME, home = process.env.HOME;
+    const source = this.installation.configDir ?? (inherited && isAbsolute(inherited) ? inherited : home && isAbsolute(home) ? join(home, ".codex") : null);
+    const isolated = await codexSingleCallHome({ runDir: request.runDir, sourceCodexHome: source, executable: this.config.command[0], env: process.env });
+    const context = { runDir: request.runDir, attempt: 1, worktreePath: request.cwd, abortSignal: request.signal, onProcessRegistered: request.onProcessRegistered,
+      state: { budgetSnapshot: { timeRemainingMs: Math.max(1, deadline - Date.now()) } } } as unknown as AttemptContext;
+    const outcome = await runCodexPhase(this.config, { phase: "single-call", prompt: request.prompt, context, spawn: {
+      schema: request.responseSchema, env: { ...process.env, HOME: isolated.home, CODEX_HOME: isolated.codexHome },
+      args: ({ schemaPath, finalPath }) => codexSingleCallArgs({ model: this.config.model, cwd: request.cwd, schemaPath, finalPath, features }),
+    } });
+    if (outcome.reason === "aborted") throw new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens);
+    if (outcome.reason !== "completed") throw Object.assign(new Error(`codex-${outcome.reason}: ${outcome.evidenceDir}`), { observedTokens: outcome.observedTokens });
+    return decodeCodexSingleCall(outcome.events, outcome.final, this.config.model, outcome.evidenceDir);
+  }
 }

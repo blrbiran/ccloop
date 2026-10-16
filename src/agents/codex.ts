@@ -65,6 +65,6 @@ export const codexDescriptor: AgentDescriptor = {
   },
   createAdapter(config, options) {
     const { configDir } = config.installation;
-    return new CodexAdapter(toCodexConfig(config), configDir === null ? undefined : { CODEX_HOME: configDir }, options?.codexSkillsDir);
+    return new CodexAdapter(toCodexConfig(config), configDir === null ? undefined : { CODEX_HOME: configDir }, options?.codexSkillsDir, { installation: config.installation });
   },
 };

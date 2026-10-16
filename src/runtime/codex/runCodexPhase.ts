@@ -8,7 +8,9 @@ import { withCodexSkillLinks } from "./codexSkills.js";
 import type { AttemptContext } from "../types.js";
 import { executeWireJsonSchema, observedTurnUsage, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
 
-export type PhaseRequest = {phase:CodexPhase;prompt:string;context:AttemptContext};
+// Every-agent requirement chain (Orca spec 2026-10-15 §6.1): a single call brings its own argv, environment and schema.
+export type PhaseRequest = {phase:CodexPhase|"single-call";prompt:string;context:AttemptContext;
+  spawn?:{args:(paths:{schemaPath:string;finalPath:string})=>string[];env:NodeJS.ProcessEnv;schema:Record<string,unknown>}};
 export type PhaseOutcome = {
   reason:"completed"|"aborted"|"timeout"|"spawn-error"|"exit-error"|"output-limit"|"io-error"|`codex-skills-${string}`;
   code:number|null;signal:NodeJS.Signals|null;events:string;final:string|null;evidenceDir:string;
@@ -25,7 +27,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   const result:PhaseOutcome={reason:"completed",code:null,signal:null,events:"",final:null,evidenceDir,observedTokens:null};
   const save=async(name:string,data:string)=>writeFile(join(evidenceDir,name),data,{mode:0o600});
   const schemaPath=join(evidenceDir,"schema.json"),finalPath=join(evidenceDir,"final.json");
-  const args=[...config.command.slice(1),"exec","--json","--ephemeral","--color","never","--model",config.model,
+  const args=request.spawn!==undefined?[...config.command.slice(1),...request.spawn.args({schemaPath,finalPath})]:[...config.command.slice(1),"exec","--json","--ephemeral","--color","never","--model",config.model,
     "--sandbox",phase==="execute"?config.sandbox:"read-only","-C",context.worktreePath,
     "--output-schema",schemaPath,"-o",finalPath,"-"];
   let stderr="", logsCreated=false;
@@ -39,13 +41,13 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   if(context.abortSignal?.aborted){result.reason="aborted";return persist();}
   const timeout=Math.min(config.timeoutMs,context.state.budgetSnapshot.timeRemainingMs);
   if(timeout<=0){result.reason="timeout";return persist();}
-  const wireBusinessSchema=phase==="execute"?executeWireJsonSchema():phaseJsonSchema(phase);
+  const wireBusinessSchema=request.spawn?.schema??(phase==="execute"?executeWireJsonSchema():phaseJsonSchema(phase as CodexPhase));
   const wireSchema=phase==="execute"?{type:"object",properties:{result:wireBusinessSchema},required:["result"],additionalProperties:false}:wireBusinessSchema;
   await save("schema.json",JSON.stringify(wireSchema));
   // Pre-create files with private permissions before handing paths to the CLI.
   await save("final.json","");await save("events.jsonl","");await save("stderr.log","");logsCreated=true;
   const runChild = async () => new Promise<void>(resolve=>{
-    const child=spawn(config.command[0],args,{cwd:context.worktreePath,detached:true,stdio:["pipe","pipe","pipe"],env:{...process.env,...extraEnv}});
+    const child=spawn(config.command[0],args,{cwd:context.worktreePath,detached:true,stdio:["pipe","pipe","pipe"],env:request.spawn?.env??{...process.env,...extraEnv}});
     const out=new StringDecoder("utf8"),err=new StringDecoder("utf8");
     let outBytes=0,errBytes=0,done=false,exited=false;
     let killTimer:NodeJS.Timeout|undefined,drainTimer:NodeJS.Timeout|undefined;

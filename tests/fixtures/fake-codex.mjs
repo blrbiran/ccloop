@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 const mode=process.argv[2], marker=process.argv[3];
 // Orca agent selection (2026-09-26), spec §4.8: `--version` with no `exec` answers a fixed version and
@@ -11,6 +11,7 @@ const mode=process.argv[2], marker=process.argv[3];
 // `debug models` and `features list` answer the catalog and the feature list and append `debug-models` / `features-list`
 // to `<marker>.catalog-calls`, before anything below runs, so `<marker>.argv` and `<marker>.calls` never see them.
 // `<marker>.catalog.json` ({rows?, sleepMs?, exitCode?, stderr?}) overrides the rows, sleeps first, or fails.
+// Task 8 of that plan: its `features?` (a list of flag names) overrides the flags `features list` prints.
 if(process.argv.at(-1)==="--version"&&!process.argv.includes("exec")) {appendFileSync(marker+".version-calls","version\n");await new Promise(resolve=>process.stdout.write("9.9.9-fake\n",resolve));process.exit(0);}
 const catalogCall=process.argv.includes("debug")&&process.argv.includes("models")?"debug-models":process.argv.includes("features")&&process.argv.includes("list")?"features-list":null;
 if(catalogCall!==null&&!process.argv.includes("exec")) {
@@ -23,7 +24,7 @@ if(catalogCall!==null&&!process.argv.includes("exec")) {
     const rows=script.rows??[{slug:"gpt-6-sol",context_window:272000,visibility:"list"},{slug:"gpt-6-luna",context_window:272000,visibility:"list"},{slug:"gpt-reserve",context_window:272000,visibility:"hide"}];
     await new Promise(resolve=>process.stdout.write(JSON.stringify({models:rows})+"\n",resolve));
   } else {
-    const flags=["apps","browser_use","image_generation","multi_agent","plugins","shell_tool","skip_host_skill_discovery","unified_exec","view_image"];
+    const flags=script.features??["apps","browser_use","image_generation","multi_agent","plugins","shell_tool","skip_host_skill_discovery","unified_exec","view_image"];
     await new Promise(resolve=>process.stdout.write(flags.map(flag=>`${flag.padEnd(40)} stable             true`).join("\n")+"\n",resolve));
   }
   process.exit(0);
@@ -36,6 +37,21 @@ let prompt="";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data",c=>{prompt+=c;});
 process.stdin.on("end",()=>{
+  // Every-agent requirement chain (Orca spec 2026-10-15 §6.1, §9): a single call is the only codex call with
+  // --skip-git-repo-check. It records HOME, CODEX_HOME and whether auth.json there is a symlink in <marker>.single-env.json,
+  // appends `single-call` to <marker>.calls, then plays <marker>.single.json ({rows?, final?, exitCode?, hang?}) or one
+  // complete {"answer":"42"} with usage input 20 (5 cached) and output 4.
+  if(args.includes("--skip-git-repo-check")) {
+    appendFileSync(marker+".calls","single-call\n");
+    let authIsLink=null; try{authIsLink=lstatSync(`${process.env.CODEX_HOME}/auth.json`).isSymbolicLink();}catch{}
+    writeFileSync(marker+".single-env.json",JSON.stringify({HOME:process.env.HOME,CODEX_HOME:process.env.CODEX_HOME,authIsLink}));
+    const script=existsSync(marker+".single.json")?JSON.parse(readFileSync(marker+".single.json","utf8")):{};
+    if(script.hang===true){setInterval(()=>{},1000);return;}
+    const rows=script.rows??[{type:"thread.started",thread_id:"t"},{type:"turn.started"},{type:"item.completed",item:{id:"item_0",type:"agent_message",text:"{\"answer\":\"42\"}"}},{type:"turn.completed",usage:{input_tokens:20,cached_input_tokens:5,output_tokens:4}}];
+    writeFileSync(value("-o"),script.final??"{\"answer\":\"42\"}");
+    process.stdout.write(rows.map(row=>JSON.stringify(row)).join("\n")+"\n",()=>{process.exitCode=script.exitCode??0;});
+    return;
+  }
   writeFileSync(marker,JSON.stringify({args,cwd:process.cwd(),prompt,pid:process.pid}));
   // Orca session 7f37d261 (2026-10-13), codex rate-limit spec §4: modes `rate-limit-1` (the first call of this marker is
   // rejected, later calls behave as `integration`), `rate-limit-all`, `rate-limit-all-exit0` and `rate-limit-after-item`
