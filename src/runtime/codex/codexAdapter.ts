@@ -1,5 +1,5 @@
 import { normalizeExecutionFinal, ExecutionFormatFailure } from "../executionNormalizer.js";
-import { writeFile } from "node:fs/promises";
+import { access, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { readAgentCatalog } from "../../agents/agentCatalog.js";
 import type { InstallationV1 } from "../../agents/types.js";
@@ -164,8 +164,15 @@ export class CodexAdapter implements RuntimeAdapter {
       schema: request.responseSchema, env: { ...process.env, HOME: isolated.home, CODEX_HOME: isolated.codexHome },
       args: ({ schemaPath, finalPath }) => codexSingleCallArgs({ model: this.config.model, cwd: request.cwd, schemaPath, finalPath, features }),
     } });
-    if (outcome.reason === "aborted") throw new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens);
-    if (outcome.reason !== "completed") throw Object.assign(new Error(`codex-${outcome.reason}: ${outcome.evidenceDir}`), { observedTokens: outcome.observedTokens });
+    if (outcome.reason !== "completed") {
+      // Fix round 1 (repo convention, omp "Ruling m4", claude): runCodexPhase writes the prompt only after process.json is
+      // saved, so a call that ended without it -- aborted before or at spawn, a spawn error, a deadline hit first -- never
+      // sent anything: neverStarted, booked 0. The codex phase path is unchanged.
+      const neverStarted = !(await access(join(outcome.evidenceDir, "process.json")).then(() => true, () => false));
+      const error = outcome.reason === "aborted" ? new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens)
+        : Object.assign(new Error(`codex-${outcome.reason}: ${outcome.evidenceDir}`), { observedTokens: outcome.observedTokens });
+      throw neverStarted ? Object.assign(error, { neverStarted: true }) : error;
+    }
     return decodeCodexSingleCall(outcome.events, outcome.final, this.config.model, outcome.evidenceDir);
   }
 }

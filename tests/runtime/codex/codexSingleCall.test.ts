@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, lstat, mkdir, mkdtemp, readlink, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { codexDescriptor } from "../../../src/agents/codex.js";
 import type { MaterializedAgentConfigV1 } from "../../../src/agents/types.js";
@@ -145,6 +145,52 @@ describe("codex single call (spec §6.1)", { timeout: 30_000 }, () => {
     }
   });
 
+  // Fix round 1 (credential safety): a private dir that is a symlink -- here to the installation's own CODEX_HOME -- would
+  // let the link repair rename a link over the real auth.json. It is refused before anything is linked or spawned.
+  it.each(["home", "codex-home"])("C8.3f: refuses, unspawned and booking 0, a private %s that is a symlink, and leaves the source auth.json alone", async (name) => {
+    const w = await world();
+    const id = createHash("sha256").update(`${await realpath(process.execPath)}\0${w.codexHome}`).digest("hex");
+    const base = join(process.env.CCLOOP_CACHE_DIR!, "codex-home", id);
+    await mkdir(base, { recursive: true });
+    const elsewhere = join(w.dir, "elsewhere-home"); await mkdir(elsewhere);
+    await symlink(name === "codex-home" ? w.codexHome : elsewhere, join(base, name));
+    const error = await failure(w.adapter.singleCall!(w.request));
+    expect(error).toMatchObject({ code: "codex-single-call-home-invalid", neverStarted: true, message: `codex-single-call-home-invalid:${join(base, name)}` });
+    expect(observedTokensOf(error)).toBe(0);
+    expect(existsSync(`${w.marker}.calls`)).toBe(false);
+    expect((await lstat(join(w.codexHome, "auth.json"))).isFile()).toBe(true);
+    expect(await readFile(join(w.codexHome, "auth.json"), "utf8")).toBe("{}");
+  });
+
+  // Controller ruling (fix round 1): a regular auth.json in the private CODEX_HOME may hold a token codex rotated into it;
+  // it is moved aside, never deleted, and the link to the installation's file is restored.
+  it("C8.3g: moves a regular private auth.json aside with its bytes, then links the source again", async () => {
+    const w = await world();
+    await w.adapter.singleCall!(w.request);
+    const { CODEX_HOME } = singleEnv(w.marker);
+    await unlink(join(CODEX_HOME, "auth.json")); await writeFile(join(CODEX_HOME, "auth.json"), "{\"rotated\":true}");
+    await w.adapter.singleCall!(w.request);
+    expect(await readlink(join(CODEX_HOME, "auth.json"))).toBe(join(w.codexHome, "auth.json"));
+    const displaced = (await readdir(CODEX_HOME)).filter((entry) => /^auth\.json\.displaced-\d+$/.test(entry));
+    expect(displaced).toHaveLength(1);
+    expect(await readFile(join(CODEX_HOME, displaced[0]!), "utf8")).toBe("{\"rotated\":true}");
+  });
+
+  // 0o000 would widen a mode left to the umask; 0o277 would narrow one below the owner's write bit (so the explicit chmod
+  // after mkdir is what keeps 0700). Precedent: tests/agents/catalogCache.test.ts.
+  it.each([["0o000", 0o000], ["0o277", 0o277]] as const)("C8.3h: creates the private dirs 0700 whatever the umask (umask %s), cached and per run", async (_label, umask) => {
+    const w = await world();
+    const input = { runDir: w.request.runDir, sourceCodexHome: w.codexHome, executable: process.execPath };
+    const old = process.umask(umask);
+    let homes: Array<{ home: string; codexHome: string }>;
+    try {
+      homes = [await codexSingleCallHome({ ...input, env: { CCLOOP_CACHE_DIR: join(w.dir, "umask-cache") } }), await codexSingleCallHome({ ...input, env: {} })];
+    } finally { process.umask(old); }
+    for (const { home, codexHome } of homes) {
+      expect([await mode(dirname(home)), await mode(home), await mode(codexHome)]).toEqual([0o700, 0o700, 0o700]);
+    }
+  });
+
   it("C8.4: refuses before spawning, booking 0, when the feature list cannot be read", async () => {
     const w = await world();
     await writeFile(`${w.marker}.catalog.json`, JSON.stringify({ exitCode: 9 }));
@@ -181,6 +227,44 @@ describe("codex single call (spec §6.1)", { timeout: 30_000 }, () => {
     const error = await failure(w.adapter.singleCall!(w.request));
     expect((error as Error).message).toBe(code);
     expect(observedTokensOf(error)).toBe(36);
+  });
+
+  // Spec R6 (as omp's Task 4 fix round 1): the re-check and the call share ONE deadline. A cold re-check of ~2 s (the fake
+  // sleeps 1 s in `debug models` and 1 s in `features list`) of a 6 s limit leaves the hanging call the rest, so the whole
+  // call ends near 6 s -- not 2 s + another full 6 s.
+  it("C8.8: stops a call after a slow cold re-check at the original deadline, not a fresh full limit", async () => {
+    const w = await world({ hang: true });
+    await writeFile(`${w.marker}.catalog.json`, JSON.stringify({ sleepMs: 1_000 }));
+    const started = Date.now();
+    const error = await failure(w.adapter.singleCall!({ ...w.request, timeoutMs: 6_000 }));
+    const elapsed = Date.now() - started;
+    expect((error as Error).message).toMatch(/^codex-timeout: /);
+    expect(observedTokensOf(error)).toBeNull();
+    expect(readFileSync(`${w.marker}.calls`, "utf8")).toBe("single-call\n");
+    expect(elapsed).toBeGreaterThanOrEqual(5_900);
+    expect(elapsed).toBeLessThan(7_500);
+  }, 20_000);
+
+  // Fix round 1 (repo convention, omp "Ruling m4"): the prompt is written only after the process is registered, so a call
+  // that never got that far sent nothing and books 0, not null.
+  it("C8.9: an abort before spawning books 0 as neverStarted", async () => {
+    const w = await world();
+    await w.adapter.singleCall!(w.request);
+    const controller = new AbortController(); controller.abort();
+    const error = await failure(w.adapter.singleCall!({ ...w.request, signal: controller.signal }));
+    expect(error).toMatchObject({ neverStarted: true });
+    expect((error as Error).message).toMatch(/^codex-aborted: /);
+    expect(observedTokensOf(error)).toBe(0);
+    expect(readFileSync(`${w.marker}.calls`, "utf8")).toBe("single-call\n");
+  });
+
+  it("C8.9b: a process that could not be spawned (its working directory is gone) books 0 as neverStarted", async () => {
+    const w = await world();
+    const error = await failure(w.adapter.singleCall!({ ...w.request, cwd: join(w.request.runDir, "gone") }));
+    expect(error).toMatchObject({ neverStarted: true });
+    expect((error as Error).message).toMatch(/^codex-spawn-error: /);
+    expect(observedTokensOf(error)).toBe(0);
+    expect(existsSync(`${w.marker}.calls`)).toBe(false);
   });
 
   it("C8.6: an answer that is not one object is single-call-output-invalid with its usage", async () => {
