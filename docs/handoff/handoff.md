@@ -1,4 +1,4 @@
-# ccloop Handoff — attempt 提交不再跑目标仓钩子（Q4）＋registry 标题更正，在分支 `codex/attempt-commit-no-hooks` 上、等人 push／合；OMP single-call＋#58 已在 main；Orca 关联见文末单节
+# ccloop Handoff — 「每个 agent 都能跑需求链」一轮（目录文件缓存、`agents models`、codex 软单次调用、claude 200000）在分支 `codex/every-agent-chain` 上、等人 push／合；attempt 提交关钩子与 OMP single-call 已在 main；Orca 关联见文末单节
 
 > ⚠️ **一律自查，别信本文。** 只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是固定历史值。
 > *** **本文不写任何当前哈希** —— 指代某一笔引**提交主题行**（`git log --grep`），指代材料引**路径**。 ***
@@ -40,16 +40,27 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-## 当前状态（Orca 会话 `026d10e3`，2026-10-15）
+## 当前状态（Orca 会话 `a852f96a`，2026-10-15～16）
 
-- ⛔ **等人**：push 分支 `codex/attempt-commit-no-hooks`（工作树 `/Users/biran/code/skills/orca/ccloop-wt/attempt-commit-no-hooks`），main `--ff-only` 到它，push main。两笔（人 2026-10-15 在 Orca 会话 `026d10e3` 授权）：
-  - `fix(workspace): run the attempt commit without the target repository's hooks`：`src/workspace/worktreeManager.ts` 的 `ATTEMPT_IDENTITY` 加 `-c core.hooksPath=/dev/null`（与 `savedResultRecovery.ts`、`executionFormatFailure.ts` 同法）。新判据 `tests/workspace/worktreeManager.test.ts`「commits although a pre-commit hook refuses…」修前看见红（pre-commit 拒提交）、修后绿；**既有判据零改写**。
-  - `test(agents): retitle the context-window criterion now that omp reports its catalog window`：`tests/agents/registry.test.ts` 只改标题，已发布注释逐字保留并追加一行人裁说明（Rule 15/16）；断言零改动，17/17。
-- **门**（clone 里跑，主题行 `fix(workspace): run the attempt commit…`，日志 `/private/tmp/ccq4-gate/`，会话结束即失效，结论只在这里）：typecheck／build 0；全量 1710/1712、0 跳过，2 红：`verifySavedResult`「r1 command interruption…」（断言形状）、`codexAdapter`「outer watchdog kills…」（1500 ms 计时）；`verify:control` 818/820，2 红：`runLoop.integration`「persists phase usage evidence…」（断言形状）、`extractFinalObject` 3 s 性能阈值；`check-known-reds` 2 条不在名单；tmpleak 0。**4 个文件负载 10–13 下单跑各 3/3 绿**。两条断言形状红（`verifySavedResult`、`runLoop.integration`）记为 n＝1 候选，未豁免。⚠️ 在主仓 worktree 里跑全量多出的那条 `cli`「example contract run」环境红，这次在 clone 里绿。
-- **Qoder 钩子已从主仓移除**（人授权）：`.git/hooks/post-commit`、`post-checkout` 两个文件全是 `# BEGIN Qoder AI tracker` 块（Qoder CN 应用 2026-09-21 写入，三仓字节相同），备份在 Orca 会话 `026d10e3` 的 scratchpad 后删除。⚠️ Qoder 应用再启动可能重新写入；本仓 `core.hooksPath` 未设。
-- **`refs/ccloop/*` 已清**（人授权）：164 个 `ccloop-cli-scripted-*` 测试残留（`cli` 测试在主仓里跑时留下），清前列表存于该会话 scratchpad，对象在 gc 前仍在库里。
-- **已在 main（上一轮人合推）**：OMP single-call（目录行给窗口／`singleCallExecution`／`singleCallOutputCap`，spawn 前复核 `0 < maxTokens ≤ request.maxOutputTokens`，argv 关工具／规则／LSP，`--config` 叠加关重试、模型回退、loop guard、advisor、压缩，解码 fail-closed）与 #58 诊断（保留码前缀＋原因＋截断 stderr 尾；进程内记忆化已撤）。⚠️ 每个 kind 的 resolution 都带 `singleCallOutputCap`，旧 Orca 的 `.strict()` 会拒——Orca main 已含接收端并已 repin 到 dc51022。遗留（Orca spec `2026-10-14-omp-single-call-design.md` §8）：spawn 时目录探测（10 s）不在调用时限与 abort 内；provider 层首 token 前重试关不掉；`omitMaxOutputTokens` 模型与 OpenRouter 不发上限。
-- **真 provider 验收（Orca 计划 Task 13，2026-10-15，付费、人已同意）**：omp 18.10.1＋人的 LiteLLM 别名，estimate／clarify／split 各一次：每次恰一条 assistant `message_end`、`stop`、工具关、叠加生效、Orca 记账＝本仓 usage；clarify／split 通过；estimate 被 Orca 判 `estimate-output-invalid`（模型把任务列了两遍，模型质量问题）。证据在 Orca `.superpowers/sdd/2026-10-15-omp-single-call-acceptance/`（Orca 分支 `test/omp-single-call-acceptance`）。
+- ⛔ **等人 push**：分支 `codex/every-agent-chain`（工作树 `/Users/biran/code/skills/orca/ccloop-wt/every-agent-chain`，从 main 切，**没 push**），main `--ff-only` 到它，push main。命令与顺序在 Orca handoff §4.1 第 1 条（H1）；推完后 Orca 才能 repin（Orca 计划 Task 15）。依据：Orca spec `docs/superpowers/specs/2026-10-15-every-agent-requirement-chain-design.md`（**末尾 §11 优先于正文**）＋计划 `docs/superpowers/plans/2026-10-15-every-agent-requirement-chain.md` Task 1–9；台账在 Orca 仓 `.superpowers/sdd/2026-10-15-every-agent-requirement-chain/progress.md`（Orca 分支 `codex/every-agent-chain` 上入库）。
+- **分支内容**（按主题行）：
+  - 夹具：`test(fixtures): fake codex and omp answer and count catalog probes`。
+  - **目录与 `--version` 的文件缓存**：`feat(agents): cache file for agent catalogs, keyed by binary and config stamps`、`fix(agents): stamp the config files omp actually reads for a named profile`、`feat(agents): read every catalog and version through the file cache`。`$CCLOOP_CACHE_DIR`（缺省 `~/.cache/ccloop`），0700／0600 显式给，键含二进制与配置 stamp，30 分钟；版本号也缓存（人裁 Orca 计划第 8 条）；检测、`agents validate`、`updates.ts` 的版本探测与 Apply 复核**按设计保持实时**。
+  - 探测进调用方时限与 abort、失败报阶段：`feat(agents): catalog probes honour the caller's deadline and abort and name their stage`、`fix(omp): the spawn-time re-check and the single call share one deadline` ⇒ 上一版「spawn 时目录探测（10 s）不在调用时限与 abort 内」**已在本分支修**。
+  - `control models`／`agents models [--refresh]`：`feat(control): list an installation's models (control models, agents models)`；`test(agents): every test file gets an empty CODEX_HOME; agents models --refresh re-probes`（**夹具改动**：`tests/setup/relocateCatalogCache.ts` 给每个测试文件一个空 `CODEX_HOME`，否则判据读到人的真 `~/.codex/config.toml`）。
+  - codex：`feat(agents): codex resolves a soft single call and its catalog window`（`singleCallExecution: "v1-soft"`，窗口取 `codex debug models`）；`feat(runtime): codex single call, tools off in a private home, bound checked after the fact`；修：`fix(runtime): codex single-call home refuses symlinked dirs, never deletes a regular credential`（正规文件挪成 `<名>.displaced-<epoch ms>`）、`fix(runtime): codex single call allows codex's error items and turns off the linked MCP servers`、`fix(agents): list codex MCP servers under the single call's own isolation; a failed list keeps the catalog`、`docs(agents): register both writers of the codex private homes (catalog-miss probe and single call)`、`fix(agents): codex single call also turns off the other on-by-default tool flags and notify`（按已装 `features list` 过滤，另加 `notify=[]`）。
+  - claude：`feat(agents): report claude's 200000 default window (ERRATUM on the unknown-window note)`。
+  - 门红修正：`test(agents): count catalog entries apart from codex-home in the relocated-HOME criterion`（本分支新判据，不算改写）。
+- **新的仓库外写入**（本仓 Rule 17 的对应物）：`<catalogCacheDir>/codex-home/<sha256(安装键)>/{home,codex-home}`——每个安装键复用一个私有 `CODEX_HOME`（人问「每次都要重建吗」后的裁定），内含指向 `~/.codex/{auth.json,config.toml}` 的软链与 codex 自己写的状态；两个写入方：codex 目录 miss 探测与单次调用；无 cache root 时退回 run 目录。登记在 Orca spec §11.1（原文不改、追加具名节）与 `src/agents/codexIsolation.ts` 的注释。
+- **改写的既有判据**（每条都有人点名）：Orca 计划 E1–E5（人批准全部六条，E6 在 Orca）；人点名 `tests/runtime/omp/ompSingleCall.test.ts`「stops the call at the request's time limit…」（先热缓存、仍断言 `omp-timeout`）＋新判据「冷缓存＋复核超过截止 ⇒ spawn 前拒」；人一揽子授权下改了三处，都在本分支新建文件里、仍精确 `toEqual`、旁边有 `Ruling: rewritten under the human's blanket naming…`：`tests/agents/agentCatalog.test.ts:42`、`tests/agents/catalogProbe.test.ts:150`、`:153`。
+- **真 codex 付费跑改了代码的发现**（gpt-6-luna、codex-cli 0.160.0，只抄工具报数）：P1 失败 `codex-single-call-not-single:tool`——codex 对人 `config.toml` 里的东西发 `error` item，且链进来的 MCP 服务被启动 ⇒ `error` item 当诊断（其余未知 item 仍 fail closed），MCP 按名 `-c mcp_servers.<名>.enabled=false`（`mcp_servers={}` 不起作用；未定义或带引号的名字会让配置加载失败）；P1b 失败（codex RC 1）——名单是在真 `~/.codex`（含 plugins）下列的，比隔离配置多 ⇒ 名单在同一隔离下列；P1c、P1d（I4 之后，29 个 `-c` 键）**通过**，input 10811／10109 token。全程 `~/.codex` 凭据前后 0 字节差。一行提示的框架开销 10109–11590 input token（spec 原估约 1.5k），归人定 profile 值。
+- **门**（clone 里跑，原始日志在 Orca 会话 scratchpad、会话结束失效）：run 3（`test(agents): count catalog entries…` 上）全量 1824/1826、`check-known-reds` RC 1（unexpected 2）、`verify:control` 866/866、tmpleak 0；run 4（代码 tip）全量 1810/1826、`check-known-reds` RC 1（unexpected 14）、`verify:control` 865/866（`extractFinalObject` 3 s 阈值）、tmpleak 0；所有红文件单跑 3/3 ⇒ 全判负载 flake，控制器以 run 3＋run 4 接受。run 2 抓到的唯一真红已修（见上「门红修正」）。明细与新候选在 Orca `docs/handoff/known-load-flakes.md` 的 ccloop 段（`a852f96a` 条）。
+- **提议进 `scripts/check-known-reds.mjs` 名单**（名单归人定，本轮没改）：`verifySavedResult`「r1 command interruption modified=true…」、`codexAdapter`「outer watchdog kills a previously observed TERM-ignoring detached Codex」——run 2、run 3 都红，每次单跑 3/3。
+- **残余**（Orca spec §11.5 为准）：refresh token 经 `auth.json` 软链的轮换未验（新 token 若以 rename 写进私有目录，下次调用挪成 displaced 并重链回旧文件 ⇒ 人 `codex login`）；keyring 存凭据 ⇒ 无 `auth.json` 可链、fail closed；control worker 的 `ccloop-agent-catalog:` 日志行没有生产 sink（worker 以 stdio `ignore` 起）；**codex 阶段调用仍带着操作者的 skills／AGENTS.md**；omp 旧 `config.yaml`／`PI_CONFIG_DIR` 不进键；旧 build 的缓存条目 30 分钟内带较短的 flag 列表；`notify=[]` 是否真挡住人的 notify 程序未量；点号 MCP 名拒；lstat 与建链之间的同用户 TOCTOU（最坏挪开真 `auth.json`、字节保留）；两条 7500 ms 界的冷复核判据余量约 0.7–1 s。历史 spec／plan 里「claude 窗口 null」的文字是 ERRATUM 候选（`docs/superpowers/specs/2026-09-24-g1-control-wire-contract-design.md:134,165-166`、`docs/superpowers/plans/2026-09-24-g1-capability-vocabulary.md:76,123,173,288,293`），未改。
+- **已在 main（人已合推，本会话 `merge-base --is-ancestor` 现核）**：
+  - `codex/attempt-commit-no-hooks`：`fix(workspace): run the attempt commit without the target repository's hooks`（`ATTEMPT_IDENTITY` 加 `-c core.hooksPath=/dev/null`，新判据修前见红，既有判据零改写）＋`test(agents): retitle the context-window criterion now that omp reports its catalog window`（只改标题，注释逐字保留＋追加人裁行）。本地分支与工作树仍在，删归人。
+  - OMP single-call（目录行给窗口／`singleCallExecution`／`singleCallOutputCap`，spawn 前复核 `0 < maxTokens ≤ request.maxOutputTokens`，argv 关工具／规则／LSP，`--config` 叠加关重试、模型回退、loop guard、advisor、压缩，解码 fail-closed）与 #58 诊断（保留码前缀＋原因＋截断 stderr 尾；进程内记忆化已撤）。⚠️ 每个 kind 的 resolution 都带 `singleCallOutputCap`，旧 Orca 的 `.strict()` 会拒——Orca main 已含接收端。遗留：provider 层首 token 前重试关不掉；`omitMaxOutputTokens` 模型与 OpenRouter 不发上限。真 provider：2026-10-15 estimate／clarify／split 各一次，传输全过；estimate 的答案质量不稳——同一别名 4 次真估算里 3 次把任务列两遍（`estimate-output-invalid`），Orca 会话 `a852f96a` 的 P2 冷缓存那次第一次 `ready`；P2 实测缓存：每个冷缓存 1 次 `omp models`、热缓存 0 次。
+- **Qoder 钩子已从主仓移除**（人授权，2026-10-15）：`.git/hooks/post-commit`、`post-checkout` 全是 `# BEGIN Qoder AI tracker` 块（Qoder CN 应用 2026-09-21 写入，三仓字节相同），备份后删除。⚠️ Qoder 应用再启动可能重新写入；本仓 `core.hooksPath` 未设。`refs/ccloop/*` 的 164 个 `ccloop-cli-scripted-*` 测试残留已清（人授权；对象在 gc 前仍在库里）。
 
 - **仍有效的前几轮结论**（2026-10-15 压缩时从上一版「当前状态」保留）：
   - 上限与窗口**信 `omp models --json` 的所选行**，人知情：本机自定义模型的 128000/16384 是 omp 编的默认值，不是人配的。Task 0 实测（Orca spec `2026-10-14-omp-single-call-design.md` §7）：`config get` 不认 `--config`、运行时认（断流时有叠加 1 次 POST、无叠加 4 次）；框架开销约 2047 token。single-call 那批既有判据零改写，`tests/fixtures/fake-omp.mjs` 有改动（已点名），`src/agents/registry.ts` 的 `singleCallExecution` 注释追加了 ERRATUM；变异 28/28 在 clone 里红。#58 前一笔主题行「read it once per process」已被后一笔撤销（记忆化会让 `ompUpdates`「model vanishes after preview」红），主题行过时、不 amend。
@@ -92,7 +103,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ### 待人做的
 
-- 失效工作树记录 `/private/tmp/orca-results-ccloop-20261010` 与一条 `…/ccloop-cli-scripted-*/worktrees/attempt-1`（2026-10-15 `git worktree list` 都标 prunable）⇒ `git worktree prune`。已合、待删的分支与工作树：`codex/omp-updates-timeout`（`ccloop-wt/omp-updates-timeout`）、`codex/omp-single-call`（`ccloop-wt/omp-single-call`）、`codex/omp-catalog-diagnostics`（`ccloop-wt/omp-catalog-diagnostics`；删前先由人杀掉从它的 `dist` 起的孤儿 `worker.js`，2026-10-15 现测 pid 6165、14693、23125、66086，杀前 `ps -p` 现核）。删除都要人做。
+- 删归人（H1 之后；删前 `merge-base --is-ancestor` 现核）：`codex/attempt-commit-no-hooks`（`ccloop-wt/attempt-commit-no-hooks`，已是 main 的祖先）；`codex/every-agent-chain`（`ccloop-wt/every-agent-chain`，其 `node_modules` 是指主仓的软链，`worktree remove --force` 只删链）。上一版列的两条 prunable 记录、三条已合分支与工作树（`omp-updates-timeout`、`omp-single-call`、`omp-catalog-diagnostics`）以及四个孤儿 `worker.js`（6165、14693、23125、66086）本会话（Orca `a852f96a`）现核都已不在（`worktree list`、`branch -vv`、`ps -p`）。
 
 ---
 
@@ -100,10 +111,10 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 | 挂账 | 现场 |
 |---|---|
-| **OMP 单次调用（estimate／clarify／split）** | 已在 main；2026-10-15 真 provider 各跑一次（见「当前状态」）：传输链路通过，estimate 的答案质量（同一任务列两遍）未验收。遗留：provider 层首 token 前重试关不掉；`omitMaxOutputTokens` 模型与 OpenRouter 不发上限（后者按名拒）；spawn 时目录探测不在时限与 abort 内 |
-| **OMP 其余延期项** | OMP 子代理、交互式审批桥、omp 的 saved-result 恢复（目前仅 codex）；OMP skills 与 OMP 本体的**真实 provider 验收**（端点已停、额度耗尽）。Git 忽略文件与主机副作用不在 execute 检查范围 |
+| **OMP 单次调用（estimate／clarify／split）** | 已在 main；2026-10-15 真 provider 各跑一次（见「当前状态」）：传输链路通过，estimate 的答案质量（同一任务列两遍）未验收。遗留：provider 层首 token 前重试关不掉；`omitMaxOutputTokens` 模型与 OpenRouter 不发上限（后者按名拒）。「spawn 时目录探测不在时限与 abort 内」已在分支 `codex/every-agent-chain` 修（`feat(agents): catalog probes honour the caller's deadline…`），未合 |
+| **OMP 其余延期项** | OMP 子代理、交互式审批桥、omp 的 saved-result 恢复（目前仅 codex）；OMP skills 的**真实 provider 验收**未做（OMP 本体已在 2026-10-12～13、10-15、10-16 真跑过，见 Orca handoff §3.2）。Git 忽略文件与主机副作用不在 execute 检查范围 |
 | **`ClaudePhaseAborted` 历史交错（B4）** | runner 重复发布竞态与无效答案中止分支已修；精确的历史交错**仍未证成** ⇒ 不能据此宣称真实 provider 稳定性。详见 Orca handoff |
-| **Codex 429（外部测试反馈 45–50、62）** | 已合进 main。剩：5xx 与其他措辞无样本未识别；Orca 侧 `codex-rate-limited` 文案已在 Orca 未合分支上；可用 `gpt-6-luna` 做一次真 Codex 回归（付费，先问人） |
+| **Codex 429（外部测试反馈 45–50、62）** | 已合进 main。剩：5xx 与其他措辞无样本未识别；Orca 侧 `codex-rate-limited` 文案已在 Orca main；可用 `gpt-6-luna` 做一次真 Codex 回归（付费，先问人） |
 | **`capabilities` 计算化** | 人裁「分两步」的第二步。今天三个 kind 的 `requestBoundProof` 都恒 `null`（`src/agents/{claude,codex,omp}.ts`）|
 | **Linux** | ccloop 整套在 Linux 上历史上红 5 条；之后只在临时 Ubuntu VM 上跑过 `/usr/bin/flock` 两进程串行（过），**整套未再在 Linux 跑过**。VM 已停，要人开 |
 
@@ -144,9 +155,8 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-15 晚，Orca 会话 `ec9ce319`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-16，Orca 会话 `a852f96a`）
 
-- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md` 的 §3.3 与 §4（在 Orca 分支 `codex/round-20261015b` 上，人合进 main 后可见）。
-- 本仓 `codex/attempt-commit-no-hooks` 已由人合推（`ls-remote` 现核）；Orca 已在其分支上 repin 到 `71053e3`。本地分支 `codex/attempt-commit-no-hooks` 与 main 同一笔，删归人。
-- **下一轮落在本仓的大头**（Orca spec `docs/superpowers/specs/2026-10-15-every-agent-requirement-chain-design.md`＋计划 `docs/superpowers/plans/2026-10-15-every-agent-requirement-chain.md` Task 1–9，都在 Orca 分支 `codex/round-20261015b`）：新 control 方法 `models`／`agents models`；**目录与 `--version` 的文件缓存**（`$CCLOOP_CACHE_DIR` 改道，0700／0600，键含二进制与配置 mtime，30 分钟）；探测进调用方时限与 abort；codex `singleCallExecution: "v1-soft"`＋从 `codex debug models` 取窗口＋私有 HOME／`CODEX_HOME` 隔离的单次调用；claude `agent-default` 报 200000。要改写的本仓既有判据（计划 E1–E5，实施前按本仓 Rule 15 逐条点名给人）：`tests/control/singleCallCapability.test.ts:16,48,53,59,60,70-78`、`tests/agents/registry.test.ts:81,83`、`tests/control/agentsControl.test.ts:110`；`ompCatalogDiagnostics` C58a–c 计划保持不动。
-- 零成本实测（结论在 Orca spec §2）：omp 18.10.1 stdin 非 TTY 不卡；codex 0.160.0 仍无单次输出上限、feature flag 去不掉注入的 skills／AGENTS.md——**本仓现有 codex phase 调用也带着操作者的 skills**（登记）。
+- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md` 的 §3.3 与 §4（在 Orca 分支 `codex/every-agent-chain` 上，人合进 main 后可见）。
+- 本仓分支 `codex/every-agent-chain` 是 Orca 计划 Task 1–9（见上「当前状态」）；Orca 同名分支是 Task 10–14＋终审修复，**仍钉旧 pin**（历史 `71053e3`，上一轮 `codex/attempt-commit-no-hooks` 合推后 repin 的）。顺序：人 push 本仓（H1）→ Orca agent repin 到推上去的 sha 并跑 repin 门（Task 15）→ 人合推 Orca（H2）。Orca 分支在旧 pin 上运行期安全但模型框全不可用 ⇒ 与 repin 同落（Orca spec §8.2）。
+- 本轮零成本实测与真跑的结论在 Orca spec §2 与 §11（omp stdin 非 TTY 不卡；codex 仍无单次输出上限；**本仓现有 codex phase 调用也带着操作者的 skills**，登记未修）。
