@@ -157,6 +157,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-17，Orca 会话 `4de777f4`）
 
-- 详情只看 Orca：`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md` 的 §3.3 与 §4。
-- 本仓 Task 1–9（见上「当前状态」）与 Orca Task 10–15 都已在两仓 main；Orca 钉 `02cbacc`（`scripts/pin-ccloop.mjs` 现核）。⚠️ Orca 主仓／服务用的是 `node_modules` 里装的 ccloop：合进新 pin 后要 `npm ci`，只 `npm run build` 不会更新它（实测曾停在 `3069dbf`）。
-- 本轮零成本实测与真跑的结论在 Orca spec §2 与 §11（omp stdin 非 TTY 不卡；codex 仍无单次输出上限；**本仓现有 codex phase 调用也带着操作者的 skills**，登记未修）。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）的 §3.2a 与 §4；在 Orca 分支 `codex/round-20261017` 上，人合进 main 之后才在 main 上可见。
+- Orca 这一轮是「花了钱就一定要拿到能用的估算」：确定性修复、指令 v2、一次自动重试。**只改了 Orca，本仓代码零改动**，pin 仍是 `02cbacc`，付费验收用的也是这一笔的 build。Orca 依赖本仓的有两点：`single-call-output-invalid` 这个码名（Orca 拿它触发重试），以及 `ompSingleCall`、`codexSingleCall` 读 JSON 对象的语义。**改这两处之前先同步 Orca。**
+- ⚠️ Orca 主仓和服务用的是 `node_modules` 里装的 ccloop：合进新 pin 后要先 `npm ci`，只跑 `npm run build` 不会更新它。
+- 本仓仍登记着、未修：codex 没有单次调用的输出上限；codex phase 调用会带上操作者的 skills（Orca spec `2026-10-15` §2、§11）。
