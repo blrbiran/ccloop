@@ -155,9 +155,9 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-17，Orca 会话 `4de777f4`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地替换】本节，不新增 Orca 章节；2026-10-17，Orca 会话 `d0843ec0`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）的 §3.2a 与 §4；在 Orca 分支 `codex/round-20261017` 上，人合进 main 之后才在 main 上可见。
-- Orca 这一轮是「花了钱就一定要拿到能用的估算」：确定性修复、指令 v2、一次自动重试。**只改了 Orca，本仓代码零改动**，pin 仍是 `02cbacc`，付费验收用的也是这一笔的 build。Orca 依赖本仓的有两点：`single-call-output-invalid` 这个码名（Orca 拿它触发重试），以及 `ompSingleCall`、`codexSingleCall` 读 JSON 对象的语义。**改这两处之前先同步 Orca。**
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）的 §3.2a 与 §4；Orca 的估算一轮已由人合推进 Orca main，profile 已切到指令 v2。
+- Orca 那一轮是「花了钱就一定要拿到能用的估算」：确定性修复、指令 v2、一次自动重试。**只改了 Orca，本仓代码零改动**，pin 仍是 `02cbacc`；付费验收 omp、claude 已跑，**codex gpt-6-luna 一次还欠着**（额度 2026-10-22 恢复，要用 `/private/tmp/ccb6-qswQ/ccloop/dist/cli.js` 这份 pin 的 build，补跑后人再删它）。这一会话之后做的是 ccmem 的 Codex／OMP 适配，**也不碰本仓**。Orca 依赖本仓的有两点：`single-call-output-invalid` 这个码名（Orca 拿它触发重试），以及 `ompSingleCall`、`codexSingleCall` 读 JSON 对象的语义。**改这两处之前先同步 Orca。**
 - ⚠️ Orca 主仓和服务用的是 `node_modules` 里装的 ccloop：合进新 pin 后要先 `npm ci`，只跑 `npm run build` 不会更新它。
 - 本仓仍登记着、未修：codex 没有单次调用的输出上限；codex phase 调用会带上操作者的 skills（Orca spec `2026-10-15` §2、§11）。
