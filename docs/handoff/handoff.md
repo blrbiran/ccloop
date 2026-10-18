@@ -1,4 +1,4 @@
-# ccloop Handoff — 下一件：按计划实施「Codex 阶段隔离」（spec 在 main，计划在分支 `codex/codex-phase-isolation-plan`）；之前各轮都已在 main；Orca 关联见文末单节
+# ccloop Handoff — 下一件：按计划实施「Codex 阶段隔离」（spec 与计划都在 main）；之前各轮都已在 main；Orca 关联见文末单节
 
 > ⚠️ **一律自查，别信本文。** 只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是固定历史值。
 > *** **本文不写任何当前哈希** —— 指代某一笔引**提交主题行**（`git log --grep`），指代材料引**路径**。 ***
@@ -34,7 +34,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 - `/opt/homebrew/bin/node` **坏的**（缺 libsimdjson）；nvm Node 22.13.1 在 PATH 最前；`/usr/local/bin/node` 是 24.13.0。
 - 本机 `rm`、`cp` 是 `-i` alias：`rm -rf` 会**静默挂在确认提示上**，`cp` 会**静默拒绝覆盖** ⇒ 用 `/bin/rm -rf`、`cat src > dst`；删软链用 `unlink`。
-- **本仓 CLAUDE.md Rule 13：开门、合并、删分支或 worktree、push 每次都要人单独点头，控制器不许 push。** Orca 的 Tier 0 闸门（从 Orca 目录起的会话里对所有目录生效）2026-10-18 起放行 `merge --ff-only`、`branch -d`、不带 force 的 `worktree remove`——**那只是闸门不再机械拦，不改变本仓 Rule 13**；要不要对齐由人裁（Orca handoff §八）。
+- **本仓 CLAUDE.md Rule 13（2026-10-18 已与 Orca 闸门对齐，人裁，Orca 会话 `1710772d`）**：`merge --ff-only` 合进 main、`branch -d`、不带 force 的 `worktree remove` agent 可以直接做；**push 仍由人做（不要提醒）**；开门与强制形式仍每次单独授权。
 - codex-cli **0.163.0**（2026-10-18 `codex --version`）；`hooks` 在 `codex features list` 里是 stable。真 Codex 只用 `gpt-6-luna`（在 0.160.0 下验过），**付费，每次先问人**；额度 2026-10-22 恢复。OMP 用的 LiteLLM 端点由人起停（真跑同样先问人）。
 
 ---
@@ -44,7 +44,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 ### 下一件：Codex 阶段隔离（Orca item 3，会话 `a3b2a7a7` 设计＋计划，代码零改动）
 
 - spec（main）：`docs/superpowers/specs/2026-10-18-codex-phase-isolation-design.md`——人裁「个人 skills 都不带」：阶段在每个安装一对的私有 `HOME`／`CODEX_HOME` 里跑（复用 single call 那对），关掉个人 skills／`~/.codex/AGENTS.md`／hooks（`features.hooks=false`）／MCP（逐个 `enabled=false`）／`notify`／plugins／apps／collaboration 指令；**保留**目标仓 `AGENTS.md`、Orca 交来的 `codexSkillsDir`、凭据链接、codex 自带的环境与权限说明；阶段里跑的命令用**真 HOME**（`shell_environment_policy.set.HOME`，要先实测）；隔离搭不起来 ⇒ spawn 前拒、终局不重试、用量记 0（`neverStarted`）；读不到 MCP 名单就拒。
-- 计划（分支 `codex/codex-phase-isolation-plan`，工作树 `ccloop-wt-iso-plan`，待人合）：`docs/superpowers/plans/2026-10-18-codex-phase-isolation.md`，7 个任务。⚠️ **Task 1 是免费实测＋停止点**（`set.HOME` 与 `features.hooks=false` 被不被 0.163.0 接受、个人 skills 回不回来）；⚠️ **Task 4 Step 6 是停止点**：预言 `tests/control/codexSkillsFailureWorker.test.ts` 两条变红（夹具 `tests/runtime/codex/skillsControllerFixture.ts` 不答 `debug models`／`features list`／`mcp list`），`tests/runtime/codex/extraEnv.test.ts`「sets CODEX_HOME from the installation's configDir…」语义已变——**改要人逐条点名**（Rule 15）；Task 7 付费一次要人点头。
+- 计划（已 `--ff-only` 合进 main，分支与工作树已删）：`docs/superpowers/plans/2026-10-18-codex-phase-isolation.md`，7 个任务。⚠️ **Task 1 是免费实测＋停止点**（`set.HOME` 与 `features.hooks=false` 被不被 0.163.0 接受、个人 skills 回不回来）；⚠️ **Task 4 Step 6 是停止点**：预言 `tests/control/codexSkillsFailureWorker.test.ts` 两条变红（夹具 `tests/runtime/codex/skillsControllerFixture.ts` 不答 `debug models`／`features list`／`mcp list`），`tests/runtime/codex/extraEnv.test.ts`「sets CODEX_HOME from the installation's configDir…」语义已变——**改要人逐条点名**（Rule 15）；Task 7 付费一次要人点头。
 - 免费实测（Orca 会话 `a3b2a7a7`，`codex debug prompt-input hi`，不发请求）：真 HOME 68018 字节含个人 skills；私有 homes 13269 字节、个人 skills 消失、仓库 skill 与 `AGENTS.md` 仍在；`features.skip_host_skill_discovery` 不需要。
 
 ### 已在 main 的能力（各轮都已由人合推；细节按主题行 `git log --grep` 取）
@@ -120,9 +120,9 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-18，Orca 会话 `a3b2a7a7`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-18，Orca 会话 `1710772d`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3.0 与 §4。Orca 这一轮只做设计与计划；pin 仍是 `02cbacc`。
-- **本仓要接的两件**：① Codex 阶段隔离（上面「下一件」）；② agent 结果里的 `decisions[]` 与 `debug`（上面挂账第一行），Orca 计划 `docs/superpowers/plans/2026-10-18-control-run-decisions.md` Task 12 对它做契约测试。
-- **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid` 码名（Orca 拿它触发估算重试）；`ompSingleCall`、`codexSingleCall` 读 JSON 对象的语义；`ExecutionReport`／结果的字段形状（Orca 将读 `decisions`、`debug`）。
-- ⚠️ Orca 主仓和服务用 `node_modules` 里装的 ccloop：合进新 pin 后先 `npm ci`。codex 估算补跑要用 `/private/tmp/ccb6-qswQ/ccloop/dist/cli.js` 这份 pin 的 build（补跑后人删）。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3.00 与 §4.2。Orca 的「控制 run 写决定」已合进 Orca main（本仓代码零改动，pin 仍是 `02cbacc`）。
+- **本仓要接的两件**：① Codex 阶段隔离（上面「下一件」；人在会话 `1710772d` 授权「本 session 中必要的 test 都允许改」——**只对那个会话有效**，新会话要人重新点名）；② agent 结果里报 `decisions[]` 与 `debug`（`choseInstead`、`reproTests`、`reproCommand`、`reproduction`）——Orca 已按 `reportedDecisionsOf` 读结果顶层 `decisions`，Orca 计划 `docs/superpowers/plans/2026-10-18-control-run-decisions.md` Task 12 等它做契约测试；**在本仓走设计**。
+- **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid` 码名；`ompSingleCall`、`codexSingleCall` 读 JSON 对象的语义；结果字段形状（`decisions`、`debug`）；agents table 的 omp `command` 只收单元素数组（Orca 门里写 fake 表时踩过）。
+- ⚠️ Orca 主仓和服务用 `node_modules` 里装的 ccloop：合进新 pin 后先 `npm ci`。`/private/tmp/ccb6-qswQ/ccloop`（pin 的 build）Orca 门与 codex 估算补跑都在用，补跑后人删。
