@@ -120,9 +120,9 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-18，Orca 会话 `1710772d`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-18，Orca 会话 `b304f167`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3.00 与 §4.2。Orca 的「控制 run 写决定」已合进 Orca main（本仓代码零改动，pin 仍是 `02cbacc`）。
-- **本仓要接的两件**：① Codex 阶段隔离（上面「下一件」；人在会话 `1710772d` 授权「本 session 中必要的 test 都允许改」——**只对那个会话有效**，新会话要人重新点名）；② agent 结果里报 `decisions[]` 与 `debug`（`choseInstead`、`reproTests`、`reproCommand`、`reproduction`）——Orca 已按 `reportedDecisionsOf` 读结果顶层 `decisions`，Orca 计划 `docs/superpowers/plans/2026-10-18-control-run-decisions.md` Task 12 等它做契约测试；**在本仓走设计**。
-- **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid` 码名；`ompSingleCall`、`codexSingleCall` 读 JSON 对象的语义；结果字段形状（`decisions`、`debug`）；agents table 的 omp `command` 只收单元素数组（Orca 门里写 fake 表时踩过）。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3.00、§3.01 与 §4.2。Orca 侧会话 `1710772d` 合了「控制 run 写决定」，会话 `b304f167` 合了「Decisions 页撤回审阅／纠正」——**本仓代码零改动，pin 仍是 `02cbacc`**。
+- **本仓要接的两件**：① Codex 阶段隔离（上面「下一件」；会话 `1710772d` 的「必要 test 都允许改」**已失效**，改既有判据要人在新会话里逐条点名）；② agent 结果里报 `decisions[]` 与 `debug`（`choseInstead`、`reproTests`、`reproCommand`、`reproduction`）——Orca 已按 `reportedDecisionsOf` 读结果顶层 `decisions`，Orca 计划 `docs/superpowers/plans/2026-10-18-control-run-decisions.md` Task 12 等它做契约测试；**在本仓走设计**。
+- **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid` 码名；`ompSingleCall`、`codexSingleCall` 读 JSON 对象的语义；结果字段形状（`decisions`、`debug`）；agents table 的 `command` 在 Orca 门里写成单元素数组；**本仓 fake 的参数约定 Orca 门在用**：`fake-codex.mjs <mode> <marker>`（门用 `integration`，`--version` 答 `9.9.9-fake`）、`fake-omp.mjs <marker>`（答 `18.10.1`）——改它们先同步 Orca handoff §3.00。
 - ⚠️ Orca 主仓和服务用 `node_modules` 里装的 ccloop：合进新 pin 后先 `npm ci`。`/private/tmp/ccb6-qswQ/ccloop`（pin 的 build）Orca 门与 codex 估算补跑都在用，补跑后人删。
