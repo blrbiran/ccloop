@@ -80,6 +80,9 @@ Default to surfacing uncertainty, not hiding it.
 **开门**、**合并**、**删分支或 worktree**、**push**。
 *** **控制器不许 push。** *** 非门合并一律 `--ff-only`。
 **每一次都要单独点头**，不因上一次批准过而自动延续。
+✅ **与 Orca Tier 0 闸门对齐**（人裁，2026-10-18，Orca 会话 `1710772d`；Orca CLAUDE.md Rule 15、闸门 spec §11）：
+`git merge --ff-only` 合进 `main`、`git branch -d`（只删已合并的）、`git worktree remove`（不带 force）**agent 可以直接做**，不再逐次点头。
+**push 仍由人做**；强制形式（`push --force`、`branch -D`、`branch -d -f`、`worktree remove --force`、`worktree prune`、非 fast-forward 合进 `main`）与**开门**仍每次单独授权。
 
 ## Rule 14 — 证据纪律
 - *** **绝不过滤验证性跑。** *** `grep`/`tail`/`head`/`sed` 都算过滤，**管道还会吞掉退出码**。
