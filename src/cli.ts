@@ -325,8 +325,10 @@ export function registerStopHandlers(
 export async function main(argv: string[]): Promise<number> {
   try {
     if (argv[0] === "control") {
-      let stdin = "";
-      for await (const chunk of process.stdin) stdin += String(chunk);
+      // Decode once over all the bytes: a per-chunk decode turns a multibyte character split across a pipe chunk into U+FFFD.
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+      const stdin = Buffer.concat(chunks).toString("utf8");
       const result = await runControlCommand(argv.slice(1), stdin);
       if (result.stdout !== "") process.stdout.write(result.stdout);
       if (result.stderr !== "") process.stderr.write(result.stderr);

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,7 +12,8 @@ import {
   ensurePrivateDirectory,
   readPrivateFile,
 } from "../../src/control/paths.js";
-import { FAKE_CLAUDE_CLI, FAKE_CODEX, claudeInstallation, codexInstallation, writeAgentsTable } from "./agentsFixture.js";
+import { resolveAgent } from "../../src/agents/materialize.js";
+import { FAKE_CLAUDE_CLI, FAKE_CODEX, claudeInstallation, codexInstallation, singleCallEnvelope, writeAgentsTable } from "./agentsFixture.js";
 
 const cliPath = resolve("src/cli.ts");
 const tsxPath = resolve("node_modules/.bin/tsx");
@@ -190,4 +192,35 @@ describe("private control paths", () => {
     expect(dirname(target)).toBe(root);
     expect(await readFile(target, "utf8")).toBe("secret");
   });
+});
+
+// Orca reported single-call-prompt-mismatch (2026-10-19): `control` decoded each stdin chunk on its own, so a multibyte
+// UTF-8 character split across the 64 KiB pipe chunk boundary became U+FFFD and ccloop sealed (and later hashed) a
+// prompt Orca never sent. The same bytes split at the same place every time, so retries could not help. Additive only
+// (ccloop Rule 15): no existing criterion pins stdin decoding.
+describe("control stdin decoding", () => {
+  it("seals the exact prompt bytes Orca sent when a multibyte character straddles the 64 KiB chunk boundary", async () => {
+    const { path, table } = await tableFixture();
+    const sourceDir = await realpath(await mkdtemp(join(tmpdir(), "ccloop-control-stdin-utf8-")));
+    const { resolution } = await resolveAgent(table, { agent: "claude" });
+    const base = singleCallEnvelope({ sourceDir, agent: resolution.selection, configHash: resolution.configHash });
+    const BOUNDARY = 65_536;
+    // Pad with 0-2 ASCII bytes so that byte 65536 of the payload is a UTF-8 continuation byte: the boundary falls
+    // inside a three-byte character, the shape Orca hit (field length 89538 decoded to 89540).
+    let envelope = base;
+    let payload = "";
+    for (const pad of ["", "x", "xx"]) {
+      envelope = { ...base, work: { ...base.work, prompt: `${pad}${"\u4e2d".repeat(40_000)}` } };
+      payload = JSON.stringify(envelope);
+      if ((Buffer.from(payload)[BOUNDARY]! & 0xc0) === 0x80) break;
+    }
+    expect((Buffer.from(payload)[BOUNDARY]! & 0xc0)).toBe(0x80);
+
+    const result = await runCli(["control", "accept", "--agents", path], payload);
+    expect(result.code, result.stderr).toBe(0);
+    const sealed = JSON.parse(await readFile(join(sourceDir, "control", "envelope.json"), "utf8"));
+    // The worker hashes the sealed prompt as promptSha256 and Orca compares it with the hash of what it sent.
+    expect(createHash("sha256").update(sealed.work.prompt, "utf8").digest("hex"))
+      .toBe(createHash("sha256").update(envelope.work.prompt, "utf8").digest("hex"));
+  }, 30_000);
 });
