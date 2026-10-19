@@ -22,7 +22,9 @@ export function parseCodexConfig(raw: unknown): CodexConfig {
 
 const strings = z.array(z.string());
 const plan = z.object({summary:z.string(), primaryTargetPaths:strings}).strict();
-const executionFields = {taskResult:z.unknown().optional(),changedFiles:strings, diffPatch:z.string(), commandOutputs:strings, stdoutStderrLog:z.string()};
+// Reported decisions and debug (spec 2026-10-20 §4.1): carried opaquely, like taskResult, and kept last, so an answer that
+// reports neither (they are removed when null, src/runtime/reportedDecisions.ts) keeps today's key order and bytes.
+const executionFields = {taskResult:z.unknown().optional(),changedFiles:strings, diffPatch:z.string(), commandOutputs:strings, stdoutStderrLog:z.string(),decisions:z.unknown().optional(),debug:z.unknown().optional()};
 const complete = z.object(executionFields).strict();
 const partial = z.object({...executionFields,completionStatus:z.literal("partial"),failureType:z.enum(["timeout","error"]),failureMessage:z.string()}).strict();
 export const executionSchema = z.union([complete,partial]);
@@ -41,6 +43,20 @@ export function phaseJsonSchema(phase: CodexPhase): Record<string, unknown> {
   return {anyOf:[optionalReport(fields),optionalReport({...fields,completionStatus:{type:"string",enum:["partial"]},failureType:{type:"string",enum:["timeout","error"]},failureMessage:string})]};
 }
 
+/**
+ * Reported decisions and debug (spec 2026-10-20 §4.1): the provider demands every property, so both are required and
+ * nullable, through `anyOf` (not `type: [..,"null"]`), and every object node is strict. `null` reports nothing; the
+ * shared unreported step removes it. Only the wire schema has them: phaseJsonSchema("execute") stays the legacy shape
+ * saved-result recovery compares archives against.
+ */
+const nullable = (schema: Record<string, unknown>) => ({anyOf:[schema,{type:"null"}]});
+const decisionItem = object({question:string,chose:string,alternatives:{type:"array",items:object({option:string,why_not:string})},because:string,
+  undo:object({how:string,cost:string,blast_radius:string}),scope:string,kind:string,importance:string});
+const reported = {
+  decisions:nullable({type:"array",items:decisionItem}),
+  debug:nullable(object({choseInstead:nullable(string),reproTests:nullable(array),reproCommand:nullable(string),
+    reproduction:nullable({type:"string",enum:["not-expressible"]}),reproductionReason:nullable(string)})),
+};
 /** Strict provider wire shape: optional taskResult is represented by separate alternatives, not an optional property. */
 export function executeWireJsonSchema(): Record<string, unknown> {
   const report = object({schema:{type:"string",enum:["task-result-v1"]},goal:string,completedWork:array,conclusions:array,
@@ -48,7 +64,7 @@ export function executeWireJsonSchema(): Record<string, unknown> {
   const business = phaseJsonSchema("execute") as {anyOf:Array<{properties:Record<string,unknown>}>};
   return {anyOf:business.anyOf.map((alternative) => {
     const {taskResult: _optional, ...fields} = alternative.properties;
-    return {anyOf:[object(fields),object({...fields,taskResult:report})]};
+    return {anyOf:[object({...fields,...reported}),object({...fields,taskResult:report,...reported})]};
   })};
 }
 

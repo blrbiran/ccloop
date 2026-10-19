@@ -59,6 +59,9 @@ export type AttemptPlan = {
 type ExecutionArtifacts = {
   /** Optional executor explanation; availability never changes the actual execution outcome. */
   taskResult?: unknown;
+  /** Reported decisions and debug (spec 2026-10-20 §4.1): carried opaquely for Orca; never change the outcome. */
+  decisions?: unknown;
+  debug?: unknown;
   changedFiles: string[];
   diffPatch: string;
   commandOutputs: string[];

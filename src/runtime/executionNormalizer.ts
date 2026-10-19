@@ -1,5 +1,6 @@
 import { executionSchema, scanFinalMessage, type PhaseAcceptor } from "./codex/protocol.js";
 import type { ExecutionResult } from "./types.js";
+import { dropUnreported } from "./reportedDecisions.js";
 export const EXECUTION_NORMALIZER_VERSION = "strict-execution-v1";
 type Diagnostic = { method:"whole"|"candidate"|"none"; candidates:number; valid:number; hidden:boolean; originalBytes:number };
 export type ExecutionNormalization =
@@ -17,7 +18,7 @@ export function normalizeExecutionFinal(final:string):ExecutionNormalization {
   const {extraction,hidden}=scanFinalMessage(final,accepts,true);
   const diagnostic:Diagnostic={method:extraction.method,candidates:"candidates" in extraction?extraction.candidates:1,valid:"valid" in extraction?extraction.valid:1,hidden,originalBytes:Buffer.byteLength(final,"utf8")};
   if (extraction.method === "candidate" && (!isWhole || accepts(whole))) {
-    return {status:"available",execution:executionSchema.parse(unwrap(extraction.value)),diagnostic:{...diagnostic,method:isWhole?"whole":"candidate"}};
+    return {status:"available",execution:dropUnreported(executionSchema.parse(unwrap(extraction.value))),diagnostic:{...diagnostic,method:isWhole?"whole":"candidate"}};
   }
   return {status:"unavailable",reason:hidden||diagnostic.valid>0?"execution-format-ambiguous-or-hidden":"execution-format-invalid",diagnostic};
 }

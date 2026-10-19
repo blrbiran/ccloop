@@ -34,6 +34,10 @@ const EXECUTION_SCHEMA = {
     commandOutputs: { type: "array", items: { type: "string" } },
     stdoutStderrLog: { type: "string" },
     taskResult: {},
+    // Reported decisions and debug (spec 2026-10-20 §4.1): any JSON, never required, so the CLI's structured-output
+    // check cannot fail a run on them; the adapter carries them opaquely.
+    decisions: {},
+    debug: {},
     completionStatus: { type: "string", enum: ["partial"] },
     failureType: { type: "string", enum: ["timeout", "error"] },
     failureMessage: { type: "string" },
