@@ -128,6 +128,19 @@ if (NEW_WRITE_MODES.has(mode)) {
   const phase = singleCall ? "single-call" : schema.oneOf || schema.properties?.changedFiles ? "execute" : schema.properties?.approved ? "verify" : "plan";
   let body = { summary: "fixture", primaryTargetPaths: ["answer.txt"] };
   if (phase === "execute") body = { changedFiles: ["answer.txt"], diffPatch: "fixture patch", commandOutputs: ["changed answer"], stdoutStderrLog: "fixture execution" };
+  // Reported decisions and debug (ccloop spec 2026-10-20 §5): mode "reported" answers as "ok" does, except that execute
+  // sets answer.txt to 42 and its answer also carries the fields of <marker>.reported.json (when present; else one major and
+  // one minor decision and a debug). The fake never validates an answer against --json-schema, as before.
+  if (phase === "execute" && mode === "reported") {
+    writeFileSync("answer.txt", "42\n");
+    Object.assign(body, existsSync(`${marker}.reported.json`) ? JSON.parse(readFileSync(`${marker}.reported.json`, "utf8")) : {
+      decisions: [
+        { question: "Retry inside the client or the caller?", chose: "caller", alternatives: [{ option: "client", why_not: "hides failures" }], because: "the caller owns the budget", undo: { how: "restore the retry loop in src/client.ts", cost: "small", blast_radius: "src/client.ts" }, scope: "repo", kind: "interface", importance: "major" },
+        { question: "Name the helper?", chose: "retryOnce", alternatives: [{ option: "retry", why_not: "too generic" }], because: "says what it does", undo: { how: "rename retryOnce back in src/client.ts", cost: "trivial", blast_radius: "src/client.ts" }, scope: "file", kind: "implementation", importance: "minor" },
+      ],
+      debug: { choseInstead: "fix the parser", reproTests: ["tests/parser.test.ts"], reproCommand: "npx vitest run tests/parser.test.ts" },
+    });
+  }
   if (phase === "verify") body = { approved: true, rejectCategory: "", primaryTargetPaths: ["answer.txt"], failingCommand: null, safeToRetry: false, evidence: [], pauseSignals: [], stopSignals: [] };
   if (phase === "single-call") body = { answer: "fixture" };
   appendFileSync(`${marker}.calls`, `${phase}\n`);

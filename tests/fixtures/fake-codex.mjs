@@ -51,6 +51,10 @@ const P1_ERROR_ITEMS=[
   {"type":"item.completed","item":{"id":"item_2","type":"error","message":"Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /private/tmp/p1-pJnD/cache/codex-home/6c50abddd3e7b8e015da354e559a9f48f1b2d2bac85d91aaee0a9509b61ec74c/codex-home/config.toml."}},
 ];
 const CONTINUATION="Treat continuation input fields unfinished, pendingDecisions, and awaitingHuman as required planning inputs.";
+const REPORTED={decisions:[
+  {question:"Retry inside the client or the caller?",chose:"caller",alternatives:[{option:"client",why_not:"hides failures"}],because:"the caller owns the budget",undo:{how:"restore the retry loop in src/client.ts",cost:"small",blast_radius:"src/client.ts"},scope:"repo",kind:"interface",importance:"major"},
+  {question:"Name the helper?",chose:"retryOnce",alternatives:[{option:"retry",why_not:"too generic"}],because:"says what it does",undo:{how:"rename retryOnce back in src/client.ts",cost:"trivial",blast_radius:"src/client.ts"},scope:"file",kind:"implementation",importance:"minor"}],
+  debug:{choseInstead:"fix the parser",reproTests:["tests/parser.test.ts"],reproCommand:"npx vitest run tests/parser.test.ts",reproduction:null,reproductionReason:null}};
 const args=process.argv.slice(process.argv.indexOf("exec")+1);
 const value=flag=>args[args.indexOf(flag)+1];
 let prompt="";
@@ -145,7 +149,11 @@ process.stdin.on("end",()=>{
   }
   const respond=()=>{
   if(mode==="script" && phase==="execute") for(const [path,content] of Object.entries(entry.files)) writeFileSync(path,content);
-  if(phase==="execute" && ["skill-integration","integration","write-hang","no-usage","false-answer","high-usage"].includes(mode)) writeFileSync("answer.txt","42\n");
+  if(phase==="execute" && ["skill-integration","integration","write-hang","no-usage","false-answer","high-usage","reported"].includes(mode)) writeFileSync("answer.txt","42\n");
+  // Reported decisions and debug (ccloop spec 2026-10-20 §5): mode `reported` behaves as `integration` and its execute
+  // answer also carries `decisions` and `debug`: the fields of <marker>.reported.json when present, else one major and one
+  // minor decision and a debug whose two unreported members are null, as codex's strict wire schema makes them.
+  if(phase==="execute" && mode==="reported") Object.assign(body,existsSync(marker+".reported.json")?JSON.parse(readFileSync(marker+".reported.json","utf8")):REPORTED);
   if(phase==="verify" && mode==="false-answer") writeFileSync("answer.txt","0\n");
   if(mode==="quota") {process.stdout.write(JSON.stringify({type:"turn.failed",error:{message:"quota exhausted"}})+"\n");return;}
   if(phase==="execute" && mode==="write-hang") {setInterval(()=>{},1000);return;}

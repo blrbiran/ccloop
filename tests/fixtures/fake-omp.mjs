@@ -69,6 +69,9 @@ if (phase === "execute") writeFileSync("answer.txt", "42\n");
 const result = phase === "plan" ? { summary: "Set answer to 42", primaryTargetPaths: ["answer.txt"] }
   : phase === "execute" ? { changedFiles: ["answer.txt"], diffPatch: "", commandOutputs: [], stdoutStderrLog: "wrote answer" }
     : { approved: true, rejectCategory: "", primaryTargetPaths: ["answer.txt"], failingCommand: null, safeToRetry: false, evidence: ["answer is 42"], pauseSignals: [], stopSignals: [] };
+// Reported decisions and debug (ccloop spec 2026-10-20 §5): with `<marker>.reported.json` present, the execute answer also
+// carries its fields (decisions, debug, anything given). Without the file nothing changes; the argv convention is unchanged.
+if (phase === "execute" && existsSync(`${marker}.reported.json`)) Object.assign(result, JSON.parse(readFileSync(`${marker}.reported.json`, "utf8")));
 const message = { role: "assistant", content: [{ type: "text", text: JSON.stringify(result) }], provider: "gateway", model: "model-a", stopReason: "stop", usage: { input: 8, output: 2, cacheRead: 3, cacheWrite: 1, totalTokens: 14, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
 for (const row of [{ type: "session", id: "fake" }, { type: "agent_start" }, { type: "message_end", message }, { type: "agent_end", isTerminal: true, yielded: true, messages: [message] }]) {
   process.stdout.write(`${JSON.stringify(row)}\n`);
