@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
+import { readEvidence } from "./evidence.js";
 import { isTerminalRunStatus } from "../state/stateMachine.js";
 import type { RunState, RunStatus } from "../state/types.js";
 import { ControlProtocolError, type StartEnvelopeV3 } from "./protocol.js";
@@ -25,6 +27,12 @@ export interface CollectionV1 {
   terminal: RunState | null;
   /** Running or terminal alike; null before the loop wrote any state. */
   progress: ProgressV1 | null;
+  /**
+   * Reported decisions and debug (spec 2026-10-20 §4.3): what the collected candidate's attempt reported, carried
+   * opaquely for Orca. Absent (never null) when there is no candidate or its attempt reported none.
+   */
+  decisions?: unknown;
+  debug?: unknown;
 }
 
 const safe = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -87,6 +95,36 @@ function candidateOf(candidate: CandidateV1, proof: StopProofV1 | null): NonNull
     checkpointId, usageHighWater, result, artifacts, snapshot, missing, unresolvedRequestIds, stopProof: proof, terminalOutcome, handoff };
 }
 
+/**
+ * Reported decisions and debug (spec 2026-10-20 §4.3): read from the candidate's kept copy of its attempt's execution.json,
+ * never from the live attempt directory. The candidate records no label for its artifacts, so the kept copy is found by
+ * content: the live run/attempts/<currentAttempt>/execution.json is hashed and only an artifact of the candidate with that
+ * hash is read. The attempt is the loop state's current one -- the one the candidate was built from (handoff.ts) -- and a
+ * file that changed after the candidate kept it, or another attempt's file, matches no kept copy, so it is never reported.
+ */
+async function reportedOf(sourceDir: string, candidate: CandidateV1, state: unknown): Promise<Pick<CollectionV1, "decisions" | "debug">> {
+  const attempt = (state as { currentAttempt: number }).currentAttempt;
+  if (attempt < 1) return {};
+  let live: Buffer;
+  try {
+    live = await readPrivateFile(sourceDir, join(sourceDir, "run", "attempts", String(attempt), "execution.json"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
+  const hash = createHash("sha256").update(live).digest("hex");
+  const kept = candidate.artifacts.find((ref) => ref.hash === hash && ref.artifactId === `evidence-${hash}`);
+  if (kept === undefined) return {};
+  let execution: unknown;
+  try { execution = JSON.parse((await readEvidence(sourceDir, kept)).toString("utf8")); } catch (error) {
+    if (error instanceof SyntaxError) return {};
+    throw error;
+  }
+  if (execution === null || typeof execution !== "object" || Array.isArray(execution)) return {};
+  const fields = execution as Record<string, unknown>;
+  return { ...(Object.hasOwn(fields, "decisions") ? { decisions: fields.decisions } : {}), ...(Object.hasOwn(fields, "debug") ? { debug: fields.debug } : {}) };
+}
+
 export async function collectExecution(input: StartEnvelopeV3, afterSeq: number): Promise<CollectionV1> {
   if (!safe.safeParse(afterSeq).success) throw new ControlProtocolError("control-collect-invalid");
   const events = (await readUsageEvents(input.work.sourceDir)).filter((event) => event.eventSeq > afterSeq);
@@ -96,11 +134,13 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     ? null
     : await proveStopped({ sourceDir: input.work.sourceDir, accepted });
   const loopState = await readLoopStateJson(input.work.sourceDir);
+  const progress = loopState === null ? null : progressOf(loopState.state);
   return {
     events,
     candidate: storedCandidate === null ? null : candidateOf(storedCandidate, proof),
     terminal: storedCandidate === null || loopState === null ? null : terminalOf(loopState.state, input.protocol),
-    progress: loopState === null ? null : progressOf(loopState.state),
+    progress,
+    ...(storedCandidate === null || loopState === null ? {} : await reportedOf(input.work.sourceDir, storedCandidate, loopState.state)),
   };
 }
 

@@ -82,5 +82,12 @@ describe("saved allowance phase evidence",()=>{
   const usage=await f.put(f.ledger);f.packet.allowanceContinuation.usage=usage;f.packet.artifacts.push(usage);await f.update();
   expect((await readAllowanceContinuation(f.envelope))?.execution?.tokenUsage).toBe(10);
  });
+ // Reported decisions and debug (ccloop spec 2026-10-20 §4.3, criterion 8): the successor run lands the predecessor's
+ // execution, so the decisions Orca writes into the ledger must survive loading the saved execution unchanged.
+ it("carries the saved execution's reported decisions and debug to the continuation unchanged",async()=>{
+  const f=await saved();const decisions=[{question:"q",chose:"c",alternatives:[],because:"b",undo:{how:"h",cost:"c",blast_radius:"r"},scope:"file",kind:"implementation",importance:"minor"}];
+  const ref=await f.put({...f.execution,decisions,debug:{reproCommand:"npm test"}});f.packet.allowanceContinuation.execution=ref;f.packet.artifacts.push(ref);await f.update();
+  expect((await readAllowanceContinuation(f.envelope))?.execution).toEqual({...f.execution,decisions,debug:{reproCommand:"npm test"}});
+ });
 
 });

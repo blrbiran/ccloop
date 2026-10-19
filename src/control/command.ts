@@ -198,6 +198,9 @@ const collectionSchema = z.object({
     attemptsRemaining: safeInteger,
     lastTransitionAt: z.string().min(1),
   }).strict().nullable(),
+  // Reported decisions and debug (spec 2026-10-20 §4.3): carried opaquely, absent when not reported; protocols 3 and 4.
+  decisions: z.unknown().optional(),
+  debug: z.unknown().optional(),
 }).strict();
 
 const METHODS = new Set<ControlMethodV1>([

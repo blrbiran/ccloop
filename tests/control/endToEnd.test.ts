@@ -51,4 +51,10 @@ describe("control protocol through the built CLI",{timeout:120000},()=>{
   await accepted(f,env);if(point==="worker-claimed"||point==="candidate-fsynced"){await waitFile(marker);const record=JSON.parse(await readFile(join(f.sourceDir,"control","accepted.json"),"utf8"));process.kill(record.worker.pid,"SIGKILL");await sleep(100);const replay=await call(f,"accept",f.envelope);expect(JSON.parse(replay.stdout)).toEqual({kind:"unknown"});if(point==="candidate-fsynced"){const report=JSON.parse((await call(f,"collect",{input:f.envelope,afterSeq:0})).stdout);expect(report.candidate).not.toBeNull();expect(report.candidate.stopProof).toBeNull();}return;}
   await collection(f);const request={protocol:1,requestId:"request-1",runId:"run-1",generation:1,reason:"context",deadlineAt:new Date(Date.now()+30000).toISOString()};const child=spawn(binary,["control","handoff","--agents",f.tablePath],{env,stdio:["pipe","ignore","ignore"]});child.stdin.end(JSON.stringify({input:f.envelope,request}));await waitFile(marker);await killAndWait(child);const replay=await call(f,"handoff",{input:f.envelope,request});expect(replay.code,replay.stderr).toBe(0);expect(await rows(f.marker+".calls")).toEqual(["plan","execute","verify"]);
  });
+ // Reported decisions and debug (ccloop spec 2026-10-20 §7 criterion 11): Orca reads the decisions a run reported from the
+ // collect answer of the real CLI, so they must travel fake codex -> normalizer -> execution.json -> kept copy -> collect.
+ it("returns the decisions a fake-codex run reported from `ccloop control collect`",async()=>{await chmod(binary,0o755);const f=await fixture("reported");await accepted(f);
+  const done=await collection(f);expect(done.decisions.map((decision:any)=>decision.importance)).toEqual(["major","minor"]);expect(done.decisions[0].undo.how).toBe("restore the retry loop in src/client.ts");
+  expect(done.debug).toEqual({choseInstead:"fix the parser",reproTests:["tests/parser.test.ts"],reproCommand:"npx vitest run tests/parser.test.ts"});expect(await rows(f.marker+".calls")).toEqual(["plan","execute","verify"]);
+ });
 });
