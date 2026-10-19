@@ -184,6 +184,7 @@ export type FinalExtraction =
   | { method: "candidate"; value: unknown; candidates: number; valid: number }
   | { method: "none"; candidates: number; valid: number };
 const MAX_NODES = 100_000, MAX_DEPTH = 1_000;
+const OPAQUE_REPORT_KEYS: ReadonlySet<string> = new Set(["taskResult", "decisions", "debug"]);
 /** Parsed, transport-bounded JSON only: canonical streaming identity without recursive stringify or candidate depth. */
 function canonicalJsonHash(value: unknown, reports?: WeakMap<object, string>): string {
   const hash = createHash("sha256");
@@ -266,7 +267,11 @@ export function scanFinalMessage(final: string, accepts: PhaseAcceptor, strictEx
         if (lossy) { reportFingerprints.set(node, canonicalJsonHash(original)); hasLossyReport = true; }
         node.taskResult = bounded;
       }
-      const children = opaque ? Object.entries(node).filter(([key]) => key !== "taskResult").map(([, item]) => item) : Object.values(node);
+      // Reported decisions and debug (spec 2026-10-20 §4.1, review I1) are opaque under an established execute node too:
+      // an agent's decision or debug object may carry a key that names an answer field, and must not make a second
+      // candidate. Their size is bounded later by dropUnreported.
+      const owner = record(node) && reportOwners.has(node);
+      const children = owner ? Object.entries(node).filter(([key]) => !OPAQUE_REPORT_KEYS.has(key)).map(([, item]) => item) : Object.values(node);
       for (const item of children) if (item !== null && typeof item === "object") stack.push([item, level + 1]);
       if (record(node) && accepts.keys.some((key) => Object.hasOwn(node, key))) found.push(node);
     }

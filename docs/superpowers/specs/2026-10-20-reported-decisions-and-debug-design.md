@@ -245,3 +245,22 @@ attempt (⇒ kept artifact copy); claude's fake never validates answers (⇒ cri
 [..,"null"]` would dodge the strictness checker (⇒ `anyOf`); Orca breakages not named (⇒ §6 list); the importance path
 to the panel and the third group list (⇒ §6); no criterion that the ledger line carries `importance` (⇒ 14). All
 folded in by the controller under the human's "follow the controller's suggestion" for this round.
+
+## 10. Correction (as built, Orca session `3831d12f`, 2026-10-20)
+
+Sections above are kept verbatim. As built:
+
+- **Codex's null line** is not a codex suffix after the envelope line (that would break
+  `tests/runtime/codex/finalExtraction.test.ts:185-188`, which pins the last two lines); it is inserted last before
+  `FINAL_MESSAGE_LINE` through `buildExecutorPrompt(ctx, { schemaNeedsNull: true })`, used only by codex.
+- **Opacity in the answer scanner** (review I1): under an established execute node, `decisions` and `debug` are opaque
+  subtrees like `taskResult` (`OPAQUE_REPORT_KEYS`, `src/runtime/codex/protocol.ts`) — an agent's decision or debug
+  object carrying a key that names an answer field (`result`, `changedFiles`, …) no longer makes a second candidate and
+  fails an omp run. Criterion: `tests/runtime/reportedDecisions.test.ts` "is opaque to the answer scanner" (red before
+  the change).
+- **Collect** finds the candidate's kept copy by the content hash of the live `attempts/<currentAttempt>/execution.json`
+  among `candidate.artifacts` (artifacts carry no labels); no match ⇒ the keys are absent. Each poll after a candidate
+  exists re-reads and hashes that file and reads the kept copy (up to twice the file size per poll), and a read error
+  other than ENOENT/non-JSON (non-regular file, evidence hash mismatch) fails the collect. Registered, accepted.
+- **Task-result manifest**: its `executionRef` core now includes `decisions`/`debug` when an answer reports them
+  (answers that report nothing are byte-identical). §4.3's "keeps what it does today" is corrected to this.

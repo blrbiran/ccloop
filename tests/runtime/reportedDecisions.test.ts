@@ -42,6 +42,18 @@ describe("reported decisions and debug in the codex/omp execute normalization", 
     expect(execution.debug).toBe("not an object");
   });
 
+  it.each([
+    ["debug carrying an answer key", { decisions: [major], debug: { reproCommand: "x", commandOutputs: ["y"] } }],
+    ["a decision item carrying `result`", { decisions: [{ ...major, result: "kept" }] }],
+    ["an undo carrying `changedFiles`", { decisions: [{ ...major, undo: { ...major.undo, changedFiles: ["a"] } }] }],
+  ])("criterion 2 (C1, review I1): %s is opaque to the answer scanner, so the answer stays available", (_name, extra) => {
+    for (const wrapped of [false, true]) {
+      const answer = { ...complete, ...extra };
+      const execution = normalized(wrapped ? { result: answer } : answer) as Record<string, unknown>;
+      expect(execution.decisions).toEqual(extra.decisions);
+    }
+  });
+
   it("criterion 3: codex's 'reported nothing' (null decisions, all-null debug) normalizes to the bytes of the same answer without the keys", () => {
     for (const body of [complete, partial]) for (const wrapped of [false, true]) {
       const plain = JSON.stringify(normalized(wrapped ? { result: body } : body));
