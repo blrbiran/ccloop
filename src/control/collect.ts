@@ -134,12 +134,12 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     ? null
     : await proveStopped({ sourceDir: input.work.sourceDir, accepted });
   const loopState = await readLoopStateJson(input.work.sourceDir);
-  const progress = loopState === null ? null : progressOf(loopState.state);
   return {
     events,
     candidate: storedCandidate === null ? null : candidateOf(storedCandidate, proof),
     terminal: storedCandidate === null || loopState === null ? null : terminalOf(loopState.state, input.protocol),
-    progress,
+    progress: loopState === null ? null : progressOf(loopState.state),
+    // Evaluated after progressOf, which has checked the loop state's currentAttempt.
     ...(storedCandidate === null || loopState === null ? {} : await reportedOf(input.work.sourceDir, storedCandidate, loopState.state)),
   };
 }
