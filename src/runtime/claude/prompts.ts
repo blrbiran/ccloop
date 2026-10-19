@@ -31,7 +31,20 @@ export function buildPlannerPrompt(contract: LoopContract): string {
   ].join("\n");
 }
 
-export function buildExecutorPrompt(context: AttemptContext): string {
+// Reported decisions and debug (spec 2026-10-20 §4.2, human rulings 2026-10-20): a headless agent does not stop to ask the
+// human; it chooses, continues, and reports the choices it made, few and graded, so the human can confirm or correct them.
+// Last before FINAL_MESSAGE_LINE, as the rule above allows. `reconcile` is left out of the kinds: only Orca writes it.
+const DECISION_LINES = [
+  'Also report the decisions you made in this attempt as decisions, in that same object: [{"question":string,"chose":string,"alternatives":[{"option":string,"why_not":string}],"because":string,"undo":{"how":string,"cost":string,"blast_radius":string},"scope":string,"kind":string,"importance":string}]. A decision is (a) a question you would have stopped to ask the human in an interactive session, with options, or (b) a direction, architecture or interface choice or change. Do not stop to ask: choose, continue, and report it.',
+  'Grade each: importance: "major" for (a) and (b); "minor" for naming and local implementation trade-offs worth recording. Report few, important decisions; omit what anyone would have done the same way. No decisions: omit the field or give [].',
+  "scope is one of file, task, repo, cross-repo; kind is one of dependency, interface, scheduling, abandon, criteria, boundary, implementation (implementation: naming and local implementation choices).",
+  "undo.how names what to change back: the files or fields (for example: restore the retry loop in src/x.ts), or a command when one applies; git revert only fits right after the change lands, so do not rely on it.",
+  'Report debug only when the task\'s goal asks for it, in that same object: {"choseInstead"?:string,"reproTests"?:string[],"reproCommand"?:string,"reproduction"?:"not-expressible","reproductionReason"?:string}.',
+];
+/** Codex only (spec §4.2): its provider-strict output schema requires every field, so an unreported one is null. */
+const CODEX_NULL_LINE = "Your output schema requires decisions and debug: give decisions null when you report none, debug null when the goal does not ask for it, and null for each debug member you leave out.";
+
+export function buildExecutorPrompt(context: AttemptContext, options: { schemaNeedsNull?: boolean } = {}): string {
   const contract = context.contract;
 
   return [
@@ -59,6 +72,8 @@ export function buildExecutorPrompt(context: AttemptContext): string {
     "Output paths must be relative POSIX file paths: no empty/dot/dot-dot components, absolute/drive or URL prefix, NUL or backslash. Report limitations honestly and leave actual verification to the verifier.",
     "If the attempt is interrupted, preserve any recognizable partial artifacts in those fields.",
     `If execute is aborted, you may have up to ${contract.executionPolicy.partialOutcomeRecoveryWindowMs}ms to flush one final execute-phase result.`,
+    ...DECISION_LINES,
+    ...(options.schemaNeedsNull === true ? [CODEX_NULL_LINE] : []),
     FINAL_MESSAGE_LINE,
   ].join("\n");
 }
@@ -68,6 +83,9 @@ export function buildVerifierPrompt(context: AttemptContext): string {
   // The Agent explanation is supplemental; verification continues to see the same actual execution evidence.
   const fields = Object.getOwnPropertyDescriptors(context.execution ?? {});
   delete fields.taskResult;
+  // Reported decisions and debug (spec 2026-10-20 §4.2): supplemental reporting, not execution evidence, like taskResult.
+  delete fields.decisions;
+  delete fields.debug;
   const executionCore = Object.defineProperties({}, Object.fromEntries(Object.entries(fields).filter(([, descriptor]) => descriptor.enumerable)));
 
   return [

@@ -129,7 +129,7 @@ export class CodexAdapter implements RuntimeAdapter {
 
   plan(context: AttemptContext) { return this.phase("plan", buildPlannerPrompt(context.contract), context); }
   async execute(context: AttemptContext) {
-    try { return await this.phase("execute", buildExecutorPrompt(context) + "\nWrap the complete or partial result in a single object with the sole key result, as required by the output schema.", context); }
+    try { return await this.phase("execute", buildExecutorPrompt(context, { schemaNeedsNull: true }) + "\nWrap the complete or partial result in a single object with the sole key result, as required by the output schema.", context); }
     catch (error) {
       // An aborted execute that was observed spending tokens throws, so runLoop can settle that usage;
       // one that was not keeps answering null exactly as before.
