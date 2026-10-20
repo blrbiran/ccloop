@@ -34,6 +34,18 @@ describe("saved allowance phase evidence",()=>{
   f.envelope.work.contract.executionPolicy.maxAttempts=1;
   expect((await readAllowanceContinuation(f.envelope))?.nextPhase).toBe(phase);
  });
+ // Spec 2026-10-20-verifier-sees-checks-and-last-failure-design.md §5.2(i) (ruling B): the plan branch also returns the
+ // saved rejection's evidence, already hash-checked, so the renewed attempt's plan can see why the last one failed.
+ it("returns the saved rejection's evidence for a plan renewal, and only when it is a string array",async()=>{
+  for(const evidence of [["boom","second"],[1],"boom"]){
+   const f=await saved("plan");
+   const ref=await f.put({approved:false,rejectCategory:"fix",primaryTargetPaths:[],failingCommand:null,safeToRetry:true,pauseSignals:[],stopSignals:[],evidence});
+   f.packet.allowanceContinuation.verification=ref;f.packet.artifacts.push(ref);await f.update();
+   const result=await readAllowanceContinuation(f.envelope);
+   if(Array.isArray(evidence)&&evidence.every(e=>typeof e==="string"))expect(result).toEqual({nextPhase:"plan",plan:null,execution:null,recentFailures:f.packet.runState.recentFailures,lastRejectionEvidence:evidence});
+   else expect(result).not.toHaveProperty("lastRejectionEvidence");
+  }
+ },30_000);
  it("refuses changed task authority even if the caller repeats the frozen hash",async()=>{
   const f=await saved();f.envelope.work.contract.objective.goal="different";
   await expect(readAllowanceContinuation(f.envelope)).rejects.toThrow("control-allowance-authority-mismatch");

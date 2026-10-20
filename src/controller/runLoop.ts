@@ -6,6 +6,8 @@ import type { MaterializedAgentConfigV1 } from "../agents/types.js";
 import { captureExecutionFormatFailure, ExecutionFormatFailure, resolveCheckpointOriginalBase } from "./executionFormatFailure.js";
 import { remainingTokens, minTokenCeiling, budgetAmountSchema, type BudgetAmount, type TokenPolicy } from "../budget/tokenPolicy.js";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   appendEvent,
@@ -44,6 +46,7 @@ import type {
   ExecutionResult,
   OwnerRecord,
   ReconciliationDraft,
+  LastFailure,
   ReconciliationRecord,
   RequiredCheckResult,
   RuntimeAdapter,
@@ -320,6 +323,26 @@ async function runVerification(
     ...verification,
     evidence: [...requiredChecks.evidence, ...verification.evidence],
   });
+}
+
+// Ruling B (spec 2026-10-20-verifier-sees-checks-and-last-failure-design.md §5.2(ii)): after a crash the rejection is no
+// longer in memory, but its verify.json is on disk. The highest attempt whose rejected verification has the last recorded
+// fingerprint wins; a missing, unreadable or non-matching file gives null and never fails the run.
+async function readRejectionEvidence(runDir: string, state: RunState): Promise<string[] | null> {
+  const last = state.recentFailures.at(-1);
+  if (last === undefined) return null;
+  const wanted = canonicalHash({ rejectCategory: last.rejectCategory, primaryTargetPaths: last.primaryTargetPaths, failingCommand: last.failingCommand });
+  for (let attempt = state.attemptsUsed; attempt >= 1; attempt--) {
+    try {
+      const value = JSON.parse(await readFile(join(runDir, "attempts", String(attempt), "verify.json"), "utf8")) as Partial<VerificationResult>;
+      const fingerprint = { rejectCategory: value.rejectCategory, primaryTargetPaths: value.primaryTargetPaths, failingCommand: value.failingCommand };
+      if (value.approved === false && canonicalHash(fingerprint) === wanted
+        && Array.isArray(value.evidence) && value.evidence.every((entry) => typeof entry === "string")) return value.evidence;
+    } catch {
+      // Unreadable or not JSON: treated as absent.
+    }
+  }
+  return null;
 }
 
 function initialState(contract: LoopContract): RunState {
@@ -1255,7 +1278,7 @@ export interface RunControlHooks {
   workGrant?: BudgetAmount;
   tokenPolicy?: TokenPolicy;
   /** Only the worker supplies this, after validating the checkpoint and reachable artifacts. */
-  allowanceContinuation?: { nextPhase: "plan" | "execute" | "verify"; plan: AttemptPlan | null; execution: ExecutionResult | null; recentFailures?: FailureFingerprint[] };
+  allowanceContinuation?: { nextPhase: "plan" | "execute" | "verify"; plan: AttemptPlan | null; execution: ExecutionResult | null; recentFailures?: FailureFingerprint[]; lastRejectionEvidence?: string[] };
   /** Trusted accepted control envelope supplied only by the worker. */
   taskResultInput?: StartEnvelopeV3;
   /** Only supported original provider evidence can create a recovery capsule. */
@@ -1323,6 +1346,14 @@ export async function runLoopFromState(
     await assertSavedResultFence(recovery.input,recovery.admission);
   }} : options;
   if(recovery)state={...state,status:"planning"};
+  // Ruling B (spec §5.2): the evidence of the last rejection, for the next attempt's plan and execute. Set from the worker's
+  // allowance continuation or, after a crash, read back from disk; then on every retry.
+  let lastRejectionEvidence: string[] | null = state.recentFailures.length === 0 ? null
+    : options?.allowanceContinuation?.lastRejectionEvidence ?? await readRejectionEvidence(runDir, state);
+  const lastFailureContext = (): { lastFailure?: LastFailure } => {
+    const last = state.recentFailures.at(-1);
+    return last === undefined ? {} : { lastFailure: { rejectCategory: last.rejectCategory, failingCommand: last.failingCommand, evidence: lastRejectionEvidence } };
+  };
   let activeAdapter: RuntimeAdapter | null = typeof adapter === "function" ? null : adapter;
   let activePhase: PhaseName | null = null;
   let observedTokens = 0;
@@ -1539,7 +1570,7 @@ export async function runLoopFromState(
         await heartbeat.assertHeld();
         activePhase = "plan";
         const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal) =>
-          attemptAdapter.plan(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options)),
+          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext() }),
           { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true },
         );
 
@@ -1606,7 +1637,7 @@ export async function runLoopFromState(
         ? { timedOut: false as const, elapsedMs: 0, result: continuation.execution! }
         : await runPhaseWithTimeout(
         executeTimeoutMs,
-        (abortSignal) => attemptAdapter.execute(buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options)),
+        (abortSignal) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext() }),
         { awaitAbortedResult: true },
       );
 
@@ -1949,6 +1980,7 @@ export async function runLoopFromState(
           primaryTargetPaths: verification.primaryTargetPaths,
           failingCommand: verification.failingCommand,
         };
+        lastRejectionEvidence = verification.evidence;
         state = {
           ...transitionRunState(
             {

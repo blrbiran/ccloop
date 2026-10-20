@@ -4,6 +4,10 @@ import type { ModelUsageV1 } from "../control/usage.js";
 
 export type RequiredCheckResult = { command: string; stdout: string; stderr: string };
 
+/** Ruling B (spec 2026-10-20-verifier-sees-checks-and-last-failure-design.md §5.1): the last rejection, for a retried
+ * attempt's plan and execute. evidence is null when it could not be recovered (e.g. after a crash, no matching file). */
+export type LastFailure = { rejectCategory: string; failingCommand: string | null; evidence: string[] | null };
+
 export type AttemptContext = {
   contract: LoopContract;
   state: RunState;
@@ -17,6 +21,7 @@ export type AttemptContext = {
   /** Ruling A (spec 2026-10-20-verifier-sees-checks-and-last-failure-design.md §4): set only for verify, by ccloop, after
    * every required check passed; one entry per check in contract order, raw streams. */
   requiredCheckResults?: RequiredCheckResult[];
+  lastFailure?: LastFailure;
   onProcessRegistered?: (process: {
     pid: number;
     pgid: number;

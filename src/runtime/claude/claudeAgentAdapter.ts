@@ -329,7 +329,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
   }
 
   plan(context: AttemptContext): Promise<AttemptPlan> {
-    return this.phase<AttemptPlan>({ phase: "plan", prompt: buildPlannerPrompt(context.contract), ...this.base(context) }, context);
+    return this.phase<AttemptPlan>({ phase: "plan", prompt: buildPlannerPrompt(context.contract, context.lastFailure), ...this.base(context) }, context);
   }
 
   async execute(context: AttemptContext): Promise<ExecutePhaseResult> {

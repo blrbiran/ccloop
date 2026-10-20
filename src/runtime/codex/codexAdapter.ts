@@ -133,7 +133,7 @@ export class CodexAdapter implements RuntimeAdapter {
     }
   }
 
-  plan(context: AttemptContext) { return this.phase("plan", buildPlannerPrompt(context.contract), context); }
+  plan(context: AttemptContext) { return this.phase("plan", buildPlannerPrompt(context.contract, context.lastFailure), context); }
   async execute(context: AttemptContext) {
     try { return await this.phase("execute", buildExecutorPrompt(context, { schemaNeedsNull: true }) + "\nWrap the complete or partial result in a single object with the sole key result, as required by the output schema.", context); }
     catch (error) {

@@ -265,7 +265,11 @@ export async function readAllowanceContinuation(envelope: LoopStartEnvelope): Pr
       budgetExceeded: false, recentFailures: recentFailures.slice(0, -1), verifier: value,
     });
     if (decision.kind !== "retryable" || value.stopSignals.some(signal => source.data.escalationAndExit.stopOn.includes(signal))) fail("control-allowance-phase-invalid");
-    return { nextPhase: "plan", plan: null, execution: null, recentFailures };
+    // Ruling B (spec 2026-10-20-verifier-sees-checks-and-last-failure-design.md §5.2(i)): the rejection's evidence, already
+    // hash-checked above, so the renewed attempt's plan sees why the last one failed. Absent unless a string array.
+    const evidence = (value as { evidence?: unknown }).evidence;
+    const lastRejectionEvidence = Array.isArray(evidence) && evidence.every((entry) => typeof entry === "string") ? { lastRejectionEvidence: evidence as string[] } : {};
+    return { nextPhase: "plan", plan: null, execution: null, recentFailures, ...lastRejectionEvidence };
   }
   if (continuation.data.verification !== null) fail("control-allowance-phase-invalid");
   const plan = savedPlanSchema.safeParse(decode(reachable(continuation.data.plan)));

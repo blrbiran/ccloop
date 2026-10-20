@@ -82,6 +82,48 @@ async function readEventTypes(runDir: string): Promise<string[]> {
   return raw.split("\n").filter(Boolean).map((l) => JSON.parse(l).type as string);
 }
 
+// Spec 2026-10-20-verifier-sees-checks-and-last-failure-design.md §5.2(ii) (ruling B): after a crash, the in-memory
+// rejection is gone; the resumed attempt reads it back from attempts/<k>/verify.json when its fingerprint matches the
+// last recorded failure, and otherwise carries evidence null without failing the run.
+describe("resumeLoop carries the last rejection read back from disk", () => {
+  const fingerprint = { rejectCategory: "required-check-failed", primaryTargetPaths: ["src/index.ts"], failingCommand: "npm test" };
+  async function resumeWith(verify: unknown | null) {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+    const state = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8"));
+    await writeFile(join(runDir, "loop-state.json"), JSON.stringify({ ...state, recentFailures: [fingerprint] }));
+    if (verify !== null) {
+      await mkdir(join(runDir, "attempts", "1"), { recursive: true });
+      await writeFile(join(runDir, "attempts", "1", "verify.json"), JSON.stringify(verify));
+    }
+    const contexts: { phase: string; lastFailure: unknown }[] = [];
+    const frame = successFrame();
+    const finalState = await resumeLoop(runDir, {
+      async plan(context) { contexts.push({ phase: "plan", lastFailure: context.lastFailure }); return frame.plan; },
+      async execute(context) { contexts.push({ phase: "execute", lastFailure: context.lastFailure }); return frame.execution; },
+      async verify() { return frame.verification; },
+    });
+    return { finalState, contexts };
+  }
+  const rejected = { ...fingerprint, approved: false, safeToRetry: true, evidence: ["TypeError: median is not a function"], pauseSignals: [], stopSignals: [] };
+
+  it("a matching verify.json gives the resumed plan and execute its evidence", async () => {
+    const { finalState, contexts } = await resumeWith(rejected);
+    expect(finalState.status).toBe("succeeded");
+    expect(contexts).toEqual(["plan", "execute"].map(phase => ({ phase, lastFailure: { rejectCategory: "required-check-failed", failingCommand: "npm test", evidence: ["TypeError: median is not a function"] } })));
+  });
+
+  it("a verify.json with another fingerprint, or none, gives evidence null and the run goes on", async () => {
+    for (const verify of [{ ...rejected, failingCommand: "other" }, null]) {
+      const { finalState, contexts } = await resumeWith(verify);
+      expect(finalState.status).toBe("succeeded");
+      expect(contexts.map(c => c.lastFailure)).toEqual([0, 1].map(() => ({ rejectCategory: "required-check-failed", failingCommand: "npm test", evidence: null })));
+    }
+  });
+});
+
 describe("resumeLoop", () => {
   it("resumes an eligible run from the next attempt and claims ownership", async () => {
     const repoPath = await createRepo();
