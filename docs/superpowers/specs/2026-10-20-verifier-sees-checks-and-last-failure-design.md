@@ -6,6 +6,15 @@ claude required-check allow rules; ...`). Every `file:line` below was read at th
 (Rule 14). This document is a design only: no code, no criterion edited. Revision 2 (same session, same day) follows an
 independent review (NOT READY) and the human's ruling R below; it replaces revision 1 on this unmerged branch.
 
+Revision 3 (Orca session `9ec98639`, 2026-10-21, implementer of this design; same unmerged branch, base still
+`86f6123`): follows the second independent review ("ready with fixes", Orca ledger
+`.superpowers/sdd/2026-10-20-session-308b874c/progress.md`, "ccloop second review") and the human's choice of option
+**(b)** (「同意选 (b)」): R applies only to the first attempt of a lineage outside saved-result recovery (§3 rewritten,
+with a terminal-state table read from the code). §8.1 item 1 now uses an independent oracle; items 2–4 were re-probed
+with their full rewritten assertions under (b) (§8.2); §9 gains the adapter wiring tests and the terminal tests the
+review asked for; §10 gains the Orca impact list. The human approved every necessary criterion rewrite in this session
+(「这次批准改写所有必要的判据」, Orca session `9ec98639`), which is the per-item nod §8 asks for.
+
 ## 1. Intent and the human's words
 
 Three approvals, given by the human in Orca session `308b874c` on 2026-10-20, on proposals the controller made:
@@ -17,7 +26,10 @@ Three approvals, given by the human in Orca session `308b874c` on 2026-10-20, on
   rejection: its category, the failing command, and a bounded excerpt of its evidence.
 - **R.** 「同意你的建议」 on: make `required-check-failed` retryable **once** — on the first attempt of a lineage, a
   failed required check retries with the failure carried into the next plan/execute (B); a second failure stops as
-  today.
+  today. **How (human, second review round): option (b)** — 「你看如何做是全局最优的」 → the controller proposed (b),
+  the human: 「同意选 (b)」. Only the lineage's first attempt outside saved-result recovery is retryable; every other
+  path keeps today's terminal state. Orca's escalation ladder owns continuation across runs; ccloop owns only this one
+  in-run retry.
 
 ⚠️ 「按你的建议」／「同意你的建议」 approve the design direction. Per the handoff (「「按你的建议办」不是改判据的授权。」)
 they are **not** an authorization to edit any existing criterion; §8 lists the ones that would change, each needing
@@ -78,25 +90,38 @@ its own nod (Rule 15).
   function` starts at byte 391. The contract had `maxAttempts: 1` (so `exhausted`); with more, today's rule would still
   have ended it (`failed`, `:85-87`), not retried it.
 
-## 3. Design R — `required-check-failed` is retryable once
+## 3. Design R — `required-check-failed` is retryable once, on the lineage's first attempt only (option (b))
 
-1. `runLoop.ts:221`: `safeToRetry: false` → `true`. Nothing else in the stop path changes; the "once" is the existing
-   rule at `stopController.ts:89-91`.
-2. Resulting decisions for a `required-check-failed` (all by today's code order):
-   - lineage attempt 1, `maxAttempts > 1`, budget left ⇒ **retryable** (new; was `failed`).
-   - lineage attempt ≥ 2, same command (or same paths) as the previous failure ⇒ **exhausted, "repeated failure
-     pattern detected"** (`:81-83` comes before `:89-91`).
-   - lineage attempt ≥ 2, a different failure ⇒ **blocked_waiting_human** (`:89-91`, unchanged).
-   - `maxAttempts` reached ⇒ exhausted (unchanged).
-   - token budget exhausted on attempt 1 ⇒ the existing allowance re-evaluation (`runLoop.ts:1920-1933`) now sees
-     retryable and **parks for an allowance** with the fingerprint; `materialize.ts:194` (`safeToRetry: z.literal(true)`)
-     and `:261-266` then accept that continuation. New reachable path, by design.
-   - saved-result recovery: `retryable` is still turned into `failed` (`runLoop.ts:1918`, unchanged).
-3. Applies to both `verifierType`s (`agent` and `command`): both go through `runRequiredChecks`.
-4. `missing-required-evidence` (`:262`) stays `safeToRetry: false` (not in ruling R).
-5. The persisted `verify.json` of such an attempt now says `safeToRetry: true`. Orca reads that field with a
-   `z.boolean()` (Orca `src/control/taskResultProtocol.ts:50`), so the wire shape is unchanged; Orca behaviour that
-   keys on run status sees `blocked_waiting_human`/`exhausted` where it saw `failed` (see §10).
+1. `runRequiredChecks` (`runLoop.ts:191-237`) gains a last parameter `checkFailureRetryable = false` and sets
+   `safeToRetry: checkFailureRetryable` at `:221`. `runVerification` (`:267`) gains the same last parameter and passes
+   it through. Its one caller (`:1816-1829`) passes `attempt + inheritedAttempts === 1 && recovery === undefined`
+   (`attempt` from `:1448`, `inheritedAttempts` from `:1304`, `recovery` from `:1302`). Every other value is `false`,
+   i.e. today's. The stop rules in `stopController.ts` are not touched.
+2. Why (b) and not "`:221` → `true`" (revision 2): the second review (C-new) showed the global change moves three
+   paths that are not the first attempt — verifier-rejected-then-check-failed, inherited lineages, saved-result
+   recovery — from `failed` to `blocked_waiting_human`/`exhausted`. (b) leaves all three byte-for-byte as today.
+3. Terminal states (rows read at `86f6123`, `src/stop/stopController.ts:60-94` in order: approved, human gate,
+   attempt limit, budget, repeated failure `:81-83`, `!safeToRetry` ⇒ failed `:85-87`, `attemptNumber > 1` ⇒
+   blocked `:89-91`, else retryable; then `runLoop.ts:1918` and `:1920-1933`). "L*n*" = lineage attempt
+   `attempt + inheritedAttempts = n`. `maxAttempts ≥ 2` and budget left unless the row says otherwise.
+
+   | # | Path | Today | With (b) | Why (code) |
+   |---|---|---|---|---|
+   | 1 | L1, not recovery, check fails | `failed` "verifier rejection with no safe retry path" | **retryable** ⇒ attempt 2 runs with `lastFailure` (B) | `safeToRetry: true`; `recentFailures` empty ⇒ not repeated; `attemptNumber` 1 ⇒ `:93` |
+   | 2 | row 1, then L2 fails the same command or changes the same paths | — | **`exhausted`** "repeated failure pattern detected" | `:81-83` precedes `:85` |
+   | 3 | row 1, then L2 fails a different check and changes other paths | — | **`failed`** "verifier rejection with no safe retry path" | L2 ⇒ `safeToRetry: false` ⇒ `:85-87` |
+   | 4 | row 1, then L2's checks pass; verifier approves / rejects `safeToRetry: true` / rejects `safeToRetry: false` | — | `succeeded` / `blocked_waiting_human` "retry after first failed attempt requires human approval" / `failed` | `:65`; `:89-91`; `:85-87` (a different category than `required-check-failed` ⇒ not repeated) |
+   | 5 | L1 verifier rejects `safeToRetry: true` (retried, unchanged), then L2 check fails | `failed` | `failed` (unchanged) | category differs ⇒ not repeated; L2 ⇒ `safeToRetry: false` |
+   | 6 | inherited lineage (`inheritedAttempts ≥ 1`: handoff continuation, allowance continuation), the run's attempt 1 check fails | `failed`, or `exhausted` when repeated | unchanged | `attemptNumber ≥ 2` ⇒ `false` |
+   | 7 | saved-result recovery (`attempt` forced to 1, `:1448`) check fails | `failed` | unchanged | `recovery !== undefined` ⇒ `false`; `:1918` also still maps retryable to failed |
+   | 8 | `maxAttempts: 1`, L1 check fails | `exhausted` "attempt limit reached" | unchanged | `:73-75` precedes; the `:1920` re-evaluation hits `:73` again |
+   | 9 | L1 check fails with the token budget at 0 (`hasBudgetExceeded`), time and attempts left, a group/spend-cap token policy | `exhausted` "runtime or token budget exhausted" | **`blocked_waiting_human`**, `waitingCause: "token-allowance"`, `allowanceNextPhase: "plan"`, fingerprint appended | `:1920-1933` re-evaluates with `budgetExceeded` = time only ⇒ now retryable ⇒ `parkAllowance("plan", fingerprint)` (`:1354-1368`; returns `null`, so `exhausted` stays, when there is no token policy, recovery, or no group/spend-cap cause) |
+   | 10 | the allowance continuation of row 9 | — | its attempt 1 is L2 (`tokenPolicy.inheritedUsage.attempts` ≥ 1, enforced at `materialize.ts:249-252`) ⇒ rows 2–4 | `materialize.ts:194` (`safeToRetry: z.literal(true)`) and `:261-266` (`attemptNumber` = 0 + 1 ⇒ retryable) accept the parked verification |
+
+4. Applies to both `verifierType`s (`agent` and `command`): both go through `runRequiredChecks`.
+5. `missing-required-evidence` (`:262`) stays `safeToRetry: false` (not in ruling R).
+6. The persisted `verify.json` of a row-1 attempt says `safeToRetry: true`. Orca reads that field with a `z.boolean()`
+   (Orca `src/control/taskResultProtocol.ts:50`), so the wire shape is unchanged. What changes for Orca is listed in §10.
 
 ## 4. Design A — the verify prompt carries ccloop's check results
 
@@ -210,28 +235,34 @@ ruling it encodes).
 1. **(A) `tests/controller/taskResultOutcome.test.ts:33` (build) and `:43` (assert)** — "%s: invokes the real
    verifier once with baseline prompt even when optional report accessor throws". It builds `expectedPrompt` in
    `execute` from the execute context and asserts the real verify prompt `toBe` it. Under A the real verify context
-   carries `requiredCheckResults` (the codex fixture has one required check, `tests/runtime/codex/fixture.ts:23`).
-   Rewrite: build `expectedPrompt` inside `verify(context)` as `buildVerifierPrompt({ ...context, execution: <the core
-   object execute returned, without the accessor> })`, keep `toBe`, add
-   `expect(actual.prompt).toContain("ccloop already ran every required check above")`. Encodes: the optional report
-   never changes what the verifier sees (original ruling) and ruling A.
+   carries `requiredCheckResults` (the codex fixture has one required check, `tests/runtime/codex/fixture.ts:15-23`).
+   Rewrite (revision 3, independent oracle — the expectation is not taken from the verify context ccloop builds):
+   `:33` becomes `buildVerifierPrompt({ ...context, execution, requiredCheckResults: [{ command:
+   f.contract.verification.requiredChecks[0], stdout: "", stderr: "" }] })`. The literal empty streams are known
+   independently: the fixture's `check.cjs` (`fixture.ts:15`) writes nothing and only calls `process.exit(1)` on a wrong
+   answer. `:43` keeps `toBe`. Encodes: the optional report never changes what the verifier sees (original ruling), and
+   ruling A with exactly ccloop's measured streams. A wrong capture (e.g. stdout and stderr swapped, or the command's
+   evidence string in place of the raw stream) turns `:43` red.
 2. **(R) `tests/controller/runLoop.integration.test.ts:468-469`** in "does not succeed when verifierType is command and
-   a required check fails" (`:429`). Now: `status "failed"`, `stopReason "verifier rejection with no safe retry
-   path"`. Probe: `expected 'exhausted' to be 'failed'` (check `false` fails again on attempt 2 ⇒ repeated failure).
+   a required check fails" (`:429`). Now: `status "failed"`, `stopReason "verifier rejection with no safe retry path"`.
+   Measured red under (b): `expected 'exhausted' to be 'failed'` (check `false` fails again on attempt 2 ⇒ §3 row 2).
    Rewrite: `status "exhausted"`, `stopReason "repeated failure pattern detected"`, `attemptsUsed 2`; keep
    `verifyCalled false`; `attempts/1/verify.json` matches `{approved:false, rejectCategory:"required-check-failed",
-   failingCommand:"false", safeToRetry:true}` and `attempts/2/verify.json` the same category and command. Encodes R.
+   failingCommand:"false", safeToRetry:true}`; `attempts/2/verify.json` matches the same with `safeToRetry:false`
+   (L2 under (b)). Encodes R, and (b)'s "only the first".
 3. **(R) `tests/controller/runLoop.integration.test.ts:526-527`** in "skips adapter.verify when agent verification
-   requiredChecks fail" (`:478`). Same assertions, same probe message, same rewrite as item 2 (agent verifier:
+   requiredChecks fail" (`:478`). Same assertions, same measured red, same rewrite as item 2 (agent verifier:
    `verifyCalled` stays `false` across both attempts).
 4. **(R) `tests/controller/partialToVerify.test.ts:82-90`**, "T11b: a failing required check gives today's stop
-   decision" (comment `:82` "a failed required check is not safe to retry"; assertions `:86-89`: `status "failed"`,
-   that `stopReason`, the event-type list ending `loop_failed`, `verify` with `safeToRetry: false`). Probe: `expected
-   'Error: no scripted frame remaining' to be 'verifier rejection with no safe retry…'` (the `ScriptedAdapter` holds
-   one attempt, R asks for a second). Rewrite: script two identical attempts; expect `exhausted`, "repeated failure
-   pattern detected", the event list with a second `attempt_started … partial_execute_sent_to_verify …` before the
-   terminal event, and `attempts/1/verify.json` with `safeToRetry: true`; comment says the check failure is retried
-   once (ruling R). The test's own point (a partial with changed files reaches verify, §5.1) is unchanged.
+   decision" (comment `:82` "a failed required check is not safe to retry"; assertions `:85-88`). Measured red under (b):
+   `expected 'Error: no scripted frame remaining' to be 'verifier rejection with no safe retry…'` (the
+   `ScriptedAdapter` holds one frame, R asks for a second). Rewrite: `runWith` scripts the same frame twice (T11a/c/d
+   use at most one, unchanged); expect `exhausted`, "repeated failure pattern detected", the event types
+   `["loop_planning","attempt_started","execute_started","partial_execute_sent_to_verify","execution_finished",
+   "verification_rejected","attempt_started","execute_started","partial_execute_sent_to_verify","execution_finished",
+   "loop_exhausted"]` (measured, see §8.2), and `attempts/1/verify.json` with `safeToRetry: true`; the comment says the
+   check failure is retried once on the lineage's first attempt (ruling R, option (b)). The test's own point (a partial
+   with changed files reaches verify, §5.1) is unchanged.
 
 ### 8.2 How the list was found
 
@@ -259,24 +290,46 @@ ruling it encodes).
   timing). So the noise is in the environment, not attributable to R — but it is n=1 under load: the implementer must
   re-run those files unloaded before calling the list complete, and report any further red as a new item. The clone
   was restored afterwards (`git diff` 0 bytes, `wc -c`).
+- **R under (b)** (revision 3, Orca session `9ec98639`): `git clone --local` of this branch at `25161e3` in that
+  session's scratchpad (`vsc-probe/`, `node_modules` symlinked), (b) applied as §3.1 says, `npm run build`, then
+  `vitest run tests/controller/runLoop.integration.test.ts tests/controller/partialToVerify.test.ts
+  tests/controller/taskResultOutcome.test.ts`: 3 failed / 78 passed — exactly items 2–4 with the red shapes quoted
+  above; `taskResultOutcome` green (A not written). With the rewrites of items 2–4 applied in the same clone: 77/77
+  passed (the event list in item 4 is the measured one). With the rewrites kept and (b) reverted to `false`: 3 red
+  (`expected 'failed' to be 'exhausted'`; `ENOENT … attempts/2/verify.json` twice) — the rewrites can fail.
+- **The five noisy files, re-run** (revision 3, same session, 2026-10-21 00:40–00:44 local): the machine was not idle
+  (43 users; `uptime` load averages 10.65 at start, 19.28 at end), so "unloaded" could not be had. On the **unmodified**
+  branch (`25161e3`, docs only over `86f6123`): 4 failed / 131 passed of 135, all in
+  `savedResultRecovery.native.test.ts` (`ENOTEMPTY … rmdir` ×2, "worker did not seal and exit" ×2, each ~10 s);
+  `updates`, `cli`, `evidence`, `verifySavedResult` all green. So the same file is red without any change; it is the
+  baseline the implementation is compared against (the plan re-runs it alone after the change).
 
 ## 9. New tests (add only; each with the mutation that must turn it red, seen red in a `git clone --local` copy, Rule 17)
 
-R:
-- `runLoop`, `maxAttempts: 3`, agent verifier stub, check `test -f ok.txt`; attempt 1's execute writes nothing,
-  attempt 2's writes `ok.txt` ⇒ `succeeded`, `attemptsUsed: 2`, `attempts/1/verify.json` has `safeToRetry: true`.
-  *Mutation:* `:221` back to `false` ⇒ red (`failed` after 1 attempt).
-- Same, check always `false` ⇒ attempt 2 fails the same command ⇒ `exhausted`, "repeated failure pattern detected",
-  `attemptsUsed: 2`, never a third attempt.
-- Different failure on attempt 2 (two checks, attempt 2 passes the first and fails the second, and changes a
-  different file — `isRepeatedFailure` matches on same command **or** same paths) ⇒
-  `blocked_waiting_human`, "retry after first failed attempt requires human approval". *Mutation:* delete
-  `stopController.ts:89-91` ⇒ red (a third attempt runs).
-- `inheritedAttempts: 1` (handoff lineage) and a failing check on the run's attempt 1 ⇒ not retried
-  (`blocked_waiting_human`). *Mutation:* use `attempt` instead of `attempt + inheritedAttempts` at `:1911` ⇒ red.
-- `verifierType: "command"` with a failing check retries once too.
-- Unchanged control: a stub verifier rejecting with `safeToRetry: true` on attempt 1 is retried and its attempt 2
-  carries `lastFailure` with the verifier's own evidence (B covers verifier rejections, not only check failures).
+R (one test per §3 row that changes or that (b) keeps, all `runLoop`-level with a stub adapter unless noted):
+- Row 1: `maxAttempts: 3`, agent verifier stub that approves, check `test -f ok.txt`; attempt 1's execute writes
+  nothing, attempt 2's writes `ok.txt` ⇒ `succeeded`, `attemptsUsed: 2`, `attempts/1/verify.json` has
+  `safeToRetry: true`. *Mutation (named "R-off"):* the caller passes `false` ⇒ red (`failed` after 1 attempt).
+- Row 2 is criterion items 2–4 (§8.1).
+- Row 3: two checks `test -f a.txt` and `test -f b.txt`; attempt 1 writes nothing (fails the first, changes no files —
+  so `primaryTargetPaths` falls back to the plan's), attempt 2 writes `a.txt` and reports `changedFiles: ["a.txt"]`
+  (fails the second, other paths) ⇒ `failed` "verifier rejection with no safe retry path", `attemptsUsed: 2`,
+  `attempts/2/verify.json` `safeToRetry: false`. *Mutation ("R-every-attempt"):* the caller passes `true` always ⇒ red
+  (`blocked_waiting_human`).
+- Row 5 (verifier rejected, then check failed): attempt 1 checks pass and the stub verifier rejects
+  `{rejectCategory:"fix", safeToRetry:true}`; attempt 2 the check fails ⇒ `failed` (today's). Same "R-every-attempt"
+  mutation ⇒ red (`blocked_waiting_human`).
+- Row 6 (inherited lineage): `tokenPolicy.inheritedUsage.attempts: 1`, failing check on the run's attempt 1 ⇒ `failed`,
+  `attemptsUsed: 1`. *Mutation ("R-run-local"):* the caller uses `attempt === 1` (drops `inheritedAttempts`) ⇒ red.
+- Row 7 (saved-result recovery): extend the existing `verifySavedResult` recovery fixture whose check fails; assert
+  `attempts/1/verify.json` (the recovery attempt's) has `safeToRetry: false` and the terminal is `failed`.
+  *Mutation ("R-in-recovery"):* drop `&& recovery === undefined` ⇒ the persisted `safeToRetry` turns `true` ⇒ red (the
+  terminal stays `failed` because `:1918` still maps retryable; the persisted field is what tells them apart).
+- Row 9 (token-exhausted allowance): grant `tokens: 10`, plan 0 / execute 10 tokens, check `false`, group/spend-cap
+  policy ⇒ `blocked_waiting_human`, `waitingCause: "token-allowance"`, `allowanceNextPhase: "plan"`,
+  `recentFailures: [{rejectCategory:"required-check-failed", …, failingCommand:"false"}]`. Mutation "R-off" ⇒ red
+  (`exhausted`).
+- `verifierType: "command"` is covered by criterion item 2 (both kinds go through the same call).
 
 A:
 - `buildVerifierPrompt` with `requiredCheckResults`: the three §6.1 lines sit immediately before the final line; every
@@ -302,20 +355,56 @@ B:
   contexts carry `lastFailure` with `required-check-failed`, the command and the evidence; attempt 1's carry none.
   *Mutations:* stop setting `lastRejectionEvidence` (⇒ evidence null); pass `lastFailure` into the verify context too
   (⇒ red on "verify context has no lastFailure").
-- Allowance continuation: a saved package whose verification has evidence ⇒ the new run's attempt 1 plan carries it;
-  `nextPhase: "execute"`/`"verify"` packages carry none. *Mutation:* drop `lastRejectionEvidence` from
+- Allowance continuation: a saved package whose verification has evidence ⇒ `readAllowanceContinuation` returns it as
+  `lastRejectionEvidence` and the new run's attempt 1 plan carries it; a saved verification without an `evidence`
+  array ⇒ the field is absent (so `tests/control/allowanceEvidence.test.ts:32`'s `toEqual` stays as it is — its fixture
+  has no `evidence`); `nextPhase: "execute"`/`"verify"` packages return no evidence (their execute context, if
+  `recentFailures` is non-empty, carries `lastFailure` with `evidence: null`). *Mutation:* drop `lastRejectionEvidence` from
   `materialize.ts:268` ⇒ evidence null ⇒ red. *Mutation:* gate on `attempt >= 2` instead of `recentFailures.length` ⇒
   red.
-- Crash resume: crash after the rejection of attempt 1 (existing crash-point hooks), resume ⇒ attempt 2's plan carries
-  the evidence read from `attempts/1/verify.json`; a `verify.json` whose fingerprint differs ⇒ `evidence: null`.
-  *Mutations:* skip the read; skip the fingerprint comparison.
+- Crash resume — construction (revision 3): the existing `resumeLoop` integration seeding
+  (`tests/controller/resumeLoop.integration.test.ts:44-70`, `seedEligibleRun`) with `recentFailures: [fp]`,
+  `attemptsUsed: 1`, plus a real rejected `attempts/1/verify.json` written as the loop writes it; then the real
+  `resumeLoop(runDir, recordingAdapter)`. Chosen over a crash-point hook because no crash point exists between the
+  rejection and attempt 2 (the four `testCrashPoint` calls are recovery-only, `runLoop.ts:1801-1994`), and adding one
+  only for a test is new production surface; the seeded state is the exact shape `resumeLoop` reads. Assert the
+  resumed attempt's plan and execute contexts carry `lastFailure.evidence` equal to the file's; a `verify.json` whose
+  fingerprint differs ⇒ `evidence: null`, run not failed; no file ⇒ `evidence: null`. *Mutations:* skip the read
+  (⇒ null, red); skip the fingerprint comparison (⇒ the non-matching file's evidence appears, red).
+- Adapter wiring (three kinds × plan/execute, through the real adapters and the fakes, each recording its prompt to
+  the marker): claude (`fake-claude-cli.mjs` marker `prompt`), codex (`fake-codex.mjs`), omp (`fake-omp.mjs`); call
+  `adapter.plan(ctx)` and `adapter.execute(ctx)` with a context carrying `lastFailure` and assert the recorded prompt
+  contains the §6.2 lead line and the JSON with the failing command. *Mutations:* plan — one per kind (three): that
+  adapter's `buildPlannerPrompt(context.contract, context.lastFailure)` call drops the second argument ⇒ red on that
+  kind's plan test only; execute — the executor prompt is one shared builder fed the whole context, so there is no
+  per-kind call site to break: `buildExecutorPrompt` ignoring `lastFailure` ⇒ all three execute tests red (and codex's
+  appended wrap line stays last, asserted).
 
 ## 10. Risks
 
-- **R changes terminal statuses**: a lineage whose first required check fails now spends a second attempt (tokens,
-  time) and ends `succeeded`, `exhausted` or `blocked_waiting_human` instead of `failed`. Orca's handling of those
-  statuses decides what the human sees; anything in Orca that expects `failed` for a check failure must be checked
-  before Orca repins (registered in the handoff's Orca dependency list).
+- **R changes terminal statuses only along §3 rows 1–4 and 9**: a lineage whose first required check fails now spends a
+  second attempt (tokens, time) and ends `succeeded`, `exhausted`, `failed` or — when the second attempt's checks pass
+  and the verifier rejects with `safeToRetry: true` — `blocked_waiting_human`, instead of `failed` at once. Rows 5–8
+  are unchanged by (b).
+- **Orca impact list** (read in Orca at its main of 2026-10-21; Orca repins after this lands; Orca Rule 16 — ccloop
+  states the facts, Orca decides):
+  1. `blockRun` reason strings: Orca's control driver writes `terminal:<outcome>` (Orca
+     `src/control/executionDriver.ts:625`). A first-attempt check failure that used to show `terminal:failed` now shows
+     `terminal:exhausted` (row 2), `terminal:failed` (row 3) or `terminal:blocked_waiting_human` (row 4); control flow
+     there is the same for every non-`succeeded` outcome.
+  2. New allowance path: row 9 parks for a token allowance with `allowanceNextPhase: "plan"` and a
+     `required-check-failed` fingerprint, where it used to end `exhausted`. Orca's `settleTokenAllowance` path (same
+     file, `:620`) is the one that already handles verifier-rejection parks; its renewal goes through
+     `materialize.ts:253-268` (row 10).
+  3. Cost: Orca's per-task default `TASK_WORK.attempts = 3` (Orca `src/control/estimator.ts:16`) ⇒ a task whose check
+     fails on attempt 1 now spends up to one more plan+execute (+ verify if the checks then pass). No number is
+     estimated here (Rule 14).
+  4. Legacy `orca run` exit codes: Orca's `routeOutcome` (`src/scheduler/ccloopRunner.ts:405-423`) counts `failed`
+     and `exhausted` alike as a failure (contribution 2) and `blocked_waiting_human` as an escalation (3). Rows 2–3
+     keep 2; row 4 (attempt 2's checks pass, verifier rejects retryably) is a new way to reach 3. The global R of
+     revision 2 would have moved rows 5–7 to 3 as well; (b) does not.
+  5. The `verify.json` `safeToRetry` of a row-1 attempt is `true` (wire shape unchanged, Orca `taskResultProtocol.ts:50`
+     reads `z.boolean()`).
 - **A lets a lazy verifier approve without looking.** The checks passed by ccloop's own measurement either way; the
   text keeps re-running allowed and says exit 0 is not the verdict.
 - **Untrusted text in prompts**: check output (target repo) in the verify prompt, rejection evidence (verifier model
