@@ -155,6 +155,19 @@ describe("codex phase isolation, one phase each (spec 2026-10-18 §3.3, §3.5)",
     expect(existsSync(`${w.marker}.argv`)).toBe(false);
   });
 
+  // Plan Interfaces (Task 3): the catalog read spends the phase's own deadline, so the child gets only what is left of it,
+  // not a fresh full timeout (here ~2.4 s of catalog sleeps inside a 4 s phase: done near 4 s, not near 6.4 s).
+  it("the child gets only what the catalog read left of the phase deadline", async () => {
+    const w = await world("hang", { sleepMs: 800, mcp: [] });
+    const context = { ...w.context, state: { ...w.context.state, budgetSnapshot: { ...w.context.state.budgetSnapshot, timeRemainingMs: 4000 } } };
+    const startedAt = Date.now();
+    const outcome = await w.run("plan", { context });
+    const elapsed = Date.now() - startedAt;
+    expect(outcome.reason).toBe("timeout");
+    expect(existsSync(`${w.marker}.argv`)).toBe(true);
+    expect(elapsed).toBeLessThan(5500);
+  });
+
   // Plan Review Focus 2: the catalog cache key stamps the installation's config.toml, so a server added there is a miss and
   // the next phase turns it off.
   it("a server added to the installation's config.toml is off from the next phase on", async () => {
