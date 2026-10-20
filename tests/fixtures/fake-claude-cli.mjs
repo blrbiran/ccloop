@@ -42,6 +42,13 @@ for (let index = 0; index < args.length; index += 1) {
   // and a run with a skill plugin adds --plugin-dir <dir>; the fake accepts both and records them in argv.
   if (arg === "--verbose" || arg === "--include-partial-messages" || arg === "--disable-slash-commands" || arg === "--strict-mcp-config") continue;
   if (arg === "--plugin-dir") { if (args[index + 1] === undefined) fail("missing value for --plugin-dir"); index += 1; continue; }
+  // Orca session 3d229487 (2026-10-20): execute and verify allow the contract's required checks. Like claude's list option,
+  // --allowedTools takes every following argument up to the next option -- a prompt placed after it would be swallowed.
+  if (arg === "--allowedTools") {
+    if (args[index + 1] === undefined || args[index + 1].startsWith("-")) fail("missing value for --allowedTools");
+    while (args[index + 1] !== undefined && !args[index + 1].startsWith("-")) index += 1;
+    continue;
+  }
   if (arg === "--output-format" || arg === "--json-schema" || arg === "--model" || arg === "--tools") {
     const value = args[index + 1];
     if (value === undefined) fail(`missing value for ${arg}`);

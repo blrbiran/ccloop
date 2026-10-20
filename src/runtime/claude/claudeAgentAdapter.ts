@@ -99,6 +99,35 @@ type Outcome = {
   evidenceDir: string;
 };
 
+/** A required check left out of the allow rules, and why (recorded in the call's outcome.json). */
+export type RequiredCheckNotAllowed = { command: string; reason: string };
+
+/**
+ * Orca session 3d229487 (2026-10-20), measured with real claude 2.1.301: under `--permission-mode acceptEdits` a -p call
+ * denies any Bash command outside claude's read-only set, so a required check such as `node check-median.js` never ran
+ * and the verifier rejected (required_check_not_run). Execute and verify allow exactly the contract's required checks,
+ * one `Bash(<command>)` rule each. Read from the claude 2.1.304 binary (static): the --allowedTools splitter keeps spaces
+ * and commas inside parentheses but tracks them as on/off, not depth; a rule's content is everything between its first
+ * and last unescaped parenthesis with `\(`, `\)` and `\\` unescaped; "" or "*" as content is the whole Bash tool;
+ * every `*` is a wildcard with no escape; separators (including newlines) split a command into subcommands that must each
+ * match. A command any of that would change is left out -- never a wider rule -- and recorded.
+ */
+export function requiredCheckAllowRules(requiredChecks: readonly string[]): { rules: string[]; notAllowed: RequiredCheckNotAllowed[] } {
+  const rules: string[] = [], notAllowed: RequiredCheckNotAllowed[] = [];
+  for (const command of requiredChecks) {
+    const reason = command.trim() === "" ? "empty: Bash() would allow every command"
+      : command.includes("*") ? "contains *, which claude reads as a wildcard and cannot escape"
+      : /[()]/.test(command) ? "contains a parenthesis, which ends or opens the rule's content"
+      : command.includes("\\") ? "contains a backslash, which claude unescapes inside a rule"
+      : /[\u0000-\u001f\u007f]/.test(command) ? "contains a control character (a newline separates commands)"
+      : command !== command.trim() ? "leading or trailing whitespace would not match the command as run"
+      : null;
+    if (reason !== null) notAllowed.push({ command, reason });
+    else if (!rules.includes(`Bash(${command})`)) rules.push(`Bash(${command})`);
+  }
+  return { rules, notAllowed };
+}
+
 /** What one runner call needs from its caller: a phase's AttemptContext, or a single call's request (Orca single-call estimate). */
 type ClaudeCall = {
   runDir: string;
@@ -109,6 +138,8 @@ type ClaudeCall = {
   onProcessRegistered?: AttemptContext["onProcessRegistered"];
   /** Consolidation step 1 (spec §5.3): the SIGTERM-to-SIGKILL delay for this call; installation.killGraceMs when absent. */
   stopGraceMs?: number;
+  /** The contract's required checks, for the phases expected to run them (execute, verify). */
+  requiredChecks?: readonly string[];
 };
 
 export class ClaudeAgentAdapter implements RuntimeAdapter {
@@ -140,10 +171,14 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     const runner = claudeRunnerPath();
     const result: Outcome = { reason: "completed", code: null, signal: null, stdout: "", evidenceDir };
     let stderr = "", ioError: string | undefined, stdoutTruncated = false, stderrTruncated = false;
+    // --allowedTools takes a list: it goes before --model, so the list ends at an option and never swallows the prompt.
+    const allow = requiredCheckAllowRules(call.requiredChecks ?? []);
+    const extraArgs = [...(allow.rules.length === 0 ? [] : ["--allowedTools", ...allow.rules]), ...this.extraArgs];
     const persist = async (): Promise<Outcome> => {
       await save("outcome.json", JSON.stringify({
         reason: result.reason, code: result.code, signal: result.signal, evidenceDir,
-        runner, claudeCommand: this.command, extraArgs: this.extraArgs, configDir: installation.configDir,
+        runner, claudeCommand: this.command, extraArgs, configDir: installation.configDir,
+        ...(allow.notAllowed.length === 0 ? {} : { requiredChecksNotAllowed: allow.notAllowed }),
         ioError, stdoutTruncated, stderrTruncated, observedUsagePath: join(evidenceDir, OBSERVED_USAGE_FILE),
       }, null, 2));
       return result;
@@ -157,7 +192,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       CCLOOP_CLAUDE_COMMAND: JSON.stringify(this.command),
-      CCLOOP_CLAUDE_EXTRA_ARGS: JSON.stringify(this.extraArgs),
+      CCLOOP_CLAUDE_EXTRA_ARGS: JSON.stringify(extraArgs),
       CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: join(evidenceDir, OBSERVED_USAGE_FILE),
     };
     if (installation.configDir !== null) env.CLAUDE_CONFIG_DIR = installation.configDir;
@@ -239,7 +274,9 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
   }
 
   private async phase<T>(request: ClaudePhaseRequest, context: AttemptContext, afterStop?: { stopGraceMs: number }): Promise<T> {
-    const outcome = await this.run(request, { ...this.call(context), ...(afterStop ? { stopGraceMs: afterStop.stopGraceMs } : {}) });
+    // Plan is read-only and is not asked to run checks; execute and verify are.
+    const requiredChecks = request.phase === "plan" ? [] : context.contract.verification.requiredChecks;
+    const outcome = await this.run(request, { ...this.call(context), requiredChecks, ...(afterStop ? { stopGraceMs: afterStop.stopGraceMs } : {}) });
     throwIfNeverStarted(outcome);
     // Consolidation step 1 (spec §5.1, §5.2): after a stop, an execute runner that exited cleanly and printed a JSON object
     // printed the phase's result (its post-SIGTERM partial, or a complete answer it already had). A result without

@@ -32,9 +32,12 @@ const SCHEMAS: Record<Phase, string> = {
   "execute": "{\"type\":\"object\",\"properties\":{\"changedFiles\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"diffPatch\":{\"type\":\"string\"},\"commandOutputs\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"stdoutStderrLog\":{\"type\":\"string\"},\"taskResult\":{},\"decisions\":{},\"debug\":{},\"completionStatus\":{\"type\":\"string\",\"enum\":[\"partial\"]},\"failureType\":{\"type\":\"string\",\"enum\":[\"timeout\",\"error\"]},\"failureMessage\":{\"type\":\"string\"}},\"required\":[\"changedFiles\",\"diffPatch\",\"commandOutputs\",\"stdoutStderrLog\"],\"additionalProperties\":false}",
   "verify": "{\"type\":\"object\",\"properties\":{\"approved\":{\"type\":\"boolean\"},\"rejectCategory\":{\"type\":\"string\"},\"primaryTargetPaths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"failingCommand\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"safeToRetry\":{\"type\":\"boolean\"},\"evidence\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"pauseSignals\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"stopSignals\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"approved\",\"rejectCategory\",\"primaryTargetPaths\",\"failingCommand\",\"safeToRetry\",\"evidence\",\"pauseSignals\",\"stopSignals\"],\"additionalProperties\":false}"
 };
-const goldenArgv = (phase: Phase): string[] => [
+// Allowed required checks (2026-10-20, Orca session 3d229487, human grant 「这次批准改写所有必要的判据」): execute and verify
+// gain only `--allowedTools Bash(<the fixture's required check>)` before --model; plan and every other argument stay exact.
+const allowArgs = (phase: Phase, check: string): string[] => (phase === "plan" ? [] : ["--allowedTools", `Bash(${check})`]);
+const goldenArgv = (phase: Phase, check: string): string[] => [
   "--strict-mcp-config", "--disable-slash-commands", "-p", "--output-format", "stream-json", "--verbose",
-  "--include-partial-messages", "--json-schema", SCHEMAS[phase], "--model", "claude-opus-5-5", "<prompt>",
+  "--include-partial-messages", "--json-schema", SCHEMAS[phase], ...allowArgs(phase, check), "--model", "claude-opus-5-5", "<prompt>",
 ];
 
 async function run(options: { skillPluginDir?: string } | undefined, phase: Phase) {
@@ -44,32 +47,32 @@ async function run(options: { skillPluginDir?: string } | undefined, phase: Phas
     .map((arg) => (arg.includes("codex-test") ? "<prompt>" : arg));
   const [evidence] = await readdir(join(f.runDir, "claude", "1", phase));
   const outcome = JSON.parse(await readFile(join(f.runDir, "claude", "1", phase, evidence!, "outcome.json"), "utf8")) as { claudeCommand: string[]; extraArgs: string[] };
-  return { argv, outcome };
+  return { argv, outcome, check: f.contract.verification.requiredChecks[0]! };
 }
 
 describe("ClaudeAgentAdapter skillPluginDir (Orca syncskill integration, spec 10.7 and 4.4)", () => {
   for (const phase of phases) {
     it(`${phase}: without skillPluginDir the argv is byte-identical to the pre-change golden`, async () => {
-      const { argv, outcome } = await run(undefined, phase);
-      expect(argv).toEqual(goldenArgv(phase));
-      expect(outcome.extraArgs).toEqual(["--model", "claude-opus-5-5"]);
+      const { argv, outcome, check } = await run(undefined, phase);
+      expect(argv).toEqual(goldenArgv(phase, check));
+      expect(outcome.extraArgs).toEqual([...allowArgs(phase, check), "--model", "claude-opus-5-5"]);
       expect(outcome.claudeCommand).toContain("--disable-slash-commands");
     });
 
     it(`${phase}: with skillPluginDir the claude gets --plugin-dir <dir> and no --disable-slash-commands, other flags kept`, async () => {
       const dir = "/some/abs/skill-plugin";
-      const { argv, outcome } = await run({ skillPluginDir: dir }, phase);
+      const { argv, outcome, check } = await run({ skillPluginDir: dir }, phase);
       expect(argv).toContain("--plugin-dir");
       expect(argv[argv.indexOf("--plugin-dir") + 1]).toBe(dir);
       expect(argv).not.toContain("--disable-slash-commands");
       expect(argv).toContain("--strict-mcp-config");
       // everything else is the golden, in order
       expect(argv.filter((arg, i) => arg !== "--plugin-dir" && argv[i - 1] !== "--plugin-dir")).toEqual(
-        goldenArgv(phase).filter((arg) => arg !== "--disable-slash-commands"),
+        goldenArgv(phase, check).filter((arg) => arg !== "--disable-slash-commands"),
       );
       expect(outcome.claudeCommand).not.toContain("--disable-slash-commands");
       expect(outcome.claudeCommand).toContain("--strict-mcp-config");
-      expect(outcome.extraArgs).toEqual(["--model", "claude-opus-5-5", "--plugin-dir", dir]);
+      expect(outcome.extraArgs).toEqual([...allowArgs(phase, check), "--model", "claude-opus-5-5", "--plugin-dir", dir]);
     });
   }
 });
