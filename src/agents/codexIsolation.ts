@@ -111,6 +111,11 @@ async function ensureLink(path: string, target: string | null): Promise<void> {
  * two links exactly as (2), and codex writes its own state into the same pair while the phase runs. Its catalog read is
  * writer (1). Without a cache dir the phase makes a pair per call under `<runDir>/codex/<attempt>/phase-isolation/home-*`
  * (never removed). Residue unchanged. ***
+ * *** ERRATUM (2026-10-21, Orca session 9ec98639; measured Orca session 308b874c, ccloop 86f6123, codex gpt-6-luna paid
+ * exec): the list above names only the private pair, but codex also writes THROUGH the `config.toml` link into the
+ * operator's real config: a real exec appended `[projects."<attempt worktree>"] trust_level = "trusted"`, one table per
+ * attempt worktree path, left behind after the run. The human ruled it allowed (「运行过程中 ~/.codex/config.toml 被改应该是
+ * 允许的」); see the Correction at the end of ccloop spec 2026-10-18-codex-phase-isolation-design.md. ***
  */
 export async function codexSingleCallHome(input: { runDir: string; sourceCodexHome: string | null; executable: string; env: NodeJS.ProcessEnv; fallback?: readonly string[] }): Promise<{ home: string; codexHome: string }> {
   const cache = catalogCacheDir(input.env);

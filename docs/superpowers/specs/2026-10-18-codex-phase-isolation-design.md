@@ -177,3 +177,17 @@ Without a cache dir the pair falls back to the run directory as for the single c
 - Breaking the person's own codex login: token rotation through the linked `auth.json` is the single call's known
   residual (this repo's handoff) and is inherited, not widened.
 - A phase that silently runs unisolated when isolation cannot be set up: it refuses instead.
+
+## Correction (2026-10-20, Orca session 308b874c; ccloop 86f6123)
+
+Appended by the implementer of `2026-10-20-verifier-sees-checks-and-last-failure-design.md` (Orca session `9ec98639`,
+2026-10-21), text as drafted in that spec's appendix; the sections above are kept verbatim.
+
+§4 lists the private `HOME`/`CODEX_HOME` pair as the only out-of-repo write, and the handoff recorded
+`~/.codex/{auth.json,config.toml}` as byte-unchanged throughout. That measurement was free and sent no request. A
+real paid exec (Orca session `308b874c`, 2026-10-20, ccloop `86f6123`, codex `gpt-6-luna`) appended
+`[projects."<attempt worktree>"] trust_level = "trusted"` to the operator's real `~/.codex/config.toml`, through
+the private `CODEX_HOME`'s `config.toml` symlink. Codex's own project-trust bookkeeping is therefore a second
+out-of-repo write: into the operator's real config, one table per attempt worktree path, left behind after the run.
+The human ruled it allowed: 「运行过程中 ~/.codex/config.toml 被改应该是允许的」. The byte-unchanged result holds
+only for the free measurement, not for a real exec.
