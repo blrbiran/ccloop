@@ -1,4 +1,4 @@
-# ccloop Handoff — Codex 阶段隔离 Task 1–6 与 claude 检查放行已在 main；下一件：Task 7 付费（10-22 后）；Orca 关联见文末单节
+# ccloop Handoff — 下一件：spec 分支 `spec/verifier-sees-checks-and-last-failure` 改完 → plan → 实施；Orca 关联见文末单节
 
 > ⚠️ **一律自查，别信本文。** 只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是固定历史值。
 > *** **本文不写任何当前哈希** —— 指代某一笔引**提交主题行**（`git log --grep`），指代材料引**路径**。 ***
@@ -41,14 +41,14 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 下一件：Codex 阶段隔离 Task 7（付费一次，额度 2026-10-22 恢复后、先问人）
+### 下一件：verifier 看到检查结果＋上次失败喂给下次＋必需检查首次重试一次（spec 在分支上，未合）
 
-- Task 1–6 已在 main（Orca 会话 `3d229487`，2026-10-20；首笔主题行 `feat(codex): phase isolation module (private pair, -c list, named refusals)`，末笔 `test(codex): an isolated phase's child gets only what the catalog read left of the deadline`；推没推用 `ls-remote` 现测）。spec `docs/superpowers/specs/2026-10-18-codex-phase-isolation-design.md`，计划 `docs/superpowers/plans/2026-10-18-codex-phase-isolation.md`。
-- 实测（codex-cli 0.163.0，免费，不发请求）：`shell_environment_policy.set.HOME="<真 HOME>"` 与 `features.hooks=false` 都被接受；隔离下 `debug prompt-input hi` 个人 skills 0 行（真 HOME 2 行）、目标仓 `AGENTS.md` 与仓库 skill 仍在；`codex sandbox` 里 HOME 是真 HOME；`~/.codex/{auth.json,config.toml}` 全程字节不变。
-- 行为：每个 codex loop 阶段在安装那对私有 `HOME`／`CODEX_HOME` 里跑（与 single call 同一对），目录读取在阶段时限内；隔离搭不起来 ⇒ spawn 前拒（`codex-phase-isolation-*`）、终局不重试、用量记 0；`outcome.json` 记隔离路径。全量门 1909/1909（`check-known-reds` 0）。
-- 改过的既有判据（人授权「这次批准改写所有必要的判据」，Orca 会话 `3d229487`）：`tests/runtime/codex/skillsControllerFixture.ts:17-19`（wrapper 转发非 `exec` 调用）、`tests/control/savedResultEvidence.test.ts:43`、`tests/control/savedResultRecovery.native.test.ts:14`（内联 fake 答目录读取；计划没预言这两处）、`tests/runtime/codex/extraEnv.test.ts:30-49`（改成阶段真跑、CODEX_HOME 不等于 configDir、两文件是软链）。逐条旧→新在 Orca 台账 `.superpowers/sdd/2026-10-20-repin-decisions-contract/progress.md` ⑨。
-- Task 7 命令（实施席写的 `paid.mjs` 在 Orca 会话 `3d229487` scratchpad 的 `paid/`，**控制器没审过，先读再跑**）：clone＋build 后 `env CCLOOP_CACHE_DIR=<s>/paid/cache node <s>/paid/paid.mjs <clone>/dist "$(which codex)" gpt-6-luna <s>/paid/out`；判据：`repo/home-probe.txt` 是真 HOME、`outcome.json` 有 `isolation.home`／`codexHome`、ccmem `session_context` 对该 thread 0 行、隔离 home 下没有 `.claude`、仓库里没有 `.ccmem`。
-- 登记未修：`CodexAdapter.execute` 在 abort 时只重抛 `codex-skills-*` ⇒ 隔离拒绝恰与 abort 同时到达会变成无用量的 aborted（窄）；主仓有一个 prunable 工作树 `…/ccloop-cli-scripted-*/worktrees/attempt-1`（cli 测试留下，`worktree prune` 是强制形式，归人）。
+- spec `docs/superpowers/specs/2026-10-20-verifier-sees-checks-and-last-failure-design.md`，只在分支 `spec/verifier-sees-checks-and-last-failure`（两笔；Orca 会话 `308b874c`，2026-10-20／21）。人裁：A（verify 提示带 ccloop 自己跑过的检查结果，标明是数据、exit 0 只证明本工作树）、B（上次失败的类别／命令／证据进下次 plan／execute）「同意」；R「必需检查失败首次可重试一次」「同意」，实现方式人裁 **(b)**：只在 `attempt + inheritedAttempts === 1` 且非 saved-result 恢复时 `safeToRetry: true`，其余路径保持今天（第二轮审阅 C-new：全局改会把 verifier 驳回后的检查失败、续接 lineage、恢复路径从 `failed` 变成 `blocked_waiting_human`／`exhausted`，旧 `orca run` 退出码 2→3）。
+- **先改 spec 再写 plan**（第二轮审阅清单，详见 Orca 台账 `.superpowers/sdd/2026-10-20-session-308b874c/progress.md`）：§3.2 按 (b) 重写并给终态表；§8.1 第 1 条（`tests/controller/taskResultOutcome.test.ts:33/43`）改成独立 oracle（fixture 的 check.cjs 不输出 ⇒ 字面空 stdout／stderr），2–4 条（`runLoop.integration.test.ts:468-469`、`:526-527`、`partialToVerify.test.ts:82-90`）**要人逐条点头**并用完整断言重新探针；补三种 kind × plan／execute 的 B 接线测试（各点名变异）、恢复／续接／驳回后检查失败的终态测试；crash resume 测试的构造方式；Orca 影响清单写进 §10 与本文 Orca 单节；空闲机器上复跑 §8.2 的 5 个文件。
+- **Codex 阶段隔离 Task 7 已付费跑完**（Orca 会话 `308b874c`，2026-10-20，`86f6123` 的 clone，gpt-6-luna）：判据全过——`home-probe.txt` 是真 HOME、`outcome.json` 有 `isolation.home`／`codexHome`、ccmem `session_context` 对该 thread 0 行、隔离 home 空、仓库无 `.ccmem`；`~/.codex/auth.json` 字节不变；用量 input 30471（cached 14976）／output 226，无 $。
+- ⚠️ **更正**（原「`~/.codex/{auth.json,config.toml}` 全程字节不变」只对不发请求的免费实测成立）：真 exec 时 codex 经私有 `CODEX_HOME` 的软链往人的真 `~/.codex/config.toml` 追加 `[projects."<worktree>"] trust_level = "trusted"`（每个 worktree 路径一节，跑完留着）。**人裁允许、不还原**（「运行过程中 ~/.codex/config.toml 被改应该是允许的」）。隔离 spec 的 Correction 一节随上面那轮实施一起落（文字草稿在 spec 分支附录）。
+- 登记未修（仍成立）：`CodexAdapter.execute` 在 abort 时只重抛 `codex-skills-*`（窄）；主仓 prunable 工作树 `…/ccloop-cli-scripted-*/worktrees/attempt-1`（`worktree prune` 归人）。
+
 
 ### 已在 main 的能力（各轮都已由人合推；细节按主题行 `git log --grep` 取）
 
@@ -125,9 +125,9 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-20，Orca 会话 `3d229487`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-21，Orca 会话 `308b874c`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3.000 与 §4.2。Orca 已 repin 到本仓 `af4ad33`（decisions／debug），契约测试（Task 12）已对真 ccloop 输出接通。本仓 main 上本轮新加的两件（claude 检查放行、Codex 阶段隔离 Task 1–6）要人推后 Orca 再 repin，再用 `--scenario decision` 跑真 claude 与（10-22 后）真 codex。
-- **本仓接下来**：Codex 阶段隔离 Task 7（付费，上面「下一件」）；「verifier 不知道 ccloop 自己的检查已过」要不要改（设计，先报人）。Orca 的测试规则（全量门只在打 tag 前）**不外溢到本仓**（Orca Rule 16）。
-- **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid` 码名；`ompSingleCall`、`codexSingleCall` 读 JSON 对象的语义；结果字段形状（collect 顶层 `decisions`、`debug`——Orca 的 collect 解析是 strict，只多认这两个键；`debug` 成员 `choseInstead`、`reproTests`、`reproCommand`、`reproduction: "not-expressible"`、`reproductionReason`）；Orca 的复现检查照本仓 `runLoop.js` 跑 required check 的方式执行命令（`sh -lc`、继承环境，见 Orca `src/control/debugRepro.ts`）；Orca **排除 `refs/ccloop/*`** 判断纠正是否已关闭；agents table 的 `command` 在 Orca 门里写成单元素数组；**本仓 fake 的参数约定 Orca 在用**：`fake-codex.mjs <mode> <marker>`（门用 `integration`、契约测试用 `reported`，`--version` 答 `9.9.9-fake`）、`fake-omp.mjs <marker>`（答 `18.10.1`）；缺 marker 时 fake 会在 cwd 写 `undefined.argv`；Orca 验收脚本的真 claude 档靠本仓的 `--allowedTools` 才能过非只读检查。
-- ⚠️ Orca 主仓和服务用 `node_modules` 里装的 ccloop：repin 后主仓先 `npm ci`（本机 `npm ci` 可能卡在代理的 registry 连接上 ⇒ 杀掉加 `--fetch-timeout=60000 --fetch-retries=5`）。Orca 门的 `ORCA_CCLOOP_BIN` 当前是 Orca 会话 `3d229487` scratchpad 里 `ccloop-af4ad33` 的 build；**别指本仓工作树的 `dist`**（不等于 pin）。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3.0000 与 §4.2。Orca 已 repin 到本仓 `86f6123`（claude 检查放行＋Codex 阶段隔离 1–6）；真 claude 与真 codex 的 `--scenario decision`、codex 估算都对这笔跑通。
+- **本仓接下来**：上面「下一件」的 spec 分支（改 spec → plan → 实施）；Orca 的失败原因词表 spec（`Orca/docs/superpowers/specs/2026-10-21-failure-causes-and-agent-fallback-design.md` §3–§4）要在本仓另写一份 spec 才能做（分类与瞬时重试在本仓）；按活动判定卡死的看门狗（人已同意方向：墙钟为天花板＋空闲 10 min ⇒ `stalled`）同样先在本仓写 spec。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
+- **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid` 码名；`ompSingleCall`、`codexSingleCall` 读 JSON 对象的语义；collect 顶层 `decisions`、`debug`（Orca 的 collect 解析是 strict）；`agent-version-drift` 的报错措辞 `<id>: table X, observed Y`（Orca 据此自动更新版本号并重派一次，措辞变了只会退回「拒绝照旧」）；`control agent-installation-observe`（Orca 的版本探测用它）；Orca 的复现检查照本仓 `runLoop.js` 跑 required check 的方式执行命令（`sh -lc`、继承环境）；Orca 排除 `refs/ccloop/*` 判断纠正是否已关闭；本仓 fake 的参数约定 Orca 在用（`fake-codex.mjs <mode> <marker>`、`fake-omp.mjs <marker>`）；Orca 的 `blockRun` 原因串是 `terminal:<outcome>`（R 落地后显示会变，控制流不变）。
+- ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`（本机可能卡在代理 ⇒ 杀掉加 `--fetch-timeout=60000 --fetch-retries=5`）。Orca 门的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build；**别指本仓工作树的 `dist`**（不等于 pin，会假红）。
