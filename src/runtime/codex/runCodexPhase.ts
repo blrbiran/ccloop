@@ -4,6 +4,9 @@ import { mkdir, mkdtemp, open, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
+import { readAgentCatalog } from "../../agents/agentCatalog.js";
+import type { InstallationV1 } from "../../agents/types.js";
+import { CodexPhaseIsolationRefused, codexPhaseIsolation } from "./codexPhaseIsolation.js";
 import { withCodexSkillLinks } from "./codexSkills.js";
 import type { AttemptContext } from "../types.js";
 import { executeWireJsonSchema, observedTurnUsage, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
@@ -12,14 +15,19 @@ import { executeWireJsonSchema, observedTurnUsage, phaseJsonSchema, type CodexCo
 export type PhaseRequest = {phase:CodexPhase|"single-call";prompt:string;context:AttemptContext;
   spawn?:{args:(paths:{schemaPath:string;finalPath:string})=>string[];env:NodeJS.ProcessEnv;schema:Record<string,unknown>}};
 export type PhaseOutcome = {
-  reason:"completed"|"aborted"|"timeout"|"spawn-error"|"exit-error"|"output-limit"|"io-error"|`codex-skills-${string}`;
+  reason:"completed"|"aborted"|"timeout"|"spawn-error"|"exit-error"|"output-limit"|"io-error"|`codex-skills-${string}`|`codex-phase-isolation-${string}`;
   code:number|null;signal:NodeJS.Signals|null;events:string;final:string|null;evidenceDir:string;
   // Orca handoff delivery C-3: usage observed in the stdout of a phase that did not complete; null otherwise.
   observedTokens:number|null;
 };
 const LIMIT=16*1024*1024;
 const execFileAsync=promisify(execFile);
-export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, extraEnv?:Record<string,string>, codexSkillsDir?:string):Promise<PhaseOutcome> {
+// Codex phase isolation (ccloop spec 2026-10-18 §3.3, Orca session 3d229487): with an `installation` (production, through
+// codexDescriptor.createAdapter) a phase reads the installation's catalog under its own deadline and runs in the single
+// call's private HOME/CODEX_HOME pair with CODEX_PHASE_CONFIG, the MCP servers off and the real HOME for its commands, or is
+// refused before spawn (`codex-phase-isolation-*`, outcome.json names it). Without one (the legacy path and every single
+// call, which brings its own spawn) nothing changes.
+export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, extraEnv?:Record<string,string>, codexSkillsDir?:string, installation?:InstallationV1):Promise<PhaseOutcome> {
   const {context,phase}=request;
   const root=join(context.runDir,"codex",String(context.attempt),phase);
   await mkdir(root,{recursive:true,mode:0o700});
@@ -30,24 +38,48 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   const args=request.spawn!==undefined?[...config.command.slice(1),...request.spawn.args({schemaPath,finalPath})]:[...config.command.slice(1),"exec","--json","--ephemeral","--color","never","--model",config.model,
     "--sandbox",phase==="execute"?config.sandbox:"read-only","-C",context.worktreePath,
     "--output-schema",schemaPath,"-o",finalPath,"-"];
+  let isolation:{home:string|null;codexHome:string|null;catalogError:string|null}|undefined;
+  let spawnEnv:NodeJS.ProcessEnv={...process.env,...extraEnv};
   let stderr="", logsCreated=false;
   let ioError:string|undefined;
   let stdoutTruncated=false,stderrTruncated=false,finalTruncated=false;
   const persist=async()=>{
     if(!logsCreated){await save("events.jsonl",result.events);await save("stderr.log",stderr);}
-    await save("outcome.json",JSON.stringify({...result,events:undefined,final:undefined,executable:config.command[0],args,ioError,stdoutTruncated,stderrTruncated,finalTruncated},null,2));
+    await save("outcome.json",JSON.stringify({...result,events:undefined,final:undefined,executable:config.command[0],args,ioError,stdoutTruncated,stderrTruncated,finalTruncated,...(isolation===undefined?{}:{isolation})},null,2));
     return result;
   };
   if(context.abortSignal?.aborted){result.reason="aborted";return persist();}
   const timeout=Math.min(config.timeoutMs,context.state.budgetSnapshot.timeRemainingMs);
   if(timeout<=0){result.reason="timeout";return persist();}
+  let childTimeout=timeout;
+  if(installation!==undefined) {
+    // Spec §3.3 "Where the MCP list comes from": read on every phase through the catalog cache, inside the phase deadline.
+    // An abort or the deadline landing during the read is reported as such, not as a refusal (plan Review Focus 5).
+    const deadline=Date.now()+timeout;
+    const catalog=await readAgentCatalog(installation,{deadline,signal:context.abortSignal,log:line=>{process.stderr.write(line+"\n");}});
+    isolation={home:null,codexHome:null,catalogError:catalog.catalogError};
+    if(context.abortSignal?.aborted){result.reason="aborted";return persist();}
+    if(Date.now()>=deadline){result.reason="timeout";return persist();}
+    try {
+      const isolated=await codexPhaseIsolation({installation,mcpServers:catalog.codexMcpServers,runDir:context.runDir,attempt:context.attempt,env:process.env});
+      isolation={home:isolated.home,codexHome:isolated.codexHome,catalogError:catalog.catalogError};
+      args.splice(args.length-1,0,...isolated.args);
+      spawnEnv={...spawnEnv,HOME:isolated.home,CODEX_HOME:isolated.codexHome};
+    } catch(error) {
+      if(!(error instanceof CodexPhaseIsolationRefused))throw error;
+      // Spec §3.5: refused before spawn and before any skill link (plan Review Focus 3); final, booked 0 by the adapter.
+      isolation={home:error.pair?.home??null,codexHome:error.pair?.codexHome??null,catalogError:catalog.catalogError};
+      result.reason=error.reason;return persist();
+    }
+    childTimeout=deadline-Date.now();
+  }
   const wireBusinessSchema=request.spawn?.schema??(phase==="execute"?executeWireJsonSchema():phaseJsonSchema(phase as CodexPhase));
   const wireSchema=phase==="execute"?{type:"object",properties:{result:wireBusinessSchema},required:["result"],additionalProperties:false}:wireBusinessSchema;
   await save("schema.json",JSON.stringify(wireSchema));
   // Pre-create files with private permissions before handing paths to the CLI.
   await save("final.json","");await save("events.jsonl","");await save("stderr.log","");logsCreated=true;
   const runChild = async () => new Promise<void>(resolve=>{
-    const child=spawn(config.command[0],args,{cwd:context.worktreePath,detached:true,stdio:["pipe","pipe","pipe"],env:request.spawn?.env??{...process.env,...extraEnv}});
+    const child=spawn(config.command[0],args,{cwd:context.worktreePath,detached:true,stdio:["pipe","pipe","pipe"],env:request.spawn?.env??spawnEnv});
     const out=new StringDecoder("utf8"),err=new StringDecoder("utf8");
     let outBytes=0,errBytes=0,done=false,exited=false;
     let killTimer:NodeJS.Timeout|undefined,drainTimer:NodeJS.Timeout|undefined;
@@ -68,7 +100,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       if(!killTimer)killTimer=setTimeout(()=>{kill("SIGKILL");finish();},config.killGraceMs);
     };
     const abort=()=>stop("aborted");
-    const timer=setTimeout(()=>stop("timeout"),timeout);
+    const timer=setTimeout(()=>stop("timeout"),childTimeout);
     child.on("error",()=>{result.reason="spawn-error";finish();});
     child.stdin.on("error",(e)=>{ioError=String(e);if(!exited)stop("io-error");});
     child.stdout.on("data",(b:Buffer)=>{

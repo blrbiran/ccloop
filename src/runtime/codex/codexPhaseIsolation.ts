@@ -13,7 +13,8 @@ export type CodexPhaseIsolationReason = `codex-phase-isolation-${string}`;
  */
 export class CodexPhaseIsolationRefused extends Error {
   readonly neverStarted = true;
-  constructor(readonly reason: CodexPhaseIsolationReason) {
+  /** The private pair when it was built before the refusal (paths only, for outcome.json); undefined otherwise. */
+  constructor(readonly reason: CodexPhaseIsolationReason, readonly pair?: { home: string; codexHome: string }) {
     super(reason);
     this.name = "CodexPhaseIsolationRefused";
   }
@@ -50,10 +51,10 @@ export async function codexPhaseIsolation(input: { installation: InstallationV1;
     }
     throw error;
   }
-  if (input.mcpServers === null) throw new CodexPhaseIsolationRefused("codex-phase-isolation-no-mcp-list");
+  if (input.mcpServers === null) throw new CodexPhaseIsolationRefused("codex-phase-isolation-no-mcp-list", pair);
   const unaddressable = input.mcpServers.find((name) => !addressableMcpServer(name));
-  if (unaddressable !== undefined) throw new CodexPhaseIsolationRefused(`codex-phase-isolation-mcp-unaddressable:${JSON.stringify(unaddressable)}`);
+  if (unaddressable !== undefined) throw new CodexPhaseIsolationRefused(`codex-phase-isolation-mcp-unaddressable:${JSON.stringify(unaddressable)}`, pair);
   const realHome = input.env.HOME;
-  if (realHome === undefined || realHome === "" || !isAbsolute(realHome)) throw new CodexPhaseIsolationRefused("codex-phase-isolation-real-home-unknown");
+  if (realHome === undefined || realHome === "" || !isAbsolute(realHome)) throw new CodexPhaseIsolationRefused("codex-phase-isolation-real-home-unknown", pair);
   return { ...pair, args: codexPhaseConfigArgs(input.mcpServers, realHome) };
 }

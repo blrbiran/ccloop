@@ -20,6 +20,8 @@ const mode=process.argv[2], marker=process.argv[3];
 // listed only when the call is NOT isolated (its CODEX_HOME/config.toml is not a symlink or `-c features.plugins=false`
 // is absent). `mcp list` records {HOME, CODEX_HOME, c} in <marker>.mcp-env.json. A single call that turns off a server
 // `mcp` does not define fails as the real codex-cli 0.160.0 does: stderr "invalid transport in `mcp_servers.<name>`", exit 1.
+// Codex phase isolation (ccloop spec 2026-10-18, Orca session 3d229487, 2026-10-20): a phase call also writes
+// {HOME, CODEX_HOME} it ran with to <marker>.phase-env.json, right after <marker>.
 if(process.argv.at(-1)==="--version"&&!process.argv.includes("exec")) {appendFileSync(marker+".version-calls","version\n");await new Promise(resolve=>process.stdout.write("9.9.9-fake\n",resolve));process.exit(0);}
 const catalogCall=process.argv.includes("debug")&&process.argv.includes("models")?"debug-models":process.argv.includes("features")&&process.argv.includes("list")?"features-list":process.argv.includes("mcp")&&process.argv.includes("list")?"mcp-list":null;
 if(catalogCall!==null&&!process.argv.includes("exec")) {
@@ -83,6 +85,7 @@ process.stdin.on("end",()=>{
     return;
   }
   writeFileSync(marker,JSON.stringify({args,cwd:process.cwd(),prompt,pid:process.pid}));
+  writeFileSync(marker+".phase-env.json",JSON.stringify({HOME:process.env.HOME??null,CODEX_HOME:process.env.CODEX_HOME??null}));
   // Orca session 7f37d261 (2026-10-13), codex rate-limit spec §4: modes `rate-limit-1` (the first call of this marker is
   // rejected, later calls behave as `integration`), `rate-limit-all`, `rate-limit-all-exit0` and `rate-limit-after-item`
   // replay the tester's real 429 stdout (Orca orca_archived_files/recommendations-1-events.jsonl), exit 1 unless exit0.
