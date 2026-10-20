@@ -104,6 +104,13 @@ async function ensureLink(path: string, target: string | null): Promise<void> {
  * - No cache dir: the single call makes a pair per call under its run directory (`<runDir>/codex/1/single-call/home-*`);
  *   the catalog probe makes a pair under a fresh `mkdtemp(<tmpdir>/ccloop-codex-mcp-*)` removed in `finally` -- a
  *   crash before that leaves the temp dir (its links and codex's state) behind.
+ *
+ * *** 2026-10-20 (codex phase isolation, ccloop spec 2026-10-18 §4; Orca session 3d229487, design Orca session a3b2a7a7):
+ * writer (3) -- every codex loop phase, on every call (`runCodexPhase` given an installation, i.e. every phase of an
+ * adapter built by codexDescriptor.createAdapter), through codexPhaseIsolation: creates the missing dirs and re-checks the
+ * two links exactly as (2), and codex writes its own state into the same pair while the phase runs. Its catalog read is
+ * writer (1). Without a cache dir the phase makes a pair per call under `<runDir>/codex/<attempt>/phase-isolation/home-*`
+ * (never removed). Residue unchanged. ***
  */
 export async function codexSingleCallHome(input: { runDir: string; sourceCodexHome: string | null; executable: string; env: NodeJS.ProcessEnv; fallback?: readonly string[] }): Promise<{ home: string; codexHome: string }> {
   const cache = catalogCacheDir(input.env);

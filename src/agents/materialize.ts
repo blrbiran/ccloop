@@ -74,6 +74,9 @@ export async function resolveAgent(
   // Every-agent requirement chain (Orca spec 2026-10-15 §4.1): without injected probes, the version and the catalog come
   // through the file cache under one deadline (plan issue 4); injected probes keep the uncached path older criteria use.
   // A codex catalog that cannot be read is not a refusal here (plan issue 5): loop phases do not need it.
+  // *** 2026-10-18 (codex phase isolation spec §3.3, human ruling; written 2026-10-20, Orca session 3d229487): loop phases now
+  // need the MCP server list; each codex phase reads the catalog itself and refuses when the list is missing. This note's
+  // "loop phases do not need it" no longer holds for codex phases; materialize still does not refuse. ***
   const injected = deps.probeVersion !== undefined || deps.probeModels !== undefined || deps.probeCatalog !== undefined;
   const catalog = injected ? null : await readAgentCatalog(installation, { deadline: deps.deadline, signal: deps.signal });
   const observed = catalog !== null ? catalog.version : await (deps.probeVersion ?? probeVersion)(installation.command);
