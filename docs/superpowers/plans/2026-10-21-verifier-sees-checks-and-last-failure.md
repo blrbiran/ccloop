@@ -9,9 +9,9 @@ Success command (Rule 4): `npm run typecheck && npm run build && vitest run --re
 node scripts/check-known-reds.mjs <s>/v.json` → RC 0.
 
 ## Task 1 — R (spec §3)
-1. Write the §9 R tests in a new file `tests/controller/requiredCheckRetry.test.ts` (rows 1, 3, 5, 6, 9) and the row-7
+1. Write the §9 R tests in a new file `tests/controller/requiredCheckRetry.test.ts` (rows 1, 3, 5, 6) and the row-7
    recovery assertion next to the existing recovery fixture. See them red for the named reason on the unchanged code
-   (row 1, row 9: `failed`/`exhausted`; rows 3, 5, 6, 7: already green — they pin what (b) keeps; their red comes from
+   (row 1: `failed`; rows 3, 5, 6, 7: already green — they pin what (b) keeps; their red comes from
    the mutations).
 2. Implement §3.1 (`checkFailureRetryable` through `runVerification` → `runRequiredChecks`; caller passes
    `attempt + inheritedAttempts === 1 && recovery === undefined`).

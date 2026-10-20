@@ -115,8 +115,9 @@ its own nod (Rule 15).
    | 6 | inherited lineage (`inheritedAttempts ≥ 1`: handoff continuation, allowance continuation), the run's attempt 1 check fails | `failed`, or `exhausted` when repeated | unchanged | `attemptNumber ≥ 2` ⇒ `false` |
    | 7 | saved-result recovery (`attempt` forced to 1, `:1448`) check fails | `failed` | unchanged | `recovery !== undefined` ⇒ `false`; `:1918` also still maps retryable to failed |
    | 8 | `maxAttempts: 1`, L1 check fails | `exhausted` "attempt limit reached" | unchanged | `:73-75` precedes; the `:1920` re-evaluation hits `:73` again |
-   | 9 | L1 check fails with the token budget at 0 (`hasBudgetExceeded`), time and attempts left, a group/spend-cap token policy | `exhausted` "runtime or token budget exhausted" | **`blocked_waiting_human`**, `waitingCause: "token-allowance"`, `allowanceNextPhase: "plan"`, fingerprint appended | `:1920-1933` re-evaluates with `budgetExceeded` = time only ⇒ now retryable ⇒ `parkAllowance("plan", fingerprint)` (`:1354-1368`; returns `null`, so `exhausted` stays, when there is no token policy, recovery, or no group/spend-cap cause) |
-   | 10 | the allowance continuation of row 9 | — | its attempt 1 is L2 (`tokenPolicy.inheritedUsage.attempts` ≥ 1, enforced at `materialize.ts:249-252`) ⇒ rows 2–4 | `materialize.ts:194` (`safeToRetry: z.literal(true)`) and `:261-266` (`attemptNumber` = 0 + 1 ⇒ retryable) accept the parked verification |
+   | 9 | L1 check fails and the work grant allows one attempt (`workGrant.attempts: 1`, `maxAttempts` larger) | `exhausted` "attempt limit reached" | unchanged | the grant caps `maxAttempts` (`:1145-1151`, `Math.min`) ⇒ row 8 |
+   | 10 | L1 check fails with the token budget at 0 (the review's "new allowance path") | — | **not reachable** | tokens cannot reach 0 inside a check-failing verify: the check failure books `tokenUsage: 0` (`:228-230`), and a budget already at 0 after execute never reaches verify — `:1777-1781` parks at `"verify"` or ends `exhausted` first. So the `:1920-1933` re-evaluation never sees a `required-check-failed` with `budgetExceeded` true from tokens; with time at 0 it re-evaluates with `budgetExceeded` true and stays `exhausted`. Corrects revision 2's §3.2 bullet. |
+   | 11 | the allowance continuation of a verifier-rejection park (unchanged path) whose new run's attempt 1 check fails | `failed` / `exhausted` | unchanged | its attempt 1 is L2 (`tokenPolicy.inheritedUsage.attempts` ≥ 1, enforced at `materialize.ts:249-252`) ⇒ row 6 |
 
 4. Applies to both `verifierType`s (`agent` and `command`): both go through `runRequiredChecks`.
 5. `missing-required-evidence` (`:262`) stays `safeToRetry: false` (not in ruling R).
@@ -325,10 +326,8 @@ R (one test per §3 row that changes or that (b) keeps, all `runLoop`-level with
   `attempts/1/verify.json` (the recovery attempt's) has `safeToRetry: false` and the terminal is `failed`.
   *Mutation ("R-in-recovery"):* drop `&& recovery === undefined` ⇒ the persisted `safeToRetry` turns `true` ⇒ red (the
   terminal stays `failed` because `:1918` still maps retryable; the persisted field is what tells them apart).
-- Row 9 (token-exhausted allowance): grant `tokens: 10`, plan 0 / execute 10 tokens, check `false`, group/spend-cap
-  policy ⇒ `blocked_waiting_human`, `waitingCause: "token-allowance"`, `allowanceNextPhase: "plan"`,
-  `recentFailures: [{rejectCategory:"required-check-failed", …, failingCommand:"false"}]`. Mutation "R-off" ⇒ red
-  (`exhausted`).
+- Row 9 needs no test of its own: the grant cap makes it row 8, which the existing `maxAttempts: 1` criteria cover.
+- Row 10 needs no test: it is unreachable by construction (the table says why); nothing new to pin.
 - `verifierType: "command"` is covered by criterion item 2 (both kinds go through the same call).
 
 A:
@@ -382,9 +381,9 @@ B:
 
 ## 10. Risks
 
-- **R changes terminal statuses only along §3 rows 1–4 and 9**: a lineage whose first required check fails now spends a
+- **R changes terminal statuses only along §3 rows 1–4**: a lineage whose first required check fails now spends a
   second attempt (tokens, time) and ends `succeeded`, `exhausted`, `failed` or — when the second attempt's checks pass
-  and the verifier rejects with `safeToRetry: true` — `blocked_waiting_human`, instead of `failed` at once. Rows 5–8
+  and the verifier rejects with `safeToRetry: true` — `blocked_waiting_human`, instead of `failed` at once. Rows 5–11
   are unchanged by (b).
 - **Orca impact list** (read in Orca at its main of 2026-10-21; Orca repins after this lands; Orca Rule 16 — ccloop
   states the facts, Orca decides):
@@ -392,10 +391,9 @@ B:
      `src/control/executionDriver.ts:625`). A first-attempt check failure that used to show `terminal:failed` now shows
      `terminal:exhausted` (row 2), `terminal:failed` (row 3) or `terminal:blocked_waiting_human` (row 4); control flow
      there is the same for every non-`succeeded` outcome.
-  2. New allowance path: row 9 parks for a token allowance with `allowanceNextPhase: "plan"` and a
-     `required-check-failed` fingerprint, where it used to end `exhausted`. Orca's `settleTokenAllowance` path (same
-     file, `:620`) is the one that already handles verifier-rejection parks; its renewal goes through
-     `materialize.ts:253-268` (row 10).
+  2. Allowance path: the second review expected a new park for a token allowance after a check failure; by reading it
+     is not reachable (§3 row 10), and a one-attempt work grant still ends `exhausted` "attempt limit reached" (row 9).
+     Orca's `settleTokenAllowance` path sees nothing new.
   3. Cost: Orca's per-task default `TASK_WORK.attempts = 3` (Orca `src/control/estimator.ts:16`) ⇒ a task whose check
      fails on attempt 1 now spends up to one more plan+execute (+ verify if the checks then pass). No number is
      estimated here (Rule 14).
