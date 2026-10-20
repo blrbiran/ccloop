@@ -461,3 +461,32 @@ only).
 > out-of-repo write: into the operator's real config, one table per attempt worktree path, left behind after the run.
 > The human ruled it allowed: 「运行过程中 ~/.codex/config.toml 被改应该是允许的」. The byte-unchanged result holds
 > only for the free measurement, not for a real exec.
+
+## 13. As built (Orca session `9ec98639`, 2026-10-21) — read this before §3–§9
+
+- Commits (subject lines): `feat(controller): retry a failed required check once, on the lineage's first attempt only`;
+  `feat(runtime): the verify prompt carries ccloop's own required-check results`; `feat(runtime): a retried attempt's
+  plan and execute carry the last rejection`; `docs(codex): correct the isolation spec and registration comment — real
+  execs write trust tables through the config.toml link`.
+- R: `runVerification`/`runRequiredChecks` take `checkFailureRetryable` (last parameter, default `false`); the one
+  caller passes `attempt + inheritedAttempts === 1 && recovery === undefined`.
+- A: `RequiredCheckResult` and `AttemptContext.requiredCheckResults` (`src/runtime/types.ts`); `runRequiredChecks`'
+  passing branch returns `results`; `adapter.verify({ ...context, requiredCheckResults })`; `tailBytes` and
+  `requiredCheckResultLines` in `src/runtime/claude/prompts.ts`.
+- B: `LastFailure` and `AttemptContext.lastFailure`; `readRejectionEvidence` and the `lastRejectionEvidence` /
+  `lastFailureContext` pair in `runLoopFromState`; `buildPlannerPrompt(contract, lastFailure?)` (three adapters pass
+  `context.lastFailure`); `lastFailureLines` shared by planner and executor; `readAllowanceContinuation`'s plan branch
+  adds `lastRejectionEvidence` only when the saved evidence is a string array; the hook type carries it.
+- New tests: `tests/controller/requiredCheckRetry.test.ts` (rows 1, 3, 5, 6), `tests/runtime/verifierCheckResults.test.ts`,
+  `tests/runtime/lastFailurePrompts.test.ts`, `tests/controller/lastFailureCarried.test.ts`, a case in
+  `tests/control/allowanceEvidence.test.ts`, a `describe` in `tests/controller/resumeLoop.integration.test.ts`; shared
+  helper `tests/runtime/realAdapterFixture.ts` (claude/codex fakes plus an inline OMP fake that records the prompt).
+- Criteria changed: §8.1 items 1–4 exactly as written there (the human approved all necessary rewrites in this session).
+- Mutations, each seen red on its named test(s) in a built `git clone --local` copy, each restored to a 0-byte
+  `git diff`: R-off, R-every-attempt, R-run-local; A-always (also reddens the existing verifier goldens
+  `taskResultPrompts`, `phasePrompts`), A-never, A-head, A-noboundary, A-no-n, A-nospread, A-execonly; B-planner-ignores,
+  B-keep-passed, B-no-retry-evidence, B-verify-too, B-materialize-drop, B-gate-attempt (plan only on `attempt >= 2`),
+  B-skip-disk, B-skip-fingerprint, B-claude-plan, B-codex-plan, B-omp-plan, B-executor-ignores, B-head-boundary,
+  B-total. **R-in-recovery stayed green** (equivalent on every reachable input found, §9 row 7).
+- Lesson recorded: a mutation clone that was not built reddens every test through the claude fake
+  (`claude-exit-error`); the first R/A mutation runs were redone after `npm run build`.
