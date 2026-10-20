@@ -30,7 +30,9 @@ describe("controller outcome independent of explanation", () => {
         async execute(context) {
           await writeFile(join(context.worktreePath,"answer.txt"),"42\n");
           const execution = { ...core, tokenUsage: 15 };
-          expectedPrompt = buildVerifierPrompt({ ...context, execution });
+          // Ruling A (spec 2026-10-20-verifier-sees-checks-and-last-failure-design.md §8.1 item 1): the verifier also gets
+          // ccloop's own check results. Independent oracle: the fixture's check.cjs prints nothing, so both streams are "".
+          expectedPrompt = buildVerifierPrompt({ ...context, execution, requiredCheckResults: [{ command: f.contract.verification.requiredChecks[0]!, stdout: "", stderr: "" }] });
           return accessor ? Object.defineProperty(execution, "taskResult", { enumerable: true, get() { throw new Error("optional report accessor executed"); } }) : execution;
         },
         verify(context) { return verifier.verify(context); },

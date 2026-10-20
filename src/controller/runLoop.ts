@@ -45,6 +45,7 @@ import type {
   OwnerRecord,
   ReconciliationDraft,
   ReconciliationRecord,
+  RequiredCheckResult,
   RuntimeAdapter,
   UsageEvidence,
   VerificationResult,
@@ -83,6 +84,8 @@ type RequiredChecksOutcome =
   | {
       passed: true;
       evidence: string[];
+      // Ruling A (spec 2026-10-20-verifier-sees-checks-and-last-failure-design.md §4.1): raw streams for the verify prompt.
+      results: RequiredCheckResult[];
     }
   | {
       passed: false;
@@ -199,6 +202,7 @@ async function runRequiredChecks(
   checkFailureRetryable = false,
 ): Promise<RequiredChecksOutcome> {
   const evidence: string[] = [];
+  const results: RequiredCheckResult[] = [];
 
   for (const [checkIndex,command] of requiredChecks.entries()) {
     try {
@@ -208,6 +212,7 @@ async function runRequiredChecks(
         maxBuffer: 10 * 1024 * 1024,
       });
       evidence.push(buildRequiredCheckEvidence(command, "passed", stdout, stderr));
+      results.push({ command, stdout, stderr });
     } catch (error) {
       if (isAbortError(error)) {
         throw error;
@@ -236,7 +241,7 @@ async function runRequiredChecks(
     }
   }
 
-  return { passed: true, evidence };
+  return { passed: true, evidence, results };
 }
 
 function evidenceIncludes(evidence: string[], requirement: string): boolean {
@@ -310,7 +315,7 @@ async function runVerification(
   }
 
   await beforeVerifier?.();
-  const verification = await adapter.verify(context);
+  const verification = await adapter.verify({ ...context, requiredCheckResults: requiredChecks.results });
   return enforceVerificationContract(contract, {
     ...verification,
     evidence: [...requiredChecks.evidence, ...verification.evidence],

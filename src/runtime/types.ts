@@ -2,6 +2,8 @@ import type { LoopContract } from "../contract/schema.js";
 import type { OwnerStatus, RunState } from "../state/types.js";
 import type { ModelUsageV1 } from "../control/usage.js";
 
+export type RequiredCheckResult = { command: string; stdout: string; stderr: string };
+
 export type AttemptContext = {
   contract: LoopContract;
   state: RunState;
@@ -12,6 +14,9 @@ export type AttemptContext = {
   plan?: AttemptPlan;
   execution?: ExecutionResult;
   savedExecution?: { originalBase:string; candidateHead:string; changedPaths:string[] };
+  /** Ruling A (spec 2026-10-20-verifier-sees-checks-and-last-failure-design.md §4): set only for verify, by ccloop, after
+   * every required check passed; one entry per check in contract order, raw streams. */
+  requiredCheckResults?: RequiredCheckResult[];
   onProcessRegistered?: (process: {
     pid: number;
     pgid: number;
