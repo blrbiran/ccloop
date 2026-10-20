@@ -21,6 +21,16 @@ export const CODEX_SINGLE_CALL_CONFIG: readonly string[] = [
 ];
 
 /**
+ * Codex phase isolation (ccloop spec 2026-10-18 §3.3; Orca session 3d229487): the `-c` values every codex loop phase sends
+ * on top of the private homes. Unlike CODEX_SINGLE_CALL_CONFIG it keeps the target repo's docs, the environment context
+ * and the permissions instructions, and touches no tool flag; `features.hooks=false` because the linked config.toml can
+ * carry hook definitions (`hooks.state`) the private CODEX_HOME would not otherwise drop. Accepted by codex-cli 0.163.0.
+ */
+export const CODEX_PHASE_CONFIG: readonly string[] = [
+  "notify=[]", "features.plugins=false", "include_apps_instructions=false", "include_collaboration_mode_instructions=false", "features.hooks=false",
+];
+
+/**
  * The installation's effective CODEX_HOME (Task 8 ruling 2): its configDir, else an inherited absolute non-empty
  * CODEX_HOME, else <HOME>/.codex (HOME absolute), else none.
  */
@@ -95,12 +105,12 @@ async function ensureLink(path: string, target: string | null): Promise<void> {
  *   the catalog probe makes a pair under a fresh `mkdtemp(<tmpdir>/ccloop-codex-mcp-*)` removed in `finally` -- a
  *   crash before that leaves the temp dir (its links and codex's state) behind.
  */
-export async function codexSingleCallHome(input: { runDir: string; sourceCodexHome: string | null; executable: string; env: NodeJS.ProcessEnv }): Promise<{ home: string; codexHome: string }> {
+export async function codexSingleCallHome(input: { runDir: string; sourceCodexHome: string | null; executable: string; env: NodeJS.ProcessEnv; fallback?: readonly string[] }): Promise<{ home: string; codexHome: string }> {
   const cache = catalogCacheDir(input.env);
   let base: string;
   if (cache === null) {
     let root = input.runDir;
-    for (const part of ["codex", "1", "single-call"]) { root = join(root, part); await privateDir(root); }
+    for (const part of input.fallback ?? ["codex", "1", "single-call"]) { root = join(root, part); await privateDir(root); }
     base = await mkdtemp(join(root, "home-"));
     await chmod(base, 0o700);
     await privateDir(base);
