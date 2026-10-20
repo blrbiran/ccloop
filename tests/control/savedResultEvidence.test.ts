@@ -40,6 +40,7 @@ async function world(mode="invalid") {
   await writeFile(fake,`import {readFileSync,writeFileSync,unlinkSync,chmodSync,mkdirSync,statSync,chownSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 if(process.argv.includes('--version')){console.log('9.9.9-fake');process.exit(0);}
+if(!process.argv.includes('exec')){const x=process.argv;process.stdout.write(x.includes('mcp')?'[]\\n':x.includes('models')?'{"models":[]}\\n':'',()=>process.exit(0));await new Promise(()=>{});}
 let prompt='';for await(const part of process.stdin)prompt+=part;
 const args=process.argv, schema=JSON.parse(readFileSync(args[args.indexOf('--output-schema')+1],'utf8'));
 const phase=schema.properties?.result?'execute':schema.properties?.approved?'verify':'plan';

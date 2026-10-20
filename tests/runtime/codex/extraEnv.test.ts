@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { codexDescriptor } from "../../../src/agents/codex.js";
@@ -27,16 +27,24 @@ describe("codex config directory", () => {
     expect(JSON.parse(await readFile(probe.seen, "utf8"))).toBe(process.env.CODEX_HOME ?? null);
   });
 
+  // Rewritten 2026-10-20 (ccloop Rule 15; human authorized criterion rewrite, Orca session 3d229487): under codex phase
+  // isolation (spec 2026-10-18 §3.3) a phase built by the descriptor runs with the installation's private CODEX_HOME, no
+  // longer with configDir itself; configDir still reaches the CLI as the target of that CODEX_HOME's auth.json and
+  // config.toml links, and the phase must actually run (the old probe never answered, so it only saw a catalog probe).
   it("sets CODEX_HOME from the installation's configDir through the descriptor's adapter", async () => {
     const f = await codexFixture("integration");
-    const probe = await envProbe(f.dir);
+    const configDir = join(f.dir, "codex-home-b");
+    await mkdir(configDir); await writeFile(join(configDir, "auth.json"), "{}"); await writeFile(join(configDir, "config.toml"), "");
     const materialized: MaterializedAgentConfigV1 = {
       schema: "ccloop-agent-config-v1",
       kind: "codex",
-      installation: { kind: "codex", command: probe.command, version: "0.155.1", configDir: "/tmp/codex-home-b", timeoutMs: 10_000, killGraceMs: 50, sandbox: "workspace-write", budgetMode: "soft" },
+      installation: { kind: "codex", command: f.config.command as [string, ...string[]], version: "0.155.1", configDir, timeoutMs: 10_000, killGraceMs: 50, sandbox: "workspace-write", budgetMode: "soft" },
       selection: { agent: "codex", model: "gpt-6-sol", contextWindow: "agent-default" },
     };
-    await expect(codexDescriptor.createAdapter(materialized).plan(f.context)).rejects.toThrow();
-    expect(JSON.parse(await readFile(probe.seen, "utf8"))).toBe("/tmp/codex-home-b");
+    await codexDescriptor.createAdapter(materialized).plan(f.context);
+    const seen = (JSON.parse(await readFile(`${f.marker}.phase-env.json`, "utf8")) as { CODEX_HOME: string }).CODEX_HOME;
+    expect(seen).not.toBe(configDir);
+    expect(await readlink(join(seen, "config.toml"))).toBe(join(configDir, "config.toml"));
+    expect(await readlink(join(seen, "auth.json"))).toBe(join(configDir, "auth.json"));
   });
 });

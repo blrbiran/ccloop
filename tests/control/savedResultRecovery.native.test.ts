@@ -11,6 +11,7 @@ async function nativeWorld(extraEnv:Record<string,string>={}){
  const f=await savedRecoveryFixture(),fake=join(f.root,'verifier.mjs'),calls=join(f.root,'provider-calls'),checks=join(f.root,'checks');
  await writeFile(fake,`import {readFileSync,writeFileSync,appendFileSync} from 'node:fs';
 if(process.argv.includes('--version')){console.log('9.9.9-fake');process.exit(0);}
+if(!process.argv.includes('exec')){const x=process.argv;process.stdout.write(x.includes('mcp')?'[]\\n':x.includes('models')?'{"models":[]}\\n':'',()=>process.exit(0));await new Promise(()=>{});}
 for await(const part of process.stdin){}
 const a=process.argv,s=JSON.parse(readFileSync(a[a.indexOf('--output-schema')+1],'utf8')),phase=s.properties.result?'execute':s.properties.approved?'verify':'plan';
 appendFileSync(${JSON.stringify(calls)},phase+'\\n');if(phase!=='verify')throw Error('paid phase replayed');

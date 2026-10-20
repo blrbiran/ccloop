@@ -14,6 +14,9 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 const [target, replace, observation, fake] = process.argv.slice(2, 6);
 const args = process.argv.slice(6);
 if (args.includes("--version") && !args.includes("exec")) { console.log("9.9.9-fake"); process.exit(0); }
+// Codex phase isolation (spec 2026-10-18 §3.3): an isolated phase first reads the catalog (debug models, features list,
+// mcp list); every call without exec goes to fake-codex unchanged, which answers it and exits.
+if (!args.includes("exec")) { process.argv.splice(2, 4); await import(fake); }
 const wire = JSON.parse(readFileSync(args[args.indexOf("--output-schema") + 1], "utf8"));
 const schema = wire.properties?.result ?? wire;
 const phase = schema.anyOf ? "execute" : schema.properties?.approved ? "verify" : "plan";
