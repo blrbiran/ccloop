@@ -58,9 +58,8 @@ const ownErrorPartial: PartialExecutionResult = {
 async function runWith(execution: ExecutionResult, requiredChecks: string[], tokenBudget?: number) {
   const repoPath = await createRepo();
   const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
-  const adapter = new ScriptedAdapter([
-    { plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] }, execution, verification: unusedVerification },
-  ]);
+  const frame = { plan: { summary: "change src/index.ts", primaryTargetPaths: ["src/index.ts"] }, execution, verification: unusedVerification };
+  const adapter = new ScriptedAdapter([frame, frame]);
   const finalState = await runLoop(createContract(repoPath, requiredChecks, tokenBudget), runDir, adapter);
   const events = (await readFile(join(runDir, "events.jsonl"), "utf8"))
     .split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; detail: string });
@@ -79,13 +78,15 @@ describe("claude's own partial error with changed files goes to verify (spec 202
     expect(verify).toMatchObject({ approved: true, failingCommand: null });
   }, 30_000);
 
-  // Spec §5.1: after verify, today's stop decision applies unchanged -- a failed required check is not safe to retry.
-  it("T11b: a failing required check gives today's stop decision", async () => {
+  // Spec §5.1: after verify, the ordinary stop decision applies. Ruling R, option (b) (spec
+  // 2026-10-20-verifier-sees-checks-and-last-failure-design.md §3): a failed required check on the lineage's first
+  // attempt is retried once; failing the same check again ends exhausted as a repeated failure.
+  it("T11b: a failing required check is retried once, then stops as a repeated failure", async () => {
     const { finalState, types, verify } = await runWith(ownErrorPartial, ["false"]);
-    expect(finalState.status).toBe("failed");
-    expect(finalState.stopReason).toBe("verifier rejection with no safe retry path");
-    expect(types).toEqual(["loop_planning", "attempt_started", "execute_started", "partial_execute_sent_to_verify", "execution_finished", "loop_failed"]);
-    expect(verify).toMatchObject({ approved: false, failingCommand: "false", safeToRetry: false });
+    expect(finalState.status).toBe("exhausted");
+    expect(finalState.stopReason).toBe("repeated failure pattern detected");
+    expect(types).toEqual(["loop_planning", "attempt_started", "execute_started", "partial_execute_sent_to_verify", "execution_finished", "verification_rejected", "attempt_started", "execute_started", "partial_execute_sent_to_verify", "execution_finished", "loop_exhausted"]);
+    expect(verify).toMatchObject({ approved: false, failingCommand: "false", safeToRetry: true });
   }, 30_000);
 
   it("T11c: no changed files ⇒ failed without verify", async () => {

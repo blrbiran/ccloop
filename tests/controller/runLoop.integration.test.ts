@@ -465,13 +465,22 @@ describe("runLoop", () => {
       failingCommand: string | null;
     };
 
-    expect(finalState.status).toBe("failed");
-    expect(finalState.stopReason).toBe("verifier rejection with no safe retry path");
+    const secondVerify = JSON.parse(await readFile(join(runDir, "attempts", "2", "verify.json"), "utf8")) as unknown;
+    expect(finalState.status).toBe("exhausted");
+    expect(finalState.stopReason).toBe("repeated failure pattern detected");
+    expect(finalState.attemptsUsed).toBe(2);
     expect(verifyCalled).toBe(false);
     expect(persistedVerify).toMatchObject({
       approved: false,
       rejectCategory: "required-check-failed",
       failingCommand: "false",
+      safeToRetry: true,
+    });
+    expect(secondVerify).toMatchObject({
+      approved: false,
+      rejectCategory: "required-check-failed",
+      failingCommand: "false",
+      safeToRetry: false,
     });
   });
 
@@ -523,13 +532,22 @@ describe("runLoop", () => {
       failingCommand: string | null;
     };
 
-    expect(finalState.status).toBe("failed");
-    expect(finalState.stopReason).toBe("verifier rejection with no safe retry path");
+    const secondVerify = JSON.parse(await readFile(join(runDir, "attempts", "2", "verify.json"), "utf8")) as unknown;
+    expect(finalState.status).toBe("exhausted");
+    expect(finalState.stopReason).toBe("repeated failure pattern detected");
+    expect(finalState.attemptsUsed).toBe(2);
     expect(verifyCalled).toBe(false);
     expect(persistedVerify).toMatchObject({
       approved: false,
       rejectCategory: "required-check-failed",
       failingCommand: "false",
+      safeToRetry: true,
+    });
+    expect(secondVerify).toMatchObject({
+      approved: false,
+      rejectCategory: "required-check-failed",
+      failingCommand: "false",
+      safeToRetry: false,
     });
   });
 

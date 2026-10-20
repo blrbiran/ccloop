@@ -322,10 +322,13 @@ R (one test per §3 row that changes or that (b) keeps, all `runLoop`-level with
   mutation ⇒ red (`blocked_waiting_human`).
 - Row 6 (inherited lineage): `tokenPolicy.inheritedUsage.attempts: 1`, failing check on the run's attempt 1 ⇒ `failed`,
   `attemptsUsed: 1`. *Mutation ("R-run-local"):* the caller uses `attempt === 1` (drops `inheritedAttempts`) ⇒ red.
-- Row 7 (saved-result recovery): extend the existing `verifySavedResult` recovery fixture whose check fails; assert
-  `attempts/1/verify.json` (the recovery attempt's) has `safeToRetry: false` and the terminal is `failed`.
-  *Mutation ("R-in-recovery"):* drop `&& recovery === undefined` ⇒ the persisted `safeToRetry` turns `true` ⇒ red (the
-  terminal stays `failed` because `:1918` still maps retryable; the persisted field is what tells them apart).
+- Row 7 (saved-result recovery): no new test. In recovery `inheritedAttempts` is the source's inherited usage plus the
+  work its run consumed (`src/control/savedResultRecovery.ts:287-288`), and that run produced the saved execution, so
+  `attempt + inheritedAttempts` is ≥ 2 in every recovery fixture (`tests/control/savedRecoveryFixture.ts:32,41`:
+  `attempts: 2`) and the first clause is already `false`. The mutation "R-in-recovery" (drop `&& recovery ===
+  undefined`) is therefore equivalent on every reachable input found; the clause stays because the spec's (b) names
+  recovery explicitly and an accounting record with 0 attempts was not proven impossible. Existing recovery criteria
+  (`tests/controller/verifySavedResult.test.ts`) pin that recovery's terminal states are unchanged.
 - Row 9 needs no test of its own: the grant cap makes it row 8, which the existing `maxAttempts: 1` criteria cover.
 - Row 10 needs no test: it is unreachable by construction (the table says why); nothing new to pin.
 - `verifierType: "command"` is covered by criterion item 2 (both kinds go through the same call).

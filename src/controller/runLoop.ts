@@ -194,6 +194,9 @@ async function runRequiredChecks(
   primaryTargetPaths: string[],
   abortSignal?: AbortSignal,
   checkRunner?:(command:string,index:number)=>Promise<{stdout:string;stderr:string}>,
+  // Ruling R, option (b) (spec 2026-10-20-verifier-sees-checks-and-last-failure-design.md §3): true only on the
+  // lineage's first attempt outside saved-result recovery; every other path keeps today's terminal state.
+  checkFailureRetryable = false,
 ): Promise<RequiredChecksOutcome> {
   const evidence: string[] = [];
 
@@ -218,7 +221,7 @@ async function runRequiredChecks(
           rejectCategory: "required-check-failed",
           primaryTargetPaths,
           failingCommand: command,
-          safeToRetry: false,
+          safeToRetry: checkFailureRetryable,
           evidence: [
             ...evidence,
             buildRequiredCheckEvidence(command, "failed", execError.stdout ?? "", execError.stderr ?? "", execError),
@@ -273,6 +276,7 @@ async function runVerification(
   onStarted?: () => void,
   checkRunner?:(command:string,index:number)=>Promise<{stdout:string;stderr:string}>,
   beforeVerifier?:()=>Promise<void>,
+  checkFailureRetryable = false,
 ): Promise<VerificationResult> {
   onStarted?.();
   const primaryTargetPaths = getVerificationPrimaryTargetPaths(contract, plan, execution);
@@ -282,6 +286,7 @@ async function runVerification(
     primaryTargetPaths,
     context.abortSignal,
     checkRunner,
+    checkFailureRetryable,
   );
 
   if (!requiredChecks.passed) {
@@ -1826,6 +1831,7 @@ export async function runLoopFromState(
             },
             recovery ? (command,index)=>runSavedResultCheck(runDir,worktreePath!,command,index,options?.phaseSignal ? AbortSignal.any([abortSignal,options.phaseSignal]) : abortSignal,providerOptions?.onProcessRegistered) : undefined,
             recovery ? ()=>assertSavedResultUnmodified(runDir,worktreePath!,recovery,state) : undefined,
+            attempt + inheritedAttempts === 1 && recovery === undefined,
           ),
           { awaitAbortedResult: recovery !== undefined || attemptAdapter.awaitAbortedPhaseCleanup === true },
         );
