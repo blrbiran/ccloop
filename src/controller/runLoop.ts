@@ -493,7 +493,8 @@ function getPhaseTimeoutMs(contract: LoopContract, state: RunState): number {
 
 function isCodexSkillFailure(error: unknown): boolean {
   // PhaseExecutionError retains String(originalError), including its "Error: " prefix.
-  return error instanceof Error && /^(?:Error: )?codex-skills-/.test(error.message);
+  // Codex phase isolation spec 2026-10-18 §3.5: a phase refused before spawn (codex-phase-isolation-*) is final the same way.
+  return error instanceof Error && /^(?:Error: )?codex-(?:skills|phase-isolation)-/.test(error.message);
 }
 
 async function runPhaseWithTimeout<T>(

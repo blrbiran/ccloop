@@ -39,6 +39,8 @@ export class CodexPhaseAborted extends Error {
 export class CodexAdapter implements RuntimeAdapter {
   private readonly config: CodexConfig;
   // Agent selection (2026-09-26): extraEnv carries the installation's config directory (CODEX_HOME) to the CLI.
+  // Codex phase isolation (spec 2026-10-18 §3.3): with an installation (production, codexDescriptor.createAdapter) every
+  // phase runs isolated in the installation's private homes; an adapter built without one keeps the legacy unisolated spawn.
   private readonly rateLimitDelaysMs: readonly number[];
   private readonly installation: InstallationV1 | undefined;
   constructor(rawConfig: unknown, private readonly extraEnv?: Record<string, string>, private readonly codexSkillsDir?: string, options: CodexAdapterOptions = {}) {
@@ -56,7 +58,7 @@ export class CodexAdapter implements RuntimeAdapter {
     for (let call = 1; ; call++) {
       const elapsed = Date.now() - startedAt;
       const callContext = call === 1 ? context : { ...context, state: { ...context.state, budgetSnapshot: { ...context.state.budgetSnapshot, timeRemainingMs: context.state.budgetSnapshot.timeRemainingMs - elapsed } } };
-      const outcome = await runCodexPhase(this.config, { phase, prompt, context: callContext }, this.extraEnv, this.codexSkillsDir);
+      const outcome = await runCodexPhase(this.config, { phase, prompt, context: callContext }, this.extraEnv, this.codexSkillsDir, this.installation);
       const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? classifyRateLimit(outcome.events) : null;
       if (rateLimited !== "before-work") return { ...outcome, rateLimited };
       const delay = this.rateLimitDelaysMs[call - 1];
@@ -76,6 +78,10 @@ export class CodexAdapter implements RuntimeAdapter {
     // the usage its stdout showed, or null.
     if (outcome.rateLimited !== null) {
       throw Object.assign(new Error(`codex-rate-limited: ${outcome.evidenceDir}`), outcome.rateLimited === "before-work" ? { rateLimitedBeforeWork: true } : { observedTokens: outcome.observedTokens });
+    }
+    if (outcome.reason.startsWith("codex-phase-isolation-")) {
+      // Spec 2026-10-18 §3.5: refused before spawn, no process and no token; named exception to "usage is never booked as 0".
+      throw Object.assign(new Error(`${outcome.reason}: ${outcome.evidenceDir}`), { neverStarted: true });
     }
     if (outcome.reason !== "completed" || outcome.final === null) {
       // Orca ruling 26 (session c85d2c4e, 2026-09-28): as the aborted path, a phase that timed out or failed carries the
