@@ -11,6 +11,7 @@ import { readHandoffCandidate, type CandidateV1 } from "./handoff.js";
 import { proveStopped, type StopProofV1 } from "./stopProof.js";
 import { inspectStart, type ExecutionStatusV1 } from "./accept.js";
 import { readAcceptedOptional } from "./store.js";
+import { readToolRulesReport } from "./toolRulesReport.js";
 
 /** Orca labels and progress spec §3.2 (2026-09-28): the loop's latest state, as Orca shows a task's step. */
 export interface ProgressV1 {
@@ -39,6 +40,11 @@ export interface CollectionV1 {
    * terminal schemas and the frozen protocol-3 projection stay as they are.
    */
   failureCause?: import("../runtime/failureCause.js").RunFailureCauseV1;
+  /**
+   * Per-contract tool rules (spec 2026-10-22 §5): the run's report, present iff the contract has toolRules and
+   * run/tool-rules.json exists. Top level, like failureCause; absent otherwise, so no existing caller sees new bytes.
+   */
+  toolRules?: import("../runtime/toolRules.js").ToolRulesReportV1;
 }
 
 const safe = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -142,6 +148,8 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const loopState = await readLoopStateJson(input.work.sourceDir);
   const terminal = storedCandidate === null || loopState === null ? null : terminalOf(loopState.state, input.protocol);
   const failureCause = terminal === null ? undefined : (loopState!.state as RunState).failureCause;
+  const declared = (input.work as { contract?: { executionPolicy?: { toolRules?: unknown } } }).contract?.executionPolicy?.toolRules;
+  const toolRules = declared === undefined ? undefined : await readToolRulesReport(input.work.sourceDir);
   return {
     events,
     candidate: storedCandidate === null ? null : candidateOf(storedCandidate, proof),
@@ -150,6 +158,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     // Evaluated after progressOf, which has checked the loop state's currentAttempt.
     ...(storedCandidate === null || loopState === null ? {} : await reportedOf(input.work.sourceDir, storedCandidate, loopState.state)),
     ...(failureCause === undefined ? {} : { failureCause }),
+    ...(toolRules === undefined ? {} : { toolRules }),
   };
 }
 

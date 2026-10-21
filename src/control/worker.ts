@@ -27,6 +27,8 @@ import { testCrashPoint } from "./testCrashPoint.js";
 import { materializeResultRepository } from "./resultRepository.js";
 import { runSingleCall } from "./singleCall.js";
 import { registerAttemptRefNamespace } from "../workspace/worktreeManager.js";
+import { codexConfigTomlPath, readCodexNetworkAccess } from "../agents/codexNetworkConfig.js";
+import { buildToolRulesReport, writeToolRulesReport } from "./toolRulesReport.js";
 
 interface ManagedProcessV1 {
   pid: number;
@@ -239,6 +241,15 @@ export async function runControlWorker(argv: string[]): Promise<void> {
     const contract = envelope.inputCheckpoint === null || allowanceContinuation !== undefined
       ? envelope.work.contract
       : await prepareContinuationContract(envelope.work.contract, runDir, envelope.inputCheckpoint);
+    // Per-contract tool rules (spec 2026-10-22 §5): the report, computed by code once per (re)start of the worker before the
+    // first phase -- also for a saved-result verify -- and replaced atomically, so a crash resume rewrites the true one.
+    const toolRules = contract.executionPolicy.toolRules;
+    if (toolRules !== undefined) {
+      const kind = config.kind as "claude" | "codex" | "omp";
+      const codexPath = kind === "codex" && toolRules.network && config.installation.sandbox === "workspace-write" ? codexConfigTomlPath(config.installation, undefined, process.env) : null;
+      await writeToolRulesReport(runDir, buildToolRulesReport({ rules: toolRules, kind, installation: config.installation,
+        codexNetwork: codexPath === null ? null : await readCodexNetworkAccess(codexPath), env: process.env }));
+    }
     const adapterOptions = envelope.work.kind === "loop" && envelope.work.skillPluginDir !== undefined
       ? { skillPluginDir: envelope.work.skillPluginDir }
       : envelope.work.codexSkillsDir !== undefined ? { codexSkillsDir: envelope.work.codexSkillsDir }

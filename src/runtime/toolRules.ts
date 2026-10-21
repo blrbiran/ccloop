@@ -269,3 +269,17 @@ export function ompToolRuleRows(rules: ToolRulesV1): ToolRuleRowV1[] {
   for (const name of rules.secretEnv) rows.push({ rule: { kind: "secretEnv", name }, status: "recorded-only", reason: SECRET_REASON, phases: [] });
   return rows;
 }
+
+/**
+ * The executor prompt's tool-rule section (spec §5 "Prompt"; executor only): the allowed commands besides the required
+ * checks, whether the network is allowed, the secret names. One string of lines; only called when the contract has rules.
+ */
+export function toolRulesPromptSection(rules: ToolRulesV1): string {
+  const commands = rules.commands.map((rule) => (rule.kind === "exact" ? `- ${rule.value}` : `- ${rule.value} (optionally followed by arguments)`));
+  return [
+    "Tool rules for this attempt: run only the required checks and these commands, each as one simple command (no cd prefix, no subshells); other commands are denied or fail the attempt:",
+    commands.length === 0 ? "(none)" : commands.join("\n"),
+    rules.network ? "Network access: allowed." : "Network access: not allowed; do not fetch URLs or call web tools.",
+    ...(rules.secretEnv.length === 0 ? [] : [`Secret environment variables this task may use (by name; never print their values): ${rules.secretEnv.join(", ")}`]),
+  ].join("\n");
+}

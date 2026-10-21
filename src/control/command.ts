@@ -1,4 +1,5 @@
 import { FAILURE_CAUSES } from "../runtime/failureCause.js";
+import { toolRulesReportSchema } from "./toolRulesReport.js";
 import {settleSavedResult,readSavedResultSettlement,savedResultSettlementSchema} from "./settleSavedResult.js";
 import {readSavedResultSourceEligibility,readSavedResultEligibility,savedResultEligibilitySchema,savedResultSourceEligibilitySchema} from "./savedResultRecovery.js";
 import { collectSavedResultEvidence, readSavedResultEvidence, savedResultCollectionSchema } from "./savedResultEvidence.js";
@@ -211,6 +212,8 @@ const collectionSchema = z.object({
     cause: z.enum(FAILURE_CAUSES), phase: z.enum(["plan", "execute", "verify"]).nullable(),
     retries: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), detail: z.string().nullable(),
   }).strict().optional(),
+  // Per-contract tool rules (spec 2026-10-22 §5): top level, present iff the contract has rules and the report exists.
+  toolRules: toolRulesReportSchema.optional(),
 }).strict();
 
 const METHODS = new Set<ControlMethodV1>([

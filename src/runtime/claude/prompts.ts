@@ -1,5 +1,6 @@
 import type { LoopContract } from "../../contract/schema.js";
 import type { AttemptContext, LastFailure, PriorFailure } from "../types.js";
+import { toolRulesPromptSection } from "../toolRules.js";
 
 function formatList(items: string[]): string {
   return items.length === 0 ? "(none)" : items.map((item) => `- ${item}`).join("\n");
@@ -161,6 +162,8 @@ export function buildExecutorPrompt(context: AttemptContext, options: { schemaNe
     formatList(contract.context.targetPaths),
     "Constraints:",
     formatList(contract.context.constraints),
+    // Per-contract tool rules (spec 2026-10-22 §5 "Prompt"): executor only; no rules ⇒ no bytes.
+    ...(contract.executionPolicy.toolRules === undefined ? [] : [toolRulesPromptSection(contract.executionPolicy.toolRules)]),
     "Current attempt plan (source of truth for this execution):",
     formatJson(context.plan),
     "Execute against the current attempt plan above and report only this attempt's concrete outcome.",
