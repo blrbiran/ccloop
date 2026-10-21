@@ -214,3 +214,58 @@ export function codexToolRuleRows(rules: ToolRulesV1, sandbox: "read-only" | "wo
   const baseline = "codex runs any command inside its sandbox; ccloop reads only the linked config.toml, not managed, MDM or system config layers (which sit above -c), a --profile in the installation command, or a trusted target repo's .codex/config.toml";
   return { rows, baseline: boundedText(baseline, 1024) };
 }
+
+/** Spec §4 omp step 2: constructs ccloop does not split; a command holding one is a violation (fail closed). */
+const UNSPLIT = ["`", "$(", "(", ")", "<(", ">(", "{", "}"];
+
+/** Spec §4 omp steps 1-3 for one bash command: null when allowed, else the reason. */
+function ompCommandViolation(command: string, rules: ToolRulesV1, requiredChecks: readonly string[]): string | null {
+  if (requiredChecks.includes(command)) return null;
+  if (UNSPLIT.some((construct) => command.includes(construct))) return `bash command ccloop cannot split: ${command}`;
+  for (const raw of command.split(/&&|\|\||;|\||&|\n/)) {
+    const segment = raw.trim();
+    if (segment === "") continue;
+    const allowed = requiredChecks.includes(segment) || rules.commands.some((rule) =>
+      rule.kind === "exact" ? segment === rule.value : segment === rule.value || segment.startsWith(`${rule.value} `));
+    if (!allowed) return `bash command outside the tool rules: ${segment}`;
+  }
+  return null;
+}
+
+/**
+ * The omp after-exit check (spec §4 "omp after-exit check"; omp 18.10.1, measure-omp.md Q1/Q3): over every
+ * `tool_execution_start` of an execute call -- `bash` must carry a string `args.command` that passes
+ * ompCommandViolation; a `write` whose `args.path` starts with `xd://` runs a tool with no bash event and is a violation.
+ * Lines that do not parse are skipped (decodeOmpPhase refuses them on its own). Null: clean; else a bounded detail.
+ */
+export function ompToolRuleViolation(events: string, rules: ToolRulesV1, requiredChecks: readonly string[]): string | null {
+  for (const line of events.split("\n")) {
+    if (!line.trim()) continue;
+    let row: unknown;
+    try { row = JSON.parse(line); } catch { continue; }
+    if (row === null || typeof row !== "object" || Array.isArray(row)) continue;
+    const event = row as { type?: unknown; toolName?: unknown; args?: { command?: unknown; path?: unknown } | null };
+    if (event.type !== "tool_execution_start") continue;
+    let detail: string | null = null;
+    if (event.toolName === "bash") {
+      const command = event.args?.command;
+      detail = typeof command !== "string" ? "bash call without a command string" : ompCommandViolation(command, rules, requiredChecks);
+    } else if (event.toolName === "write" && typeof event.args?.path === "string" && event.args.path.trim().toLowerCase().startsWith("xd://")) {
+      detail = `write to ${event.args.path.trim()} runs a tool without a bash event`;
+    }
+    if (detail !== null) return boundedText(detail, 512);
+  }
+  return null;
+}
+
+/** The omp report rows (spec §3.3, §4 omp column): the check is built, so commands-closed is `detected` on execute. */
+export function ompToolRuleRows(rules: ToolRulesV1): ToolRuleRowV1[] {
+  const rows: ToolRuleRowV1[] = [{ rule: { kind: "commands-closed" }, status: "detected", reason: "omp has no allowlist ccloop can set; execute's bash calls are checked after the call and a violation fails the run", phases: ["execute"] }];
+  for (const rule of rules.commands) {
+    const separator = separatorRefusal(rule.value);
+    rows.push({ rule: { ...rule }, status: separator === null ? "recorded-only" : "refused", reason: separator ?? "omp has no allowlist; the command is admitted by the after-exit check", phases: [] });
+  }
+  rows.push({ rule: { kind: "network", value: rules.network }, status: "recorded-only", reason: "omp has no network switch ccloop can set (bash and read reach the network)", phases: [] });
+  for (const name of rules.secretEnv) rows.push({ rule: { kind: "secretEnv", name }, status: "recorded-only", reason: SECRET_REASON, phases: [] });
+  return rows;
+}

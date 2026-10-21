@@ -535,6 +535,15 @@ function isCodexSkillFailure(error: unknown): boolean {
   return error instanceof Error && /^(?:Error: )?codex-(?:skills|phase-isolation)-/.test(error.message);
 }
 
+/**
+ * Per-contract tool rules (spec 2026-10-22 §4): an attempt that ran a command outside the contract's tool rules ends the
+ * run `failed` with that cause -- also when the phase was stopped by its timeout or a handoff -- because the command
+ * already ran outside the declared boundary; no further attempt, no in-run continuation.
+ */
+function isToolRuleViolation(error: unknown): boolean {
+  return error instanceof PhaseExecutionError && error.attached?.classification.cause === "tool-rule-violated";
+}
+
 async function runPhaseWithTimeout<T>(
   timeoutMs: number,
   operation: (abortSignal: AbortSignal) => Promise<T>,
@@ -1684,6 +1693,8 @@ export async function runLoopFromState(
         { awaitAbortedResult: true },
       );
 
+      if (executeOutcome.timedOut && isToolRuleViolation(executeOutcome.abortedError)) throw executeOutcome.abortedError;
+
       if (handoffAborted()) {
         execution = executeOutcome.result ?? null;
         await captureResult(attempt, worktreePath, execution);
@@ -2224,7 +2235,7 @@ export async function runLoopFromState(
           await heartbeat.runExclusive(() => captureExecutionFormatFailure({input:options.taskResultInput!,runDir,worktreePath:worktreePath!,attempt,attemptStartHead:attemptStartHead!,resolvedBase:resolvedSourceBase,runtimeContract:contract,actualConfig:options.executionFormatCapture!.config,failure:error.formatFailure!,verifierEntered,assertHeld:()=>heartbeat.assertHeld()}));
         }
 
-        if (!recoveryRefusal && !isCodexSkillFailure(error) && (handoffAborted() || handoffRequested())) {
+        if (!recoveryRefusal && !isCodexSkillFailure(error) && !isToolRuleViolation(error) && (handoffAborted() || handoffRequested())) {
           await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
           const interrupted = handoffAborted();
           return await persistHandoffBoundary(

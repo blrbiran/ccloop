@@ -12,6 +12,19 @@ import { observedChangedPaths, worktreeHead, worktreeSnapshot } from "./worktree
 import { classifyOmpCall, type CallClassification } from "../failureCause.js";
 import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
 import type { OmpPhaseOutcome } from "./runOmpPhase.js";
+import { ompToolRuleViolation } from "../toolRules.js";
+
+/**
+ * Per-contract tool rules (spec 2026-10-22 §4 "omp after-exit check"): an execute call ran a command outside the
+ * contract's tool rules. Classified by its `code` alone (never by text) as the terminal cause `tool-rule-violated`.
+ */
+export class OmpToolRuleViolated extends Error {
+  readonly code = "omp-tool-rule-violated";
+  constructor(evidenceDir: string, readonly detail: string) {
+    super(`omp-tool-rule-violated: ${evidenceDir}`);
+    this.name = "OmpToolRuleViolated";
+  }
+}
 
 export class OmpAdapter implements RuntimeAdapter {
   constructor(private readonly config: MaterializedAgentConfigV1, private readonly skillsDir?: string, private readonly retryDelaysMs: readonly number[] = TRANSIENT_RETRY_DELAYS_MS) {}
@@ -32,7 +45,8 @@ export class OmpAdapter implements RuntimeAdapter {
         } catch (error) {
           const outcome = seen.outcome;
           let classification: CallClassification | null;
-          if (outcome === undefined || String(error).includes("omp-read-only-phase-mutated")) classification = { cause: "unknown", workObserved: true, detail: null };
+          if (error instanceof OmpToolRuleViolated) classification = { cause: "tool-rule-violated", workObserved: true, detail: error.detail };
+          else if (outcome === undefined || String(error).includes("omp-read-only-phase-mutated")) classification = { cause: "unknown", workObserved: true, detail: null };
           else if (outcome.reason === "aborted") classification = null;
           else if (outcome.reason === "timeout") classification = { cause: "budget-exhausted", workObserved: true, detail: null };
           // Activity watchdog (spec 2026-10-21 §2.3): transient; retried when the phase is read-only or no tool ran.
@@ -53,6 +67,18 @@ export class OmpAdapter implements RuntimeAdapter {
     const before = phase === "execute" ? null : await worktreeSnapshot(context.worktreePath);
     const outcome = await runOmpPhase(this.config, phase, prompt, context, this.skillsDir === undefined ? {} : { skillsDir: this.skillsDir });
     seen.outcome = outcome;
+    // Per-contract tool rules (spec 2026-10-22 §4; plan Task 4): checked on every execute outcome, before any other reading,
+    // so a violation followed by a timeout, a crash or a bad answer still ends the run as tool-rule-violated.
+    const toolRules = phase === "execute" ? context.contract?.executionPolicy?.toolRules : undefined;
+    const violation = toolRules === undefined ? null : ompToolRuleViolation(outcome.events, toolRules, context.contract.verification.requiredChecks);
+    if (violation !== null) {
+      await writeFile(join(outcome.evidenceDir, "tool-rule-violation.txt"), violation, { mode: 0o600 });
+      let observedTokens: number | null = null;
+      if (outcome.reason === "completed") {
+        try { observedTokens = decodeOmpPhase(phase, outcome.events, this.config.selection.model).tokenUsage ?? null; } catch { /* keep unknown */ }
+      }
+      throw Object.assign(new OmpToolRuleViolated(outcome.evidenceDir, violation), observedTokens === null ? {} : { observedTokens });
+    }
     if (before !== null) {
       const after = await worktreeSnapshot(context.worktreePath);
       if (before !== after) {
@@ -95,7 +121,8 @@ export class OmpAdapter implements RuntimeAdapter {
       return execution;
     }
     catch (error) {
-      if (context.abortSignal?.aborted && !(error !== null && typeof error === "object" && "observedTokens" in error)) return null;
+      // Per-contract tool rules (spec 2026-10-22 §4): a violation is terminal, so an abort never turns it into "no result".
+      if (context.abortSignal?.aborted && !(error instanceof OmpToolRuleViolated) && !(error !== null && typeof error === "object" && "observedTokens" in error)) return null;
       throw error;
     }
   }

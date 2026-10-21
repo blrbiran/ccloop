@@ -7,6 +7,9 @@
 export const FAILURE_CAUSES = [
   "auth", "quota", "rate-limited", "provider-5xx", "network", "context-overflow", "stalled", "executable-missing",
   "required-check-failed", "verifier-rejected", "budget-exhausted", "unknown",
+  // Per-contract tool rules (spec 2026-10-22 §4): an omp execute call ran a command outside the contract's tool rules.
+  // Terminal: never in RETRYABLE_CAUSES, classified only from the decode error code `omp-tool-rule-violated`.
+  "tool-rule-violated",
 ] as const;
 export type FailureCauseV1 = (typeof FAILURE_CAUSES)[number];
 

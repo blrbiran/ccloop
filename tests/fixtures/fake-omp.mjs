@@ -73,6 +73,20 @@ const result = phase === "plan" ? { summary: "Set answer to 42", primaryTargetPa
 // carries its fields (decisions, debug, anything given). Without the file nothing changes; the argv convention is unchanged.
 if (phase === "execute" && existsSync(`${marker}.reported.json`)) Object.assign(result, JSON.parse(readFileSync(`${marker}.reported.json`, "utf8")));
 const message = { role: "assistant", content: [{ type: "text", text: JSON.stringify(result) }], provider: "gateway", model: "model-a", stopReason: "stop", usage: { input: 8, output: 2, cacheRead: 3, cacheWrite: 1, totalTokens: 14, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
-for (const row of [{ type: "session", id: "fake" }, { type: "agent_start" }, { type: "message_end", message }, { type: "agent_end", isTerminal: true, yielded: true, messages: [message] }]) {
+// Tool rules (ccloop spec 2026-10-22 §4; shape from omp 18.10.1 source, Orca session b37f7ce9 measure-omp.md Q5):
+// `<marker>.tools.json` ([{toolName, args}], or {calls, hang}), when present, is emitted as real-shaped
+// tool_execution_start/end pairs before the final message (execute only); with `hang: true` the fake then hangs instead of
+// answering. Without the file nothing changes.
+const toolScript = phase === "execute" && existsSync(`${marker}.tools.json`) ? JSON.parse(readFileSync(`${marker}.tools.json`, "utf8")) : null;
+const toolRows = (Array.isArray(toolScript) ? toolScript : toolScript?.calls ?? []).flatMap((call, index) => [
+  { type: "tool_execution_start", toolCallId: `fake-call-${index}`, toolName: call.toolName, args: call.args },
+  { type: "tool_execution_end", toolCallId: `fake-call-${index}`, toolName: call.toolName, result: { content: [{ type: "text", text: "" }], details: {} }, isError: false },
+]);
+if (toolScript !== null && !Array.isArray(toolScript) && toolScript.hang === true) {
+  for (const row of [{ type: "session", id: "fake" }, { type: "agent_start" }, ...toolRows]) process.stdout.write(`${JSON.stringify(row)}\n`);
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+}
+for (const row of [{ type: "session", id: "fake" }, { type: "agent_start" }, ...toolRows, { type: "message_end", message }, { type: "agent_end", isTerminal: true, yielded: true, messages: [message] }]) {
   process.stdout.write(`${JSON.stringify(row)}\n`);
 }
