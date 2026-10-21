@@ -178,3 +178,31 @@ Independent review: ready with fixes. Applied (controller's calls):
     test 3).
 12. Freezing: built once before the run is prepared, never into the saved-result recovery rebuild
     (`executionDriver.ts:1315`) (§3).
+
+## As built (Orca session 9ec98639, 2026-10-21; ccloop main e43f2a3 + this round)
+
+- Wire (`src/control/protocol.ts`): `priorFailureSchema` / `priorFailuresSchema` on `loopWorkSchema` (protocol 3) and
+  `nullableLoopWorkSchema` (protocol 4); byte bounds via `utf8Bounded(n)` = `z.string().min(1).refine(byteLength ≤ n)`;
+  the v4 envelope refine also refuses `priorFailures` next to `mode`. `LoopWork.priorFailures?: PriorFailureV1[]`.
+  Protocol 3 has no `mode`, so the refusal is protocol 4 only (a saved-result recovery is protocol 4 by schema).
+- Attempt (`src/runtime/types.ts`): `PriorFailure` (no `runId`) and `AttemptContext.priorFailures?`.
+- `runLoopFromState` maps the envelope's list once (dropping `runId`) and extends ruling B's `lastFailureContext`:
+  empty `state.recentFailures` ⇒ `{ priorFailures }`, else B's `{ lastFailure }` only. Verify contexts never call it.
+- Prompts (`src/runtime/claude/prompts.ts`): `priorFailureLines(priorFailures, lastFailure)` after B's lines, before
+  `FINAL_MESSAGE_LINE`; returns nothing when `lastFailure` is set (defence in depth for §2.2(3)'s exclusivity). B's
+  per-entry excerpt is shared as `evidenceExcerpt`. The shared budget: entries are taken newest-failure first while the
+  running total stays ≤ 8192 bytes; the first entry that would cross it closes the budget for every older failure too
+  (each counts its untaken entries in `evidenceOmittedEntries`).
+- **Test 8 (crash resume) not built, by reading:** a control run is never resumed in place — `resumeLoop` refuses an Orca
+  control run directory (`src/controller/resumeLoop.ts:237-240`, crash-resume spec §4.3), and the worker's `runLoop` needs
+  a fresh run directory (`ensureFreshRunDir`). A crashed control run continues as a successor run with a new envelope,
+  which is test 7 ("a successor (input checkpoint set) … still carries them") plus Orca copying the frozen bytes (§3).
+- Tests: `tests/control/priorFailuresSchema.test.ts`, `tests/runtime/priorFailuresPrompts.test.ts`,
+  `tests/controller/priorFailuresCarried.test.ts` (add only; no existing criterion changed). The prompt tests were
+  written before the code but first run after it; every branch's red is shown by the mutations below instead.
+- Mutations (built `git clone --local` copy; restore diff 0 / 0 bytes), all red on their named tests: default-to-empty,
+  allow-empty-list, drop-max-3, drop-evidence-max-16, drop-strict, max-not-bytes (`.max` instead of the byte refine),
+  allow-with-saved-result, refuse-with-checkpoint, v4-no-field, oldest-first, per-failure-budget, keep-passed-lines,
+  render-runid, drop-cause, prior-wins-over-B (builder), planner-ignores, executor-ignores, verify-too, claude-plan,
+  codex-plan, omp-plan, loop-never-passes, loop-keeps-runid, loop-prior-wins, loop-gate-on-attempt,
+  loop-drop-on-successor.
