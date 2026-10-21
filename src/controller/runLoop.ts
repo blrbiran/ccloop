@@ -48,6 +48,7 @@ import type {
   OwnerRecord,
   ReconciliationDraft,
   LastFailure,
+  PriorFailure,
   ReconciliationRecord,
   RequiredCheckResult,
   RuntimeAdapter,
@@ -1380,9 +1381,16 @@ export async function runLoopFromState(
   // allowance continuation or, after a crash, read back from disk; then on every retry.
   let lastRejectionEvidence: string[] | null = state.recentFailures.length === 0 ? null
     : options?.allowanceContinuation?.lastRejectionEvidence ?? await readRejectionEvidence(runDir, state);
-  const lastFailureContext = (): { lastFailure?: LastFailure } => {
+  // Prior-failures spec 2026-10-21 §2.2: earlier runs' failures from the accepted envelope (the worker re-parses it on
+  // every start, so a crash resume sees the same bytes), for plan and execute only while this run has no failure of its
+  // own; from the first fingerprint on, B's last failure is the only one, byte-identical to before. runId stays behind.
+  const priorFailures: PriorFailure[] | undefined = options?.taskResultInput?.work.kind === "loop"
+    ? options.taskResultInput.work.priorFailures?.map(({ runId: _runId, ...failure }) => failure)
+    : undefined;
+  const lastFailureContext = (): { lastFailure?: LastFailure; priorFailures?: PriorFailure[] } => {
     const last = state.recentFailures.at(-1);
-    return last === undefined ? {} : { lastFailure: { rejectCategory: last.rejectCategory, failingCommand: last.failingCommand, evidence: lastRejectionEvidence } };
+    if (last === undefined) return priorFailures === undefined ? {} : { priorFailures };
+    return { lastFailure: { rejectCategory: last.rejectCategory, failingCommand: last.failingCommand, evidence: lastRejectionEvidence } };
   };
   let activeAdapter: RuntimeAdapter | null = typeof adapter === "function" ? null : adapter;
   let activePhase: PhaseName | null = null;

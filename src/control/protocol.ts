@@ -81,6 +81,17 @@ export interface LoopWork {
   codexSkillsDir?: string;
   /** OMP skill injection (2026-10-13): the same snapshot `skills` directory, OMP-only; listed in each phase's system prompt. */
   ompSkillsDir?: string;
+  /** Prior-failures spec 2026-10-21 §2.1: earlier runs' failures, oldest first, for plan and execute of this run. */
+  priorFailures?: PriorFailureV1[];
+}
+
+/** Prior-failures spec 2026-10-21 §2.1: one earlier run's failure; runId is for audit and never rendered. */
+export interface PriorFailureV1 {
+  runId: string;
+  rejectCategory: string;
+  failingCommand: string | null;
+  evidence: string[] | null;
+  failureCause?: string;
 }
 
 /**
@@ -231,6 +242,19 @@ const inputCheckpointSchema = z
     bundlePath: z.string().min(1),
   })
   .strict();
+// Spec 2026-10-21-prior-failures-start-input-design.md §2.1: the failures of earlier runs of the same task, oldest first,
+// for plan and execute of a fresh run. Bounds are UTF-8 bytes (zod's .max counts UTF-16 code units).
+const utf8Bounded = (max: number) => z.string().min(1).refine((value) => Buffer.byteLength(value, "utf8") <= max);
+const priorFailureSchema = z
+  .object({
+    runId: idSchema,
+    rejectCategory: utf8Bounded(200),
+    failingCommand: utf8Bounded(4096).nullable(),
+    evidence: z.array(utf8Bounded(4096)).min(1).max(16).nullable(),
+    failureCause: utf8Bounded(64).optional(),
+  })
+  .strict();
+const priorFailuresSchema = z.array(priorFailureSchema).min(1).max(3).optional();
 function atMostOneSkillDirectory(work: { skillPluginDir?: string; codexSkillsDir?: string; ompSkillsDir?: string }): boolean {
   return [work.skillPluginDir, work.codexSkillsDir, work.ompSkillsDir].filter((dir) => dir !== undefined).length <= 1;
 }
@@ -246,6 +270,7 @@ const loopWorkSchema = z
     skillPluginDir: z.string().min(1).optional(),
     codexSkillsDir: z.string().min(1).optional(),
     ompSkillsDir: z.string().min(1).optional(),
+    priorFailures: priorFailuresSchema,
   })
   .strict()
   .refine((work) => atMostOneSkillDirectory(work), {
@@ -272,13 +297,16 @@ const nullableLoopWorkSchema = z.object({
   kind: z.literal("loop"), contract: loopContractSchema,
   targetRepo: z.string().min(1), base: z.string().min(1), sourceDir: z.string().min(1),
   skillPluginDir: z.string().min(1).optional(), codexSkillsDir: z.string().min(1).optional(), ompSkillsDir: z.string().min(1).optional(),
+  priorFailures: priorFailuresSchema,
 }).strict().refine(work => atMostOneSkillDirectory(work));
 const v4StartEnvelopeSchema = z.object({
   protocol: z.literal(4), contractHash: hashSchema, tokenPolicy: tokenPolicySchema.optional(),
   mode: z.literal("verify-saved-result").optional(), savedResultRecovery: savedResultRecoveryInputSchema.optional(),
   claim: claimSchema.extend({ grant: z.object({ work: budgetAmountSchema.extend({ sessions: positiveSafeInteger }), handoff: amountSchema }).strict() }),
   inputCheckpoint: inputCheckpointSchema.nullable(), work: nullableLoopWorkSchema,
-}).strict().refine(e => (e.mode === undefined) === (e.savedResultRecovery === undefined) && (e.mode === undefined || e.inputCheckpoint === null));
+}).strict().refine(e => (e.mode === undefined) === (e.savedResultRecovery === undefined) && (e.mode === undefined || e.inputCheckpoint === null)
+  // Prior-failures spec §2.1: a saved-result recovery builds no prompt, so it takes no prior failures.
+  && (e.mode === undefined || e.work.priorFailures === undefined));
 export const startEnvelopeSchema = z.union([legacyStartEnvelopeSchema, v4StartEnvelopeSchema]);
 export const handoffRequestSchema = z
   .object({

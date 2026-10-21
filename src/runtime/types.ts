@@ -8,6 +8,10 @@ export type RequiredCheckResult = { command: string; stdout: string; stderr: str
  * attempt's plan and execute. evidence is null when it could not be recovered (e.g. after a crash, no matching file). */
 export type LastFailure = { rejectCategory: string; failingCommand: string | null; evidence: string[] | null };
 
+/** Prior-failures spec 2026-10-21 §2.2: one earlier run's failure as the attempt sees it (the wire's runId is dropped:
+ * it is never rendered). Oldest first, as on the wire. */
+export type PriorFailure = { rejectCategory: string; failingCommand: string | null; evidence: string[] | null; failureCause?: string };
+
 export type AttemptContext = {
   contract: LoopContract;
   state: RunState;
@@ -22,6 +26,8 @@ export type AttemptContext = {
    * every required check passed; one entry per check in contract order, raw streams. */
   requiredCheckResults?: RequiredCheckResult[];
   lastFailure?: LastFailure;
+  /** Prior-failures spec §2.2: set for plan and execute only while the run has no failure of its own. */
+  priorFailures?: PriorFailure[];
   onProcessRegistered?: (process: {
     pid: number;
     pgid: number;
