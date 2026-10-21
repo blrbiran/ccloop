@@ -19,6 +19,8 @@ export type PhaseOutcome = {
   code:number|null;signal:NodeJS.Signals|null;events:string;final:string|null;evidenceDir:string;
   // Orca handoff delivery C-3: usage observed in the stdout of a phase that did not complete; null otherwise.
   observedTokens:number|null;
+  // Failure causes (ccloop spec 2026-10-21 §3 "Every kind"): the errno of a spawn that failed, so ENOENT is executable-missing.
+  spawnErrno?:string;
 };
 const LIMIT=16*1024*1024;
 const execFileAsync=promisify(execFile);
@@ -101,7 +103,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     };
     const abort=()=>stop("aborted");
     const timer=setTimeout(()=>stop("timeout"),childTimeout);
-    child.on("error",()=>{result.reason="spawn-error";finish();});
+    child.on("error",(e:NodeJS.ErrnoException)=>{result.reason="spawn-error";if(typeof e.code==="string")result.spawnErrno=e.code;finish();});
     child.stdin.on("error",(e)=>{ioError=String(e);if(!exited)stop("io-error");});
     child.stdout.on("data",(b:Buffer)=>{
       const kept=b.subarray(0,Math.max(0,LIMIT-outBytes));outBytes+=b.length;

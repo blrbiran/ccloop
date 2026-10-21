@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { Socket } from "node:net";
 import { promisify } from "node:util";
 import { buildModelUsage, buildUsageEvidence, createLineSplitter, createUsageObserver, writeObservation } from "./claude-stream.mjs";
@@ -423,7 +423,7 @@ function readArgvEnv(name, fallback, requireCommand) {
 function claudeEnv() {
   // Crash resume (2026-10-02): CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS is this runner's own input too.
   // Crash resume (2026-10-02), spec §3.1: so are CCLOOP_PARENT_WATCH_FD and CCLOOP_PARENT_GONE_GRACE_MS.
-  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: _observedUsagePath, CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS: _spawnRetryDelay, CCLOOP_PARENT_WATCH_FD: _parentWatchFd, CCLOOP_PARENT_GONE_GRACE_MS: _parentGoneGrace, CCLOOP_CLAUDE_TEST_LIFECYCLE_PATH: _testLifecyclePath, CCLOOP_CLAUDE_TEST_MAIN_CLAIM_GATE: _testMainClaimGate, ...env } = process.env;
+  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: _observedUsagePath, CCLOOP_CLAUDE_SIGNALS_PATH: _signalsPath, CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS: _spawnRetryDelay, CCLOOP_PARENT_WATCH_FD: _parentWatchFd, CCLOOP_PARENT_GONE_GRACE_MS: _parentGoneGrace, CCLOOP_CLAUDE_TEST_LIFECYCLE_PATH: _testLifecyclePath, CCLOOP_CLAUDE_TEST_MAIN_CLAIM_GATE: _testMainClaimGate, ...env } = process.env;
   return env;
 }
 
@@ -559,6 +559,49 @@ function withModelUsage(envelope) {
   return modelUsage === null ? {} : { modelUsage };
 }
 
+// Failure causes (ccloop spec 2026-10-21-failure-causes-and-transient-retries-design.md §3 claude): per call, the SDK
+// assistant message's typed `error` (and the text of that same message only), the tool uses and the assistant messages
+// seen. Rewritten atomically whenever a field changes, so a runner killed mid-call leaves the last state; the adapter reads
+// a missing file as "work may have happened" (not retried).
+function createSignalsRecorder(path) {
+  const state = { schema: "ccloop-claude-signals-v1", assistantError: null, errorText: null, toolUses: 0, assistantMessages: 0 };
+  const toolIds = new Set();
+  const write = () => {
+    if (!path) return;
+    try { writeFileSync(`${path}.tmp`, JSON.stringify(state), { mode: 0o600 }); renameSync(`${path}.tmp`, path); }
+    catch (error) { process.stderr.write(`claude-runner: signals not written: ${String(error)}\n`); }
+  };
+  write();
+  return {
+    observe(event) {
+      if (!event || typeof event !== "object" || event.type !== "assistant") return;
+      const content = event.message && Array.isArray(event.message.content) ? event.message.content : [];
+      const messageId = event.message && typeof event.message.id === "string" ? event.message.id : null;
+      let changed = false;
+      if (messageId === null || !toolIds.has(`message:${messageId}`)) {
+        if (messageId !== null) toolIds.add(`message:${messageId}`);
+        state.assistantMessages += 1;
+        changed = true;
+      }
+      for (const block of content) {
+        if (!block || block.type !== "tool_use") continue;
+        const id = typeof block.id === "string" ? block.id : `${messageId}:${toolIds.size}`;
+        if (toolIds.has(id)) continue;
+        toolIds.add(id);
+        state.toolUses += 1;
+        changed = true;
+      }
+      if (typeof event.error === "string") {
+        state.assistantError = event.error;
+        const text = content.filter((block) => block && block.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n");
+        state.errorText = text === "" ? null : text;
+        changed = true;
+      }
+      if (changed) write();
+    },
+  };
+}
+
 async function runClaude(request, claudeCommand, extraArgs) {
   // Orca single-call estimate (2026-09-27), spec §5.4 and Task 0 item 1 (claude 2.1.283, static): a single call answers
   // the caller's schema with every tool off (`--tools ""`; claude --help: 'Use "" to disable all tools') and its output
@@ -591,11 +634,13 @@ async function runClaude(request, claudeCommand, extraArgs) {
   child.on("exit", (code, signal) => recordTestLifecycle({ event: "inner-exit", code, signal }));
   const observationPath = process.env.CCLOOP_CLAUDE_OBSERVED_USAGE_PATH;
   const observer = createUsageObserver();
+  const signals = createSignalsRecorder(process.env.CCLOOP_CLAUDE_SIGNALS_PATH);
   let resultEvent = null;
   let fallbackEnvelope = null;
   const splitter = createLineSplitter((line) => {
     let event;
     try { event = JSON.parse(line); } catch { return; }
+    signals.observe(event);
     if (event && event.type === "result") { resultEvent = event; return; }
     // Orca claude stream usage (2026-09-27): real claude's json envelope and its stream's result event both carry
     // type "result"; the older SubprocessClaudeAdapter criteria's stand-ins print a bare {structured_output, usage}

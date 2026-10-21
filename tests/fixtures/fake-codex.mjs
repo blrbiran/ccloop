@@ -91,6 +91,20 @@ process.stdin.on("end",()=>{
   // replay the tester's real 429 stdout (Orca orca_archived_files/recommendations-1-events.jsonl), exit 1 unless exit0.
   // `rate-limit-hang` prints the same rows and then hangs (a phase that times out); `rate-limit-1-hang` rejects the first
   // call and hangs on every later one.
+  // Failure causes (ccloop spec 2026-10-21 §8): `error-503-1` fails the first call of this marker with codex's own
+  // "exceeded retry limit, last status: 503" rows (later calls behave as `integration`); `error-503-all` on every call;
+  // `error-503-after-item` prints an item.started first (work observed) on every call.
+  if(mode.startsWith("error-503")) {
+    const call=readFileSync(marker+".argv","utf8").trim().split("\n").length;
+    if(mode!=="error-503-1"||call===1) {
+      const message="exceeded retry limit, last status: 503 Service Unavailable";
+      const rows=[{type:"thread.started",thread_id:"01a13431-3db4-73a1-afd1-154f0477282d"},{type:"turn.started"},
+        ...(mode==="error-503-after-item"?[{type:"item.started",item:{id:"item_0",type:"command_execution",command:"ls",status:"in_progress"}}]:[]),
+        {type:"error",message},{type:"turn.failed",error:{message}}];
+      process.stdout.write(rows.map(row=>JSON.stringify(row)).join("\n")+"\n");
+      process.exitCode=1;return;
+    }
+  }
   if(mode.startsWith("rate-limit")) {
     const call=readFileSync(marker+".argv","utf8").trim().split("\n").length;
     if(mode==="rate-limit-1-hang"&&call>1) {setInterval(()=>{},1000);return;}

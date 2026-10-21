@@ -1,3 +1,4 @@
+import { attachedCause, type RunFailureCauseV1 } from "../runtime/failureCause.js";
 import {testCrashPoint} from "../control/testCrashPoint.js";
 import {canonicalHash} from "../control/protocol.js";
 import {loadSavedResultRecovery,materializeSavedResult,boundSavedResultRuntime,assertSavedResultFence,type LoadedSavedResult} from "../control/savedResultRecovery.js";
@@ -125,6 +126,8 @@ class PhaseExecutionError extends Error {
   // (Codex rejected the call with HTTP 429 after turn.started and before any item; human ruling, observedTokensOf). ***
   readonly tokenUsage: number | null;
   readonly formatFailure: ExecutionFormatFailure | null;
+  /** Failure causes (spec 2026-10-21 §5 row 3): the cause the adapter attached, if any. */
+  readonly attached: ReturnType<typeof attachedCause>;
 
   constructor(elapsedMs: number, error: unknown) {
     super(String(error));
@@ -132,6 +135,7 @@ class PhaseExecutionError extends Error {
     this.elapsedMs = elapsedMs;
     this.tokenUsage = observedTokensOf(error);
     this.formatFailure = error instanceof ExecutionFormatFailure ? error : null;
+    this.attached = attachedCause(error);
   }
 }
 
@@ -1156,11 +1160,37 @@ async function persistTerminalState(
   state: RunState,
   decision: TerminalDecision,
   reason: string,
+  cause?: RunFailureCauseV1,
 ): Promise<RunState> {
-  const terminalState = transitionRunState(state, decision, reason);
+  const terminalState = withFailureCause(transitionRunState(state, decision, reason), cause);
   await appendTransitionEvent(runDir, terminalState, `loop_${decision}`, reason);
   await writeOwnedRunState(runDir, terminalState);
   return terminalState;
+}
+
+/**
+ * Failure causes (ccloop spec 2026-10-21-failure-causes-and-transient-retries-design.md §5): every failed or exhausted run
+ * records a cause. A caller that knows it (rows 1-3) passes it; otherwise exhausted is a phase timeout or budget check
+ * (row 4, budget-exhausted) and failed is unknown. A blocked_waiting_human gets one only when a rejection caused it.
+ */
+function withFailureCause(state: RunState, cause: RunFailureCauseV1 | undefined): RunState {
+  if (cause !== undefined) return { ...state, failureCause: cause };
+  if (state.status === "exhausted") return { ...state, failureCause: { cause: "budget-exhausted", phase: null, retries: 0, detail: null } };
+  if (state.status === "failed") return { ...state, failureCause: { cause: "unknown", phase: null, retries: 0, detail: null } };
+  return state;
+}
+
+/** Spec §5 row 1: a verifier rejection's category. */
+function rejectionCause(rejectCategory: string): RunFailureCauseV1 {
+  return { cause: rejectCategory === "required-check-failed" ? "required-check-failed" : "verifier-rejected", phase: "verify", retries: 0, detail: null };
+}
+
+/** Spec §5 rows 2-3: the cause an adapter attached to an error or a runner-built partial, else unknown. */
+function phaseCause(value: unknown, phase: PhaseName | null): RunFailureCauseV1 {
+  const attached = attachedCause(value);
+  const knownPhase = phase === "plan" || phase === "execute" || phase === "verify" ? phase : null;
+  return attached === undefined ? { cause: "unknown", phase: knownPhase, retries: 0, detail: null }
+    : { cause: attached.classification.cause, phase: knownPhase, retries: attached.retries, detail: attached.classification.detail };
 }
 
 export async function runLoop(
@@ -1484,7 +1514,12 @@ export async function runLoopFromState(
     }
 
     if (hasBudgetExceeded(state) || (state.budgetSnapshot.attemptsRemaining === 0 && (!recovery || state.attemptsUsed === 0)) || options?.workGrant?.sessions === 0) {
-      return await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON);
+      // Spec §5 row 1 (round 2 I-B): right after a persisted rejection (status planning, a recentFailures entry, no new
+      // attempt started) the budget/attempt stop keeps the rejection's category. Read from the persisted state, so it
+      // holds across a crash resume.
+      const lastRejection = state.status === "planning" ? state.recentFailures.at(-1) : undefined;
+      return await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON,
+        lastRejection === undefined ? undefined : rejectionCause(lastRejection.rejectCategory));
     }
     const attempt = recovery ? 1 : state.attemptsUsed + 1;
 
@@ -1783,6 +1818,8 @@ export async function runLoopFromState(
             state,
             completedExecution.failureType === "timeout" ? "exhausted" : "failed",
             completedExecution.failureMessage,
+            // Spec §5 row 2: the cause the adapter attached to its runner-built partial.
+            attachedCause(completedExecution) === undefined ? undefined : phaseCause(completedExecution, "execute"),
           );
 
           await heartbeat.assertHeld();
@@ -2004,7 +2041,8 @@ export async function runLoopFromState(
             "cleanup after verification rejected",
           );
         } catch (error) {
-          state = transitionRunState(state, "failed", String(error));
+          // Spec §5: a cleanup failure after a rejection is the controller-failure path (row 3) ⇒ unknown, not row 1.
+          state = withFailureCause(transitionRunState(state, "failed", String(error)), undefined);
           await appendTransitionEvent(runDir, state, "attempt_failed", String(error));
           await writeOwnedRunState(runDir, state);
           await heartbeat.assertHeld();
@@ -2027,15 +2065,20 @@ export async function runLoopFromState(
         continue;
       }
 
+      // Spec §5 row 1: a rejection that ends the run (failed / exhausted, or the human gate the stop rules raised for it)
+      // records the rejection's category. A path-policy/pause gate or a stopOn cancel is not a failure (row 6).
+      const rejectionEnded = !verification.approved && !humanGateHit && matchedStopSignal === null
+        && (decision.kind === "failed" || decision.kind === "exhausted" || decision.kind === "blocked_waiting_human");
+      const terminalCause = rejectionEnded ? rejectionCause(verification.rejectCategory) : undefined;
       if(recovery){
         await assertSavedResultUnmodified(runDir,worktreePath,recovery,state);
-        const terminal=transitionRunState(state,decision.kind,decision.reason);
+        const terminal=withFailureCause(transitionRunState(state,decision.kind,decision.reason),terminalCause);
         await persistSavedResultCompletion(runDir,terminal,verification);
         state=terminal;
         await appendTransitionEvent(runDir,state,`loop_${decision.kind}`,decision.reason);
         await writeOwnedRunState(runDir,state);
         await testCrashPoint("saved-result-terminal-fsynced");
-      } else state = await persistTerminalState(runDir, writeOwnedRunState, state, decision.kind, decision.reason);
+      } else state = await persistTerminalState(runDir, writeOwnedRunState, state, decision.kind, decision.reason, terminalCause);
 
       if (decision.kind !== "blocked_waiting_human") {
         await heartbeat.assertHeld();
@@ -2150,6 +2193,11 @@ export async function runLoopFromState(
 
       let failureReason = error instanceof PhaseExecutionError ? error.message : String(error);
       let recoveryRefusal=false;
+      // Spec §5 row 3: a phase exception records the adapter's classified cause, else unknown.
+      const exceptionCause = error instanceof PhaseExecutionError && error.attached !== undefined
+        ? { cause: error.attached.classification.cause, phase: activePhase === "plan" || activePhase === "execute" || activePhase === "verify" ? activePhase : null,
+          retries: error.attached.retries, detail: error.attached.classification.detail } satisfies RunFailureCauseV1
+        : undefined;
 
       if (error instanceof PhaseExecutionError) {
         const failedPhase = activePhase;
@@ -2198,7 +2246,7 @@ export async function runLoopFromState(
       }
 
       if (state.status !== "failed") {
-        state = transitionRunState(state, "failed", failureReason);
+        state = withFailureCause(transitionRunState(state, "failed", failureReason), recoveryRefusal ? undefined : exceptionCause);
         await appendTransitionEvent(runDir, state, "attempt_failed", failureReason);
         await writeOwnedRunState(runDir, state);
       }

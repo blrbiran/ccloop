@@ -128,7 +128,9 @@ describe("ClaudeAgentAdapter (Orca agent selection, spec §4.7)", () => {
     // Orca claude stream usage (2026-09-27), spec §3.1(6), controller ruling in the round's ledger (sixth named
     // rewrite): the runner writes its observation during every phase, so a completed call keeps it too; the 0600
     // loop below now pins it.
-    expect((await readdir(dir)).sort()).toEqual(["observed-usage.json", "outcome.json", "process.json", "request.json", "stderr.log", "stdout.json", "usage.json"]);
+    // Ruling: human approved rewriting all necessary criteria (Orca session 9ec98639, 2026-10-21): a phase call also keeps the
+    // runner's failure-cause signals (failure-causes spec §3 claude).
+    expect((await readdir(dir)).sort()).toEqual(["claude-signals.json", "observed-usage.json", "outcome.json", "process.json", "request.json", "stderr.log", "stdout.json", "usage.json"]);
     expect((await stat(dir)).mode & 0o777).toBe(0o700);
     for (const name of await readdir(dir)) expect((await stat(join(dir, name))).mode & 0o777).toBe(0o600);
     const request = await readFile(join(dir, "request.json"), "utf8");

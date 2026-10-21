@@ -9,13 +9,48 @@ import { runOmpPhase } from "./runOmpPhase.js";
 import { decodeOmpSingleCall, runOmpSingleCall } from "./ompSingleCall.js";
 import type { OmpPhase } from "./phasePrompt.js";
 import { observedChangedPaths, worktreeHead, worktreeSnapshot } from "./worktreeSnapshot.js";
+import { classifyOmpCall, type CallClassification } from "../failureCause.js";
+import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
+import type { OmpPhaseOutcome } from "./runOmpPhase.js";
 
 export class OmpAdapter implements RuntimeAdapter {
-  constructor(private readonly config: MaterializedAgentConfigV1, private readonly skillsDir?: string) {}
+  constructor(private readonly config: MaterializedAgentConfigV1, private readonly skillsDir?: string, private readonly retryDelaysMs: readonly number[] = TRANSIENT_RETRY_DELAYS_MS) {}
 
+  /**
+   * Failure causes (ccloop spec 2026-10-21-failure-causes-and-transient-retries-design.md §3 omp, §4): omp has no provider
+   * error sample, so a failed call classifies `unknown` (never retried) unless it never spawned (ENOENT ⇒ executable-missing)
+   * or timed out; the shared loop is in place for the causes later rounds can name. Read-only phases are retry-safe.
+   */
   private async phase<P extends OmpPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
+    return runWithTransientRetry<PhaseResults[P]>({
+      limitMs: phaseLimitMs(this.config.installation.timeoutMs, context), delaysMs: this.retryDelaysMs, signal: context.abortSignal,
+      attempt: async (tryLimitMs) => {
+        const seen: { outcome?: OmpPhaseOutcome } = {};
+        try {
+          const value = await this.phaseOnce(phase, prompt, tryContext(context, tryLimitMs), seen);
+          return { ok: true, value, evidenceDir: seen.outcome?.evidenceDir ?? context.runDir };
+        } catch (error) {
+          const outcome = seen.outcome;
+          let classification: CallClassification | null;
+          if (outcome === undefined || String(error).includes("omp-read-only-phase-mutated")) classification = { cause: "unknown", workObserved: true, detail: null };
+          else if (outcome.reason === "aborted") classification = null;
+          else if (outcome.reason === "timeout") classification = { cause: "budget-exhausted", workObserved: true, detail: null };
+          else if (outcome.reason === "spawn-error") classification = { cause: outcome.spawnErrno === "ENOENT" ? "executable-missing" : "unknown", workObserved: false, detail: outcome.spawnErrno ?? null };
+          else classification = classifyOmpCall(outcome.events);
+          const observed = (error as { observedTokens?: unknown }).observedTokens;
+          const observation: TryObservation = (error as { neverStarted?: unknown }).neverStarted === true ? { kind: "rule0" }
+            : typeof observed === "number" && observed > 0 ? { kind: "tokens", tokens: observed } : { kind: "null" };
+          return { ok: false, error: error as Error, evidenceDir: outcome?.evidenceDir ?? context.runDir, classification,
+            retrySafe: classification !== null && (phase !== "execute" || !classification.workObserved), observation };
+        }
+      },
+    });
+  }
+
+  private async phaseOnce<P extends OmpPhase>(phase: P, prompt: string, context: AttemptContext, seen: { outcome?: OmpPhaseOutcome }): Promise<PhaseResults[P]> {
     const before = phase === "execute" ? null : await worktreeSnapshot(context.worktreePath);
     const outcome = await runOmpPhase(this.config, phase, prompt, context, this.skillsDir === undefined ? {} : { skillsDir: this.skillsDir });
+    seen.outcome = outcome;
     if (before !== null) {
       const after = await worktreeSnapshot(context.worktreePath);
       if (before !== after) {

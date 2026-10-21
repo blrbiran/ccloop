@@ -9,6 +9,8 @@ import { addressableMcpServer, codexSingleCallArgs, codexSingleCallHome, decodeC
 import { codexModelUsage, decodeCodexUsage, decodeCodexResult, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
 import { runCodexPhase, type PhaseOutcome } from "./runCodexPhase.js";
 import { classifyRateLimit } from "./rateLimit.js";
+import { classifyCodexCall, type CallClassification } from "../failureCause.js";
+import { phaseLimitMs, runWithTransientRetry, tryContext, type TryObservation, type TryResult } from "../transientRetry.js";
 
 /** Codex rate-limit spec §3.2: waits before each retry of a phase rejected by 429 before any work (three retries). */
 export const RATE_LIMIT_DELAYS_MS: readonly number[] = [30_000, 60_000, 120_000];
@@ -16,16 +18,6 @@ export interface CodexAdapterOptions {
   rateLimitDelaysMs?: readonly number[];
   /** Every-agent requirement chain (Orca spec 2026-10-15 §6.1): the installation a single call re-reads its catalog for. */
   installation?: InstallationV1;
-}
-
-/** Resolves after ms, or at once when the signal aborts (the next call then reports the abort through today's path). */
-function wait(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise(resolve => {
-    if (signal?.aborted) { resolve(); return; }
-    const done = () => { clearTimeout(timer); signal?.removeEventListener("abort", done); resolve(); };
-    const timer = setTimeout(done, ms);
-    signal?.addEventListener("abort", done, { once: true });
-  });
 }
 
 /** Orca handoff delivery C-3: an aborted phase, carrying the usage its stdout showed before the kill (or null). */
@@ -50,34 +42,61 @@ export class CodexAdapter implements RuntimeAdapter {
   }
 
   /**
-   * Spec §3.2–3.3: a call rejected by 429 before any work is called again after a bounded, abortable wait, within the
-   * phase's time limit. Each call keeps its own evidence directory; a rejected one also records rate-limit.json.
+   * Spec §3.2–3.3 (2026-10-13): a call rejected by 429 before any work is called again after a bounded, abortable wait,
+   * within the phase's time limit. Each call keeps its own evidence directory; a rejected one also records rate-limit.json.
+   * *** Failure causes (ccloop spec 2026-10-21-failure-causes-and-transient-retries-design.md §4): the loop is now the
+   * shared runWithTransientRetry, which also retries a provider-5xx / network failure of a read-only phase (plan, verify)
+   * or of a call that observed no work. The 429 predicate is exactly today's (before-work), rate-limit.json is unchanged,
+   * and the phase limit now also respects the contract's perAttemptTimeoutMs (each try gets the limit minus what has
+   * elapsed). ***
    */
-  private async callWithBackoff(phase: CodexPhase, prompt: string, context: AttemptContext): Promise<PhaseOutcome & { rateLimited: "before-work" | "after-work" | null }> {
-    const startedAt = Date.now(), limitMs = Math.min(this.config.timeoutMs, context.state.budgetSnapshot.timeRemainingMs);
-    for (let call = 1; ; call++) {
-      const elapsed = Date.now() - startedAt;
-      const callContext = call === 1 ? context : { ...context, state: { ...context.state, budgetSnapshot: { ...context.state.budgetSnapshot, timeRemainingMs: context.state.budgetSnapshot.timeRemainingMs - elapsed } } };
-      const outcome = await runCodexPhase(this.config, { phase, prompt, context: callContext }, this.extraEnv, this.codexSkillsDir, this.installation);
-      const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? classifyRateLimit(outcome.events) : null;
-      if (rateLimited !== "before-work") return { ...outcome, rateLimited };
-      const delay = this.rateLimitDelaysMs[call - 1];
-      const next = delay !== undefined && Date.now() - startedAt + delay < limitMs && !context.abortSignal?.aborted ? delay : null;
-      await writeFile(join(outcome.evidenceDir, "rate-limit.json"), JSON.stringify({ classification: rateLimited, call, nextDelayMs: next }), { mode: 0o600 });
-      if (next === null) return { ...outcome, rateLimited };
-      await wait(next, context.abortSignal);
-    }
+  private async phase<P extends CodexPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
+    return runWithTransientRetry<PhaseResults[P]>({
+      limitMs: phaseLimitMs(this.config.timeoutMs, context), delaysMs: this.rateLimitDelaysMs, signal: context.abortSignal,
+      attempt: async (tryLimitMs) => {
+        const outcome = await runCodexPhase(this.config, { phase, prompt, context: tryContext(context, tryLimitMs) }, this.extraEnv, this.codexSkillsDir, this.installation);
+        try {
+          return { ok: true, value: await this.decodePhase(phase, outcome), evidenceDir: outcome.evidenceDir };
+        } catch (error) {
+          return this.failedTry(phase, outcome, error as Error);
+        }
+      },
+    });
+  }
+
+  /** Spec §3 codex and §4 retry-safety: the cause of a failed call and whether retrying it could not have changed the worktree. */
+  private failedTry<T>(phase: CodexPhase, outcome: PhaseOutcome, error: Error): TryResult<T> {
+    const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? classifyRateLimit(outcome.events) : null;
+    let classification: CallClassification | null;
+    if (outcome.reason === "aborted") classification = null;
+    else if (outcome.reason === "timeout") classification = { cause: "budget-exhausted", workObserved: true, detail: null };
+    else if (outcome.reason === "spawn-error") classification = { cause: outcome.spawnErrno === "ENOENT" ? "executable-missing" : "unknown", workObserved: false, detail: outcome.spawnErrno ?? null };
+    else if (outcome.reason.startsWith("codex-skills-") || outcome.reason.startsWith("codex-phase-isolation-")) classification = { cause: "unknown", workObserved: false, detail: outcome.reason };
+    else classification = classifyCodexCall(outcome.events) ?? { cause: "unknown", workObserved: true, detail: null };
+    // The 429 row keeps exactly the 2026-10-13 predicate; every other retryable cause needs a read-only phase or no work seen.
+    const retrySafe = classification?.cause === "rate-limited" ? rateLimited === "before-work"
+      : classification !== null && (phase !== "execute" || !classification.workObserved);
+    const observedTokens = (error as { observedTokens?: unknown }).observedTokens;
+    const observation: TryObservation = (error as { rateLimitedBeforeWork?: unknown }).rateLimitedBeforeWork === true || (error as { neverStarted?: unknown }).neverStarted === true ? { kind: "rule0" }
+      : typeof observedTokens === "number" && observedTokens > 0 ? { kind: "tokens", tokens: observedTokens } : { kind: "null" };
+    return {
+      ok: false, error, evidenceDir: outcome.evidenceDir, classification, retrySafe, observation,
+      onDecided: rateLimited === "before-work"
+        ? async (call, nextDelayMs) => { await writeFile(join(outcome.evidenceDir, "rate-limit.json"), JSON.stringify({ classification: rateLimited, call, nextDelayMs }), { mode: 0o600 }); }
+        : undefined,
+    };
   }
 
   get awaitAbortedPhaseCleanup(): boolean { return this.codexSkillsDir !== undefined; }
 
-  private async phase<P extends CodexPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
-    const outcome = await this.callWithBackoff(phase, prompt, context);
+  /** One call's outcome as the phase's result, or the error it fails with (unchanged from before the shared loop). */
+  private async decodePhase<P extends CodexPhase>(phase: P, outcome: PhaseOutcome): Promise<PhaseResults[P]> {
+    const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? classifyRateLimit(outcome.events) : null;
     if (outcome.reason === "aborted") throw new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens);
     // Spec §3.3: named; a rejection before any work books 0 (rateLimitedBeforeWork, observedTokensOf), any other keeps
     // the usage its stdout showed, or null.
-    if (outcome.rateLimited !== null) {
-      throw Object.assign(new Error(`codex-rate-limited: ${outcome.evidenceDir}`), outcome.rateLimited === "before-work" ? { rateLimitedBeforeWork: true } : { observedTokens: outcome.observedTokens });
+    if (rateLimited !== null) {
+      throw Object.assign(new Error(`codex-rate-limited: ${outcome.evidenceDir}`), rateLimited === "before-work" ? { rateLimitedBeforeWork: true } : { observedTokens: outcome.observedTokens });
     }
     if (outcome.reason.startsWith("codex-phase-isolation-")) {
       // Spec 2026-10-18 §3.5: refused before spawn, no process and no token; named exception to "usage is never booked as 0".

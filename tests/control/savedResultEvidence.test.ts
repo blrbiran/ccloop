@@ -102,7 +102,9 @@ it('captures original attempt, usage, full snapshot and exact runtime bytes befo
  const usage=await readUsageEvents(f.sourceDir);expect(usage.filter(e=>e.bucket==='work').map(e=>e.cumulative?.tokens)).toEqual([15,30]);
  expect(usage.filter(e=>e.bucket==='work').at(-1)?.byModel).toEqual([{model:'fixture',input:20,output:10,cacheRead:0,cacheWrite:0}]);
  const legacy=await f.rpc('collect',{input:f.input,afterSeq:0});expect(legacy.code,legacy.stderr).toBe(0);
- const collected=JSON.parse(legacy.stdout);expect(Object.keys(collected)).toEqual(['events','candidate','terminal','progress']);expect(collected.terminal.status).toBe('failed');
+ // Ruling: human approved rewriting all necessary criteria (Orca session 9ec98639, 2026-10-21): a failed terminal now also
+ // carries the top-level failureCause (failure-causes spec §5); the v3 terminal object itself is unchanged (next line).
+ const collected=JSON.parse(legacy.stdout);expect(Object.keys(collected)).toEqual(['events','candidate','terminal','progress','failureCause']);expect(collected.terminal.status).toBe('failed');
  expect(Object.keys(collected.terminal)).toEqual(['status','currentAttempt','attemptsUsed','lastTransitionAt','waitingOnHuman','stopReason','budgetSnapshot','recentFailures']);
  expect(Object.hasOwn(collected.candidate,'capsule')).toBe(false);
  expect(JSON.parse((await f.rpc('features',{})).stdout)).toEqual({protocol:1,tokenPolicy:'optional-v1',savedResultRecovery:'v1',agentInstallationUpdate:'v1'});

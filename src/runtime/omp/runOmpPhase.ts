@@ -18,6 +18,8 @@ export interface OmpPhaseOutcome {
   events: string;
   evidenceDir: string;
   neverStarted: boolean;
+  /** Failure causes (ccloop spec 2026-10-21 §3 "Every kind"): the errno of a spawn that failed (ENOENT ⇒ executable-missing). */
+  spawnErrno?: string;
 }
 
 /**
@@ -111,7 +113,7 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       if (stderrBytes > OUTPUT_LIMIT) stop("output-limit");
     });
     child.stdin.on("error", () => { if (!closed && !stopped) stop("io-error"); });
-    child.on("error", () => { result.neverStarted = true; stop("spawn-error"); });
+    child.on("error", (error: NodeJS.ErrnoException) => { result.neverStarted = true; if (typeof error.code === "string") result.spawnErrno = error.code; stop("spawn-error"); });
     child.once("spawn", () => {
       void (async () => {
         try {

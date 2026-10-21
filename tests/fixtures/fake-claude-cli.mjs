@@ -102,6 +102,23 @@ const emitClosedMessage = async () => { await emitStart(); await emitMessageTail
 // SIGTERM and hangs; "write-then-fail" writes partial.txt and exits 1; "answer-then-linger" answers like "ok", leaves a
 // grandchild holding its stdout (so the runner's close waits), writes <marker>.answered and exits 0.
 const PARTIAL_BYTES = "x".repeat(400_000) + "\n";
+// Failure causes (ccloop spec 2026-10-21 §8): "api-error-<kind>-once" ends the first call of this marker with an SDK
+// assistant message carrying the typed `error` <kind> (stream-json) and exit 1, later calls behave as "ok";
+// "api-error-<kind>-all" does so on every call; "api-error-<kind>-tool" emits a tool_use first (work observed).
+// <kind> is the typed value with "_" kept (e.g. overloaded, rate_limit, authentication_failed); the message text is
+// <marker>.error-text when that file exists, else "API error".
+const apiError = /^api-error-([a-z_]+)-(once|all|tool)$/.exec(mode);
+const apiErrorCall = apiError === null ? 0 : readFileSync(`${marker}.argv`, "utf8").trim().split("\n").length;
+if (apiError !== null && (apiError[2] !== "once" || apiErrorCall === 1)) {
+  if (stream) {
+    await emitInit();
+    if (apiError[2] === "tool") await emit({ type: "assistant", message: { id: "msg_tool", content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } }] } });
+    const text = existsSync(`${marker}.error-text`) ? readFileSync(`${marker}.error-text`, "utf8") : "API error";
+    await emit({ type: "assistant", error: apiError[1], message: { id: "msg_error", content: [{ type: "text", text }] } });
+  }
+  process.stderr.write(`fake-claude-cli: api error ${apiError[1]}\n`);
+  process.exit(1);
+}
 const NEW_WRITE_MODES = new Set(["write-then-hang", "write-quiet-then-hang", "write-ignore-term", "write-then-fail"]);
 if (NEW_WRITE_MODES.has(mode)) {
   writeFileSync("partial.txt", PARTIAL_BYTES);

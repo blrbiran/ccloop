@@ -107,7 +107,11 @@ describe("a codex phase rejected by 429 before any work backs off inside the pha
     // First call rejected, the retry hangs: it must time out at the phase's remaining time (10 s minus the 6 s wait),
     // about 10 s in, not after a fresh 10 s (about 16 s). The 13 s bound leaves 3 s each way for a loaded machine.
     const f = await adapter("rate-limit-1-hang", { delays: [6_000], timeoutMs: 60_000 });
-    const context = { ...f.context, state: { ...f.context.state, budgetSnapshot: { ...f.context.state.budgetSnapshot, timeRemainingMs: 10_000 } } };
+    // Ruling: human approved rewriting all necessary criteria (Orca session 9ec98639, 2026-10-21). The fixture contract's
+    // perAttemptTimeoutMs (5 s) now also bounds the phase (failure-causes spec §4 "Time"), which would leave no room for the
+    // 6 s wait; it is lifted here so the remaining run time (10 s) stays the binding limit this criterion is about.
+    const contract = { ...f.context.contract, executionPolicy: { ...f.context.contract.executionPolicy, perAttemptTimeoutMs: 60_000 } };
+    const context = { ...f.context, contract, state: { ...f.context.state, budgetSnapshot: { ...f.context.state.budgetSnapshot, timeRemainingMs: 10_000 } } };
     const started = Date.now();
     const out = await settle(f.a.plan(context)) as { error: Error };
     const elapsed = Date.now() - started;

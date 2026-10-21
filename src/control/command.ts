@@ -1,3 +1,4 @@
+import { FAILURE_CAUSES } from "../runtime/failureCause.js";
 import {settleSavedResult,readSavedResultSettlement,savedResultSettlementSchema} from "./settleSavedResult.js";
 import {readSavedResultSourceEligibility,readSavedResultEligibility,savedResultEligibilitySchema,savedResultSourceEligibilitySchema} from "./savedResultRecovery.js";
 import { collectSavedResultEvidence, readSavedResultEvidence, savedResultCollectionSchema } from "./savedResultEvidence.js";
@@ -204,6 +205,12 @@ const collectionSchema = z.object({
   // Reported decisions and debug (spec 2026-10-20 §4.3): carried opaquely, absent when not reported; protocols 3 and 4.
   decisions: z.unknown().optional(),
   debug: z.unknown().optional(),
+  // Failure causes (spec 2026-10-21 §5): top level, present iff terminal and the state has one. Orca's strict collect parse
+  // must accept it in the same repin.
+  failureCause: z.object({
+    cause: z.enum(FAILURE_CAUSES), phase: z.enum(["plan", "execute", "verify"]).nullable(),
+    retries: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), detail: z.string().nullable(),
+  }).strict().optional(),
 }).strict();
 
 const METHODS = new Set<ControlMethodV1>([

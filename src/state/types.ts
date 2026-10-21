@@ -36,6 +36,8 @@ export type RunState = {
   allowanceNextPhase?: "plan" | "execute" | "verify";
   budgetSnapshot: BudgetSnapshot;
   recentFailures: FailureFingerprint[];
+  /** Failure causes (ccloop spec 2026-10-21-failure-causes-and-transient-retries-design.md §5): set with a failed or exhausted terminal. */
+  failureCause?: import("../runtime/failureCause.js").RunFailureCauseV1;
 };
 
 export type RunBoundaryStatus =

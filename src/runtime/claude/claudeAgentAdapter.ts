@@ -13,6 +13,8 @@ import { boundedTaskResult } from "../taskResult.js";
 import { dropUnreported } from "../reportedDecisions.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./prompts.js";
 import type { ClaudePhaseRequest } from "./types.js";
+import { classifyClaudeCall, isExecutableMissing, parseClaudeSignals, type CallClassification } from "../failureCause.js";
+import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
 
 // Orca agent selection (2026-09-26), spec §4.7: the claude adapter that ccloop control can run. Its process
 // handling follows runCodexPhase: the phase runner is the leader of its own process group (the claude CLI
@@ -45,6 +47,8 @@ export class ClaudePhaseAborted extends Error {
 }
 
 const OBSERVED_USAGE_FILE = "observed-usage.json";
+/** Failure causes (ccloop spec 2026-10-21 §3 claude): what the runner saw of claude's typed errors and tool use, per call. */
+const SIGNALS_FILE = "claude-signals.json";
 
 /** Crash resume (2026-10-02), spec §3.2: the claude command never existed in this call, so nothing was spent. */
 export class ClaudeNeverStartedError extends Error {
@@ -149,7 +153,10 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
 
   // Orca syncskill integration (2026-10-03), spec §10.7 and §4.4: `skillPluginDir` adds `--plugin-dir <dir>` and removes
   // `--disable-slash-commands` from the installation command; without it nothing here changes.
-  constructor(private readonly config: MaterializedAgentConfigV1, options: { skillPluginDir?: string } = {}) {
+  private readonly retryDelaysMs: readonly number[];
+
+  constructor(private readonly config: MaterializedAgentConfigV1, options: { skillPluginDir?: string; retryDelaysMs?: readonly number[] } = {}) {
+    this.retryDelaysMs = options.retryDelaysMs ?? TRANSIENT_RETRY_DELAYS_MS;
     // §12 I11 (P19): reuses T1's own validation and 1M-suffix spelling (src/agents/claude.ts) rather than
     // re-deriving them here, so there is exactly one place that knows claude's context options and exactly
     // one place that spells the [1m] suffix. Kept here too (not only in the descriptor's validateSelection)
@@ -194,6 +201,8 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       CCLOOP_CLAUDE_COMMAND: JSON.stringify(this.command),
       CCLOOP_CLAUDE_EXTRA_ARGS: JSON.stringify(extraArgs),
       CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: join(evidenceDir, OBSERVED_USAGE_FILE),
+      // Phases only: a single call is never retried here (its caller owns retries), so it records no signals.
+      ...(phase === "single-call" ? {} : { CCLOOP_CLAUDE_SIGNALS_PATH: join(evidenceDir, SIGNALS_FILE) }),
     };
     if (installation.configDir !== null) env.CLAUDE_CONFIG_DIR = installation.configDir;
     await new Promise<void>((resolve) => {
@@ -273,10 +282,55 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     return persist();
   }
 
+  /**
+   * Failure causes (ccloop spec 2026-10-21-failure-causes-and-transient-retries-design.md §4): a phase call that failed for a
+   * transient cause (rate limit, provider 5xx) is called again after a bounded wait, but only when the runner saw no tool
+   * use -- claude phases are not sandboxed read-only, so work observed means the worktree may have changed. A runner-built
+   * partial is a result, never retried; it carries its cause (non-enumerable, so execution.json is unchanged).
+   */
   private async phase<T>(request: ClaudePhaseRequest, context: AttemptContext, afterStop?: { stopGraceMs: number }): Promise<T> {
+    return runWithTransientRetry<T>({
+      limitMs: phaseLimitMs(this.config.installation.timeoutMs, context), delaysMs: this.retryDelaysMs, signal: context.abortSignal,
+      attempt: async (tryLimitMs) => {
+        const seen: { outcome?: Outcome } = {};
+        try {
+          const value = await this.phaseOnce<T>(request, tryContext(context, tryLimitMs), seen, afterStop);
+          const partial = value as { partialOrigin?: unknown; failureType?: unknown } | null;
+          if (partial !== null && typeof partial === "object" && partial.partialOrigin === "runner" && seen.outcome !== undefined) {
+            const classification = partial.failureType === "timeout" ? { cause: "budget-exhausted" as const, workObserved: true, detail: null } : await this.classify(seen.outcome);
+            Object.defineProperty(partial, "failureCause", { value: { ...classification, retries: 0 }, enumerable: false, configurable: true, writable: true });
+          }
+          return { ok: true, value, evidenceDir: seen.outcome?.evidenceDir ?? context.runDir };
+        } catch (error) {
+          const outcome = seen.outcome;
+          let classification: CallClassification | null;
+          if (error instanceof ClaudeNeverStartedError) classification = { cause: isExecutableMissing(error.spawnError) ? "executable-missing" : "unknown", workObserved: false, detail: error.spawnError };
+          else if (outcome === undefined) classification = { cause: "unknown", workObserved: true, detail: null };
+          else if (outcome.reason === "aborted") classification = null;
+          else if (outcome.reason === "timeout") classification = { cause: "budget-exhausted", workObserved: true, detail: null };
+          else classification = await this.classify(outcome);
+          const observed = (error as { observedTokens?: unknown }).observedTokens;
+          const observation: TryObservation = (error as { neverStarted?: unknown }).neverStarted === true ? { kind: "rule0" }
+            : typeof observed === "number" && observed > 0 ? { kind: "tokens", tokens: observed } : { kind: "null" };
+          return { ok: false, error: error as Error, evidenceDir: outcome?.evidenceDir ?? context.runDir, classification,
+            retrySafe: classification !== null && !classification.workObserved, observation };
+        }
+      },
+    });
+  }
+
+  /** Spec §3 claude: the runner's signals file; missing or unparseable ⇒ work assumed, cause unknown (round 2 I-C). */
+  private async classify(outcome: Outcome): Promise<CallClassification> {
+    let text: string | null = null;
+    try { text = await readFile(join(outcome.evidenceDir, SIGNALS_FILE), "utf8"); } catch { text = null; }
+    return classifyClaudeCall(text === null ? null : parseClaudeSignals(text));
+  }
+
+  private async phaseOnce<T>(request: ClaudePhaseRequest, context: AttemptContext, seen: { outcome?: Outcome }, afterStop?: { stopGraceMs: number }): Promise<T> {
     // Plan is read-only and is not asked to run checks; execute and verify are.
     const requiredChecks = request.phase === "plan" ? [] : context.contract.verification.requiredChecks;
     const outcome = await this.run(request, { ...this.call(context), requiredChecks, ...(afterStop ? { stopGraceMs: afterStop.stopGraceMs } : {}) });
+    seen.outcome = outcome;
     throwIfNeverStarted(outcome);
     // Consolidation step 1 (spec §5.1, §5.2): after a stop, an execute runner that exited cleanly and printed a JSON object
     // printed the phase's result (its post-SIGTERM partial, or a complete answer it already had). A result without
