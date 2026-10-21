@@ -1,0 +1,23 @@
+{
+  "args": [
+    "--profile",
+    "default",
+    "--no-extensions",
+    "--no-skills",
+    "--no-tools",
+    "--tools",
+    "read,grep,glob,edit,write,bash",
+    "--no-session",
+    "--no-title",
+    "--no-prewalk",
+    "--model",
+    "gateway/model-a",
+    "--mode",
+    "json",
+    "-p",
+    "--system-prompt",
+    "<dir>/run/omp/1/execute/call-<id>/system-prompt.md",
+    "--cwd",
+    "<dir>/repo"
+  ]
+}

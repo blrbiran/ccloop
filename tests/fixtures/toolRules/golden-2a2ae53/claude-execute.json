@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--json-schema",
+    "{\"type\":\"object\",\"properties\":{\"changedFiles\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"diffPatch\":{\"type\":\"string\"},\"commandOutputs\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"stdoutStderrLog\":{\"type\":\"string\"},\"taskResult\":{},\"decisions\":{},\"debug\":{},\"completionStatus\":{\"type\":\"string\",\"enum\":[\"partial\"]},\"failureType\":{\"type\":\"string\",\"enum\":[\"timeout\",\"error\"]},\"failureMessage\":{\"type\":\"string\"}},\"required\":[\"changedFiles\",\"diffPatch\",\"commandOutputs\",\"stdoutStderrLog\"],\"additionalProperties\":false}",
+    "--allowedTools",
+    "Bash(npm test)",
+    "Bash(npm run lint)",
+    "--model",
+    "claude-opus-5-5",
+    "<prompt>"
+  ],
+  "extraArgs": [
+    "--allowedTools",
+    "Bash(npm test)",
+    "Bash(npm run lint)",
+    "--model",
+    "claude-opus-5-5"
+  ]
+}

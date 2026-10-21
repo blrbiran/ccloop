@@ -1,0 +1,34 @@
+Return JSON only.
+Execute one isolated attempt for task tool-rules-golden.
+Goal: Set answer.txt to 42
+Success condition: answer is 42
+Required checks (run by the verifier in this worktree after you finish):
+- npm test
+- npm run lint
+If you cannot run a command (for example it needs approval), do not report partial or error for that reason; deliver your changes and say in stdoutStderrLog which commands you could not run.
+Never declare final success; only report what changed in this attempt.
+Allowed target paths:
+- answer.txt
+Constraints:
+(none)
+Current attempt plan (source of truth for this execution):
+{
+  "summary": "Set answer to 42",
+  "primaryTargetPaths": [
+    "answer.txt"
+  ]
+}
+Execute against the current attempt plan above and report only this attempt's concrete outcome.
+Return either a complete object with {"changedFiles": string[], "diffPatch": string, "commandOutputs": string[], "stdoutStderrLog": string} or a partial object that also includes {"completionStatus": "partial", "failureType": "timeout" | "error", "failureMessage": string}.
+When possible, include optional taskResult metadata in that same complete or partial object: {"schema":"task-result-v1","goal":string,"completedWork":string[],"conclusions":string[],"outputs":[{"path":string,"label":string}],"limitations":string[]}.
+This explanation describes this attempt only; it is not a product file, a verification claim, or an additional acceptance condition. Do not add task/run/group or verification identities. Missing explanation does not change the execution outcome.
+Keep taskResult UTF-8 JSON at most 65536 bytes: a nonempty goal at most 4000 characters; each text array and outputs at most 32 entries; text entries at most 4000 characters; output path at most 1024 and label at most 256 characters. Empty arrays are valid.
+Output paths must be relative POSIX file paths: no empty/dot/dot-dot components, absolute/drive or URL prefix, NUL or backslash. Report limitations honestly and leave actual verification to the verifier.
+If the attempt is interrupted, preserve any recognizable partial artifacts in those fields.
+If execute is aborted, you may have up to 1000ms to flush one final execute-phase result.
+Also report the decisions you made in this attempt as decisions, in that same object: [{"question":string,"chose":string,"alternatives":[{"option":string,"why_not":string}],"because":string,"undo":{"how":string,"cost":string,"blast_radius":string},"scope":string,"kind":string,"importance":string}]. A decision is (a) a question you would have stopped to ask the human in an interactive session, with options, or (b) a direction, architecture or interface choice or change. Do not stop to ask: choose, continue, and report it.
+Grade each: importance: "major" for (a) and (b); "minor" for naming and local implementation trade-offs worth recording. Report few, important decisions; omit what anyone would have done the same way. No decisions: omit the field or give [].
+scope is one of file, task, repo, cross-repo; kind is one of dependency, interface, scheduling, abandon, criteria, boundary, implementation (implementation: naming and local implementation choices).
+undo.how names what to change back: the files or fields (for example: restore the retry loop in src/x.ts), or a command when one applies; git revert only fits right after the change lands, so do not rely on it.
+Report debug only when the task's goal asks for it, in that same object: {"choseInstead"?:string,"reproTests"?:string[],"reproCommand"?:string,"reproduction"?:"not-expressible","reproductionReason"?:string}.
+Your final message must be exactly one JSON object: no Markdown code fence, no text before or after it.
