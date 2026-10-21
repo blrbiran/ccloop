@@ -153,3 +153,21 @@ Independent review verdict: READY WITH FIXES. Applied: **I-D** version-skew note
 Orca dependency list when this lands). **M-7** `stalled` ⇒ `failed` rationale restated (cause mapping, not escalation).
 **M-8** stopReason wording of a claude partial after an idle stop. **M-9** fd-4 mutation (test 6). **M-10** test 9
 mutation named. Silent tool > 3 × idle ⇒ `stalled` ⇒ `failed` stated in §2.2.
+
+## As-built (Orca session 9ec98639, 2026-10-21, track D-impl)
+
+Implemented: `src/runtime/idleWatch.ts` (IdleWatch, effective limit, codex/omp tool trackers), the three runners (codex
+`runCodexPhase`, omp `runOmpProcess`, claude adapter `run` + runner fd-4 reporter), table field + cross-field rule,
+`configHash` exclusion, detect draft 2 h, adapters' `stalled` classification, claude partial after an idle stop (marked
+`stalled`, `failureMessage` prefixed `claude-stalled: `), runLoop row 2 (`stalled` ⇒ `failed`), single calls throw
+`<kind>-stalled` with the cause. Criteria: `tests/runtime/activityWatchdog.test.ts`, the row-2 case in
+`tests/controller/failureCauseRunLoop.test.ts`; mutations W1-W12 seen red in a built clone except W8 (a forced fd-4 write on a
+tool event), which was equivalent and was removed (one write path); restore diff 0/0.
+
+Decisions and deviations (controller's calls, reversible):
+1. The runner's fd-4 throttle (one line per second while the tool count is unchanged) means an idle limit under about one
+   second can stall a claude call that is streaming; the default 10 min is far above it. The claude criteria use 1.5 s.
+2. Codex `codexConfigSchema` gains optional `idleTimeoutMs` (the runner's config); `toCodexConfig` passes it.
+3. Not covered by a per-kind criterion: omp's idle stop (same IdleWatch, fake-omp has no idle script yet); codex/omp
+   plan stalled-then-success (the retry loop's own criteria cover retrying a `stalled` cause).
+4. Changed criterion: `tests/agents/detect.test.ts:54,70` draft `timeoutMs` 1 800 000 → 7 200 000.
