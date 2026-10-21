@@ -612,23 +612,23 @@ function createActivityReporter() {
   try { out = new Socket({ fd: 4, readable: false, writable: true }); out.on("error", () => {}); out.unref(); } catch { return { chunk() {}, event() {} }; }
   const open = new Set();
   let lastWrite = 0, lastCount = -1;
-  const report = (force) => {
+  const report = () => {
     const now = Date.now();
-    if (!force && open.size === lastCount && now - lastWrite < 1000) return;
+    if (open.size === lastCount && now - lastWrite < 1000) return;
     lastWrite = now; lastCount = open.size;
     try { out.write(`${JSON.stringify({ openTools: open.size })}\n`); } catch { /* parent gone */ }
   };
   return {
-    chunk() { report(false); },
+    chunk() { report(); },
     event(event) {
       if (!event || typeof event !== "object" || !event.message || !Array.isArray(event.message.content)) return;
-      const before = open.size;
       for (const block of event.message.content) {
         if (!block || typeof block !== "object") continue;
         if (event.type === "assistant" && block.type === "tool_use" && typeof block.id === "string") open.add(block.id);
         if (event.type === "user" && block.type === "tool_result" && typeof block.tool_use_id === "string") open.delete(block.tool_use_id);
       }
-      if (open.size !== before) report(true);
+      // No write here: the chunk that carried this event reports next, and a changed count bypasses the throttle there
+      // (mutation W8 showed a forced write here was equivalent).
     },
   };
 }
