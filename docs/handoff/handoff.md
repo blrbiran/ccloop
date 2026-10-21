@@ -41,7 +41,12 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 下一件：等 Orca repin 到含 `priorFailures` 的那笔；本仓无在飞分支（2026-10-21，Orca 会话 `9ec98639`）
+### 下一件：实施「每契约工具规则」（spec 已在 main，未实施；2026-10-22，Orca 会话 `8b1469ea`）
+
+- **新 spec**：`docs/superpowers/specs/2026-10-22-per-contract-tool-rules-design.md`（主题行 `docs(spec): per-contract tool rules`；独立审阅一轮已改入）。契约可选 `executionPolicy.toolRules`（命令 exact/prefix、network、secretEnv 只声明不过滤）；缺省时字节与行为不变；旧 ccloop 见到即拒；每条规则回报 `enforced | detected | recorded-only | refused`（与 Orca 流程引擎 spec §16.2 冻结的四值一致）。人裁：模板逐步声明工具（「a」）；管不住的规则照跑、记 recorded-only、Orca 标红（「a」）。控制器替人定（可逆，spec 内标明）：不在 `control features` 声明支持；永不放宽（含 codex 人自己关网时 `network:true` ⇒ refused）；违反规则的 attempt 终止、不重试。**Orca 流程引擎第一期依赖它**：实施 → 合 main → 人推 → Orca repin。
+- 本仓 2026-10-21 那一轮（verifier 看检查结果、EPERM 修复、失败原因／看门狗／声明窗口／`priorFailures`）**已被 Orca repin 到 `76b098b`**；`~/.orca/agents.json` 现在可以加 `idleTimeoutMs`／`declaredContextWindow`（尚未加）。
+
+#### 上一轮（2026-10-21，Orca 会话 `9ec98639`）—— 已合、已推、已被 Orca 采用
 
 - **本轮合进 main 的**（都 `--ff-only`，以 `git ls-remote` 现测推没推；按主题行 `git log --grep` 取）：
   - **verifier 看到检查结果＋上次失败带给重试＋首次必需检查失败重试一次**（spec `docs/superpowers/specs/2026-10-20-verifier-sees-checks-and-last-failure-design.md`，§13 as-built 优先；人选 (b)：只在 lineage 第 1 次 attempt 且非恢复路径 `safeToRetry: true`）。改了判据：`runLoop.integration.test.ts:468-475`、`:526-533`（`failed` → `exhausted`「repeated failure pattern detected」）、`partialToVerify.test.ts` T11b、`taskResultOutcome.test.ts:33`（独立 oracle：fixture 检查不输出 ⇒ 空 stdout／stderr）。codex 阶段隔离 spec 的 Correction 与 `codexIsolation.ts` ERRATUM 同轮落地。
@@ -133,8 +138,8 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-21，Orca 会话 `9ec98639`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-22，Orca 会话 `8b1469ea`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3.00000 与 §4。Orca 的 pin 是本仓 `71d650c`；本仓之后的失败原因／看门狗／声明窗口／`priorFailures` 还没进 Orca——Orca 已在 main 上先放宽了严格解析（新字段全可选），阶梯 L1 的分支等本仓推到远端后随 repin 一起合。
-- **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid` 码名；`ompSingleCall`、`codexSingleCall` 读 JSON 对象的语义；collect 顶层 `decisions`、`debug`、`failureCause`（Orca 的 collect 解析是 strict；`cause` 当有界字符串读，**新增值不破线、改名／删除才破**）；resolution 的 `contextWindowSource`（Orca 冻结进 frozen slot）；启动 envelope `work.priorFailures` 的形状、上限、拒收规则（Orca 构造它）；`agent-version-drift` 的报错措辞 `<id>: table X, observed Y`；`control agent-installation-observe`；Orca 的复现检查照本仓 `runLoop.js` 跑 required check 的方式（`sh -lc`、继承环境）；Orca 排除 `refs/ccloop/*` 判断纠正是否已关闭；fake 的参数约定（`fake-codex.mjs <mode> <marker>`、`fake-omp.mjs <marker>`）；Orca 的 `blockRun` 原因串 `terminal:<outcome>`——首次检查失败后的终态现为 `exhausted`（同一检查再失败或同路径）／`failed`（换了别的失败）／`blocked_waiting_human`（第 2 次检查过了、verifier 驳回且可重试，旧 `orca run` 退出码 3 的唯一新来源）；`isRepeatedFailure` 对同路径不同命令也判重复（Orca 的 S8 判据据此改过）。
-- ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`（本机可能卡在代理 ⇒ 杀掉加 `--fetch-timeout=60000 --fetch-retries=5`）。Orca 门的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build；**别指本仓工作树的 `dist`**（不等于 pin，会假红）。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3.000000 与 §4。Orca 的 pin 是本仓 `76b098b`（含 priorFailures），本仓之后只有文档提交。
+- **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid` 码名；`ompSingleCall`、`codexSingleCall` 读 JSON 对象的语义；collect 顶层 `decisions`、`debug`、`failureCause`（Orca 的 collect 解析是 strict；`cause` 当有界字符串读，**新增值不破线、改名／删除才破**——工具规则 spec 新增的 `tool-rule-violated` 属于新增值）；resolution 的 `contextWindowSource`；启动 envelope `work.priorFailures` 的形状、上限、拒收规则；`agent-version-drift` 的报错措辞 `<id>: table X, observed Y`；`control agent-installation-observe`；Orca 的复现检查照本仓 `runLoop.js` 跑 required check 的方式（`sh -lc`、继承环境）；Orca 排除 `refs/ccloop/*` 判断纠正是否已关闭；fake 的参数约定（`fake-codex.mjs <mode> <marker>`、`fake-omp.mjs <marker>`）；Orca 的 `blockRun` 原因串 `terminal:<outcome>`（首次检查失败后的终态 `exhausted`／`failed`／`blocked_waiting_human`）；`isRepeatedFailure` 对同路径不同命令也判重复。**即将新增**：契约 `executionPolicy.toolRules` 与 collect 顶层 `toolRules` 报告（形状以本仓 spec 为准，Orca 流程引擎 spec §16.2／§18 冻结了四个状态值）。
+- ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`（本机可能卡在代理 ⇒ 杀掉加 `--fetch-timeout=60000 --fetch-retries=5`）。Orca 门的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build；**别指本仓工作树的 `dist`**。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
