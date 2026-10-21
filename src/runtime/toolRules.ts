@@ -34,9 +34,12 @@ export const toolRulesSchema = z.object({
 }).strict();
 
 const SEPARATOR_REASON = "a compound command cannot be one rule";
-/** Spec §3.1: a value with a shell separator (`&`, `|`, `;`, newline) is refused on every kind. */
+/**
+ * Spec §3.1: a value with a shell separator (`&`, `|`, `;`, newline) is refused on every kind. Review round 1 follow-up
+ * (Orca session b37f7ce9): a carriage return counts as a newline, so it can neither split a command nor add prompt lines.
+ */
 export function separatorRefusal(value: string): string | null {
-  return /[&|;\n]/.test(value) ? SEPARATOR_REASON : null;
+  return /[&|;\n\r]/.test(value) ? SEPARATOR_REASON : null;
 }
 
 /** Head of `text` within `maxBytes` UTF-8 bytes, cut back to a code-point boundary (failureCause.ts causeDetail). */
