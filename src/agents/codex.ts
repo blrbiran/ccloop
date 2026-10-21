@@ -32,13 +32,15 @@ export const codexDescriptor: AgentDescriptor = {
   configDirEnv: "CODEX_HOME",
   defaults: { model: "gpt-6-sol", contextWindow: "agent-default" },
   contextOptions: CONTEXT_OPTIONS,
-  installationExtras: { sandbox: z.enum(["read-only", "workspace-write"]), budgetMode: z.literal("soft") },
+  // Declared context window (#70, ccloop spec 2026-10-21-declared-context-window-design.md §2.1): the window of a model the
+  // catalog does not list; used only when the catalog was read and gave none (materialize decides, §2.2).
+  installationExtras: { sandbox: z.enum(["read-only", "workspace-write"]), budgetMode: z.literal("soft"), declaredContextWindow: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional() },
   draftInstallationExtras: { sandbox: "workspace-write", budgetMode: "soft" },
   validateSelection(selection) {
     assertModel(selection.model);
     assertContextOption(CONTEXT_OPTIONS, selection);
   },
-  capabilities(_config, row) {
+  capabilities(_config, row, declaredWindow) {
     return {
       usageObservation: "phase-end",
       budgetEnforcement: "soft",
@@ -47,7 +49,8 @@ export const codexDescriptor: AgentDescriptor = {
       handoffExecution: "mechanical-in-run-v1",
       // Every-agent requirement chain (Orca spec 2026-10-15 §6.1): the catalog row's context_window (config.toml's
       // model_context_window wins), not scaled by effective_context_window_percent; no row => unknown.
-      contextWindowTokens: row?.contextWindow ?? null,
+      // Declared window (#70 spec §2.2): only when materialize passes one, i.e. the catalog proved no window for the model.
+      contextWindowTokens: row?.contextWindow ?? declaredWindow ?? null,
       requestBoundProof: null,
     };
   },

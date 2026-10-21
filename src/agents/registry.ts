@@ -33,7 +33,11 @@ export interface AgentDescriptor {
   validateInstallation?: (installation: MaterializedAgentConfigV1["installation"]) => void;
   validateSelection(selection: AgentSelectionV1): void;
   /** `row` is the selected catalog row for a kind that has a catalog (omp, OMP single call 2026-10-14 §3.2), else undefined. */
-  capabilities(config: MaterializedAgentConfigV1, row?: CatalogRowV1): CapabilityViewV1;
+  /**
+   * `declaredWindow` (#70, ccloop spec 2026-10-21-declared-context-window-design.md §2.2): the installation's
+   * declaredContextWindow when materialize established that the catalog was read and gives no window; else null/absent.
+   */
+  capabilities(config: MaterializedAgentConfigV1, row?: CatalogRowV1, declaredWindow?: number | null): CapabilityViewV1;
   /**
    * Orca single-call estimate (2026-09-27), spec §4.4: "v1" when this kind can run one read-only structured call with
    * an output-token cap and every tool turned off; null when either cannot be done. A sibling of capabilities, not a

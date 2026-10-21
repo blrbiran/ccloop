@@ -55,6 +55,8 @@ export interface AgentResolutionV1 {
   singleCallExecution: "v1" | "v1-soft" | null;
   /** OMP single call (Orca spec 2026-10-14 §3.2): the cap the call actually runs under; null = it honours the request's maxOutputTokens. Never frozen. */
   singleCallOutputCap: number | null;
+  /** Declared context window (#70 spec §2.3): present only when contextWindowTokens is the installation's declared value. */
+  contextWindowSource?: "installation-declared";
 }
 
 /** Every code an AgentError can carry (agent selection spec §7, plus the plan's additions). */

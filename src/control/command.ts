@@ -98,6 +98,9 @@ const capabilitiesSchema = z.union([
       singleCallExecution: z.enum(["v1", "v1-soft"]).nullable(),
       // OMP single call (Orca spec 2026-10-14 §3.2). Optional, so an answer without it (a handler stand-in) still parses.
       singleCallOutputCap: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable().optional(),
+      // Declared context window (#70, ccloop spec 2026-10-21-declared-context-window-design.md §2.3): only when the window
+      // is the installation's declared value. Orca's agentResolutionSchema must accept it in the same repin.
+      contextWindowSource: z.literal("installation-declared").optional(),
     })
     .strict(),
 ]);

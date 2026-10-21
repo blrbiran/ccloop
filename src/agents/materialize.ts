@@ -39,6 +39,9 @@ export function agentConfigHash(config: MaterializedAgentConfigV1): string {
     command: _whereInstalledNotWhich,
     timeoutMs: _runLimitNotIdentity,
     killGraceMs: _stopLimitNotIdentity,
+    // Declared context window (#70 spec §2.1): it fills a number the catalog did not report, not which agent runs or how;
+    // Orca freezes the value in effect with the slot, so editing it must not strand a frozen selection.
+    declaredContextWindow: _reportedNumberNotIdentity,
     ...installation
   } = config.installation;
   return canonicalHash({ ...config, installation });
@@ -55,6 +58,8 @@ export async function resolveAgent(
     probeVersion?: (command: string[]) => Promise<string | null>;
     probeModels?: typeof readOmpModels;
     probeCatalog?: typeof readOmpCatalog;
+    /** Declared window (#70 spec test 2): the codex catalog rows, or null for "could not be read". Counts as injected. */
+    codexCatalog?: (installation: AgentsTableV1["installations"][string]) => Promise<CatalogRowV1[] | null>;
     deadline?: number;
     signal?: AbortSignal;
   } = {},
@@ -77,7 +82,7 @@ export async function resolveAgent(
   // *** 2026-10-18 (codex phase isolation spec §3.3, human ruling; written 2026-10-20, Orca session 3d229487): loop phases now
   // need the MCP server list; each codex phase reads the catalog itself and refuses when the list is missing. This note's
   // "loop phases do not need it" no longer holds for codex phases; materialize still does not refuse. ***
-  const injected = deps.probeVersion !== undefined || deps.probeModels !== undefined || deps.probeCatalog !== undefined;
+  const injected = deps.probeVersion !== undefined || deps.probeModels !== undefined || deps.probeCatalog !== undefined || deps.codexCatalog !== undefined;
   const catalog = injected ? null : await readAgentCatalog(installation, { deadline: deps.deadline, signal: deps.signal });
   const observed = catalog !== null ? catalog.version : await (deps.probeVersion ?? probeVersion)(installation.command);
   // Orca wave-2 review I-3 (2026-09-26): a probe that observed no version at all (spawn failure, non-zero exit, no
@@ -106,7 +111,15 @@ export async function resolveAgent(
   }
   // Every-agent requirement chain (Orca spec 2026-10-15 §6.1, plan issue 5): a codex row (any visibility) decides the
   // window and the soft single call; a catalog that could not be read leaves both unknown rather than refusing.
-  if (installation.kind === "codex" && catalog !== null && catalog.rows !== null) row = catalog.rows.find((candidate) => candidate.selector === selection.model);
+  let codexRows: CatalogRowV1[] | null = null;
+  if (installation.kind === "codex") codexRows = catalog !== null ? catalog.rows : deps.codexCatalog !== undefined ? await deps.codexCatalog(installation) : null;
+  if (codexRows !== null) row = codexRows.find((candidate) => candidate.selector === selection.model);
+  // Declared context window (#70, ccloop spec 2026-10-21-declared-context-window-design.md §2.2): only this function knows
+  // whether the catalog was read. The declared value applies when it was (omp always is by here; codex when its rows were
+  // readable) and gave no window for the model -- never over a catalog window, never when absence is unproven.
+  const declared = typeof installation.declaredContextWindow === "number" ? installation.declaredContextWindow : null;
+  const catalogRead = installation.kind === "omp" || codexRows !== null;
+  const declaredWindow = declared !== null && catalogRead && (row?.contextWindow ?? null) === null ? declared : null;
   return {
     config,
     resolution: {
@@ -114,9 +127,10 @@ export async function resolveAgent(
       configHash: agentConfigHash(config),
       timeoutMs: installation.timeoutMs,
       killGraceMs: installation.killGraceMs,
-      capabilities: descriptor.capabilities(config, row),
+      capabilities: descriptor.capabilities(config, row, declaredWindow),
       singleCallExecution: descriptor.singleCallExecution(config, row),
       singleCallOutputCap: descriptor.singleCallOutputCap(config, row),
+      ...(declaredWindow !== null ? { contextWindowSource: "installation-declared" as const } : {}),
     },
   };
 }

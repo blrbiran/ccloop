@@ -16,6 +16,8 @@ export const ompDescriptor: AgentDescriptor = {
     command: z.tuple([z.string().min(1).refine(isAbsolute)]),
     defaultModel: z.string().min(1).max(200).regex(/^[^/\s]+\/.+$/u),
     profile: z.string().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/).nullable(),
+    // Declared context window (#70 spec §2.1): fills a selected row whose window is null.
+    declaredContextWindow: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
   },
   draftInstallationExtras: { profile: null },
   validateInstallation(installation) {
@@ -28,7 +30,7 @@ export const ompDescriptor: AgentDescriptor = {
     assertContextOption(["agent-default"], selection);
     if (!/^[^/\s]+\/.+$/u.test(selection.model)) throw new AgentError("agent-selection-invalid", "omp model must be provider-qualified");
   },
-  capabilities(_config, row) {
+  capabilities(_config, row, declaredWindow) {
     return {
       usageObservation: "phase-end",
       budgetEnforcement: "soft",
@@ -36,7 +38,8 @@ export const ompDescriptor: AgentDescriptor = {
       handoffControl: "durable",
       handoffExecution: "mechanical-in-run-v1",
       // OMP single call (Orca spec 2026-10-14 §1.2, §3.2): the selected catalog row's window, omp's defaults included.
-      contextWindowTokens: row?.contextWindow ?? null,
+      // Declared window (#70 spec §2.2): only when materialize passes one (the row's window is null).
+      contextWindowTokens: row?.contextWindow ?? declaredWindow ?? null,
       requestBoundProof: null,
     };
   },
