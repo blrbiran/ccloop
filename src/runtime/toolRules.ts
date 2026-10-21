@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { CodexNetworkSetting } from "../agents/codexNetworkConfig.js";
 
 /**
  * Per-contract tool rules (ccloop spec docs/superpowers/specs/2026-10-22-per-contract-tool-rules-design.md; plan
@@ -172,5 +173,44 @@ export function claudeToolRuleRows(rules: ToolRulesV1, installationCommand: read
     ...(exactAllows.length > 0 ? [`the installation's exact allows ${exactAllows.join(", ")}`] : []),
     "and whatever .claude/settings.json, settings.local.json and the person's settings loaded by --setting-sources allow (not read by ccloop)",
   ].join("; ");
+  return { rows, baseline: boundedText(baseline, 1024) };
+}
+
+/**
+ * Why codex may not switch the sandbox network on for `network:true`, or null (spec §3.2.2): a read-only installation has
+ * no write sandbox to open; the person's explicit `network_access = false` is a restriction; an unreadable or
+ * unparseable config.toml cannot be shown not to be one.
+ */
+function codexNetworkRefusal(sandbox: "read-only" | "workspace-write", setting: CodexNetworkSetting): string | null {
+  if (sandbox === "read-only") return "the installation runs codex read-only; ccloop never changes --sandbox";
+  if (setting.kind === "value" && !setting.value) return "the person's config.toml sets sandbox_workspace_write.network_access = false; ccloop never overrides it";
+  if (setting.kind === "unparseable") return `cannot show that switching the network on is not widening: ${setting.reason}`;
+  return null;
+}
+
+/**
+ * The codex `-c` pairs for one phase (spec §4 codex column; codex 0.163.0, measure-codex.md Q1/Q2), joined before the
+ * trailing `-`: network:true ⇒ `sandbox_workspace_write.network_access=true` on execute unless refused; network:false ⇒
+ * `...network_access=false` on execute and `web_search="disabled"`, `features.apps=false` on every phase. No rules ⇒ none.
+ */
+export function codexToolRuleArgs(rules: ToolRulesV1 | undefined, phase: ToolRulePhase, sandbox: "read-only" | "workspace-write", setting: CodexNetworkSetting): string[] {
+  if (rules === undefined) return [];
+  if (rules.network) return phase === "execute" && codexNetworkRefusal(sandbox, setting) === null ? ["-c", "sandbox_workspace_write.network_access=true"] : [];
+  return [...(phase === "execute" ? ["-c", "sandbox_workspace_write.network_access=false"] : []), "-c", "web_search=\"disabled\"", "-c", "features.apps=false"];
+}
+
+/** The codex report rows and baseline (spec §3.3, §4 codex column). */
+export function codexToolRuleRows(rules: ToolRulesV1, sandbox: "read-only" | "workspace-write", setting: CodexNetworkSetting): { rows: ToolRuleRowV1[]; baseline: string } {
+  const rows: ToolRuleRowV1[] = [{ rule: { kind: "commands-closed" }, status: "recorded-only", reason: "codex exec has no per-command allowlist; the sandbox runs any command", phases: [] }];
+  for (const rule of rules.commands) {
+    const separator = separatorRefusal(rule.value);
+    rows.push({ rule: { ...rule }, status: separator === null ? "recorded-only" : "refused", reason: separator ?? "codex exec has no per-command allowlist", phases: [] });
+  }
+  const refusal = rules.network ? codexNetworkRefusal(sandbox, setting) : null;
+  rows.push(!rules.network ? { rule: { kind: "network", value: false }, status: "enforced", reason: null, phases: [...ALL_PHASES] }
+    : refusal === null ? { rule: { kind: "network", value: true }, status: "enforced", reason: null, phases: ["execute"] }
+      : { rule: { kind: "network", value: true }, status: "refused", reason: boundedText(refusal, 512), phases: [] });
+  for (const name of rules.secretEnv) rows.push({ rule: { kind: "secretEnv", name }, status: "recorded-only", reason: SECRET_REASON, phases: [] });
+  const baseline = "codex runs any command inside its sandbox; ccloop reads only the linked config.toml, not managed, MDM or system config layers (which sit above -c), a --profile in the installation command, or a trusted target repo's .codex/config.toml";
   return { rows, baseline: boundedText(baseline, 1024) };
 }

@@ -11,6 +11,8 @@ import { withCodexSkillLinks } from "./codexSkills.js";
 import type { AttemptContext } from "../types.js";
 import { codexToolEvent, effectiveIdleTimeoutMs, IdleWatch, lineFeeder, type IdleSnapshotV1 } from "../idleWatch.js";
 import { executeWireJsonSchema, observedTurnUsage, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
+import { codexConfigTomlPath, readCodexNetworkAccess, type CodexNetworkSetting } from "../../agents/codexNetworkConfig.js";
+import { codexToolRuleArgs } from "../toolRules.js";
 
 // Every-agent requirement chain (Orca spec 2026-10-15 §6.1): a single call brings its own argv, environment and schema.
 export type PhaseRequest = {phase:CodexPhase|"single-call";prompt:string;context:AttemptContext;
@@ -77,6 +79,18 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       result.reason=error.reason;return persist();
     }
     childTimeout=deadline-Date.now();
+  }
+  // Per-contract tool rules (spec 2026-10-22 §4 codex): the rules' -c pairs join the phase's, before the trailing `-`.
+  // The person's config.toml is read only when it decides something (network:true on a workspace-write execute).
+  const toolRules=request.spawn===undefined?context.contract?.executionPolicy?.toolRules:undefined;
+  if(toolRules!==undefined&&phase!=="single-call") {
+    let setting:CodexNetworkSetting={kind:"absent"};
+    if(toolRules.network&&phase==="execute"&&config.sandbox==="workspace-write") {
+      const path=codexConfigTomlPath(installation,extraEnv,process.env);
+      setting=path===null?{kind:"absent"}:await readCodexNetworkAccess(path);
+    }
+    const ruleArgs=codexToolRuleArgs(toolRules,phase,config.sandbox,setting);
+    if(ruleArgs.length>0)args.splice(args.length-1,0,...ruleArgs);
   }
   const wireBusinessSchema=request.spawn?.schema??(phase==="execute"?executeWireJsonSchema():phaseJsonSchema(phase as CodexPhase));
   const wireSchema=phase==="execute"?{type:"object",properties:{result:wireBusinessSchema},required:["result"],additionalProperties:false}:wireBusinessSchema;
