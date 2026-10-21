@@ -45,6 +45,8 @@ describe("test 1: classifier sample sets", () => {
       .map(row => JSON.stringify(row)).join("\n");
     expect(classifyCodexCall(inMessage)).toEqual({ cause: "unknown", workObserved: true, detail: "something else" });
     expect(classifyCodexCall(codexRows("exceeded retry limit, last status: 429", [])+JSON.stringify({ type: "turn.completed", usage: {} }))).toBeNull();
+    const onlyModelText = [{ type: "turn.started" }, { type: "item.completed", item: { type: "agent_message", text: "exceeded retry limit, last status: 429" } }].map(row => JSON.stringify(row)).join("\n");
+    expect(classifyCodexCall(onlyModelText)).toEqual({ cause: "unknown", workObserved: true, detail: null });
     expect(classifyCodexCall("")).toEqual({ cause: "unknown", workObserved: false, detail: null });
     expect(classifyCodexCall(codexRows("an unrecognised failure"))?.cause).toBe("unknown");
   });
@@ -127,6 +129,8 @@ describe("test 3/4: the shared retry loop (bounded, safe, and booking every try)
   it("usage edge cases: all unobserved => null; spend then 429-before-work => the spend, without the zero flag", async () => {
     const allNull = await settle(run([transient(null), transient(null), transient(null), transient(null)]).promise) as { error: Error };
     expect(observedTokensOf(allNull.error)).toBeNull();
+    // The raw field, not only observedTokensOf (which also reads 0 as unobserved): an all-unobserved phase is null, never 0.
+    expect((allNull.error as { observedTokens?: unknown }).observedTokens).toBeNull();
     const spendThen429 = await settle(run([transient(7), transient(null, { rateLimitedBeforeWork: true }), transient(null, { rateLimitedBeforeWork: true }), transient(null, { rateLimitedBeforeWork: true })]).promise) as { error: Error & { rateLimitedBeforeWork?: boolean } };
     expect(observedTokensOf(spendThen429.error)).toBe(7);
     expect(spendThen429.error.rateLimitedBeforeWork).toBeUndefined();
