@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { toolRulesSchema } from "../runtime/toolRules.js";
 
 export const V1_TERMINAL_STATES = [
   "succeeded",
@@ -49,6 +50,8 @@ export const loopContractSchema = z
         tokenBudget: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
         worktreeRequired: z.literal(true),
         partialOutcomeRecoveryWindowMs: z.number().int().nonnegative(),
+        // Per-contract tool rules (spec 2026-10-22 §2): optional, no default -- absent leaves the contract byte-identical.
+        toolRules: toolRulesSchema.optional(),
       })
       .strict(),
     safetyPolicy: z
