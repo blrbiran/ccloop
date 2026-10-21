@@ -188,7 +188,10 @@ export async function runSavedResultCheck(runDir:string,tree:string,command:stri
  const wrapper="let s='';process.stdin.on('data',b=>s+=b);process.stdin.on('end',()=>{if(s.length===0)process.exit(1);const c=require('node:child_process').spawn('/bin/sh',['-lc',s],{stdio:'inherit'});c.on('error',()=>process.exit(127));c.on('exit',(code,signal)=>process.exit(code??1));});";
  const child=spawn(process.execPath,["-e",wrapper],{cwd:tree,detached:true,stdio:["pipe","pipe","pipe"]});
  let stdout="",stderr="",exceeded=false,aborted=false;let timer:NodeJS.Timeout|undefined;
- const kill=(sig:NodeJS.Signals)=>{if(child.pid)try{process.kill(-child.pid,sig);}catch(error){if((error as NodeJS.ErrnoException).code!=="ESRCH")throw error;}};
+ // ESRCH: the group is gone. EPERM: on macOS kill() answers EPERM for a group whose members have all exited but are not
+ // yet reaped (after SIGTERM the shell and its children are reparented and reaped asynchronously). Nothing is left to
+ // signal in either case; throwing there turned an abort, or a passed check, into a failed check.
+ const kill=(sig:NodeJS.Signals)=>{if(child.pid)try{process.kill(-child.pid,sig);}catch(error){const code=(error as NodeJS.ErrnoException).code;if(code!=="ESRCH"&&code!=="EPERM")throw error;}};
  const abort=()=>{if(aborted)return;aborted=true;kill("SIGTERM");timer=setTimeout(()=>kill("SIGKILL"),100);};
  const closed=new Promise<number|null>((resolve,reject)=>{child.once("error",reject);child.once("close",code=>resolve(code));});
  child.stdin.on("error",()=>undefined);

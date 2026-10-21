@@ -205,3 +205,33 @@ it('r1 retains observed usage when timeout cleanup races an external handoff int
   expect((await readFile(join(f.runDir,'events.jsonl'),'utf8'))).not.toContain('handoff_interrupted');
  }finally{await rm(f.root,{recursive:true,force:true});}
 },10000);
+
+// macOS answers kill() on a process group whose members are all exited-but-unreaped (zombies) with EPERM, not ESRCH
+// (probe: a detached `sh -c 'exit 0'` with the event loop blocked, then process.kill(-pid) → EPERM; after reaping → ESRCH).
+// After an abort's SIGTERM the check's shell and its children are reparented and reaped asynchronously, so the
+// post-close SIGKILL can land in that window. Observed in the r1 command-interruption criterion as `kill EPERM` thrown
+// from the check ⇒ recorded as required-check-failed (tokenUsage 0, completedWithResult true) instead of an abort.
+// The stub delivers the real signal, then answers EPERM the way that window does.
+it.each(["passed","aborted"] as const)("a saved-result check whose group answers kill() with EPERM after exit still reports %s",async outcome=>{
+ const {mkdtemp,realpath}=await import("node:fs/promises"),{tmpdir}=await import("node:os");
+ const {runSavedResultCheck}=await import("../../src/controller/verifySavedResult.js");
+ const root=await realpath(await mkdtemp(join(tmpdir(),"vsr-eperm-")));
+ const real=process.kill.bind(process);
+ const spy=vi.spyOn(process,"kill").mockImplementation(((pid:number,signal?:string|number)=>{
+  if(pid<0){try{real(pid,signal as NodeJS.Signals);}catch{/* already gone */}throw Object.assign(Error("kill EPERM"),{code:"EPERM",errno:-1,syscall:"kill"});}
+  return real(pid,signal as NodeJS.Signals);
+ }) as typeof process.kill);
+ try{
+  const abort=new AbortController();
+  const ready=join(root,"ready");
+  const command=outcome==="passed"?"true":`printf ready > '${ready}'; while :; do sleep 1; done`;
+  const run=runSavedResultCheck(root,root,command,0,abort.signal);
+  if(outcome==="aborted"){
+   for(let i=0;i<500;i++){try{await readFile(ready);break;}catch{await new Promise(r=>setTimeout(r,20));}}
+   abort.abort();
+   await expect(run).rejects.toMatchObject({name:"AbortError",message:"saved-result-check-aborted"});
+  }else{
+   await expect(run).resolves.toEqual({stdout:"",stderr:""});
+  }
+ }finally{spy.mockRestore();await rm(root,{recursive:true,force:true});}
+},15000);
