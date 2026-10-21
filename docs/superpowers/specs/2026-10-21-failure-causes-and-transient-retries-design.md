@@ -256,3 +256,35 @@ missing/unparseable claude signals ⇒ `workObserved = true`, `unknown` unless `
 cleanup failure after a rejection ⇒ `unknown`; **M-3** claude partial never retried in-phase; **M-4** where
 `retriedTriesUnobserved` lives; **M-5** omp read-only mutation ⇒ `unknown` + test; **M-6** test 5 is a regression guard;
 **M-11** collect citation widened to `:77-111`.
+
+## As-built (Orca session 9ec98639, 2026-10-21, track D-impl)
+
+Implemented: `src/runtime/failureCause.ts` (vocabulary, classifiers), `src/runtime/transientRetry.ts` (shared loop, `phaseLimitMs`,
+`tryContext`), the three adapters' phases, `scripts/claude-phase-runner.mjs` (signals recorder), `RunState.failureCause` with the
+§5 precedence in `src/controller/runLoop.ts`, collect top level + ccloop's `collectionSchema`. Criteria:
+`tests/runtime/failureCause.test.ts`, `tests/controller/failureCauseRunLoop.test.ts`; mutations F1-F19 each seen red in a built
+clone (F2 and F7 survived the first criteria and were pinned by a follow-up commit), restore diff 0/0.
+
+Decisions and deviations (controller's calls, reversible):
+1. **`retry-usage.json` instead of a field in `usage.json`.** A successful phase that had failed tries writes
+   `{priorTries, priorObservedTokens, retriedTriesUnobserved}` to `retry-usage.json` in the successful call's directory;
+   `usage.json` keeps exactly the agent's usage evidence. The failed phase's last `failure-cause.json` carries
+   `retriedTriesUnobserved` as designed.
+2. **Single calls record no claude signals** (`CCLOOP_CLAUDE_SIGNALS_PATH` is set for phases only): single calls are never
+   retried here, and the single-call criterion lists every file a call writes.
+3. Evidence writes of the loop (`failure-cause.json`, `retry-usage.json`) are best-effort: a failed write never replaces the
+   call's own failure (found by `claudeNeverStarted`'s stubbed run whose evidence directory does not exist).
+4. A claude runner-built partial carries its cause as a **non-enumerable** property, so `execution.json` bytes are unchanged.
+5. Codex: a try that timed out is `budget-exhausted`; a completed turn whose final failed to decode is `unknown`; codex-skills and
+   phase-isolation refusals are `unknown` (never retried). Spawn errno is now recorded (`spawnErrno`) for codex and omp.
+6. Row 1 via the top-of-loop stop reads `status === "planning"` and the last `recentFailures` entry of the persisted state;
+   tested through `runLoopFromState` with a persisted state (the crash-resume shape).
+7. `stalled` is produced only once the activity watchdog lands; until then no call classifies it.
+
+Changed existing criteria (each with a Ruling line in the commit): `tests/runtime/codex/rateLimit.test.ts` "gives a retried call
+only the time the phase has left" (context lifts the fixture's `perAttemptTimeoutMs`, assertions unchanged);
+`tests/runtime/claude/claudeAgentAdapter.test.ts:131` (+`claude-signals.json`); `tests/control/savedResultEvidence.test.ts:105`
+(v3 collect keys + `failureCause`).
+
+Residual: the runner's "errorText only from the message carrying the typed error" rule has no runner-level criterion (the
+classifier is tested on signals); the claude quota/overflow phrases and every codex row but 429 still rest on static strings.

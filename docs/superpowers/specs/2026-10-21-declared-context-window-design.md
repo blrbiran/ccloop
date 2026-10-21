@@ -112,3 +112,13 @@ catalog-unreadable (§2.2).
 Independent review verdict: READY. Minors applied: **M-12** Orca's frozen-slot schema gains the optional field.
 **M-13** catalog injection named (`deps.codexCatalog`). **M-14** version-skew note. **M-15** `configHash` rationale
 reworded. **M-10** test 4 mutation named.
+
+## As-built (Orca session 9ec98639, 2026-10-21, track D-impl)
+
+- Implemented as designed (`src/agents/{codex,omp,registry,types,materialize}.ts`, `src/control/command.ts`); criteria in
+  `tests/agents/declaredContextWindow.test.ts` (tests 1-4; mutations M1-M6 each seen red in a built clone, restore diff 0/0).
+- `deps.codexCatalog(installation) => Promise<CatalogRowV1[] | null>` (null = unreadable); like the other injections it
+  marks the resolution as injected (no cached catalog/version read).
+- omp's selector-only `probeModels` injection yields rows with `contextWindow: null`, so a declared window applies there too
+  (test-only path; production omp always reads the full catalog).
+- No existing criterion changed.
