@@ -70,6 +70,8 @@ export class CodexAdapter implements RuntimeAdapter {
     let classification: CallClassification | null;
     if (outcome.reason === "aborted") classification = null;
     else if (outcome.reason === "timeout") classification = { cause: "budget-exhausted", workObserved: true, detail: null };
+    // Activity watchdog (spec 2026-10-21 §2.3): a stalled call is transient; it is retried when no work was seen or the phase is read-only.
+    else if (outcome.reason === "stalled") classification = { cause: "stalled", workObserved: classifyCodexCall(outcome.events)?.workObserved ?? true, detail: null };
     else if (outcome.reason === "spawn-error") classification = { cause: outcome.spawnErrno === "ENOENT" ? "executable-missing" : "unknown", workObserved: false, detail: outcome.spawnErrno ?? null };
     else if (outcome.reason.startsWith("codex-skills-") || outcome.reason.startsWith("codex-phase-isolation-")) classification = { cause: "unknown", workObserved: false, detail: outcome.reason };
     else classification = classifyCodexCall(outcome.events) ?? { cause: "unknown", workObserved: true, detail: null };
@@ -204,7 +206,9 @@ export class CodexAdapter implements RuntimeAdapter {
       // sent anything: neverStarted, booked 0. The codex phase path is unchanged.
       const neverStarted = !(await access(join(outcome.evidenceDir, "process.json")).then(() => true, () => false));
       const error = outcome.reason === "aborted" ? new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens)
-        : Object.assign(new Error(`codex-${outcome.reason}: ${outcome.evidenceDir}`), { observedTokens: outcome.observedTokens });
+        : Object.assign(new Error(`codex-${outcome.reason}: ${outcome.evidenceDir}`), { observedTokens: outcome.observedTokens },
+          // Activity watchdog (spec 2026-10-21 §2.4): a stalled single call names its cause; its caller owns retries.
+          outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {});
       throw neverStarted ? Object.assign(error, { neverStarted: true }) : error;
     }
     return decodeCodexSingleCall(outcome.events, outcome.final, this.config.model, outcome.evidenceDir);

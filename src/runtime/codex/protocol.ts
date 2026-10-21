@@ -12,6 +12,8 @@ const configSchema = z.object({
   sandbox: z.enum(["read-only", "workspace-write"]),
   timeoutMs: z.number().int().positive().max(2_147_483_647),
   killGraceMs: z.number().int().nonnegative().max(60_000),
+  // Activity watchdog (spec 2026-10-21 §2.1): the installation's idle limit; absent ⇒ min(10 min, timeoutMs), null ⇒ off.
+  idleTimeoutMs: z.number().int().positive().max(2_147_483_647).nullable().optional(),
 }).strict();
 export type CodexConfig = z.infer<typeof configSchema>;
 export function parseCodexConfig(raw: unknown): CodexConfig {

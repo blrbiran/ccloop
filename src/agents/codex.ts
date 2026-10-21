@@ -22,6 +22,7 @@ export function toCodexConfig(config: MaterializedAgentConfigV1): CodexConfig {
     sandbox: installation.sandbox,
     timeoutMs: installation.timeoutMs,
     killGraceMs: installation.killGraceMs,
+    ...(installation.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: installation.idleTimeoutMs }),
   });
 }
 

@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, lstatSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, readFileSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { spawn } from "node:child_process";
 const mode=process.argv[2], marker=process.argv[3];
 // Orca agent selection (2026-09-26), spec §4.8: `--version` with no `exec` answers a fixed version and
@@ -94,6 +94,20 @@ process.stdin.on("end",()=>{
   // Failure causes (ccloop spec 2026-10-21 §8): `error-503-1` fails the first call of this marker with codex's own
   // "exceeded retry limit, last status: 503" rows (later calls behave as `integration`); `error-503-all` on every call;
   // `error-503-after-item` prints an item.started first (work observed) on every call.
+  // Activity watchdog (ccloop spec 2026-10-21 §4): `idle-script` plays <marker>.idle-script.json {steps:[{delayMs, stdout?,
+  // stderr?}], end:"answer"|"hang"} -- each step waits delayMs then writes its line(s) -- and then answers as the default
+  // mode does, or hangs silently.
+  if(mode==="idle-script") {
+    const script=JSON.parse(readFileSync(marker+".idle-script.json","utf8"));
+    // Synchronous on purpose (this runs inside the stdin callback): a blocking sleep, and writeSync so each line leaves now.
+    const sleep=ms=>Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,ms);
+    for(const step of script.steps??[]) {
+      sleep(step.delayMs??0);
+      if(step.stdout!==undefined) writeSync(1,JSON.stringify(step.stdout)+"\n");
+      if(step.stderr!==undefined) writeSync(2,step.stderr+"\n");
+    }
+    if(script.end==="hang") {setInterval(()=>{},1000);return;}
+  }
   if(mode.startsWith("error-503")) {
     const call=readFileSync(marker+".argv","utf8").trim().split("\n").length;
     if(mode!=="error-503-1"||call===1) {

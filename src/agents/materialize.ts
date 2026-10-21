@@ -42,6 +42,8 @@ export function agentConfigHash(config: MaterializedAgentConfigV1): string {
     // Declared context window (#70 spec §2.1): it fills a number the catalog did not report, not which agent runs or how;
     // Orca freezes the value in effect with the slot, so editing it must not strand a frozen selection.
     declaredContextWindow: _reportedNumberNotIdentity,
+    // Activity watchdog (spec 2026-10-21 §2.1): a run limit like timeoutMs.
+    idleTimeoutMs: _idleLimitNotIdentity,
     ...installation
   } = config.installation;
   return canonicalHash({ ...config, installation });

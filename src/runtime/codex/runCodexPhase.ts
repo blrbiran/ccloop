@@ -9,13 +9,14 @@ import type { InstallationV1 } from "../../agents/types.js";
 import { CodexPhaseIsolationRefused, codexPhaseIsolation } from "./codexPhaseIsolation.js";
 import { withCodexSkillLinks } from "./codexSkills.js";
 import type { AttemptContext } from "../types.js";
+import { codexToolEvent, effectiveIdleTimeoutMs, IdleWatch, lineFeeder, type IdleSnapshotV1 } from "../idleWatch.js";
 import { executeWireJsonSchema, observedTurnUsage, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
 
 // Every-agent requirement chain (Orca spec 2026-10-15 §6.1): a single call brings its own argv, environment and schema.
 export type PhaseRequest = {phase:CodexPhase|"single-call";prompt:string;context:AttemptContext;
   spawn?:{args:(paths:{schemaPath:string;finalPath:string})=>string[];env:NodeJS.ProcessEnv;schema:Record<string,unknown>}};
 export type PhaseOutcome = {
-  reason:"completed"|"aborted"|"timeout"|"spawn-error"|"exit-error"|"output-limit"|"io-error"|`codex-skills-${string}`|`codex-phase-isolation-${string}`;
+  reason:"completed"|"aborted"|"timeout"|"stalled"|"spawn-error"|"exit-error"|"output-limit"|"io-error"|`codex-skills-${string}`|`codex-phase-isolation-${string}`;
   code:number|null;signal:NodeJS.Signals|null;events:string;final:string|null;evidenceDir:string;
   // Orca handoff delivery C-3: usage observed in the stdout of a phase that did not complete; null otherwise.
   observedTokens:number|null;
@@ -45,9 +46,11 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   let stderr="", logsCreated=false;
   let ioError:string|undefined;
   let stdoutTruncated=false,stderrTruncated=false,finalTruncated=false;
+  // Activity watchdog (spec 2026-10-21 §2.3): recorded in outcome.json when the call was stopped as stalled.
+  let idle:IdleSnapshotV1|null=null;
   const persist=async()=>{
     if(!logsCreated){await save("events.jsonl",result.events);await save("stderr.log",stderr);}
-    await save("outcome.json",JSON.stringify({...result,events:undefined,final:undefined,executable:config.command[0],args,ioError,stdoutTruncated,stderrTruncated,finalTruncated,...(isolation===undefined?{}:{isolation})},null,2));
+    await save("outcome.json",JSON.stringify({...result,events:undefined,final:undefined,executable:config.command[0],args,ioError,stdoutTruncated,stderrTruncated,finalTruncated,...(isolation===undefined?{}:{isolation}),...(result.reason==="stalled"&&idle!==null?{idle}:{})},null,2));
     return result;
   };
   if(context.abortSignal?.aborted){result.reason="aborted";return persist();}
@@ -89,7 +92,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     const finish=()=>{
       if(done)return;done=true;
       kill("SIGKILL");
-      clearTimeout(timer);clearTimeout(killTimer);clearTimeout(drainTimer);
+      clearTimeout(timer);clearTimeout(killTimer);clearTimeout(drainTimer);watch.stop();
       context.abortSignal?.removeEventListener("abort",abort);
       result.events+=out.end();stderr+=err.end();
       child.stdin.destroy();child.stdout.destroy();child.stderr.destroy();
@@ -103,16 +106,22 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     };
     const abort=()=>stop("aborted");
     const timer=setTimeout(()=>stop("timeout"),childTimeout);
+    // Activity watchdog (spec 2026-10-21 §2.2 codex): stdout/stderr bytes are activity; tool items suspend the clock.
+    const watch=new IdleWatch(effectiveIdleTimeoutMs(config),()=>{idle=watch.snapshot();stop("stalled");});
+    const feedTools=lineFeeder(line=>codexToolEvent(line,watch));
+    watch.start();
     child.on("error",(e:NodeJS.ErrnoException)=>{result.reason="spawn-error";if(typeof e.code==="string")result.spawnErrno=e.code;finish();});
     child.stdin.on("error",(e)=>{ioError=String(e);if(!exited)stop("io-error");});
     child.stdout.on("data",(b:Buffer)=>{
       const kept=b.subarray(0,Math.max(0,LIMIT-outBytes));outBytes+=b.length;
       try{appendFileSync(join(evidenceDir,"events.jsonl"),kept);}catch(e){ioError=String(e);stop("io-error");}
+      watch.activity();feedTools(kept);
       result.events+=out.write(kept);if(outBytes>LIMIT){stdoutTruncated=true;stop("output-limit");}
     });
     child.stderr.on("data",(b:Buffer)=>{
       const kept=b.subarray(0,Math.max(0,LIMIT-errBytes));errBytes+=b.length;
       try{appendFileSync(join(evidenceDir,"stderr.log"),kept);}catch(e){ioError=String(e);stop("io-error");}
+      watch.activity();
       stderr+=err.write(kept);if(errBytes>LIMIT){stderrTruncated=true;stop("output-limit");}
     });
     child.on("exit",(code,signal)=>{

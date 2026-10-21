@@ -14,6 +14,7 @@ import { dropUnreported } from "../reportedDecisions.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./prompts.js";
 import type { ClaudePhaseRequest } from "./types.js";
 import { classifyClaudeCall, isExecutableMissing, parseClaudeSignals, type CallClassification } from "../failureCause.js";
+import { effectiveIdleTimeoutMs, IdleWatch, lineFeeder, type IdleSnapshotV1 } from "../idleWatch.js";
 import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
 
 // Orca agent selection (2026-09-26), spec §4.7: the claude adapter that ccloop control can run. Its process
@@ -96,7 +97,7 @@ export async function readObservedTokens(path: string): Promise<number | null> {
 }
 
 type Outcome = {
-  reason: "completed" | "aborted" | "timeout" | "spawn-error" | "exit-error" | "output-limit" | "io-error";
+  reason: "completed" | "aborted" | "timeout" | "stalled" | "spawn-error" | "exit-error" | "output-limit" | "io-error";
   code: number | null;
   signal: NodeJS.Signals | null;
   stdout: string;
@@ -178,6 +179,8 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     const runner = claudeRunnerPath();
     const result: Outcome = { reason: "completed", code: null, signal: null, stdout: "", evidenceDir };
     let stderr = "", ioError: string | undefined, stdoutTruncated = false, stderrTruncated = false;
+    // Activity watchdog (spec 2026-10-21 §2.3): recorded in outcome.json when the call was stopped as stalled.
+    let idle: IdleSnapshotV1 | null = null;
     // --allowedTools takes a list: it goes before --model, so the list ends at an option and never swallows the prompt.
     const allow = requiredCheckAllowRules(call.requiredChecks ?? []);
     const extraArgs = [...(allow.rules.length === 0 ? [] : ["--allowedTools", ...allow.rules]), ...this.extraArgs];
@@ -187,6 +190,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
         runner, claudeCommand: this.command, extraArgs, configDir: installation.configDir,
         ...(allow.notAllowed.length === 0 ? {} : { requiredChecksNotAllowed: allow.notAllowed }),
         ioError, stdoutTruncated, stderrTruncated, observedUsagePath: join(evidenceDir, OBSERVED_USAGE_FILE),
+        ...(result.reason === "stalled" && idle !== null ? { idle } : {}),
       }, null, 2));
       return result;
     };
@@ -207,10 +211,11 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     if (installation.configDir !== null) env.CLAUDE_CONFIG_DIR = installation.configDir;
     await new Promise<void>((resolve) => {
       const child = spawn(process.execPath, [runner], {
-        cwd: call.cwd, detached: true, stdio: ["pipe", "pipe", "pipe", "pipe"],
+        // Activity watchdog (spec 2026-10-21 §2.2 claude): fd 4 carries the runner's `{"openTools":n}` activity lines.
+        cwd: call.cwd, detached: true, stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
         // Crash resume (2026-10-02), spec §3.1: fd 3 is a pipe this process never writes; its end closes only when this
         // process dies (or finish() destroys it), which is how the runner learns that its parent is gone.
-        env: { ...env, CCLOOP_PARENT_WATCH_FD: "3" },
+        env: { ...env, CCLOOP_PARENT_WATCH_FD: "3", CCLOOP_CLAUDE_ACTIVITY_FD: "4" },
       });
       const out = new StringDecoder("utf8"), err = new StringDecoder("utf8");
       let outBytes = 0, errBytes = 0, done = false, exited = false;
@@ -224,11 +229,12 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
         if (done) return;
         done = true;
         kill("SIGKILL");
-        clearTimeout(timer); clearTimeout(killTimer); clearTimeout(drainTimer);
+        clearTimeout(timer); clearTimeout(killTimer); clearTimeout(drainTimer); watch.stop();
         call.abortSignal?.removeEventListener("abort", abort);
         result.stdout += out.end(); stderr += err.end();
         child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
         (child.stdio[3] as { destroy?: () => void } | null)?.destroy?.();
+        (child.stdio[4] as { destroy?: () => void } | null)?.destroy?.();
         resolve();
       };
       const stop = (reason: Outcome["reason"]) => {
@@ -239,6 +245,14 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       };
       const abort = () => stop("aborted");
       const timer = setTimeout(() => stop("timeout"), timeout);
+      const watch = new IdleWatch(effectiveIdleTimeoutMs(installation), () => { idle = watch.snapshot(); stop("stalled"); });
+      const activity = child.stdio[4] as NodeJS.ReadableStream | null;
+      activity?.on("data", lineFeeder((line) => {
+        watch.activity();
+        try { const open = (JSON.parse(line) as { openTools?: unknown }).openTools; if (typeof open === "number") watch.reportOpenTools(open); } catch { /* activity only */ }
+      }));
+      activity?.on("error", () => {});
+      watch.start();
       const writeRequest = async () => {
         await save("request.json", JSON.stringify(request, null, 2));
         child.stdin.end(JSON.stringify(request));
@@ -297,7 +311,11 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
           const value = await this.phaseOnce<T>(request, tryContext(context, tryLimitMs), seen, afterStop);
           const partial = value as { partialOrigin?: unknown; failureType?: unknown } | null;
           if (partial !== null && typeof partial === "object" && partial.partialOrigin === "runner" && seen.outcome !== undefined) {
-            const classification = partial.failureType === "timeout" ? { cause: "budget-exhausted" as const, workObserved: true, detail: null } : await this.classify(seen.outcome);
+            // Activity watchdog (spec 2026-10-21 §2.3): a partial after an idle stop is `stalled`, named in its stopReason too.
+            const stalled = seen.outcome.reason === "stalled";
+            const classification = stalled ? { cause: "stalled" as const, workObserved: true, detail: null }
+              : partial.failureType === "timeout" ? { cause: "budget-exhausted" as const, workObserved: true, detail: null } : await this.classify(seen.outcome);
+            if (stalled) (partial as { failureMessage?: string }).failureMessage = `claude-stalled: ${String((partial as { failureMessage?: unknown }).failureMessage ?? "")}`;
             Object.defineProperty(partial, "failureCause", { value: { ...classification, retries: 0 }, enumerable: false, configurable: true, writable: true });
           }
           return { ok: true, value, evidenceDir: seen.outcome?.evidenceDir ?? context.runDir };
@@ -308,6 +326,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
           else if (outcome === undefined) classification = { cause: "unknown", workObserved: true, detail: null };
           else if (outcome.reason === "aborted") classification = null;
           else if (outcome.reason === "timeout") classification = { cause: "budget-exhausted", workObserved: true, detail: null };
+          else if (outcome.reason === "stalled") classification = { cause: "stalled", workObserved: (await this.classify(outcome)).workObserved, detail: null };
           else classification = await this.classify(outcome);
           const observed = (error as { observedTokens?: unknown }).observedTokens;
           const observation: TryObservation = (error as { neverStarted?: unknown }).neverStarted === true ? { kind: "rule0" }
@@ -335,7 +354,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     // Consolidation step 1 (spec §5.1, §5.2): after a stop, an execute runner that exited cleanly and printed a JSON object
     // printed the phase's result (its post-SIGTERM partial, or a complete answer it already had). A result without
     // tokenUsage carries the usage observed before the stop; no observation leaves it absent, never 0.
-    if (afterStop !== undefined && (outcome.reason === "aborted" || outcome.reason === "timeout") && outcome.code === 0 && outcome.signal === null) {
+    if (afterStop !== undefined && (outcome.reason === "aborted" || outcome.reason === "timeout" || outcome.reason === "stalled") && outcome.code === 0 && outcome.signal === null) {
       const written = parseObject(outcome.stdout);
       if (written !== undefined) {
         const usageEvidence = (written as { usageEvidence?: unknown }).usageEvidence;
@@ -424,9 +443,10 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     if (outcome.reason !== "completed") {
       // Final review of the single-call estimate (2026-09-28): a call that timed out or failed still spent what claude
       // streamed before it ended; that observation rides on the error (observedTokensOf), null when there is none.
+      // Activity watchdog (spec 2026-10-21 §2.4): a stalled single call names its cause; its caller owns retries.
       throw Object.assign(new Error(`claude-${outcome.reason}: ${outcome.evidenceDir}`), {
         observedTokens: await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)),
-      });
+      }, outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {});
     }
     let parsed: unknown;
     try { parsed = JSON.parse(outcome.stdout); } catch { parsed = undefined; }

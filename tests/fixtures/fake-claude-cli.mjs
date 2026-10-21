@@ -119,6 +119,19 @@ if (apiError !== null && (apiError[2] !== "once" || apiErrorCall === 1)) {
   process.stderr.write(`fake-claude-cli: api error ${apiError[1]}\n`);
   process.exit(1);
 }
+// Activity watchdog (ccloop spec 2026-10-21 §4): "idle-script" plays <marker>.idle-script.json {steps:[{delayMs, event?,
+// writeFile?}], end:"answer"|"hang"}: each step waits delayMs, then emits its stream-json event and/or writes the named file
+// in its cwd; then answers as "ok" does, or hangs silently.
+if (mode === "idle-script") {
+  const script = JSON.parse(readFileSync(`${marker}.idle-script.json`, "utf8"));
+  if (stream) await emitInit();
+  for (const step of script.steps ?? []) {
+    await new Promise((resolve) => setTimeout(resolve, step.delayMs ?? 0));
+    if (step.writeFile !== undefined) writeFileSync(step.writeFile, "changed\n");
+    if (step.event !== undefined && stream) await emit(step.event);
+  }
+  if (script.end === "hang") { setInterval(() => {}, 1000); await new Promise(() => {}); }
+}
 const NEW_WRITE_MODES = new Set(["write-then-hang", "write-quiet-then-hang", "write-ignore-term", "write-then-fail"]);
 if (NEW_WRITE_MODES.has(mode)) {
   writeFileSync("partial.txt", PARTIAL_BYTES);

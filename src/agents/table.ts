@@ -14,6 +14,8 @@ const commonInstallation = {
   configDir: z.string().min(1).refine(isAbsolute).nullable(),
   timeoutMs: z.number().int().positive().max(2_147_483_647),
   killGraceMs: z.number().int().nonnegative().max(60_000),
+  // Activity watchdog (ccloop spec 2026-10-21-activity-watchdog-design.md §2.1): absent ⇒ min(10 min, timeoutMs); null ⇒ off.
+  idleTimeoutMs: z.number().int().positive().max(2_147_483_647).nullable().optional(),
 };
 const tableShape = z
   .object({ schema: z.literal("ccloop-agents-table-v1"), installations: z.record(z.unknown()) })
@@ -39,6 +41,10 @@ export function parseInstallation(raw: unknown): InstallationV1 {
   const parsed = z.object({ ...commonInstallation, ...extras }).strict().safeParse(raw);
   if (!parsed.success) throw invalid(parsed.error.message);
   const installation = parsed.data as InstallationV1;
+  // Spec §2.1: a cross-field rule on the parsed installation (the common fields are merged with each kind's extras above).
+  if (typeof installation.idleTimeoutMs === "number" && installation.idleTimeoutMs > installation.timeoutMs) {
+    throw invalid("idleTimeoutMs must not exceed timeoutMs");
+  }
   descriptor.validateInstallation?.(installation);
   return installation;
 }

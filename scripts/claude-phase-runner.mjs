@@ -423,7 +423,7 @@ function readArgvEnv(name, fallback, requireCommand) {
 function claudeEnv() {
   // Crash resume (2026-10-02): CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS is this runner's own input too.
   // Crash resume (2026-10-02), spec §3.1: so are CCLOOP_PARENT_WATCH_FD and CCLOOP_PARENT_GONE_GRACE_MS.
-  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: _observedUsagePath, CCLOOP_CLAUDE_SIGNALS_PATH: _signalsPath, CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS: _spawnRetryDelay, CCLOOP_PARENT_WATCH_FD: _parentWatchFd, CCLOOP_PARENT_GONE_GRACE_MS: _parentGoneGrace, CCLOOP_CLAUDE_TEST_LIFECYCLE_PATH: _testLifecyclePath, CCLOOP_CLAUDE_TEST_MAIN_CLAIM_GATE: _testMainClaimGate, ...env } = process.env;
+  const { CCLOOP_CLAUDE_COMMAND: _command, CCLOOP_CLAUDE_EXTRA_ARGS: _extraArgs, CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: _observedUsagePath, CCLOOP_CLAUDE_SIGNALS_PATH: _signalsPath, CCLOOP_CLAUDE_ACTIVITY_FD: _activityFd, CCLOOP_CLAUDE_SPAWN_RETRY_DELAY_MS: _spawnRetryDelay, CCLOOP_PARENT_WATCH_FD: _parentWatchFd, CCLOOP_PARENT_GONE_GRACE_MS: _parentGoneGrace, CCLOOP_CLAUDE_TEST_LIFECYCLE_PATH: _testLifecyclePath, CCLOOP_CLAUDE_TEST_MAIN_CLAIM_GATE: _testMainClaimGate, ...env } = process.env;
   return env;
 }
 
@@ -602,6 +602,37 @@ function createSignalsRecorder(path) {
   };
 }
 
+// Activity watchdog (ccloop spec 2026-10-21-activity-watchdog-design.md §2.2 claude): the adapter sees only this runner's
+// final stdout, so the runner reports activity on fd 4 as `{"openTools":n}` lines -- on every claude stdout chunk, at most
+// one line per second unless the open-tool count changed. A tool_use block opens a tool; a tool_result with its id closes
+// it. Only an adapter-spawned runner gets fd 4 (CCLOOP_CLAUDE_ACTIVITY_FD=4); without it nothing is reported.
+function createActivityReporter() {
+  if (process.env.CCLOOP_CLAUDE_ACTIVITY_FD !== "4") return { chunk() {}, event() {} };
+  let out;
+  try { out = new Socket({ fd: 4, readable: false, writable: true }); out.on("error", () => {}); out.unref(); } catch { return { chunk() {}, event() {} }; }
+  const open = new Set();
+  let lastWrite = 0, lastCount = -1;
+  const report = (force) => {
+    const now = Date.now();
+    if (!force && open.size === lastCount && now - lastWrite < 1000) return;
+    lastWrite = now; lastCount = open.size;
+    try { out.write(`${JSON.stringify({ openTools: open.size })}\n`); } catch { /* parent gone */ }
+  };
+  return {
+    chunk() { report(false); },
+    event(event) {
+      if (!event || typeof event !== "object" || !event.message || !Array.isArray(event.message.content)) return;
+      const before = open.size;
+      for (const block of event.message.content) {
+        if (!block || typeof block !== "object") continue;
+        if (event.type === "assistant" && block.type === "tool_use" && typeof block.id === "string") open.add(block.id);
+        if (event.type === "user" && block.type === "tool_result" && typeof block.tool_use_id === "string") open.delete(block.tool_use_id);
+      }
+      if (open.size !== before) report(true);
+    },
+  };
+}
+
 async function runClaude(request, claudeCommand, extraArgs) {
   // Orca single-call estimate (2026-09-27), spec §5.4 and Task 0 item 1 (claude 2.1.283, static): a single call answers
   // the caller's schema with every tool off (`--tools ""`; claude --help: 'Use "" to disable all tools') and its output
@@ -635,12 +666,14 @@ async function runClaude(request, claudeCommand, extraArgs) {
   const observationPath = process.env.CCLOOP_CLAUDE_OBSERVED_USAGE_PATH;
   const observer = createUsageObserver();
   const signals = createSignalsRecorder(process.env.CCLOOP_CLAUDE_SIGNALS_PATH);
+  const activity = createActivityReporter();
   let resultEvent = null;
   let fallbackEnvelope = null;
   const splitter = createLineSplitter((line) => {
     let event;
     try { event = JSON.parse(line); } catch { return; }
     signals.observe(event);
+    activity.event(event);
     if (event && event.type === "result") { resultEvent = event; return; }
     // Orca claude stream usage (2026-09-27): real claude's json envelope and its stream's result event both carry
     // type "result"; the older SubprocessClaudeAdapter criteria's stand-ins print a bare {structured_output, usage}
@@ -668,6 +701,7 @@ async function runClaude(request, claudeCommand, extraArgs) {
         stdoutLength += chunk.length;
         stdoutTail = (stdoutTail + chunk).slice(-FAILURE_OUTPUT_TAIL);
         splitter.push(chunk);
+        activity.chunk();
       });
       // Orca backlog #12(a) (2026-09-29): decoded as a stream, like claude's stdout just above and this runner's stdin
       // (ruling 26); a chunk's own toString turned a multi-byte character cut at a chunk boundary into U+FFFD in the

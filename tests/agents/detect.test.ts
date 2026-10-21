@@ -1,3 +1,5 @@
+// Ruling: human approved rewriting all necessary criteria (Orca session 9ec98639, 2026-10-21): detect drafts a 2 h wall
+// clock (activity watchdog spec §2.1); the two draft expectations below moved 1_800_000 -> 7_200_000.
 import { chmod, mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -51,7 +53,7 @@ describe("detecting installed agents (spec §9 criterion 1)", () => {
     expect(result.table.installations.claude).toEqual({
       kind: "claude",
       command: [volta, "--permission-mode", "acceptEdits", "--no-session-persistence", "--setting-sources", "project,local", "--strict-mcp-config", "--disable-slash-commands", "--settings", '{"autoMemoryEnabled":false}', "--max-budget-usd", "100"],
-      version: "2.1.200", configDir: null, timeoutMs: 1_800_000, killGraceMs: 5_000,
+      version: "2.1.200", configDir: null, timeoutMs: 7_200_000, killGraceMs: 5_000,
     });
   });
 
@@ -67,7 +69,7 @@ describe("detecting installed agents (spec §9 criterion 1)", () => {
       { path: broken, realpath: broken, version: null, runnable: false, source: "path", isPathDefault: true, error: "version-probe-failed" },
     ]);
     expect(result.table.installations.codex).toEqual({
-      kind: "codex", command: [working], version: "0.155.1", configDir: null, timeoutMs: 1_800_000, killGraceMs: 5_000,
+      kind: "codex", command: [working], version: "0.155.1", configDir: null, timeoutMs: 7_200_000, killGraceMs: 5_000,
       sandbox: "workspace-write", budgetMode: "soft",
     });
   });

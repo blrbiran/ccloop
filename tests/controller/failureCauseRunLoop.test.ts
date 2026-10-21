@@ -89,6 +89,13 @@ describe("test 6: a failed or exhausted run records its cause by precedence", ()
     expect([state.status, state.failureCause?.cause, state.failureCause?.phase]).toEqual(["failed", "rate-limited", "execute"]);
   });
 
+  // Activity watchdog spec §2.3 (test 7): a partial after an idle stop is failed + stalled, checked before timeout => exhausted.
+  it("row 2: a runner partial after an idle stop (failureType timeout) is failed with cause stalled", async () => {
+    const partial = withCause({ ...execution, completionStatus: "partial" as const, failureType: "timeout" as const, failureMessage: "claude-stalled: interrupted", partialOrigin: "runner" as const }, "stalled");
+    const { state } = await run(new Stub({ execute: async () => partial }));
+    expect([state.status, state.failureCause?.cause]).toEqual(["failed", "stalled"]);
+  });
+
   it("row 1 exhausted: the same check failing twice is required-check-failed, not budget-exhausted", async () => {
     const { state } = await run(new Stub({}), { verifierType: "command", requiredChecks: ["false"] });
     expect([state.status, state.failureCause?.cause]).toEqual(["exhausted", "required-check-failed"]);

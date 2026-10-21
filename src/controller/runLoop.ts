@@ -1816,7 +1816,9 @@ export async function runLoopFromState(
             runDir,
             writeOwnedRunState,
             state,
-            completedExecution.failureType === "timeout" ? "exhausted" : "failed",
+            // Activity watchdog (spec 2026-10-21 §2.3): a partial carrying `stalled` is checked before the timeout mapping --
+            // a stall is a transient fault, not a spent budget.
+            attachedCause(completedExecution)?.classification.cause === "stalled" || completedExecution.failureType !== "timeout" ? "failed" : "exhausted",
             completedExecution.failureMessage,
             // Spec §5 row 2: the cause the adapter attached to its runner-built partial.
             attachedCause(completedExecution) === undefined ? undefined : phaseCause(completedExecution, "execute"),

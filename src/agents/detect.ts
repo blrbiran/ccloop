@@ -22,7 +22,10 @@ export interface DetectResultV1 {
   candidates: Record<string, CandidateV1[]>;
 }
 
-const DRAFT_TIMEOUT_MS = 1_800_000;
+// Activity watchdog (ccloop spec 2026-10-21-activity-watchdog-design.md §2.1, human ruling "wall clock relaxed"): the idle
+// watchdog now catches a hung agent, so a newly detected installation gets a 2 h wall clock (was 30 min). Existing tables
+// are not rewritten.
+const DRAFT_TIMEOUT_MS = 7_200_000;
 const DRAFT_KILL_GRACE_MS = 5_000;
 
 export function draftCommandForCandidate(kind: string, path: string): [string, ...string[]] {

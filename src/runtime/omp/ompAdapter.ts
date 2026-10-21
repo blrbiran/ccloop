@@ -35,6 +35,8 @@ export class OmpAdapter implements RuntimeAdapter {
           if (outcome === undefined || String(error).includes("omp-read-only-phase-mutated")) classification = { cause: "unknown", workObserved: true, detail: null };
           else if (outcome.reason === "aborted") classification = null;
           else if (outcome.reason === "timeout") classification = { cause: "budget-exhausted", workObserved: true, detail: null };
+          // Activity watchdog (spec 2026-10-21 §2.3): transient; retried when the phase is read-only or no tool ran.
+          else if (outcome.reason === "stalled") classification = { cause: "stalled", workObserved: classifyOmpCall(outcome.events).workObserved, detail: null };
           else if (outcome.reason === "spawn-error") classification = { cause: outcome.spawnErrno === "ENOENT" ? "executable-missing" : "unknown", workObserved: false, detail: outcome.spawnErrno ?? null };
           else classification = classifyOmpCall(outcome.events);
           const observed = (error as { observedTokens?: unknown }).observedTokens;
@@ -111,7 +113,9 @@ export class OmpAdapter implements RuntimeAdapter {
       // Best-effort diagnostic: a failed write must not replace the refusal below and its booking.
       if (lowerBound !== null) await writeFile(join(outcome.evidenceDir, "usage-lower-bound.json"), JSON.stringify({ tokens: lowerBound }), { mode: 0o600 }).catch(() => undefined);
       // Ruling m4: a pre-spawn abort, a timeoutMs <= 0 or a spawn error is neverStarted (books 0, as types.ts observedTokensOf).
-      throw Object.assign(new Error(`omp-${outcome.reason}: ${outcome.evidenceDir}`), { neverStarted: outcome.neverStarted });
+      // Activity watchdog (spec 2026-10-21 §2.4): a stalled single call names its cause; its caller owns retries.
+      throw Object.assign(new Error(`omp-${outcome.reason}: ${outcome.evidenceDir}`), { neverStarted: outcome.neverStarted },
+        outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {});
     }
     try {
       const result = decodeOmpSingleCall(outcome.events, this.config.selection.model, outcome.evidenceDir);

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { MaterializedAgentConfigV1 } from "../../agents/types.js";
 import type { AttemptContext } from "../types.js";
+import { effectiveIdleTimeoutMs, IdleWatch, lineFeeder, ompToolEvent, type IdleSnapshotV1 } from "../idleWatch.js";
 import { ompSkillsPromptBlock } from "./ompSkills.js";
 import { phaseSystemPrompt, type OmpPhase } from "./phasePrompt.js";
 
@@ -12,7 +13,7 @@ const execFileAsync = promisify(execFile);
 const OUTPUT_LIMIT = 16 * 1024 * 1024;
 
 export interface OmpPhaseOutcome {
-  reason: "completed" | "aborted" | "timeout" | "spawn-error" | "exit-error" | "output-limit" | "io-error";
+  reason: "completed" | "aborted" | "timeout" | "stalled" | "spawn-error" | "exit-error" | "output-limit" | "io-error";
   code: number | null;
   signal: NodeJS.Signals | null;
   events: string;
@@ -66,8 +67,10 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
   const stderrPath = join(evidenceDir, "stderr.log");
   await Promise.all([writeFile(eventsPath, "", { mode: 0o600 }), writeFile(stderrPath, "", { mode: 0o600 })]);
   const result: OmpPhaseOutcome = { reason: "completed", code: null, signal: null, events: "", evidenceDir, neverStarted: false };
+  // Activity watchdog (spec 2026-10-21 §2.3): recorded in outcome.json when the call was stopped as stalled.
+  let idle: IdleSnapshotV1 | null = null;
   const persist = async (): Promise<OmpPhaseOutcome> => {
-    await writeFile(join(evidenceDir, "outcome.json"), JSON.stringify({ reason: result.reason, code: result.code, signal: result.signal, neverStarted: result.neverStarted, executable: config.installation.command[0], args }, null, 2), { mode: 0o600 });
+    await writeFile(join(evidenceDir, "outcome.json"), JSON.stringify({ reason: result.reason, code: result.code, signal: result.signal, neverStarted: result.neverStarted, executable: config.installation.command[0], args, ...(result.reason === "stalled" && idle !== null ? { idle } : {}) }, null, 2), { mode: 0o600 });
     return result;
   };
   if (input.abortSignal?.aborted) { result.reason = "aborted"; result.neverStarted = true; return persist(); }
@@ -98,11 +101,16 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
     };
     const abort = (): void => stop("aborted");
     const timer = setTimeout(() => stop("timeout"), timeoutMs);
+    // Activity watchdog (spec 2026-10-21 §2.2 omp): stdout/stderr bytes are activity; tool executions suspend the clock.
+    const watch = new IdleWatch(effectiveIdleTimeoutMs(config.installation), () => { idle = watch.snapshot(); stop("stalled"); });
+    const feedTools = lineFeeder((line) => ompToolEvent(line, watch));
+    watch.start();
     input.abortSignal?.addEventListener("abort", abort, { once: true });
     child.stdout.on("data", (chunk: Buffer) => {
       const kept = chunk.subarray(0, Math.max(0, OUTPUT_LIMIT - stdoutBytes));
       stdoutBytes += chunk.length;
       try { appendFileSync(eventsPath, kept); } catch { stop("io-error"); }
+      watch.activity(); feedTools(kept);
       chunks.push(kept);
       if (stdoutBytes > OUTPUT_LIMIT) stop("output-limit");
     });
@@ -110,6 +118,7 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       const kept = chunk.subarray(0, Math.max(0, OUTPUT_LIMIT - stderrBytes));
       stderrBytes += chunk.length;
       try { appendFileSync(stderrPath, kept); } catch { stop("io-error"); }
+      watch.activity();
       if (stderrBytes > OUTPUT_LIMIT) stop("output-limit");
     });
     child.stdin.on("error", () => { if (!closed && !stopped) stop("io-error"); });
@@ -136,6 +145,7 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       closed = true;
       kill("SIGKILL");
       clearTimeout(timer);
+      watch.stop();
       clearTimeout(killTimer);
       clearTimeout(drainTimer);
       input.abortSignal?.removeEventListener("abort", abort);
