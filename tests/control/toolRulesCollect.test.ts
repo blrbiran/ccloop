@@ -3,7 +3,8 @@
 // every run whose contract has rules -- `commands-closed` included even with `commands: []`, because that row is what says
 // whether the agent can run something else -- and must reach Orca through collect at the top level (the protocol-4
 // terminal is a strict RunState). A secret is declared by name only: its value must never be written anywhere ccloop writes.
-import { readdir, readFile, stat, mkdir } from "node:fs/promises";
+import { readdir, readFile, rm, stat, mkdir } from "node:fs/promises";
+import { savedRecoveryFixture } from "./savedRecoveryFixture.js";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveAgent } from "../../src/agents/materialize.js";
@@ -113,5 +114,48 @@ describe("buildToolRulesReport (spec §5)", () => {
     expect(report.rules.map((row) => row.rule)).toEqual([{ kind: "commands-closed" }, { kind: "exact", value: "b" }, { kind: "exact", value: "a" }, { kind: "network", value: true }, { kind: "secretEnv", name: "Z" }, { kind: "secretEnv", name: "A" }]);
     expect(report.rules.map((row) => row.present)).toEqual([undefined, undefined, undefined, undefined, true, false]);
     expect(Buffer.byteLength(report.baseline)).toBeLessThanOrEqual(1024);
+  });
+});
+
+describe("the verify-saved-result path (spec §6 Saved-result recovery)", { timeout: 60_000 }, () => {
+  // A recovery runs verify only, so its report names a mechanism only where verify gets one. The legacy recovery fixture's
+  // archived source contract has no toolRules, so ccloop's own identity check refuses this recovery inside runLoop
+  // (saved-result-source-stale) -- after the worker wrote the report, which is what this criterion observes.
+  it("writes run/tool-rules.json before verify, phases restricted to verify, and collect returns it", async () => {
+    const f = await savedRecoveryFixture();
+    try {
+      const marker = join(f.root, "omp-marker");
+      const table = parseAgentsTable({ schema: "ccloop-agents-table-v1", installations: { omp: (await ompInstallation({ dir: f.root, marker } as World) as { installation: never }).installation } });
+      const { config, resolution } = await resolveAgent(table, { agent: "omp" });
+      const rules: ToolRulesV1 = { commands: [{ kind: "exact", value: "npm test" }], network: false, secretEnv: [] };
+      const input = structuredClone(f.input);
+      input.claim.configHash = resolution.configHash; input.claim.agent = resolution.selection;
+      input.work.contract = { ...input.work.contract, executionPolicy: { ...input.work.contract.executionPolicy, toolRules: rules } };
+      const controlDir = join(f.sourceDir, "control");
+      await ensurePrivateDirectory(f.sourceDir, controlDir);
+      await atomicReplacePrivateFile(f.sourceDir, join(controlDir, "config.json"), Buffer.from(canonicalJson(config)));
+      await atomicReplacePrivateFile(f.sourceDir, join(controlDir, "envelope.json"), Buffer.from(canonicalJson(input)));
+      await rm(join(controlDir, "accepted.json"), { force: true });
+      await writeAccepted(f.sourceDir, { protocol: 1, envelopeHash: canonicalHash(input), executionId: "execution-r", configHash: input.claim.configHash,
+        generation: input.claim.generation, acceptedAt: new Date().toISOString(), launch: "intended", worker: null });
+      await runControlWorker(["--source-dir", f.sourceDir, "--execution-id", "execution-r", "--nonce", "nonce-r"]).catch(() => undefined);
+      const report = JSON.parse(await readFile(join(f.sourceDir, "run", "tool-rules.json"), "utf8")) as { agentKind: string; rules: Array<{ rule: unknown; status: string; phases: string[] }> };
+      expect(report.agentKind).toBe("omp");
+      expect(report.rules.map((row) => [row.rule, row.status, row.phases])).toEqual([
+        [{ kind: "commands-closed" }, "detected", []],
+        [{ kind: "exact", value: "npm test" }, "recorded-only", []],
+        [{ kind: "network", value: false }, "recorded-only", []],
+      ]);
+      expect(report.rules.every((row) => row.phases.every((phase) => phase === "verify"))).toBe(true);
+      expect(((await collectExecution(input, 0)) as unknown as { toolRules?: unknown }).toolRules).toEqual(report);
+    } finally { await rm(f.root, { recursive: true, force: true }); }
+  });
+
+  it("buildToolRulesReport for a recovery keeps only verify in phases (claude: restrictions on verify, no grant)", () => {
+    const installation = { kind: "claude", command: ["claude", "--permission-mode", "acceptEdits"], version: "x", configDir: null, timeoutMs: 1, killGraceMs: 1 } as never;
+    const report = buildToolRulesReport({ rules: { commands: [{ kind: "exact", value: "npm test" }], network: false, secretEnv: [] }, kind: "claude", installation, codexNetwork: null, env: {}, savedResult: true });
+    expect(report.rules.map((row) => [row.rule.kind, row.status, row.phases])).toEqual([
+      ["commands-closed", "enforced", ["verify"]], ["exact", "enforced", []], ["network", "recorded-only", ["verify"]],
+    ]);
   });
 });

@@ -16,7 +16,7 @@ export const TOOL_RULES_REPORT_FILE = "tool-rules.json";
 
 const OMP_BASELINE = "omp adds tools to --tools by its own settings (a call to one fails the phase closed); read fetches URLs; a bash call's cwd, async or service mode is not checked";
 
-export function buildToolRulesReport(input: { rules: ToolRulesV1; kind: "claude" | "codex" | "omp"; installation: InstallationV1; codexNetwork: CodexNetworkSetting | null; env: NodeJS.ProcessEnv }): ToolRulesReportV1 {
+export function buildToolRulesReport(input: { rules: ToolRulesV1; kind: "claude" | "codex" | "omp"; installation: InstallationV1; codexNetwork: CodexNetworkSetting | null; env: NodeJS.ProcessEnv; savedResult?: boolean }): ToolRulesReportV1 {
   const { rows, baseline } = input.kind === "claude" ? claudeToolRuleRows(input.rules, input.installation.command, requiredCheckAllowRules)
     : input.kind === "codex" ? codexToolRuleRows(input.rules, input.installation.sandbox === "read-only" ? "read-only" : "workspace-write", input.codexNetwork ?? { kind: "absent" })
       : { rows: ompToolRuleRows(input.rules), baseline: OMP_BASELINE };
@@ -24,7 +24,9 @@ export function buildToolRulesReport(input: { rules: ToolRulesV1; kind: "claude"
   const present = (name: string) => typeof input.env[name] === "string" && input.env[name] !== "";
   return {
     schema: "ccloop-tool-rules-report-v1", agentKind: input.kind, baseline: boundedText(baseline, 1024),
-    rules: rows.map((row) => (row.rule.kind === "secretEnv" ? { ...row, present: present(row.rule.name) } : row)),
+    // Spec §6 Saved-result recovery: a recovery runs verify only, so a row names only the verify mechanism, if any.
+    rules: rows.map((row) => (input.savedResult === true ? { ...row, phases: row.phases.filter((phase) => phase === "verify") } : row))
+      .map((row) => (row.rule.kind === "secretEnv" ? { ...row, present: present(row.rule.name) } : row)),
   };
 }
 

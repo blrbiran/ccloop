@@ -119,6 +119,13 @@ function claudeOpenReason(command: readonly string[], allowRulesOf: ClaudeAllowR
     const value = () => inline ?? command[++i];
     if (name === "--dangerously-skip-permissions" || name === "--allow-dangerously-skip-permissions") return `the installation command has ${name}`;
     if (name === "--permission-prompt-tool" || name === "--sdk-url") return `the installation command has ${name}, which answers permission prompts instead of denying them`;
+    // Controller call (Orca session b37f7ce9; claude 2.1.306): `--permission-prompts host` hands prompts to a host; only
+    // `none` (deny anything that would prompt) keeps the set closed. No settings key carries it (static read of the binary).
+    if (name === "--permission-prompts") {
+      const target = value();
+      if (target !== "none") return `the installation command has --permission-prompts ${target ?? ""}, which can answer permission prompts instead of denying them`;
+      continue;
+    }
     if (name === "--permission-mode") mode = value();
     else if (LIST_OPTIONS.has(name)) {
       if (inline !== undefined) allows.push(...splitToolList(inline));

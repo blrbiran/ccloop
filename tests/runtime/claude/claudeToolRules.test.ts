@@ -116,6 +116,11 @@ describe("claudeToolRuleRows: commands-closed from the installation command (spe
     });
   }
 
+  it("--permission-prompts none keeps the analysis (anything that would prompt is denied)", () => {
+    expect(closed(["--permission-mode", "acceptEdits", "--permission-prompts", "none"]).status).toBe("enforced");
+    expect(closed(["--permission-prompts=none", "--permission-mode", "default"]).status).toBe("enforced");
+  });
+
   it("the draft installation command (acceptEdits, inline settings without a mode or sandbox) ⇒ enforced", () => {
     expect(closed(["--permission-mode", "acceptEdits", "--no-session-persistence", "--setting-sources", "project,local", "--strict-mcp-config",
       "--disable-slash-commands", "--settings", '{"autoMemoryEnabled":false}', "--max-budget-usd", "100"]).status).toBe("enforced");
@@ -135,6 +140,10 @@ describe("claudeToolRuleRows: commands-closed from the installation command (spe
     ["--allow-dangerously-skip-permissions", ["--permission-mode", "acceptEdits", "--allow-dangerously-skip-permissions"]],
     ["--permission-prompt-tool", ["--permission-mode", "acceptEdits", "--permission-prompt-tool", "mcp__x__ask"]],
     ["--sdk-url", ["--permission-mode", "acceptEdits", "--sdk-url", "ws://localhost:1"]],
+    // Controller call (Orca session b37f7ce9, follow-up 1; claude 2.1.306 `--permission-prompts host|none`): any target
+    // other than none hands prompts to a host instead of denying them.
+    ["--permission-prompts host", ["--permission-mode", "acceptEdits", "--permission-prompts", "host"]],
+    ["--permission-prompts=host", ["--permission-mode", "acceptEdits", "--permission-prompts=host"]],
     ["inline settings with sandbox", ["--permission-mode", "acceptEdits", "--settings", '{"sandbox":{"enabled":true}}']],
     ["settings file path (not read)", ["--permission-mode", "acceptEdits", "--settings", "/etc/claude.json"]],
     ["installation --allowedTools Bash", ["--permission-mode", "acceptEdits", "--allowedTools", "Bash"]],
