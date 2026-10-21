@@ -17,6 +17,8 @@ const bare = (name: string) => name.trim().replace(/^"(.*)"$/, "$1");
 const BOOL = String.raw`(true|false)\s*(#.*)?$`;
 const IN_TABLE = new RegExp(String.raw`^\s*"?${KEY}"?\s*=\s*${BOOL}`);
 const DOTTED = new RegExp(String.raw`^\s*"?${TABLE}"?\s*\.\s*"?${KEY}"?\s*=\s*${BOOL}`);
+const QUOTED_KEY = new RegExp(String.raw`["']${KEY}["']`);
+const ESCAPED_KEY = /"(?:[^"\\]|\\.)*\\(?:[^"\\]|\\.)*"\s*[=.\]]/;
 const INLINE = new RegExp(String.raw`^\s*"?${TABLE}"?\s*=\s*\{(.*)\}\s*(#.*)?$`);
 
 export async function readCodexNetworkAccess(configTomlPath: string): Promise<CodexNetworkSetting> {
@@ -32,6 +34,9 @@ export async function readCodexNetworkAccess(configTomlPath: string): Promise<Co
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
     if (line.trim().startsWith("#")) continue;
+    // Review round 1 (Orca session b37f7ce9, M4): a quoted spelling of the key, or a quoted key with an escape (which can
+    // spell it, e.g. "network\u005Faccess"), is not read: refused wherever it stands.
+    if (QUOTED_KEY.test(line) || ESCAPED_KEY.test(line)) return refuse(index + 1);
     const header = /^\s*\[\[?([^\]]+)\]\]?\s*(#.*)?$/.exec(line);
     if (header !== null) {
       table = header[1]!.split(".").map(bare).join(".");
@@ -60,4 +65,15 @@ export function codexConfigTomlPath(installation: InstallationV1 | undefined, ex
   const home = installation !== undefined ? effectiveCodexHome(installation, env)
     : effectiveCodexHome({ configDir: extraEnv?.CODEX_HOME ?? null } as InstallationV1, env);
   return home === null ? null : join(home, "config.toml");
+}
+
+/**
+ * What a codex phase's tool rules read from config.toml (spec 2026-10-22 §4 codex): only network:true on a workspace-write
+ * execute decides anything; otherwise `absent`. Shared by runCodexPhase (the -c pairs) and the executor prompt (review
+ * round 1, Orca session b37f7ce9, M6), so both state the same network status.
+ */
+export async function codexToolRuleNetworkSetting(network: boolean, phase: string, sandbox: "read-only" | "workspace-write", installation: InstallationV1 | undefined, extraEnv: Record<string, string> | undefined): Promise<CodexNetworkSetting> {
+  if (!(network && phase === "execute" && sandbox === "workspace-write")) return { kind: "absent" };
+  const path = codexConfigTomlPath(installation, extraEnv, process.env);
+  return path === null ? { kind: "absent" } : readCodexNetworkAccess(path);
 }

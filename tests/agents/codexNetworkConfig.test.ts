@@ -23,7 +23,8 @@ describe("readCodexNetworkAccess (narrow, fail-closed)", () => {
   for (const value of [true, false]) {
     it(`[sandbox_workspace_write] table, network_access = ${value}`, async () => {
       expect(await readCodexNetworkAccess(await config(`model = "x"\n\n[sandbox_workspace_write]\nnetwork_access = ${value}\n\n[tui]\nx = 1\n`))).toEqual({ kind: "value", value });
-      expect(await readCodexNetworkAccess(await config(`["sandbox_workspace_write"]\n"network_access" = ${value} # the person's choice\n`))).toEqual({ kind: "value", value });
+      // Review round 1 (Orca session b37f7ce9, M4): the quoted key moved to the refusal test below; the quoted header stays.
+      expect(await readCodexNetworkAccess(await config(`["sandbox_workspace_write"]\nnetwork_access = ${value} # the person's choice\n`))).toEqual({ kind: "value", value });
     });
     it(`top-level dotted key, ${value}`, async () => {
       expect(await readCodexNetworkAccess(await config(`sandbox_workspace_write.network_access = ${value}\n[tui]\n`))).toEqual({ kind: "value", value });
@@ -52,6 +53,25 @@ describe("readCodexNetworkAccess (narrow, fail-closed)", () => {
     expect((await readCodexNetworkAccess(await config(`sandbox_workspace_write = { network_access = "no" }\n`))).kind).toBe("unparseable");
     expect((await readCodexNetworkAccess(await config(`sandbox_workspace_write.network_access = true\n[sandbox_workspace_write]\nnetwork_access = false\n`))).kind).toBe("unparseable");
     expect((await readCodexNetworkAccess(await config(`sandbox_workspace_write = {\n  network_access = false\n}\n`))).kind).toBe("unparseable");
+  });
+
+  // Review round 1 (Orca session b37f7ce9, M4): a quoted key can carry an escape that spells network_access without the
+  // bytes "network_access" (codex's TOML parser unescapes it, this reader does not) -- a missed `= false` would let
+  // network:true widen. So any quoted spelling of the key, and any quoted key holding a backslash, is refused.
+  it("a quoted network_access key, or a quoted key with an escape, is unparseable (with the line)", async () => {
+    for (const text of [
+      `[sandbox_workspace_write]\n"network_access" = false\n`,
+      `[sandbox_workspace_write]\n'network_access' = false\n`,
+      `[sandbox_workspace_write]\n"network\\u005Faccess" = false\n`,
+      `sandbox_workspace_write."network\\u005Faccess" = false\n`,
+      `"sandbox_workspace\\u005Fwrite".network_access = false\n`,
+      `sandbox_workspace_write = { "network\\u005Faccess" = false }\n`,
+    ]) {
+      const setting = await readCodexNetworkAccess(await config(`model = "x"\n${text}`));
+      expect(setting, text).toEqual({ kind: "unparseable", reason: expect.stringContaining("line ") });
+    }
+    // Positive control: an escape in a value (not a key) is not a key spelling.
+    expect(await readCodexNetworkAccess(await config(`model = "a\\tb"\n[sandbox_workspace_write]\nnetwork_access = false\n`))).toEqual({ kind: "value", value: false });
   });
 
   it("an unreadable file (EACCES) is unparseable, with a reason", async () => {

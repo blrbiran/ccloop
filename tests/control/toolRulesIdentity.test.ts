@@ -7,8 +7,6 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { agentConfigHash } from "../../src/agents/materialize.js";
-import type { MaterializedAgentConfigV1 } from "../../src/agents/types.js";
 import { readAllowanceContinuation } from "../../src/control/materialize.js";
 import { appendUsageObservation } from "../../src/control/usage.js";
 import { buildBundle } from "./optionalMaterializeFixture.js";
@@ -59,12 +57,6 @@ describe("toolRules and continuation identity (T7)", () => {
   }, 30_000);
 });
 
-describe("toolRules are not agent identity (spec §6)", () => {
-  it("agentConfigHash reads the materialized config only: it is a one-argument function of it", () => {
-    const config: MaterializedAgentConfigV1 = { schema: "ccloop-agent-config-v1", kind: "omp",
-      installation: { kind: "omp", command: ["/bin/omp"], version: "1", configDir: null, timeoutMs: 1, killGraceMs: 1, defaultModel: "a/b", profile: null },
-      selection: { agent: "omp", model: "a/b", contextWindow: "agent-default" } };
-    expect(agentConfigHash.length).toBe(1);
-    expect(agentConfigHash(structuredClone(config))).toBe(agentConfigHash(config));
-  });
-});
+// toolRules are not agent identity (spec §6): this holds by construction -- agentConfigHash hashes only the materialized
+// config, which resolveAgent builds from the agents table and the selection, never the contract (review round 1, M8:
+// the former test here could not fail on its named mutation, so it was removed).

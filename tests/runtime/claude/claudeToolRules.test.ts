@@ -107,7 +107,9 @@ describe("claudeToolRuleArgs refusals (spec §3.1, §4 claude rows)", () => {
 
 describe("claudeToolRuleRows: commands-closed from the installation command (spec §3.4)", () => {
   const rules: ToolRulesV1 = { commands: [{ kind: "exact", value: "npm test" }, { kind: "prefix", value: "npm run" }], network: false, secretEnv: ["NPM_TOKEN"] };
-  const closed = (command: string[]) => claudeToolRuleRows(rules, command, requiredCheckAllowRules).rows[0]!;
+  // Review round 1 (Orca session b37f7ce9, I1): without --disable-slash-commands skills load, so every command below that is
+  // meant to be closed carries it; the commands without it are covered in the skills describe at the end.
+  const closed = (command: string[]) => claudeToolRuleRows(rules, ["--disable-slash-commands", ...command], requiredCheckAllowRules).rows[0]!;
 
   for (const mode of ["acceptEdits", "default", "manual"]) {
     it(`--permission-mode ${mode} ⇒ enforced on every phase`, () => {
@@ -152,6 +154,27 @@ describe("claudeToolRuleRows: commands-closed from the installation command (spe
     ["inline settings permissions.allow Bash(*)", ["--permission-mode", "acceptEdits", "--settings", '{"permissions":{"allow":["Bash(*)"]}}']],
     ["inline settings defaultMode bypassPermissions with flag absent", ["--settings", '{"permissions":{"defaultMode":"bypassPermissions"}}']],
   ];
+  // Review round 1 (Orca session b37f7ce9, M5): tools other than Bash that run commands (Monitor, PowerShell, REPL), any MCP
+  // tool, and an inline hooks key (a hook can approve a call) each let the agent act outside the Bash rules.
+  const other: Array<[string, string[]]> = [
+    ["installation --allowedTools Monitor", ["--permission-mode", "acceptEdits", "--allowedTools", "Monitor"]],
+    ["installation --allowedTools PowerShell", ["--permission-mode", "acceptEdits", "--allowedTools", "Edit,PowerShell"]],
+    ["installation --allowed-tools REPL", ["--permission-mode", "acceptEdits", "--allowed-tools", "REPL"]],
+    ["installation --allowedTools mcp__srv__tool", ["--permission-mode", "acceptEdits", "--allowedTools", "mcp__srv__tool"]],
+    ["inline settings permissions.allow mcp__srv", ["--permission-mode", "acceptEdits", "--settings", '{"permissions":{"allow":["mcp__srv"]}}']],
+    ["inline settings permissions.allow PowerShell(x)", ["--permission-mode", "acceptEdits", "--settings", '{"permissions":{"allow":["PowerShell(x)"]}}']],
+    ["inline settings hooks", ["--permission-mode", "acceptEdits", "--settings", '{"hooks":{"PreToolUse":[]}}']],
+  ];
+  for (const [name, command] of other) {
+    it(`${name} ⇒ recorded-only, the reason names it`, () => {
+      const row = closed(command);
+      expect(row).toEqual({ rule: { kind: "commands-closed" }, status: "recorded-only", reason: expect.any(String), phases: [] });
+      expect(row.reason).toMatch(/Monitor|PowerShell|REPL|mcp__|hooks/);
+    });
+  }
+  it("positive control for M5: Edit and Read allows keep the set closed", () => {
+    expect(closed(["--permission-mode", "acceptEdits", "--allowedTools", "Edit,Read", "--settings", '{"permissions":{"allow":["Write"]}}']).status).toBe("enforced");
+  });
   for (const [name, command] of open) {
     it(`${name} ⇒ recorded-only, no phases`, () => {
       const row = closed(command);
@@ -162,14 +185,14 @@ describe("claudeToolRuleRows: commands-closed from the installation command (spe
   }
 
   it("an exact installation Bash allow keeps the set closed and is named in the baseline", () => {
-    const { rows, baseline } = claudeToolRuleRows(rules, ["--permission-mode", "acceptEdits", "--allowedTools", "Bash(git log)", "Edit"], requiredCheckAllowRules);
+    const { rows, baseline } = claudeToolRuleRows(rules, ["--disable-slash-commands", "--permission-mode", "acceptEdits", "--allowedTools", "Bash(git log)", "Edit"], requiredCheckAllowRules);
     expect(rows[0]!.status).toBe("enforced");
     expect(baseline).toContain("Bash(git log)");
     expect(Buffer.byteLength(baseline)).toBeLessThanOrEqual(1024);
   });
 
   it("rows: commands as given, network false recorded-only (Bash still reaches the network), secretEnv recorded-only", () => {
-    const { rows } = claudeToolRuleRows(rules, ["--permission-mode", "acceptEdits"], requiredCheckAllowRules);
+    const { rows } = claudeToolRuleRows(rules, ["--disable-slash-commands", "--permission-mode", "acceptEdits"], requiredCheckAllowRules);
     expect(rows.map((row) => [row.rule, row.status, row.phases])).toEqual([
       [{ kind: "commands-closed" }, "enforced", ["plan", "execute", "verify"]],
       [{ kind: "exact", value: "npm test" }, "enforced", ["execute"]],
@@ -182,10 +205,45 @@ describe("claudeToolRuleRows: commands-closed from the installation command (spe
   });
 
   it("network:true is enforced on execute", () => {
-    const { rows } = claudeToolRuleRows({ commands: [], network: true, secretEnv: [] }, ["--permission-mode", "acceptEdits"], requiredCheckAllowRules);
+    const { rows } = claudeToolRuleRows({ commands: [], network: true, secretEnv: [] }, ["--disable-slash-commands", "--permission-mode", "acceptEdits"], requiredCheckAllowRules);
     expect(rows).toEqual([
       { rule: { kind: "commands-closed" }, status: "enforced", reason: null, phases: ["plan", "execute", "verify"] },
       { rule: { kind: "network", value: true }, status: "enforced", reason: null, phases: ["execute"] },
     ]);
   });
+});
+
+// Review round 1 (Orca session b37f7ce9, I1): a skill (from the person's skills or a --plugin-dir plugin) can declare
+// allowed-tools, and a plugin can carry settings and hooks, so a claude that loads skills is not closed by its mode alone.
+describe("claudeToolRuleRows: skills and plugins (review round 1, I1)", () => {
+  const rules: ToolRulesV1 = { commands: [], network: false, secretEnv: [] };
+  it("no --disable-slash-commands ⇒ recorded-only, the reason and the baseline name skills", () => {
+    const { rows, baseline } = claudeToolRuleRows(rules, ["--permission-mode", "acceptEdits"], requiredCheckAllowRules);
+    expect(rows[0]).toEqual({ rule: { kind: "commands-closed" }, status: "recorded-only", reason: expect.stringContaining("skills"), phases: [] });
+    expect(baseline).toContain("skills and plugins");
+  });
+  it("--plugin-dir ⇒ recorded-only even with --disable-slash-commands, the reason names the plugin", () => {
+    for (const argv of [["--disable-slash-commands", "--permission-mode", "acceptEdits", "--plugin-dir", "/p"], ["--disable-slash-commands", "--permission-mode", "acceptEdits", "--plugin-dir=/p"]]) {
+      const { rows, baseline } = claudeToolRuleRows(rules, argv, requiredCheckAllowRules);
+      expect(rows[0]).toEqual({ rule: { kind: "commands-closed" }, status: "recorded-only", reason: expect.stringContaining("--plugin-dir"), phases: [] });
+      expect(baseline).toContain("skills and plugins");
+    }
+  });
+  it("positive control: --disable-slash-commands and no plugin ⇒ enforced, baseline without skills", () => {
+    const { rows, baseline } = claudeToolRuleRows(rules, ["--disable-slash-commands", "--permission-mode", "acceptEdits"], requiredCheckAllowRules);
+    expect(rows[0]!.status).toBe("enforced");
+    expect(baseline).not.toContain("skills and plugins");
+  });
+});
+
+// Review round 1 (Orca session b37f7ce9, M6): the executor is told only what this argv grants -- a rule claude refuses is
+// not passed, so naming it in the prompt would send the agent into denied calls.
+describe("claude executor prompt states the claude rows (review round 1, M6)", () => {
+  it("a claude-refused rule (npm run x:*) is not listed; a granted one is", async () => {
+    const w = await world(m, withRules({ commands: [{ kind: "exact", value: "npm run x:*" }, { kind: "exact", value: "git status" }], network: false, secretEnv: [] })); worlds.push(w);
+    await captureClaude(m, "execute", w);
+    const prompt = (JSON.parse(await readFile(w.marker, "utf8")) as { prompt: string }).prompt;
+    expect(prompt).toContain("- git status");
+    expect(prompt).not.toContain("npm run x:*");
+  }, 30_000);
 });

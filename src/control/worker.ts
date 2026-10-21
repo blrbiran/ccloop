@@ -248,7 +248,8 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       const kind = config.kind as "claude" | "codex" | "omp";
       const codexPath = kind === "codex" && toolRules.network && config.installation.sandbox === "workspace-write" ? codexConfigTomlPath(config.installation, undefined, process.env) : null;
       await writeToolRulesReport(runDir, buildToolRulesReport({ rules: toolRules, kind, installation: config.installation,
-        codexNetwork: codexPath === null ? null : await readCodexNetworkAccess(codexPath), env: process.env, savedResult: envelope.mode === "verify-saved-result" }));
+        codexNetwork: codexPath === null ? null : await readCodexNetworkAccess(codexPath), env: process.env, savedResult: envelope.mode === "verify-saved-result",
+        ...(envelope.work.kind === "loop" && envelope.work.skillPluginDir !== undefined ? { skillPluginDir: envelope.work.skillPluginDir } : {}) }));
     }
     const adapterOptions = envelope.work.kind === "loop" && envelope.work.skillPluginDir !== undefined
       ? { skillPluginDir: envelope.work.skillPluginDir }

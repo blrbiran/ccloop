@@ -11,7 +11,7 @@ import { withCodexSkillLinks } from "./codexSkills.js";
 import type { AttemptContext } from "../types.js";
 import { codexToolEvent, effectiveIdleTimeoutMs, IdleWatch, lineFeeder, type IdleSnapshotV1 } from "../idleWatch.js";
 import { executeWireJsonSchema, observedTurnUsage, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
-import { codexConfigTomlPath, readCodexNetworkAccess, type CodexNetworkSetting } from "../../agents/codexNetworkConfig.js";
+import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
 import { codexToolRuleArgs } from "../toolRules.js";
 
 // Every-agent requirement chain (Orca spec 2026-10-15 §6.1): a single call brings its own argv, environment and schema.
@@ -84,11 +84,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   // The person's config.toml is read only when it decides something (network:true on a workspace-write execute).
   const toolRules=request.spawn===undefined?context.contract?.executionPolicy?.toolRules:undefined;
   if(toolRules!==undefined&&phase!=="single-call") {
-    let setting:CodexNetworkSetting={kind:"absent"};
-    if(toolRules.network&&phase==="execute"&&config.sandbox==="workspace-write") {
-      const path=codexConfigTomlPath(installation,extraEnv,process.env);
-      setting=path===null?{kind:"absent"}:await readCodexNetworkAccess(path);
-    }
+    const setting=await codexToolRuleNetworkSetting(toolRules.network,phase,config.sandbox,installation,extraEnv);
     const ruleArgs=codexToolRuleArgs(toolRules,phase,config.sandbox,setting);
     if(ruleArgs.length>0)args.splice(args.length-1,0,...ruleArgs);
   }

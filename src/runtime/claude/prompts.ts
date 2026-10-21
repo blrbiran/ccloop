@@ -1,6 +1,6 @@
 import type { LoopContract } from "../../contract/schema.js";
 import type { AttemptContext, LastFailure, PriorFailure } from "../types.js";
-import { toolRulesPromptSection } from "../toolRules.js";
+import { toolRulesPromptSection, type ToolRuleRowV1 } from "../toolRules.js";
 
 function formatList(items: string[]): string {
   return items.length === 0 ? "(none)" : items.map((item) => `- ${item}`).join("\n");
@@ -144,7 +144,7 @@ const DECISION_LINES = [
 /** Codex only (spec §4.2): its provider-strict output schema requires every field, so an unreported one is null. */
 const CODEX_NULL_LINE = "Your output schema requires decisions and debug: give decisions null when you report none, debug null when the goal does not ask for it, and null for each debug member you leave out.";
 
-export function buildExecutorPrompt(context: AttemptContext, options: { schemaNeedsNull?: boolean } = {}): string {
+export function buildExecutorPrompt(context: AttemptContext, options: { schemaNeedsNull?: boolean; toolRuleRows?: readonly ToolRuleRowV1[] } = {}): string {
   const contract = context.contract;
 
   return [
@@ -163,7 +163,7 @@ export function buildExecutorPrompt(context: AttemptContext, options: { schemaNe
     "Constraints:",
     formatList(contract.context.constraints),
     // Per-contract tool rules (spec 2026-10-22 §5 "Prompt"): executor only; no rules ⇒ no bytes.
-    ...(contract.executionPolicy.toolRules === undefined ? [] : [toolRulesPromptSection(contract.executionPolicy.toolRules)]),
+    ...(contract.executionPolicy.toolRules === undefined ? [] : [toolRulesPromptSection(contract.executionPolicy.toolRules, options.toolRuleRows)]),
     "Current attempt plan (source of truth for this execution):",
     formatJson(context.plan),
     "Execute against the current attempt plan above and report only this attempt's concrete outcome.",

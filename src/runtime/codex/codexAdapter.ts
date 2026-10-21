@@ -8,6 +8,8 @@ import type { AttemptContext, RuntimeAdapter, SingleCallRequest, SingleCallResul
 import { addressableMcpServer, codexSingleCallArgs, codexSingleCallHome, decodeCodexSingleCall, effectiveCodexHome } from "./codexSingleCall.js";
 import { codexModelUsage, decodeCodexUsage, decodeCodexResult, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
 import { runCodexPhase, type PhaseOutcome } from "./runCodexPhase.js";
+import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
+import { codexToolRuleRows } from "../toolRules.js";
 import { classifyRateLimit } from "./rateLimit.js";
 import { classifyCodexCall, type CallClassification } from "../failureCause.js";
 import { phaseLimitMs, runWithTransientRetry, tryContext, type TryObservation, type TryResult } from "../transientRetry.js";
@@ -156,7 +158,11 @@ export class CodexAdapter implements RuntimeAdapter {
 
   plan(context: AttemptContext) { return this.phase("plan", buildPlannerPrompt(context.contract, context.lastFailure, context.priorFailures), context); }
   async execute(context: AttemptContext) {
-    try { return await this.phase("execute", buildExecutorPrompt(context, { schemaNeedsNull: true }) + "\nWrap the complete or partial result in a single object with the sole key result, as required by the output schema.", context); }
+    // Per-contract tool rules (spec 2026-10-22 §5 "Prompt"; review round 1 M6): the prompt states this kind's final status.
+    const toolRules = context.contract.executionPolicy.toolRules;
+    const toolRuleRows = toolRules === undefined ? undefined
+      : codexToolRuleRows(toolRules, this.config.sandbox, await codexToolRuleNetworkSetting(toolRules.network, "execute", this.config.sandbox, this.installation, this.extraEnv)).rows;
+    try { return await this.phase("execute", buildExecutorPrompt(context, { schemaNeedsNull: true, ...(toolRuleRows === undefined ? {} : { toolRuleRows }) }) + "\nWrap the complete or partial result in a single object with the sole key result, as required by the output schema.", context); }
     catch (error) {
       // An aborted execute that was observed spending tokens throws, so runLoop can settle that usage;
       // one that was not keeps answering null exactly as before.

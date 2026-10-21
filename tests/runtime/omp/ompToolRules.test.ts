@@ -75,6 +75,18 @@ describe("ompToolRuleViolation (spec §4 steps 1-3)", () => {
     expect(ompToolRuleViolation(events(start("write", { path: "answer.txt", content: "42\n" })), rules, required)).toBeNull();
   });
 
+  // Review round 1 (Orca session b37f7ce9, M3): omp's `edit` reaches the same xd: devices as `write`, and the scheme is
+  // matched as `xd:` in any spelling (xd:/bash, xd:bash), not only `xd://` -- fail closed on any of them.
+  it("a write or edit to any xd: spelling is a violation; an ordinary edit is not", () => {
+    for (const tool of ["write", "edit"]) {
+      for (const path of ["xd://bash", "xd:/bash", "xd:bash", " Xd:bash"]) {
+        expect(ompToolRuleViolation(events(start(tool, { path, content: "{}" })), rules, required), `${tool} ${path}`).toContain(tool);
+      }
+    }
+    expect(ompToolRuleViolation(events(start("edit", { path: "answer.txt", oldText: "0", newText: "42" })), rules, required)).toBeNull();
+    expect(ompToolRuleViolation(events(start("edit", { path: "xdocs/a.md", oldText: "0", newText: "42" })), rules, required)).toBeNull();
+  });
+
   it("commands: [] still restricts: only the required checks verbatim pass", () => {
     const none: ToolRulesV1 = { commands: [], network: true, secretEnv: [] };
     expect(ompToolRuleViolation(events(bash("test -f answer.txt")), none, required)).toBeNull();

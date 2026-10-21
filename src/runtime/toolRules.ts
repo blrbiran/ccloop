@@ -88,6 +88,8 @@ export function claudeToolRuleArgs(rules: ToolRulesV1 | undefined, phase: ToolRu
 
 const CLOSED_MODES = new Set(["acceptEdits", "default", "manual"]);
 const LIST_OPTIONS = new Set(["--allowedTools", "--allowed-tools"]);
+/** Review round 1 (Orca session b37f7ce9, M5): tools besides Bash that run commands or reach outside the Bash rules. */
+const OTHER_COMMAND_TOOLS = new Set(["Monitor", "PowerShell", "REPL"]);
 
 /** claude's --allowedTools splitter (claudeAgentAdapter.ts note): commas and whitespace separate entries outside parentheses. */
 function splitToolList(text: string): string[] {
@@ -110,7 +112,7 @@ function splitToolList(text: string): string[] {
  * asks to a host), no settings file path (not read), no inline `sandbox` key (autoAllowBashIfSandboxed), and every
  * installation Bash allow an exact rule. `seen` collects the exact allows and the effective mode for the baseline.
  */
-function claudeOpenReason(command: readonly string[], allowRulesOf: ClaudeAllowRulesOf, seen: { exactAllows: string[]; mode?: string }): string | null {
+function claudeOpenReason(command: readonly string[], allowRulesOf: ClaudeAllowRulesOf, seen: { exactAllows: string[]; mode?: string; skills?: boolean }): string | null {
   let mode: string | undefined, settingsMode: string | undefined;
   const allows: string[] = [];
   for (let i = 0; i < command.length; i += 1) {
@@ -118,6 +120,8 @@ function claudeOpenReason(command: readonly string[], allowRulesOf: ClaudeAllowR
     const [name, inline] = arg.startsWith("--") && arg.includes("=") ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg, undefined];
     const value = () => inline ?? command[++i];
     if (name === "--dangerously-skip-permissions" || name === "--allow-dangerously-skip-permissions") return `the installation command has ${name}`;
+    // Review round 1 (Orca session b37f7ce9, I1): a plugin's skills can declare allowed-tools, and it can carry settings and hooks.
+    if (name === "--plugin-dir") { seen.skills = true; return "the claude command loads a plugin (--plugin-dir); its skills' allowed-tools, settings and hooks can allow more"; }
     if (name === "--permission-prompt-tool" || name === "--sdk-url") return `the installation command has ${name}, which answers permission prompts instead of denying them`;
     // Controller call (Orca session b37f7ce9; claude 2.1.306): `--permission-prompts host` hands prompts to a host; only
     // `none` (deny anything that would prompt) keeps the set closed. No settings key carries it (static read of the binary).
@@ -136,8 +140,9 @@ function claudeOpenReason(command: readonly string[], allowRulesOf: ClaudeAllowR
       let settings: unknown;
       try { settings = JSON.parse(text); } catch { return "the installation's inline --settings is not JSON"; }
       if (settings === null || typeof settings !== "object" || Array.isArray(settings)) return "the installation's inline --settings is not an object";
-      const record = settings as { sandbox?: unknown; permissions?: { defaultMode?: unknown; allow?: unknown } };
+      const record = settings as { sandbox?: unknown; hooks?: unknown; permissions?: { defaultMode?: unknown; allow?: unknown } };
       if (record.sandbox !== undefined) return "the installation's inline --settings has a sandbox key (sandboxed Bash is auto-allowed)";
+      if (record.hooks !== undefined) return "the installation's inline --settings has a hooks key (a hook can allow a tool call)";
       if (typeof record.permissions?.defaultMode === "string") settingsMode = record.permissions.defaultMode;
       if (Array.isArray(record.permissions?.allow)) for (const entry of record.permissions.allow) allows.push(String(entry));
     }
@@ -147,18 +152,21 @@ function claudeOpenReason(command: readonly string[], allowRulesOf: ClaudeAllowR
   if (effective === undefined) return "the installation sets no permission mode; project or user settings may";
   if (!CLOSED_MODES.has(effective)) return `the installation's permission mode ${effective} does not deny un-granted Bash commands`;
   for (const entry of allows) {
+    const tool = entry.split("(")[0]!;
+    if (OTHER_COMMAND_TOOLS.has(tool) || tool.startsWith("mcp__")) return `the installation allows ${entry}, which runs commands or tools outside the Bash rules`;
     if (entry !== "Bash" && !entry.startsWith("Bash(")) continue;
     const content = entry.startsWith("Bash(") && entry.endsWith(")") ? entry.slice(5, -1) : null;
     const exact = content === null || content.includes(":*") ? null : allowRulesOf([content]);
     if (exact === null || exact.notAllowed.length > 0 || exact.rules.length !== 1) return `the installation allows ${entry}, which is not one exact command`;
     if (!seen.exactAllows.includes(entry)) seen.exactAllows.push(entry);
   }
+  if (!command.includes("--disable-slash-commands")) { seen.skills = true; return "the claude command has no --disable-slash-commands, so skills load; a skill's allowed-tools can allow more"; }
   return null;
 }
 
 /** The claude report rows and baseline (spec §3.3, §3.4, §4 claude column). */
 export function claudeToolRuleRows(rules: ToolRulesV1, installationCommand: readonly string[], allowRulesOf: ClaudeAllowRulesOf): { rows: ToolRuleRowV1[]; baseline: string } {
-  const seen: { exactAllows: string[]; mode?: string } = { exactAllows: [] };
+  const seen: { exactAllows: string[]; mode?: string; skills?: boolean } = { exactAllows: [] };
   const open = claudeOpenReason(installationCommand, allowRulesOf, seen);
   const exactAllows = seen.exactAllows, acceptEdits = seen.mode === "acceptEdits";
   const rows: ToolRuleRowV1[] = [open === null
@@ -178,6 +186,7 @@ export function claudeToolRuleRows(rules: ToolRulesV1, installationCommand: read
     ...(acceptEdits ? ["acceptEdits' mkdir, touch, rm, rmdir, mv, cp, sed"] : []),
     "a granted command behind wrappers it strips (timeout, nice, nohup, safe NAME=value), with redirections, and xargs <prefix> for prefix rules",
     ...(exactAllows.length > 0 ? [`the installation's exact allows ${exactAllows.join(", ")}`] : []),
+    ...(seen.skills === true ? ["whatever the skills and plugins claude loads allow (allowed-tools, settings, hooks; not read by ccloop)"] : []),
     "and whatever .claude/settings.json, settings.local.json and the person's settings loaded by --setting-sources allow (not read by ccloop)",
   ].join("; ");
   return { rows, baseline: boundedText(baseline, 1024) };
@@ -218,7 +227,7 @@ export function codexToolRuleRows(rules: ToolRulesV1, sandbox: "read-only" | "wo
     : refusal === null ? { rule: { kind: "network", value: true }, status: "enforced", reason: null, phases: ["execute"] }
       : { rule: { kind: "network", value: true }, status: "refused", reason: boundedText(refusal, 512), phases: [] });
   for (const name of rules.secretEnv) rows.push({ rule: { kind: "secretEnv", name }, status: "recorded-only", reason: SECRET_REASON, phases: [] });
-  const baseline = "codex runs any command inside its sandbox; ccloop reads only the linked config.toml, not managed, MDM or system config layers (which sit above -c), a --profile in the installation command, or a trusted target repo's .codex/config.toml";
+  const baseline = "codex runs any command inside its sandbox; ccloop reads only the linked config.toml, not managed, MDM or system config layers (which sit above -c), a --profile in the installation command, or a trusted target repo's .codex/config.toml; this report reads config.toml once at worker start, while each execute re-reads it";
   return { rows, baseline: boundedText(baseline, 1024) };
 }
 
@@ -243,6 +252,7 @@ function ompCommandViolation(command: string, rules: ToolRulesV1, requiredChecks
  * The omp after-exit check (spec §4 "omp after-exit check"; omp 18.10.1, measure-omp.md Q1/Q3): over every
  * `tool_execution_start` of an execute call -- `bash` must carry a string `args.command` that passes
  * ompCommandViolation; a `write` whose `args.path` starts with `xd://` runs a tool with no bash event and is a violation.
+ * Review round 1 (Orca session b37f7ce9, M3): `write` or `edit`, and any path starting `xd:` (any case or slash count).
  * Lines that do not parse are skipped (decodeOmpPhase refuses them on its own). Null: clean; else a bounded detail.
  */
 export function ompToolRuleViolation(events: string, rules: ToolRulesV1, requiredChecks: readonly string[]): string | null {
@@ -257,8 +267,8 @@ export function ompToolRuleViolation(events: string, rules: ToolRulesV1, require
     if (event.toolName === "bash") {
       const command = event.args?.command;
       detail = typeof command !== "string" ? "bash call without a command string" : ompCommandViolation(command, rules, requiredChecks);
-    } else if (event.toolName === "write" && typeof event.args?.path === "string" && event.args.path.trim().toLowerCase().startsWith("xd://")) {
-      detail = `write to ${event.args.path.trim()} runs a tool without a bash event`;
+    } else if ((event.toolName === "write" || event.toolName === "edit") && typeof event.args?.path === "string" && event.args.path.trim().toLowerCase().startsWith("xd:")) {
+      detail = `${event.toolName} to ${event.args.path.trim()} runs a tool without a bash event`;
     }
     if (detail !== null) return boundedText(detail, 512);
   }
@@ -280,13 +290,21 @@ export function ompToolRuleRows(rules: ToolRulesV1): ToolRuleRowV1[] {
 /**
  * The executor prompt's tool-rule section (spec §5 "Prompt"; executor only): the allowed commands besides the required
  * checks, whether the network is allowed, the secret names. One string of lines; only called when the contract has rules.
+ * Review round 1 (Orca session b37f7ce9, M6): `rows` are this kind's report rows; a refused rule is not listed (and a
+ * separator one never is, rows or not, so a value with a newline cannot add lines), and network:true whose row is refused
+ * is stated as not granted.
  */
-export function toolRulesPromptSection(rules: ToolRulesV1): string {
-  const commands = rules.commands.map((rule) => (rule.kind === "exact" ? `- ${rule.value}` : `- ${rule.value} (optionally followed by arguments)`));
+export function toolRulesPromptSection(rules: ToolRulesV1, rows?: readonly ToolRuleRowV1[]): string {
+  const refused = (rule: ToolCommandRuleV1) => separatorRefusal(rule.value) !== null
+    || rows?.some((row) => row.status === "refused" && (row.rule.kind === "exact" || row.rule.kind === "prefix") && row.rule.kind === rule.kind && row.rule.value === rule.value) === true;
+  const commands = rules.commands.filter((rule) => !refused(rule)).map((rule) => (rule.kind === "exact" ? `- ${rule.value}` : `- ${rule.value} (optionally followed by arguments)`));
+  const networkRefused = rows?.some((row) => row.rule.kind === "network" && row.status === "refused") === true;
   return [
     "Tool rules for this attempt: run only the required checks and these commands, each as one simple command (no cd prefix, no subshells); other commands are denied or fail the attempt:",
     commands.length === 0 ? "(none)" : commands.join("\n"),
-    rules.network ? "Network access: allowed." : "Network access: not allowed; do not fetch URLs or call web tools.",
+    rules.network && !networkRefused ? "Network access: allowed."
+      : rules.network ? "Network access: not granted for this attempt (the installation cannot switch it on without widening); do not fetch URLs or call web tools."
+        : "Network access: not allowed; do not fetch URLs or call web tools.",
     ...(rules.secretEnv.length === 0 ? [] : [`Secret environment variables this task may use (by name; never print their values): ${rules.secretEnv.join(", ")}`]),
   ].join("\n");
 }

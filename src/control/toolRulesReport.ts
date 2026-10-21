@@ -2,8 +2,8 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import type { CodexNetworkSetting } from "../agents/codexNetworkConfig.js";
 import type { InstallationV1 } from "../agents/types.js";
-import { requiredCheckAllowRules } from "../runtime/claude/claudeAgentAdapter.js";
-import { boundedText, claudeToolRuleRows, codexToolRuleRows, ompToolRuleRows, type ToolRulesReportV1, type ToolRulesV1 } from "../runtime/toolRules.js";
+import { claudeSkillArgv, requiredCheckAllowRules } from "../runtime/claude/claudeAgentAdapter.js";
+import { boundedText, claudeToolRuleRows, codexToolRuleRows, ompToolRuleRows, type ToolRuleRowV1, type ToolRulesReportV1, type ToolRulesV1 } from "../runtime/toolRules.js";
 import { atomicReplacePrivateFile, readPrivateFile } from "./paths.js";
 
 /**
@@ -16,8 +16,15 @@ export const TOOL_RULES_REPORT_FILE = "tool-rules.json";
 
 const OMP_BASELINE = "omp adds tools to --tools by its own settings (a call to one fails the phase closed); read fetches URLs; a bash call's cwd, async or service mode is not checked";
 
-export function buildToolRulesReport(input: { rules: ToolRulesV1; kind: "claude" | "codex" | "omp"; installation: InstallationV1; codexNetwork: CodexNetworkSetting | null; env: NodeJS.ProcessEnv; savedResult?: boolean }): ToolRulesReportV1 {
-  const { rows, baseline } = input.kind === "claude" ? claudeToolRuleRows(input.rules, input.installation.command, requiredCheckAllowRules)
+const RECOVERY_GRANT_REASON = "not passed: a recovery runs verify only";
+/** A grant row: a command rule or network:true -- what a recovery, running verify only, never passes (review round 1, M1). */
+const isGrant = (row: ToolRuleRowV1) => row.rule.kind === "exact" || row.rule.kind === "prefix" || (row.rule.kind === "network" && row.rule.value);
+
+export function buildToolRulesReport(input: { rules: ToolRulesV1; kind: "claude" | "codex" | "omp"; installation: InstallationV1; codexNetwork: CodexNetworkSetting | null; env: NodeJS.ProcessEnv; savedResult?: boolean; skillPluginDir?: string }): ToolRulesReportV1 {
+  // Review round 1 (Orca session b37f7ce9, I1): claude is analysed on the argv the adapter runs (claudeSkillArgv), not the
+  // installation's command -- a skill plugin dir drops --disable-slash-commands and adds --plugin-dir.
+  const claudeArgv = () => { const argv = claudeSkillArgv(input.installation.command, input.skillPluginDir); return [...argv.command, ...argv.pluginArgs]; };
+  const { rows, baseline } = input.kind === "claude" ? claudeToolRuleRows(input.rules, claudeArgv(), requiredCheckAllowRules)
     : input.kind === "codex" ? codexToolRuleRows(input.rules, input.installation.sandbox === "read-only" ? "read-only" : "workspace-write", input.codexNetwork ?? { kind: "absent" })
       : { rows: ompToolRuleRows(input.rules), baseline: OMP_BASELINE };
   // Spec §4 secretEnv: the name only -- set and non-empty in ccloop's environment at worker start -- never the value.
@@ -25,7 +32,10 @@ export function buildToolRulesReport(input: { rules: ToolRulesV1; kind: "claude"
   return {
     schema: "ccloop-tool-rules-report-v1", agentKind: input.kind, baseline: boundedText(baseline, 1024),
     // Spec §6 Saved-result recovery: a recovery runs verify only, so a row names only the verify mechanism, if any.
-    rules: rows.map((row) => (input.savedResult === true ? { ...row, phases: row.phases.filter((phase) => phase === "verify") } : row))
+    // Review round 1 (M1): a grant left with no phase is not passed at all, so it is recorded-only, not enforced.
+    rules: rows.map((row) => (input.savedResult !== true ? row
+      : row.status === "enforced" && isGrant(row) ? { ...row, status: "recorded-only" as const, reason: RECOVERY_GRANT_REASON, phases: [] }
+        : { ...row, phases: row.phases.filter((phase) => phase === "verify") }))
       .map((row) => (row.rule.kind === "secretEnv" ? { ...row, present: present(row.rule.name) } : row)),
   };
 }

@@ -120,3 +120,24 @@ describe("codexToolRuleArgs / codexToolRuleRows (T4 statuses)", () => {
     expect(rows.slice(1, 3).map((r) => r.status)).toEqual(["refused", "refused"]);
   });
 });
+
+// Review round 1 (Orca session b37f7ce9, M6): the executor prompt states the network as this kind's final status. With
+// the person's `network_access = false` codex refuses network:true and passes no -c pair, so telling the agent "allowed"
+// would be false.
+describe("codex executor prompt states the codex rows (review round 1, M6)", () => {
+  const promptOf = async (isolated: boolean, configToml: string) => {
+    const w = await world(m, withRules(open)); worlds.push(w);
+    await captureCodex(m, "execute", w, isolated, { configToml });
+    return (JSON.parse(await readFile(w.marker, "utf8")) as { prompt: string }).prompt;
+  };
+  for (const isolated of [false, true]) {
+    it(`${isolated ? "isolated" : "legacy"}: config.toml network_access = false ⇒ the prompt says the network is not granted`, async () => {
+      const prompt = await promptOf(isolated, "[sandbox_workspace_write]\nnetwork_access = false\n");
+      expect(prompt).toContain("Network access: not granted");
+      expect(prompt).not.toContain("Network access: allowed.");
+    }, 30_000);
+  }
+  it("positive control: no restriction in config.toml ⇒ the prompt says allowed", async () => {
+    expect(await promptOf(true, "")).toContain("Network access: allowed.");
+  }, 30_000);
+});

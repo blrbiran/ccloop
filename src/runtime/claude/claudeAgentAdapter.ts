@@ -16,7 +16,7 @@ import type { ClaudePhaseRequest } from "./types.js";
 import { classifyClaudeCall, isExecutableMissing, parseClaudeSignals, type CallClassification } from "../failureCause.js";
 import { effectiveIdleTimeoutMs, IdleWatch, lineFeeder, type IdleSnapshotV1 } from "../idleWatch.js";
 import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
-import { claudeToolRuleArgs, type ToolRulesV1 } from "../toolRules.js";
+import { claudeToolRuleArgs, claudeToolRuleRows, type ToolRulesV1 } from "../toolRules.js";
 
 // Orca agent selection (2026-09-26), spec §4.7: the claude adapter that ccloop control can run. Its process
 // handling follows runCodexPhase: the phase runner is the leader of its own process group (the claude CLI
@@ -139,6 +139,16 @@ export function requiredCheckAllowRules(requiredChecks: readonly string[]): { ru
   return { rules, notAllowed };
 }
 
+/**
+ * The claude argv a skill plugin dir changes (Orca syncskill integration 2026-10-03, spec §10.7 and §4.4): the
+ * installation's command loses --disable-slash-commands, and `--plugin-dir <dir>` is passed (after --model). One function
+ * for the adapter and the tool-rules report (ccloop spec 2026-10-22 §3.4), so the report reads the argv claude runs.
+ */
+export function claudeSkillArgv(command: readonly string[], skillPluginDir: string | undefined): { command: string[]; pluginArgs: string[] } {
+  return skillPluginDir === undefined ? { command: [...command], pluginArgs: [] }
+    : { command: command.filter((arg) => arg !== "--disable-slash-commands"), pluginArgs: ["--plugin-dir", skillPluginDir] };
+}
+
 /** What one runner call needs from its caller: a phase's AttemptContext, or a single call's request (Orca single-call estimate). */
 type ClaudeCall = {
   runDir: string;
@@ -159,6 +169,8 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
   private readonly extraArgs: string[];
   /** The installation's command; with a skill plugin dir it loses --disable-slash-commands, which would hide the plugin's skills. */
   private readonly command: string[];
+  /** The command and plugin arguments claude runs with, as the tool-rules analysis reads them (spec 2026-10-22 §3.4). */
+  private readonly effectiveCommand: string[];
 
   // Orca syncskill integration (2026-10-03), spec §10.7 and §4.4: `skillPluginDir` adds `--plugin-dir <dir>` and removes
   // `--disable-slash-commands` from the installation command; without it nothing here changes.
@@ -171,10 +183,10 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     // one place that spells the [1m] suffix. Kept here too (not only in the descriptor's validateSelection)
     // so a directly constructed adapter still fails closed on an unexpressable context window (spec W2-9).
     assertContextOption(claudeDescriptor.contextOptions, config.selection);
-    this.extraArgs = ["--model", claudeModelArgument(config.selection),
-      ...(options.skillPluginDir === undefined ? [] : ["--plugin-dir", options.skillPluginDir])];
-    this.command = options.skillPluginDir === undefined ? config.installation.command
-      : config.installation.command.filter((arg) => arg !== "--disable-slash-commands");
+    const skillArgv = claudeSkillArgv(config.installation.command, options.skillPluginDir);
+    this.extraArgs = ["--model", claudeModelArgument(config.selection), ...skillArgv.pluginArgs];
+    this.command = skillArgv.command;
+    this.effectiveCommand = [...skillArgv.command, ...skillArgv.pluginArgs];
   }
 
   private async run(request: ClaudePhaseRequest, call: ClaudeCall): Promise<Outcome> {
@@ -417,9 +429,11 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
   }
 
   async execute(context: AttemptContext): Promise<ExecutePhaseResult> {
+    // Per-contract tool rules (spec 2026-10-22 §5 "Prompt"): the prompt names only what this argv grants.
+    const toolRules = context.contract.executionPolicy.toolRules;
     try {
       const result = await this.phase<ExecutionResult>({
-        phase: "execute", prompt: buildExecutorPrompt(context), ...this.base(context),
+        phase: "execute", prompt: buildExecutorPrompt(context, toolRules === undefined ? {} : { toolRuleRows: claudeToolRuleRows(toolRules, this.effectiveCommand, requiredCheckAllowRules).rows }), ...this.base(context),
         partialOutcomeRecoveryWindowMs: context.contract.executionPolicy.partialOutcomeRecoveryWindowMs,
       }, context, { stopGraceMs: Math.max(this.config.installation.killGraceMs, context.contract.executionPolicy.partialOutcomeRecoveryWindowMs + PARTIAL_FLUSH_MARGIN_MS) });
       if (Object.hasOwn(result, "taskResult")) result.taskResult = boundedTaskResult(result.taskResult);

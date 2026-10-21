@@ -3,7 +3,7 @@
 // every run whose contract has rules -- `commands-closed` included even with `commands: []`, because that row is what says
 // whether the agent can run something else -- and must reach Orca through collect at the top level (the protocol-4
 // terminal is a strict RunState). A secret is declared by name only: its value must never be written anywhere ccloop writes.
-import { readdir, readFile, rm, stat, mkdir } from "node:fs/promises";
+import { readdir, readFile, rm, stat, mkdir, writeFile } from "node:fs/promises";
 import { savedRecoveryFixture } from "./savedRecoveryFixture.js";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +18,7 @@ import { runControlWorker } from "../../src/control/worker.js";
 import { buildToolRulesReport } from "../../src/control/toolRulesReport.js";
 import type { ToolRulesV1 } from "../../src/runtime/toolRules.js";
 import { codexFixture } from "../runtime/codex/fixture.js";
+import { FAKE_CLAUDE_CLI, claudeInstallation, sealClaude } from "./agentsFixture.js";
 import { dispose, ompInstallation, type World } from "../fixtures/toolRules/argvCapture.js";
 
 const SECRET_VALUE = "s3cr3t-value-7f1c9a-never-written";
@@ -151,11 +152,77 @@ describe("the verify-saved-result path (spec §6 Saved-result recovery)", { time
     } finally { await rm(f.root, { recursive: true, force: true }); }
   });
 
-  it("buildToolRulesReport for a recovery keeps only verify in phases (claude: restrictions on verify, no grant)", () => {
-    const installation = { kind: "claude", command: ["claude", "--permission-mode", "acceptEdits"], version: "x", configDir: null, timeoutMs: 1, killGraceMs: 1 } as never;
+  // Review round 1 (Orca session b37f7ce9, M1): a recovery passes no grant at all (it runs verify only), so a grant row --
+  // a command rule or network:true -- is recorded-only with that reason, never `enforced` with no phase. Restrictions keep
+  // their verify mechanism. (This replaces this branch's own earlier test, which locked `enforced` with phases [].)
+  it("buildToolRulesReport for a recovery: restrictions keep verify; a grant (command rule, network:true) is recorded-only, not passed", () => {
+    const installation = { kind: "claude", command: ["claude", "--disable-slash-commands", "--permission-mode", "acceptEdits"], version: "x", configDir: null, timeoutMs: 1, killGraceMs: 1 } as never;
     const report = buildToolRulesReport({ rules: { commands: [{ kind: "exact", value: "npm test" }], network: false, secretEnv: [] }, kind: "claude", installation, codexNetwork: null, env: {}, savedResult: true });
-    expect(report.rules.map((row) => [row.rule.kind, row.status, row.phases])).toEqual([
-      ["commands-closed", "enforced", ["verify"]], ["exact", "enforced", []], ["network", "recorded-only", ["verify"]],
+    expect(report.rules.map((row) => [row.rule.kind, row.status, row.phases, row.reason])).toEqual([
+      ["commands-closed", "enforced", ["verify"], null], ["exact", "recorded-only", [], "not passed: a recovery runs verify only"], ["network", "recorded-only", ["verify"], expect.any(String)],
     ]);
+    const open = buildToolRulesReport({ rules: { commands: [], network: true, secretEnv: [] }, kind: "claude", installation, codexNetwork: null, env: {}, savedResult: true });
+    expect(open.rules[1]).toEqual({ rule: { kind: "network", value: true }, status: "recorded-only", reason: "not passed: a recovery runs verify only", phases: [] });
+    const codex = { kind: "codex", command: ["codex"], version: "x", configDir: null, timeoutMs: 1, killGraceMs: 1, sandbox: "workspace-write", budgetMode: "soft" } as never;
+    const codexReport = buildToolRulesReport({ rules: { commands: [], network: true, secretEnv: [] }, kind: "codex", installation: codex, codexNetwork: { kind: "absent" }, env: {}, savedResult: true });
+    expect(codexReport.rules[1]).toEqual({ rule: { kind: "network", value: true }, status: "recorded-only", reason: "not passed: a recovery runs verify only", phases: [] });
+    // Positive control: outside a recovery the same grants are enforced on execute.
+    expect(buildToolRulesReport({ rules: { commands: [], network: true, secretEnv: [] }, kind: "codex", installation: codex, codexNetwork: { kind: "absent" }, env: {} }).rules[1])
+      .toMatchObject({ status: "enforced", phases: ["execute"] });
+  });
+});
+
+// Review round 1 (Orca session b37f7ce9, I1): with an envelope skillPluginDir the claude adapter drops
+// --disable-slash-commands and adds --plugin-dir, and a plugin's skills can declare allowed-tools (settings, hooks too).
+// The report must describe that argv, not the installation's command, or it says `enforced` for a set that is open.
+describe("the claude report reads the argv the adapter runs (review round 1, I1)", { timeout: 60_000 }, () => {
+  const installation = { kind: "claude", command: ["claude", "--disable-slash-commands", "--permission-mode", "acceptEdits"], version: "x", configDir: null, timeoutMs: 1, killGraceMs: 1 } as never;
+  const rules: ToolRulesV1 = { commands: [], network: true, secretEnv: [] };
+  it("buildToolRulesReport: skillPluginDir ⇒ commands-closed recorded-only naming the plugin; without it enforced", () => {
+    const report = buildToolRulesReport({ rules, kind: "claude", installation, codexNetwork: null, env: {}, skillPluginDir: "/plugins/p" });
+    expect(report.rules[0]).toEqual({ rule: { kind: "commands-closed" }, status: "recorded-only", reason: expect.stringContaining("--plugin-dir"), phases: [] });
+    expect(report.baseline).toContain("skills and plugins");
+    expect(buildToolRulesReport({ rules, kind: "claude", installation, codexNetwork: null, env: {} }).rules[0]!.status).toBe("enforced");
+  });
+
+  async function claudeWorker(withPlugin: boolean): Promise<{ report: { rules: Array<{ rule: unknown; status: string; reason: string | null }> }; argvs: string[][] }> {
+    const runtime = await codexFixture("script");
+    worlds.push({ dir: runtime.dir } as World);
+    const scriptPath = join(runtime.dir, "script.json");
+    await writeFile(scriptPath, JSON.stringify({ "codex-test": { files: { "answer.txt": "42\n" } } }));
+    await mkdir(join(runtime.dir, "input"));
+    const skillPluginDir = join(runtime.dir, "skill-plugin");
+    await mkdir(skillPluginDir);
+    const claude = await claudeInstallation([process.execPath, FAKE_CLAUDE_CLI, "script", runtime.marker, scriptPath], { timeoutMs: 60_000, killGraceMs: 300 });
+    const bare = await sealClaude(claude);
+    // As skillPluginDirWorker.test.ts: the flags go on the config the worker reads; the claim keeps the bare config's hash.
+    const sealed = { ...bare, config: { ...bare.config, installation: { ...bare.config.installation, command: [...claude.command, "--permission-mode", "acceptEdits", "--disable-slash-commands"] } } as typeof bare.config };
+    const amount = { tokens: 100, activeMs: 60_000, attempts: 1, sessions: 1 };
+    const contract = { ...runtime.contract, executionPolicy: { ...runtime.contract.executionPolicy, toolRules: rules } };
+    const envelope = {
+      protocol: 3,
+      claim: { groupId: "group-1", workItemId: "work-1", taskId: "task-1", runId: "run-1", generation: 1, graphVersion: 1, targetVersion: 1, commandId: "command-1", configHash: sealed.configHash, agent: sealed.selection, grant: { work: amount, handoff: amount }, ownerToken: "owner-1" },
+      contractHash: "c".repeat(64), inputCheckpoint: null,
+      work: { kind: "loop", contract, targetRepo: runtime.repo, base: "main", sourceDir: runtime.dir, ...(withPlugin ? { skillPluginDir } : {}) },
+    } as unknown as LoopStartEnvelope;
+    const controlDir = join(runtime.dir, "control");
+    await ensurePrivateDirectory(runtime.dir, controlDir);
+    await atomicReplacePrivateFile(runtime.dir, join(controlDir, "config.json"), Buffer.from(canonicalJson(sealed.config)));
+    await atomicReplacePrivateFile(runtime.dir, join(controlDir, "envelope.json"), Buffer.from(canonicalJson(envelope)));
+    await writeAccepted(runtime.dir, { protocol: 1, envelopeHash: canonicalHash(envelope), executionId: "execution-1", configHash: envelope.claim.configHash,
+      generation: 1, acceptedAt: new Date().toISOString(), launch: "intended", worker: null });
+    await runControlWorker(["--source-dir", runtime.dir, "--execution-id", "execution-1", "--nonce", "nonce-1"]);
+    const argvs = (await readFile(`${runtime.marker}.argv`, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    return { report: JSON.parse(await readFile(join(runtime.dir, "run", "tool-rules.json"), "utf8")) as never, argvs };
+  }
+
+  it("worker: with skillPluginDir the written report says recorded-only (the calls ran with --plugin-dir); without it enforced", async () => {
+    const plugin = await claudeWorker(true);
+    expect(plugin.argvs.length).toBeGreaterThan(0);
+    for (const argv of plugin.argvs) expect(argv).toContain("--plugin-dir");
+    expect(plugin.report.rules[0]).toMatchObject({ rule: { kind: "commands-closed" }, status: "recorded-only", reason: expect.stringContaining("--plugin-dir") });
+    const bare = await claudeWorker(false);
+    for (const argv of bare.argvs) expect(argv).toContain("--disable-slash-commands");
+    expect(bare.report.rules[0]).toMatchObject({ rule: { kind: "commands-closed" }, status: "enforced" });
   });
 });
