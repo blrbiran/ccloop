@@ -16,6 +16,7 @@ import type { ClaudePhaseRequest } from "./types.js";
 import { classifyClaudeCall, isExecutableMissing, parseClaudeSignals, type CallClassification } from "../failureCause.js";
 import { effectiveIdleTimeoutMs, IdleWatch, lineFeeder, type IdleSnapshotV1 } from "../idleWatch.js";
 import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
+import { claudeToolRuleArgs, type ToolRulesV1 } from "../toolRules.js";
 
 // Orca agent selection (2026-09-26), spec §4.7: the claude adapter that ccloop control can run. Its process
 // handling follows runCodexPhase: the phase runner is the leader of its own process group (the claude CLI
@@ -116,6 +117,11 @@ export type RequiredCheckNotAllowed = { command: string; reason: string };
  * and last unescaped parenthesis with `\(`, `\)` and `\\` unescaped; "" or "*" as content is the whole Bash tool;
  * every `*` is a wildcard with no escape; separators (including newlines) split a command into subcommands that must each
  * match. A command any of that would change is left out -- never a wider rule -- and recorded.
+ * *** ERRATUM (per-contract tool rules, 2026-10-22, Orca session b37f7ce9; static read of claude 2.1.306, measurement
+ * /private/tmp/orca-b37f7ce9/measure-claude.md Q1) -- "every `*` is a wildcard with no escape" is stale for wildcard
+ * rules: there `\*` is a literal star. A rule whose content has no unescaped `*` is an exact rule, which keeps the
+ * backslash, so escaping cannot help an exact rule and refusing `*` and `\` here stays right. The prefix form tool rules
+ * use is `Bash(<value> *)`, matched as `^value( .*)?$` only while that trailing ` *` is the rule's only `*`. ***
  */
 export function requiredCheckAllowRules(requiredChecks: readonly string[]): { rules: string[]; notAllowed: RequiredCheckNotAllowed[] } {
   const rules: string[] = [], notAllowed: RequiredCheckNotAllowed[] = [];
@@ -145,6 +151,8 @@ type ClaudeCall = {
   stopGraceMs?: number;
   /** The contract's required checks, for the phases expected to run them (execute, verify). */
   requiredChecks?: readonly string[];
+  /** Per-contract tool rules (spec 2026-10-22 §4): the contract's toolRules, absent when it has none. */
+  toolRules?: ToolRulesV1;
 };
 
 export class ClaudeAgentAdapter implements RuntimeAdapter {
@@ -183,7 +191,10 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     let idle: IdleSnapshotV1 | null = null;
     // --allowedTools takes a list: it goes before --model, so the list ends at an option and never swallows the prompt.
     const allow = requiredCheckAllowRules(call.requiredChecks ?? []);
-    const extraArgs = [...(allow.rules.length === 0 ? [] : ["--allowedTools", ...allow.rules]), ...this.extraArgs];
+    // Per-contract tool rules (spec 2026-10-22 §4 claude): grants join the allow list on execute; network:false adds a
+    // --disallowedTools list on every phase, also before --model (a list option). No rules ⇒ exactly the list above.
+    const lists = phase === "single-call" ? { allow: allow.rules, disallow: [] } : claudeToolRuleArgs(call.toolRules, phase, allow.rules, requiredCheckAllowRules);
+    const extraArgs = [...(lists.allow.length === 0 ? [] : ["--allowedTools", ...lists.allow]), ...(lists.disallow.length === 0 ? [] : ["--disallowedTools", ...lists.disallow]), ...this.extraArgs];
     const persist = async (): Promise<Outcome> => {
       await save("outcome.json", JSON.stringify({
         reason: result.reason, code: result.code, signal: result.signal, evidenceDir,
@@ -348,7 +359,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
   private async phaseOnce<T>(request: ClaudePhaseRequest, context: AttemptContext, seen: { outcome?: Outcome }, afterStop?: { stopGraceMs: number }): Promise<T> {
     // Plan is read-only and is not asked to run checks; execute and verify are.
     const requiredChecks = request.phase === "plan" ? [] : context.contract.verification.requiredChecks;
-    const outcome = await this.run(request, { ...this.call(context), requiredChecks, ...(afterStop ? { stopGraceMs: afterStop.stopGraceMs } : {}) });
+    const outcome = await this.run(request, { ...this.call(context), requiredChecks, toolRules: context.contract.executionPolicy.toolRules, ...(afterStop ? { stopGraceMs: afterStop.stopGraceMs } : {}) });
     seen.outcome = outcome;
     throwIfNeverStarted(outcome);
     // Consolidation step 1 (spec §5.1, §5.2): after a stop, an execute runner that exited cleanly and printed a JSON object

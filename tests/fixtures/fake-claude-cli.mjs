@@ -44,8 +44,9 @@ for (let index = 0; index < args.length; index += 1) {
   if (arg === "--plugin-dir") { if (args[index + 1] === undefined) fail("missing value for --plugin-dir"); index += 1; continue; }
   // Orca session 3d229487 (2026-10-20): execute and verify allow the contract's required checks. Like claude's list option,
   // --allowedTools takes every following argument up to the next option -- a prompt placed after it would be swallowed.
-  if (arg === "--allowedTools") {
-    if (args[index + 1] === undefined || args[index + 1].startsWith("-")) fail("missing value for --allowedTools");
+  // Per-contract tool rules (ccloop spec 2026-10-22 §4 claude): --disallowedTools is a list option of the same shape.
+  if (arg === "--allowedTools" || arg === "--disallowedTools") {
+    if (args[index + 1] === undefined || args[index + 1].startsWith("-")) fail(`missing value for ${arg}`);
     while (args[index + 1] !== undefined && !args[index + 1].startsWith("-")) index += 1;
     continue;
   }
