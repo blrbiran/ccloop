@@ -16,7 +16,7 @@
 
 - A phase that fails throws from its adapter; `runPhaseWithTimeout` wraps it in `PhaseExecutionError`
   (`runLoop.ts:117-136`, `:547`), and the run becomes `failed` with `stopReason` = the error text (`:2151`, `:2200-2204`).
-  Orca sees only `status` and that free string (`src/control/collect.ts:77-89`).
+  Orca sees only `status` and that free string (`src/control/collect.ts:77-111`).
 - One transient case is retried: Codex HTTP 429 before any item, 30/60/120 s, within `min(config.timeoutMs,
   timeRemainingMs)` (`src/runtime/codex/codexAdapter.ts:14`, `:56-70`; `src/runtime/codex/rateLimit.ts`; spec
   `2026-10-13-codex-rate-limit-backoff-design.md`). Claude and OMP retry nothing (claude's runner retries only a spawn
@@ -76,10 +76,14 @@ message that carries the typed `error`** — never other assistant text, tool re
 | invalid_request **and** errorText contains `Prompt is too long` or `input is too long for requested model` | context-overflow |
 | anything else | unknown |
 
-`workObserved` = `toolUses > 0`.
+`workObserved` = `toolUses > 0`. The runner writes the signals file **incrementally** (rewritten atomically whenever a
+field changes), so a runner killed mid-call leaves the last state. A **missing or unparseable** signals file ⇒
+`workObserved = true` (not retried) and cause `unknown`, unless the adapter outcome itself gives `stalled` or `timeout`
+(those map as below).
 
 **omp.** No error sample exists. v1: `executable-missing` (below); a final assistant `message_end` with
-`stopReason: "error"` records its `errorMessage` as `detail` and classifies `unknown`. `workObserved` = any
+`stopReason: "error"` records its `errorMessage` as `detail` and classifies `unknown`; `omp-read-only-phase-mutated`
+(`src/runtime/omp/ompAdapter.ts:27`) classifies `unknown` (never retried). `workObserved` = any
 `tool_execution_start`.
 
 **Every kind:**
@@ -93,7 +97,8 @@ message that carries the typed `error`** — never other assistant text, tool re
 
 - One shared loop generalising `callWithBackoff` (`codexAdapter.ts:56-70`), used by all three adapters' **phases** (single
   calls are not retried here — their callers own retries; watchdog spec §2.4). Delays `[30_000, 60_000, 120_000]` ms,
-  **≤3 retries per phase in total** across causes, constructor option for tests (as `rateLimitDelaysMs`).
+  **≤3 retries per phase in total**, one budget shared by every cause (a phase that retried twice for `network` has one
+  retry left for `stalled`), constructor option for tests (as `rateLimitDelaysMs`).
 - **Retry-safety, per kind** — a call is retried only when its cause is retryable **and**:
   - **codex, omp:** the phase is `plan` or `verify` (read-only is enforced: codex `--sandbox read-only`,
     `runCodexPhase.ts:39`; omp tools `read,grep,glob`, `runOmpPhase.ts:49`, plus the mutation check,
@@ -106,16 +111,23 @@ message that carries the typed `error`** — never other assistant text, tool re
   aborted; **each try's own timer is `L − elapsed`** at its start (today a codex retry gets a fresh `config.timeoutMs`
   capped only by remaining run time, `codexAdapter.ts:59-61`; adding `perAttemptTimeoutMs` only shortens it). The wait is
   abortable.
+- A claude runner-built partial (§5) is a result, not a failed try: it is **never** retried in-phase.
 - An execute call that observed work and then failed transiently is **not** retried in-phase; the run ends with that
   cause and Orca's escalation ladder re-dispatches (Orca kanban spec §6).
 - Evidence: codex's `rate-limit.json` stays byte-identical (`classification`, `call`, `nextDelayMs`); every classified
   call (all kinds) also gets `failure-cause.json` `{ cause, workObserved, call, nextDelayMs, detail }`.
-- **Usage (C1):** the phase books the **sum over all its tries**. A try that returns a result contributes its
-  `tokenUsage`; a failed try contributes its observation (`observedTokensOf`, `src/runtime/types.ts:187-193`: 0 under the
-  two existing rules — never-started, codex 429 before work — observed tokens otherwise). A failed try with a **null**
-  observation adds nothing and marks the phase total a **lower bound**: `failure-cause.json` of that call records
-  `usageObserved: false`, and the phase's usage evidence records `retriedTriesUnobserved: <n>`. If every try is null and
-  the phase fails, the thrown error carries `observedTokens: null` (today's "never 0" rule).
+- **Usage (C1, round 2 I-A):** the phase books the **sum over all its tries**. A try that returns a result contributes its
+  `tokenUsage`; a failed try contributes its observation (`observedTokensOf`, `src/runtime/types.ts:187-193`): `0` under
+  the two existing rules (never-started, codex 429 before work), observed tokens, or **null**.
+  - The final error of a failed phase carries `observedTokens = Σ` of the non-null observations.
+  - The 0-by-rule flags (`rateLimitedBeforeWork`, `neverStarted`) go on the final error **only when every try was
+    0-by-rule**; otherwise the final error carries the sum and no flag (a phase that spent 7 tokens and then hit a 429
+    before work books 7, not 0).
+  - If any try is null **and** the observed sum is 0 ⇒ `observedTokens: null` (today's "never 0" rule). If any try is
+    null and the sum is > 0 ⇒ the sum is booked and recorded as a **lower bound**.
+  - Where the lower bound is recorded: each unobserved try's `failure-cause.json` has `usageObserved: false`; the phase's
+    `usage.json` (successful phase) or the last call's `failure-cause.json` (failed phase) has
+    `retriedTriesUnobserved: <n>`.
 
 ## 5. Recording the cause on the run (wire)
 
@@ -128,14 +140,15 @@ message that carries the typed `error`** — never other assistant text, tool re
 
 | # | the attempt ended … | `failureCause.cause` | status (unchanged) |
 |---|---|---|---|
-| 1 | on a verifier decision with `approved: false` (any resulting status: `failed`, `exhausted` incl. "repeated failure pattern", `blocked_waiting_human`) | `required-check-failed` if `rejectCategory === "required-check-failed"`, else `verifier-rejected` | as today |
+| 1 | on a verifier decision with `approved: false` whose stop is `failed` or `exhausted` (incl. "repeated failure pattern"), or `blocked_waiting_human` caused by that rejection; **or** the next loop iteration's budget/attempt check (`runLoop.ts:1486-1487`) ends the run right after a persisted rejection (last `recentFailures` entry, status `planning`, no new attempt started — read from the persisted state, so it holds across crash resume) | `required-check-failed` if `rejectCategory === "required-check-failed"`, else `verifier-rejected` | as today |
 | 2 | on a runner-built partial carrying a cause (`runLoop.ts:1768-1786`) | that cause (`stalled` per watchdog spec §2.3 — and then status `failed`) | `failed`/`exhausted` as today except `stalled` ⇒ `failed` |
 | 3 | on a phase exception (`runLoop.ts:2151-2204`) | the classified cause, else `unknown` | `failed` |
 | 4 | on a phase timeout or budget check with no rejection (`:1487`, `:1582-1590`, `:1615`, `:1654-1680`, `:1822`, `:1900-1912`) | `budget-exhausted` | `exhausted` |
 | 5 | parked for a token allowance (`waitingCause: "token-allowance"`, `:1404`) | absent | — |
 | 6 | succeeded, cancelled, a human gate that is not a failure (path policy, `:1755`, `:2187`) | absent | — |
 
-  Invariant: **no `failed` or `exhausted` run without a cause** — a terminal write that reaches neither row 1–4 records
+  A cleanup failure after a rejection (the controller-failure path, `:2151-2204`, reached from cleanup) is row 3 ⇒
+  `unknown`, not row 1. Invariant: **no `failed` or `exhausted` run without a cause** — a terminal write that reaches neither row 1–4 records
   `unknown`.
 - **collect:** protocol 4's terminal copies the whole state minus `savedResult` (`collect.ts:80`); it also strips
   `failureCause`, so both strict terminal schemas (ccloop `src/control/command.ts:170-179`, `:318-322`; Orca
@@ -184,12 +197,21 @@ error behaviour comes from **new mode names** / a marker sidecar, never new argv
    wait ⇒ aborted without waiting; **`perAttemptTimeoutMs` < `installation.timeoutMs`**: second try's timer is
    `perAttemptTimeoutMs − elapsed` (fake records the deadline it was given). Mutations: drop each guard; use
    `config.timeoutMs` for the try timer.
-4. **Usage sum (C1):** fake spends 7 tokens and fails transiently (read-only phase), then succeeds with 5 ⇒ phase books 12;
-   a failed try with no observation ⇒ total 5 and `retriedTriesUnobserved: 1`. Mutation "book only the last" ⇒ 5 (red).
-5. Codex 429 criteria of `2026-10-13` stay green unchanged (`rate-limit.json` bytes, usage 0).
+4. **Usage sum (C1, I-A):** fake spends 7 tokens and fails transiently (read-only phase), then succeeds with 5 ⇒ phase
+   books 12; a failed try with no observation then success 5 ⇒ 5 and `retriedTriesUnobserved: 1`; all tries null and the
+   phase fails ⇒ `observedTokens: null`; codex spends 7, then 429 before work ×3 ⇒ final error `observedTokens: 7`, no
+   `rateLimitedBeforeWork`. Mutations: "book only the last" ⇒ 5 (red); "treat null as 0" ⇒ all-null case 0 (red);
+   "keep the 429 flag on the final error" ⇒ 0 instead of 7 (red).
+   **Claude signals (I-C):** delete the signals file before the adapter reads it ⇒ `workObserved` true, one call, cause
+   `unknown`; a stalled outcome with no file ⇒ `stalled`. Mutation "default workObserved to false" ⇒ retried (red).
+   **omp read-only mutation** ⇒ `unknown`, one call.
+5. Codex 429 criteria of `2026-10-13` stay green unchanged (`rate-limit.json` bytes, usage 0). This is a regression
+   guard only — it cannot go red for any new branch here, so it is not counted as any branch's red proof.
 6. Through `runLoop`, one test per precedence row 1–6 (row 1 for each of `failed`, `exhausted`, `blocked_waiting_human`;
-   row 2 a claude runner partial after an API error ⇒ the classified cause; row 4 adapter `timeout` ⇒ `budget-exhausted`).
-   Mutation: swap rows 1 and 4 ⇒ the rejected-then-budget case goes red.
+   row 2 a claude runner partial after an API error ⇒ the classified cause, not retried; row 4 adapter `timeout` ⇒
+   `budget-exhausted`). The rejected-then-budget case goes **through `runLoop.ts:1487`** explicitly (rejection, attempts
+   left 0 ⇒ next iteration exhausts) ⇒ row 1 with that `rejectCategory`; repeated with a crash resume between the
+   rejection and the check. Cleanup failure after a rejection ⇒ `unknown`. Mutation: swap rows 1 and 4 ⇒ red.
 7. `collect` protocol 3 and 4: terminal objects byte-identical to today's for the same state; top-level `failureCause`
    present iff terminal; ccloop's `validateResponse` accepts it. Mutation: leave it in the protocol-4 terminal ⇒ strict
    schema refusal (red).
@@ -223,3 +245,14 @@ must-not-match samples; errorText only from the typed-error message; codex `turn
 driving `rate-limited` named per kind; `ENOENT` prefix; CLI-internal retries noted; `run/loop-state.json`; handoff packet
 `runState` carries the cause (Orca `z.unknown`); Orca parses `cause` as a string (adding values non-breaking); fake
 argument conventions kept.
+
+## Review round 2 (Orca session 9ec98639, 2026-10-21)
+
+Independent review verdict: READY WITH FIXES. Applied: **I-A** final-error usage = sum; 0-flags only when every try was
+0-by-rule; null only when some try is null and the sum is 0, else lower bound (§4, test 4). **I-B** the `:1487`
+budget/attempt terminal right after a persisted rejection is row 1, read from persisted state (§5, test 6). **I-C**
+missing/unparseable claude signals ⇒ `workObserved = true`, `unknown` unless `stalled`/`timeout`; written incrementally
+(§3, test 4). **M-1** shared retry budget wording; **M-2** row 1 limited to failed/exhausted or a rejection-caused gate,
+cleanup failure after a rejection ⇒ `unknown`; **M-3** claude partial never retried in-phase; **M-4** where
+`retriedTriesUnobserved` lives; **M-5** omp read-only mutation ⇒ `unknown` + test; **M-6** test 5 is a regression guard;
+**M-11** collect citation widened to `:77-111`.

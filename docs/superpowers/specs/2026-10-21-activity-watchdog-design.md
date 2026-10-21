@@ -38,7 +38,8 @@ read 2026-10-21, has `1800000` for all three installations).
 A phase runner keeps `lastActivityAt`, `openTools` (count) and `toolOpenedAt`. The idle timer fires when
 `now − lastActivityAt ≥ idleTimeoutMs` **and** either `openTools === 0`, or a tool has been open with no activity for
 `≥ 3 × idleTimeoutMs` (open-tool suspension is capped: a long test suite produces no agent output while it runs, but a
-hung tool is not left to the wall clock alone).
+hung tool is not left to the wall clock alone). A tool that stays silent for more than 3 × `idleTimeoutMs` is therefore
+stopped as `stalled` and, if the call cannot be retried, the run ends `failed` with cause `stalled`.
 
 - **codex** (`runCodexPhase`, stdout `--json` JSONL): any stdout or stderr bytes are activity (`:106-115`). Each complete
   stdout line is parsed once more for tool state: `item.started` with `item.type` ∈ {`command_execution`,
@@ -64,8 +65,11 @@ hung tool is not left to the wall clock alone).
   (`claudeAgentAdapter.ts:284`) accepts `stalled` as it accepts `timeout`, returns that partial and attaches
   `failureCause: "stalled"`. runLoop's runner-partial terminal (`runLoop.ts:1768-1786`, today `timeout` ⇒ `exhausted`)
   checks the cause **first**: a partial carrying `stalled` ⇒ status **`failed`**, `failureCause.cause = "stalled"` —
-  before the `timeout` ⇒ `exhausted`/`budget-exhausted` mapping (failure-causes spec §5 row 2). Decided `failed` so that
-  Orca's ladder treats it as a failure to re-dispatch, not as a spent budget.
+  before the `timeout` ⇒ `exhausted`/`budget-exhausted` mapping (failure-causes spec §5 row 2). Why `failed`: Orca's ladder
+  escalates `failed` and `exhausted` alike, so the reason is the cause mapping — a stall is a transient fault, not a spent
+  budget, and `exhausted` would pair it with `budget-exhausted`. The run's `stopReason` is the partial's
+  `failureMessage` (`claude phase runner interrupted by SIGTERM`), prefixed by the adapter with `claude-stalled: ` so the
+  free string names the stall too. The partial is never retried in-phase (failure-causes spec §4).
 - Otherwise the adapter throws `<kind>-stalled: <dir>` (`codex-stalled`, `claude-stalled`, `omp-stalled`) carrying
   `observedTokens` as the `timeout` error does, plus `failureCause: "stalled"` and `workObserved`. The failure-causes
   retry loop retries it when safe (its §4); otherwise the run ends `failed` with `failureCause.cause = "stalled"`.
@@ -88,6 +92,9 @@ retries, and a single call has no phase loop to put the retry in.
   `boundStopReason`); the typed signal is `failureCause.cause === "stalled"` (failure-causes spec §5–§6).
 - New single-call error codes `<kind>-stalled` reach Orca's single-call path; Orca maps unknown codes as it does today —
   list in the ccloop handoff's Orca dependency list.
+- **Version skew:** ccloop's table parse is strict (`src/agents/table.ts:39`), so a ccloop that does not know
+  `idleTimeoutMs` refuses the whole table (`agents-table-invalid`). Set `idleTimeoutMs` in `~/.orca/agents.json` only
+  after Orca has repinned a ccloop that knows the field (Orca dependency note).
 - Agents table: optional `idleTimeoutMs`, excluded from `configHash`. Orca keeps installations as `z.unknown()`
   (`Orca/src/control/agentInstallationProtocol.ts:23`) and its version refresh keeps unknown fields (checked, §2.1).
 - `capabilities`, `features`, collect schemas: unchanged.
@@ -106,14 +113,16 @@ retries, and a single call has no phase loop to put the retry in.
    3 × idle (not at the wall clock). Mutations: ignore `openTools` ⇒ first case `stalled` (red); drop the 3× cap ⇒ second
    case reaches `timeout` (red).
 6. Claude fd 4: runner with a fake claude streaming chunks writes throttled lines; a tool_use/tool_result pair moves
-   `openTools` 1 → 0. Mutation: drop the throttle exception for `openTools` changes (red).
+   `openTools` 1 → 0. Mutations: drop the throttle exception for `openTools` changes (red); the adapter ignores fd-4 lines
+   (a fake claude streaming steadily is stopped as `stalled`, red).
 7. **Claude execute idle-stopped after a tool ran** ⇒ the runner partial comes back, run status `failed`,
    `failureCause.cause === "stalled"` (not `exhausted`/`budget-exhausted`). Mutation: check `failureType === "timeout"`
    before the cause ⇒ `exhausted` (red). Codex execute stalled after work ⇒ no in-phase retry, `failed`, `stalled`.
    Plan stalled before work ⇒ retried once, then success.
 8. Single calls (each kind): a fake that goes silent ⇒ throws `<kind>-stalled`, one call only. Mutation: route single
    calls through the retry loop ⇒ two calls (red).
-9. Draft `timeoutMs` 7 200 000 in `agents detect` output; existing-table criteria unchanged.
+9. Draft `timeoutMs` 7 200 000 in `agents detect` output; existing-table criteria unchanged. Mutation: keep
+   `DRAFT_TIMEOUT_MS` at 1 800 000 (red).
 
 ## 5. Decisions (controller's calls, reversible)
 
@@ -137,3 +146,10 @@ from `agentConfigHash` + test 2. **I9** open-tool suspension capped at 3 × `idl
 only to newly detected installations, flagged for the human (§2.1). **I10** single calls watched, `stalled` mapped, not
 retried (§2.4, test 8). Minors: `superRefine` for the cross-field rule; effective default `min(600 000, timeoutMs)`;
 false-stall retry cost noted; Orca version auto-refresh check done (keeps unknown fields).
+
+## Review round 2 (Orca session 9ec98639, 2026-10-21)
+
+Independent review verdict: READY WITH FIXES. Applied: **I-D** version-skew note (§3; also in the ccloop handoff's
+Orca dependency list when this lands). **M-7** `stalled` ⇒ `failed` rationale restated (cause mapping, not escalation).
+**M-8** stopReason wording of a claude partial after an idle stop. **M-9** fd-4 mutation (test 6). **M-10** test 9
+mutation named. Silent tool > 3 × idle ⇒ `stalled` ⇒ `failed` stated in §2.2.

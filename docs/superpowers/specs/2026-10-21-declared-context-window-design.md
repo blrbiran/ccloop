@@ -28,9 +28,10 @@
   `src/agents/omp.ts:15`): a positive safe integer. Absent ⇒ today's behaviour. **claude** does not get it: its window is
   fixed by the selection, so the strict claude installation (`src/agents/claude.ts:31`, empty extras) refuses the key
   (`agents-table-invalid`).
-- **Not part of `configHash`:** `agentConfigHash` (`materialize.ts:36-45`) drops it as it drops the run limits — the
-  declared window is a reporting fallback, not the agent's identity; editing it must not invalidate Orca's frozen
-  selections. The value in effect at resolution is frozen by Orca with the resolution (§3).
+- **Not part of `configHash`:** `agentConfigHash` (`materialize.ts:36-45`) drops it, the way it drops `version`,
+  `command` and the run limits. `configHash` names which agent configuration a run used; the declared window does not
+  change what the agent is or how it is invoked — it only fills in a number the catalog did not report — so editing it
+  must not invalidate Orca's frozen selections. The value in effect at resolution is frozen by Orca with the slot (§3).
 
 ### 2.2 When it applies (only when the catalog does not give a window)
 
@@ -65,7 +66,11 @@ A declared value never overrides a catalog value (narrow ruling).
   breaks `capabilities`. Only installations that set `declaredContextWindow` ever send it.
 - Orca must **freeze** `contextWindowSource` with the slot: `frozenSlotOf` (`Orca/src/control/agentSelection.ts:45-50`)
   copies `capabilities` but not other resolution fields — it gains the marker, so a later table edit cannot relabel a
-  frozen window. (Because the value is excluded from `configHash`, the frozen slot is the only record of it.)
+  frozen window. (Because the value is excluded from `configHash`, the frozen slot is the only record of it.) Orca's
+  frozen-slot schema gains the same optional field.
+- **Version skew:** ccloop's table parse is strict (`src/agents/table.ts:39`); a ccloop that does not know
+  `declaredContextWindow` refuses the whole table. Set it in `~/.orca/agents.json` only after Orca has repinned a ccloop
+  that knows the field.
 - Orca shows the window with a "declared / 声明值" mark where it shows `contextWindowTokens` (profiles, estimator
   compatibility, agents page) — Orca's own change.
 - Out of the narrow ruling, recorded: a codex model not in the catalog still has `singleCallExecution: null`
@@ -76,14 +81,16 @@ A declared value never overrides a catalog value (narrow ruling).
 
 1. Table: codex/omp accept a positive integer; `0`, negative, non-integer, string ⇒ `agents-table-invalid`; claude with
    the key ⇒ `agents-table-invalid`. Mutation: add the key to claude's extras ⇒ red.
-2. Resolution (catalog injected): codex listed row ⇒ row window, no source; codex unlisted + declared ⇒ declared value
+2. Resolution (catalog injected through a new `deps.codexCatalog` for codex, alongside the existing `deps.probeCatalog`
+   used for omp, `materialize.ts:96-103`; today any injected dep makes the codex `catalog` null, `:80-81`, which would
+   read as "unreadable"): codex listed row ⇒ row window, no source; codex unlisted + declared ⇒ declared value
    and `contextWindowSource: "installation-declared"`; codex unlisted, no declared ⇒ null; codex catalog unreadable +
    declared ⇒ null, no source; omp row with null window + declared ⇒ declared; omp row with window + declared ⇒ row
    window. Mutations: use declared even when a row window exists (override case red); pass `declaredWindow` regardless of
    catalog readability (unreadable case red); omit the source marker (declared case red).
 3. `configHash` is equal for an installation with and without `declaredContextWindow`. Mutation: stop excluding it (red).
 4. ccloop `control capabilities` answer with the source validates against its own schema; without it, byte-identical
-   to today.
+   to today. Mutation: leave the field out of `capabilitiesSchema` ⇒ the declared answer is refused (red).
 
 ## 5. Decisions (controller's calls, reversible)
 
@@ -99,3 +106,9 @@ Independent review verdict: READY WITH FIXES. Applied: re-anchored to `71d650c`.
 from `agentConfigHash` + test 3. Minors: marker renamed `"installation-declared"`; Orca's `frozenSlotOf` must freeze it
 (§3); `capabilities()` gets a `declaredWindow` argument so the descriptor no longer has to tell row-absent from
 catalog-unreadable (§2.2).
+
+## Review round 2 (Orca session 9ec98639, 2026-10-21)
+
+Independent review verdict: READY. Minors applied: **M-12** Orca's frozen-slot schema gains the optional field.
+**M-13** catalog injection named (`deps.codexCatalog`). **M-14** version-skew note. **M-15** `configHash` rationale
+reworded. **M-10** test 4 mutation named.
