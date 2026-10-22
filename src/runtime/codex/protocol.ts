@@ -57,7 +57,10 @@ const decisionItem = object({question:string,chose:string,alternatives:{type:"ar
 const reported = {
   decisions:nullable({type:"array",items:decisionItem}),
   debug:nullable(object({choseInstead:nullable(string),reproTests:nullable(array),reproCommand:nullable(string),
-    reproduction:nullable({type:"string",enum:["not-expressible"]}),reproductionReason:nullable(string)})),
+    reproduction:nullable({type:"string",enum:["not-expressible"]}),reproductionReason:nullable(string),
+    // debug.located (spec 2026-10-22-debug-located-design.md §4.1): where a coarse correction applies. Every member is
+    // required, so an absent id is null; the shared unreported step removes those nulls.
+    located:nullable(object({groupId:nullable(string),runId:nullable(string),decisionId:nullable(string),paths:array,because:string}))})),
 };
 /** Strict provider wire shape: optional taskResult is represented by separate alternatives, not an optional property. */
 export function executeWireJsonSchema(): Record<string, unknown> {

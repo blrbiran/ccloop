@@ -61,7 +61,7 @@ it("sends decisions and debug required and nullable in every one of the 2x2 stri
       expect(Object.keys(decisions.items.properties.alternatives.items.properties)).toEqual(["option", "why_not"]);
       const [debug, noDebug] = part.properties.debug.anyOf;
       expect(noDebug).toEqual({ type: "null" });
-      expect(Object.keys(debug.properties)).toEqual(["choseInstead", "reproTests", "reproCommand", "reproduction", "reproductionReason"]);
+      expect(Object.keys(debug.properties)).toEqual(["choseInstead", "reproTests", "reproCommand", "reproduction", "reproductionReason", "located"]);
       for (const member of Object.values(debug.properties) as Array<{ anyOf: unknown[] }>) expect(member.anyOf.at(-1)).toEqual({ type: "null" });
     }
   } finally { await rm(fixture.dir, { recursive: true, force: true }); }

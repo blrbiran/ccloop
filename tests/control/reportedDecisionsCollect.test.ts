@@ -9,6 +9,8 @@ import { canonicalHash, type LoopStartEnvelope } from "../../src/control/protoco
 import { runLoop } from "../../src/controller/runLoop.js";
 import type { RunState } from "../../src/state/types.js";
 import type { RuntimeAdapter } from "../../src/runtime/types.js";
+import { CodexAdapter } from "../../src/runtime/codex/codexAdapter.js";
+import { codexFixture } from "../runtime/codex/fixture.js";
 import { createContract, createRepo } from "../controller/optionalFixture.js";
 import { FIXTURE_SELECTION } from "./agentsFixture.js";
 
@@ -118,5 +120,28 @@ describe("criterion 8: a token-allowance continuation reports its predecessor's 
     const report = await collectExecution(f.envelope, 0) as unknown as Record<string, unknown>;
     expect(report.decisions).toEqual([major, minor]);
     expect(report.debug).toEqual({ reproCommand: "npm test" });
+  });
+});
+
+// debug.located (ccloop spec 2026-10-22-debug-located-design.md §7 criterion 4): Orca reads `located` from collect's top-level
+// `debug` to cite the decision a coarse correction applies to, so a real (fake-codex) run's located must reach collect in
+// Orca's shape -- the nulls codex's strict schema forced removed -- and a run without it must answer no `located` key.
+describe("criterion 4 (debug.located): collect answers a codex run's located at the top level", () => {
+  const located = { decisionId: "decision-7", paths: ["src/parser.ts"], because: "the sentence names the parser's retry" };
+  const nulls = { reproTests: null, reproCommand: null, reproduction: null, reproductionReason: null };
+  it.each([
+    ["with located", { choseInstead: "fix the parser", ...nulls, located: { groupId: null, runId: null, ...located } }, { choseInstead: "fix the parser", located }],
+    ["without located", { choseInstead: "fix the parser", ...nulls, located: null }, { choseInstead: "fix the parser" }],
+  ])("%s", { timeout: 60_000 }, async (_name, debug, expected) => {
+    const f = await envelopeAt();
+    const codex = await codexFixture("reported"); roots.push(codex.dir);
+    await writeFile(`${codex.marker}.reported.json`, JSON.stringify({ decisions: null, debug }));
+    codex.contract.executionPolicy.perAttemptTimeoutMs = 15_000;
+    const state = await runLoop(codex.contract, join(f.root, "run"), new CodexAdapter(codex.config));
+    expect(state.status).toBe("succeeded");
+    await finalizeHandoffCandidate(f.envelope, null, state, { result: "complete", usageHighWater: 0 });
+    const report = await collectExecution(f.envelope, 0) as unknown as Record<string, unknown>;
+    expect(report.debug).toEqual(expected);
+    expect(Object.hasOwn(report.debug as object, "located")).toBe(expected !== undefined && "located" in expected);
   });
 });
