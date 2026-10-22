@@ -33,12 +33,22 @@ const listAfter = (argv: string[], option: string): string[] => {
 const REQUIRED = ["Bash(npm test)", "Bash(npm run lint)"];
 const golden = async (phase: string) => JSON.parse(await readFile(new URL(`../../fixtures/toolRules/golden-2a2ae53/claude-${phase}.json`, import.meta.url), "utf8")) as { argv: string[]; extraArgs: string[] };
 
+// flow answer key (2026-10-22, Orca session b37f7ce9, human grant 「这次批准改写所有必要的判据」, ccloop spec
+// 2026-10-22-flow-answer-key-design.md §6): claude's execute --json-schema gains exactly the optional opaque property flow
+// after debug. The 2a2ae53 golden file is a captured oracle and stays as captured; this applies that one insertion to it,
+// and refuses a golden where it does not apply exactly once. Every other argv byte, and plan and verify, compare unchanged.
+const withFlow = (argv: string[]): string[] => argv.map((arg, i) => {
+  if (argv[i - 1] !== "--json-schema") return arg;
+  if (arg.split('"debug":{},').length !== 2) throw new Error("golden --json-schema does not hold exactly one debug property");
+  return arg.replace('"debug":{},', '"debug":{},"flow":{},');
+});
+
 describe("claude without toolRules (T1, claude part)", () => {
   for (const phase of PHASES) {
     it(`${phase}: argv and extraArgs equal the 2a2ae53 golden`, async () => {
       const got = await argvOf(phase);
       const want = await golden(phase);
-      expect(got.argv).toEqual(want.argv);
+      expect(got.argv).toEqual(phase === "execute" ? withFlow(want.argv) : want.argv);
       expect(got.extraArgs).toEqual(want.extraArgs);
     }, 30_000);
   }
