@@ -78,6 +78,8 @@ type ExecutionArtifacts = {
   /** Reported decisions and debug (spec 2026-10-20 §4.1): carried opaquely for Orca; never change the outcome. */
   decisions?: unknown;
   debug?: unknown;
+  /** Orca's flow-step report (spec 2026-10-22-flow-answer-key-design.md §4): carried opaquely, like debug. */
+  flow?: unknown;
   changedFiles: string[];
   diffPatch: string;
   commandOutputs: string[];

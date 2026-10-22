@@ -38,6 +38,8 @@ const EXECUTION_SCHEMA = {
     // check cannot fail a run on them; the adapter carries them opaquely.
     decisions: {},
     debug: {},
+    // flow (spec 2026-10-22-flow-answer-key-design.md §4 item 5): Orca's flow-step report, the same way.
+    flow: {},
     completionStatus: { type: "string", enum: ["partial"] },
     failureType: { type: "string", enum: ["timeout", "error"] },
     failureMessage: { type: "string" },

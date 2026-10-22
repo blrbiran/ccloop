@@ -8,7 +8,10 @@
  * removed. Keys are deleted, never set to undefined, so an answer that reports nothing keeps today's bytes (saved-result
  * recovery pins that hash). `decisions: []` is kept.
  */
-export const REPORTED_FIELDS = ["decisions", "debug"] as const;
+export const REPORTED_FIELDS = ["decisions", "debug", "flow"] as const;
+// flow (spec 2026-10-22-flow-answer-key-design.md §4 item 3, F3): an object `flow` gets exactly the rule an object `debug` gets
+// -- codex can say "no url" in `flow.effect` only as null, which Orca's strict parser refuses.
+const OBJECT_REPORTS = ["debug", "flow"] as const;
 const MAX_REPORTED_BYTES = 65536;
 
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -19,14 +22,16 @@ function withinBound(value: unknown): boolean {
 
 export function dropUnreported<T extends object>(execution: T): T {
   const fields = execution as Record<string, unknown>;
-  if (record(fields.debug)) {
-    for (const [key, member] of Object.entries(fields.debug)) {
+  for (const name of OBJECT_REPORTS) {
+    const report = fields[name];
+    if (!record(report)) continue;
+    for (const [key, member] of Object.entries(report)) {
       if (!record(member)) continue;
       for (const [inner, value] of Object.entries(member)) if (value === null) delete member[inner];
-      if (Object.keys(member).length === 0) delete fields.debug[key];
+      if (Object.keys(member).length === 0) delete report[key];
     }
-    for (const [key, member] of Object.entries(fields.debug)) if (member === null) delete fields.debug[key];
-    if (Object.keys(fields.debug).length === 0) delete fields.debug;
+    for (const [key, member] of Object.entries(report)) if (member === null) delete report[key];
+    if (Object.keys(report).length === 0) delete fields[name];
   }
   for (const key of REPORTED_FIELDS) {
     if (!Object.hasOwn(fields, key)) continue;

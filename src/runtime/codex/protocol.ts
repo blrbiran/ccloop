@@ -26,7 +26,7 @@ const strings = z.array(z.string());
 const plan = z.object({summary:z.string(), primaryTargetPaths:strings}).strict();
 // Reported decisions and debug (spec 2026-10-20 §4.1): carried opaquely, like taskResult, and kept last, so an answer that
 // reports neither (they are removed when null, src/runtime/reportedDecisions.ts) keeps today's key order and bytes.
-const executionFields = {taskResult:z.unknown().optional(),changedFiles:strings, diffPatch:z.string(), commandOutputs:strings, stdoutStderrLog:z.string(),decisions:z.unknown().optional(),debug:z.unknown().optional()};
+const executionFields = {taskResult:z.unknown().optional(),changedFiles:strings, diffPatch:z.string(), commandOutputs:strings, stdoutStderrLog:z.string(),decisions:z.unknown().optional(),debug:z.unknown().optional(),flow:z.unknown().optional()};
 const complete = z.object(executionFields).strict();
 const partial = z.object({...executionFields,completionStatus:z.literal("partial"),failureType:z.enum(["timeout","error"]),failureMessage:z.string()}).strict();
 export const executionSchema = z.union([complete,partial]);
@@ -61,6 +61,13 @@ const reported = {
     // debug.located (spec 2026-10-22-debug-located-design.md §4.1): where a coarse correction applies. Every member is
     // required, so an absent id is null; the shared unreported step removes those nulls.
     located:nullable(object({groupId:nullable(string),runId:nullable(string),decisionId:nullable(string),paths:array,because:string}))})),
+  // flow (spec 2026-10-22-flow-answer-key-design.md §3): Orca's flow-step report, closed for the provider. `needs` is one flat
+  // anyOf of Orca's two kinds and null; Orca's `candidates` is a record with template-named keys, which no strict schema can
+  // express, so codex cannot report it (writer's call F1). The shared unreported step removes the nulls.
+  flow:nullable(object({
+    needs:{anyOf:[object({kind:{type:"string",enum:["confirmation"]},what:string,payloadSummary:string}),
+      object({kind:{type:"string",enum:["input"]},question:string,candidates:array}),{type:"null"}]},
+    effect:nullable(object({remoteId:string,url:nullable(string)}))})),
 };
 /** Strict provider wire shape: optional taskResult is represented by separate alternatives, not an optional property. */
 export function executeWireJsonSchema(): Record<string, unknown> {
@@ -189,7 +196,7 @@ export type FinalExtraction =
   | { method: "candidate"; value: unknown; candidates: number; valid: number }
   | { method: "none"; candidates: number; valid: number };
 const MAX_NODES = 100_000, MAX_DEPTH = 1_000;
-const OPAQUE_REPORT_KEYS: ReadonlySet<string> = new Set(["taskResult", "decisions", "debug"]);
+const OPAQUE_REPORT_KEYS: ReadonlySet<string> = new Set(["taskResult", "decisions", "debug", "flow"]);
 /** Parsed, transport-bounded JSON only: canonical streaming identity without recursive stringify or candidate depth. */
 function canonicalJsonHash(value: unknown, reports?: WeakMap<object, string>): string {
   const hash = createHash("sha256");

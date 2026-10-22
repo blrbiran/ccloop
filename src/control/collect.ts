@@ -34,6 +34,8 @@ export interface CollectionV1 {
    */
   decisions?: unknown;
   debug?: unknown;
+  /** Orca's flow-step report (spec 2026-10-22-flow-answer-key-design.md §4 item 7), read the same way as debug. */
+  flow?: unknown;
   /**
    * Failure causes (ccloop spec 2026-10-21-failure-causes-and-transient-retries-design.md §5): why the run failed or was
    * exhausted, present iff `terminal` is non-null and the state has one. Top level, not inside `terminal`, so both strict
@@ -114,7 +116,7 @@ function candidateOf(candidate: CandidateV1, proof: StopProofV1 | null): NonNull
  * hash is read. The attempt is the loop state's current one -- the one the candidate was built from (handoff.ts) -- and a
  * file that changed after the candidate kept it, or another attempt's file, matches no kept copy, so it is never reported.
  */
-async function reportedOf(sourceDir: string, candidate: CandidateV1, state: unknown): Promise<Pick<CollectionV1, "decisions" | "debug">> {
+async function reportedOf(sourceDir: string, candidate: CandidateV1, state: unknown): Promise<Pick<CollectionV1, "decisions" | "debug" | "flow">> {
   const attempt = (state as { currentAttempt: number }).currentAttempt;
   if (attempt < 1) return {};
   let live: Buffer;
@@ -134,7 +136,8 @@ async function reportedOf(sourceDir: string, candidate: CandidateV1, state: unkn
   }
   if (execution === null || typeof execution !== "object" || Array.isArray(execution)) return {};
   const fields = execution as Record<string, unknown>;
-  return { ...(Object.hasOwn(fields, "decisions") ? { decisions: fields.decisions } : {}), ...(Object.hasOwn(fields, "debug") ? { debug: fields.debug } : {}) };
+  return { ...(Object.hasOwn(fields, "decisions") ? { decisions: fields.decisions } : {}), ...(Object.hasOwn(fields, "debug") ? { debug: fields.debug } : {}),
+    ...(Object.hasOwn(fields, "flow") ? { flow: fields.flow } : {}) };
 }
 
 export async function collectExecution(input: StartEnvelopeV3, afterSeq: number): Promise<CollectionV1> {

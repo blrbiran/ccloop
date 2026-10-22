@@ -190,6 +190,8 @@ export function buildVerifierPrompt(context: AttemptContext): string {
   // Reported decisions and debug (spec 2026-10-20 §4.2): supplemental reporting, not execution evidence, like taskResult.
   delete fields.decisions;
   delete fields.debug;
+  // flow (spec 2026-10-22-flow-answer-key-design.md §4 item 8): Orca's flow-step report, not execution evidence either.
+  delete fields.flow;
   const executionCore = Object.defineProperties({}, Object.fromEntries(Object.entries(fields).filter(([, descriptor]) => descriptor.enumerable)));
 
   return [

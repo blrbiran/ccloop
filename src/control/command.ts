@@ -206,6 +206,8 @@ const collectionSchema = z.object({
   // Reported decisions and debug (spec 2026-10-20 §4.3): carried opaquely, absent when not reported; protocols 3 and 4.
   decisions: z.unknown().optional(),
   debug: z.unknown().optional(),
+  // Orca's flow-step report (spec 2026-10-22-flow-answer-key-design.md §4 item 7): the same, protocols 3 and 4.
+  flow: z.unknown().optional(),
   // Failure causes (spec 2026-10-21 §5): top level, present iff terminal and the state has one. Orca's strict collect parse
   // must accept it in the same repin.
   failureCause: z.object({

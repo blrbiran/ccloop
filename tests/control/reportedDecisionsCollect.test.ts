@@ -145,3 +145,38 @@ describe("criterion 4 (debug.located): collect answers a codex run's located at 
     expect(Object.hasOwn(report.debug as object, "located")).toBe(expected !== undefined && "located" in expected);
   });
 });
+
+// The `flow` answer key (ccloop spec 2026-10-22-flow-answer-key-design.md §4 item 7, §7 criterion 5): Orca's flow engine
+// reads `flow` from collect's top level (a `needs` parks the step for a person), and Orca's collect parse is strict -- so a
+// real (fake-codex) run's flow must reach collect in Orca's shape, through the command's strict response schema, and a run
+// that reported none must answer no `flow` key.
+describe("criterion 5 (flow): collect answers a codex run's flow at the top level", () => {
+  const needs = { kind: "input", question: "Which audience?", candidates: ["devs", "managers"] };
+  it.each([
+    ["with flow", { needs, effect: { remoteId: "media-42", url: null } }, { needs, effect: { remoteId: "media-42" } }],
+    ["with flow, effect null", { needs, effect: null }, { needs }],
+    ["without flow", null, undefined],
+  ] as const)("%s", { timeout: 60_000 }, async (_name, flow, expected) => {
+    const f = await envelopeAt();
+    const codex = await codexFixture("reported"); roots.push(codex.dir);
+    await writeFile(`${codex.marker}.reported.json`, JSON.stringify({ decisions: null, debug: { choseInstead: "x" }, flow }));
+    codex.contract.executionPolicy.perAttemptTimeoutMs = 15_000;
+    const state = await runLoop(codex.contract, join(f.root, "run"), new CodexAdapter(codex.config));
+    expect(state.status).toBe("succeeded");
+    await finalizeHandoffCandidate(f.envelope, null, state, { result: "complete", usageHighWater: 0 });
+    const collected = await runControlCommand(["collect", "--agents", join(f.root, "agents.json")], JSON.stringify({ input: f.envelope, afterSeq: 0 }));
+    expect(collected.code, collected.stderr).toBe(0);
+    const report = JSON.parse(collected.stdout) as Record<string, unknown>;
+    expect(report.debug).toEqual({ choseInstead: "x" });
+    expect(report.flow).toEqual(expected);
+    expect(Object.hasOwn(report, "flow")).toBe(expected !== undefined);
+    if (expected !== undefined) expect(Object.keys(report).indexOf("flow")).toBe(Object.keys(report).indexOf("debug") + 1);
+  });
+
+  it.each([3, 4] as const)("the control command's strict response schema lets flow through for protocol %s", async (protocol) => {
+    const f = await settledRun([{ ...core, debug: { choseInstead: "x" }, flow: { needs } }], protocol);
+    const collected = await runControlCommand(["collect", "--agents", join(f.root, "agents.json")], JSON.stringify({ input: f.envelope, afterSeq: 0 }));
+    expect(collected.code, collected.stderr).toBe(0);
+    expect(JSON.parse(collected.stdout)).toMatchObject({ debug: { choseInstead: "x" }, flow: { needs } });
+  });
+});
