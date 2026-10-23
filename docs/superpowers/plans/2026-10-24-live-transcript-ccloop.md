@@ -82,3 +82,21 @@ marker into `events.jsonl`. L3 per-chunk `toString`; drop lines > 1 MiB; skip th
 `npm run typecheck`, `npm run build`, full vitest JSON → `node scripts/check-known-reds.mjs` (RC 0), with
 `CCLOOP_CACHE_DIR=/private/tmp/orca-ffec7b28/ccloop-cache`. A red that is not this branch's is also shown red on untouched main.
 Not merged, not pushed.
+
+## As built (Orca session `ffec7b28`, 2026-10-24; supersedes the task list above where they differ)
+
+- **Two branches.** `feat/live-transcript` holds Tasks 1-4 (line splitter, codex/omp folds, codex/omp transcript and
+  caps, the O5 rewrite) and turns no other existing criterion red. `feat/live-transcript-rulings` is stacked on it and holds
+  Tasks 5-7 (claude runner transcript, collect `transcripts` + `features.transcripts`, `perf:stream`) plus a collect fix.
+  Those tasks necessarily change bytes that five existing criteria pin exactly; per the dispatch they were not rewritten
+  and wait for a named ruling (re-measured at the stacked branch's tip):
+  `tests/runtime/claude/claudeAgentAdapter.test.ts:133` (a call's evidence file list gains `transcript.jsonl`),
+  `tests/control/singleCall.test.ts:87-107` (the source tree gains `run/claude/1/single-call/call-*/transcript.jsonl`),
+  `tests/control/protocol4.test.ts:13` and `tests/control/savedResultEvidence.test.ts:110` (`features` gains
+  `transcripts: "v1"`), `tests/control/savedResultEvidence.test.ts:107` and `tests/control/toolRulesCollect.test.ts:107`
+  (collect's exact key list gains `transcripts` after real agent calls).
+- **L7 bounds growth, not the absolute peak** (spec §4.3 wording). Measured: the codex phase process peaked at ~47 MiB with
+  only 8 MiB of output, from a pre-existing 16 MiB up-front buffer for final.json (now read in 64 KiB pieces). Growth over
+  baseline after that, three runs: codex 24.5-26.2 MiB, omp 24.4-26.3 MiB, claude 25.6-31.0 MiB (main's unchanged runner,
+  same workload: 25.2-26.0 MiB). Margin for claude is small and set by V8's floating garbage, not retention.
+- **D3 stands**: no 1 GiB stop on claude's own stream. **D1 stands**: `work.operatorNote` (10.2.6, L6) is not built.
