@@ -212,17 +212,43 @@ setInterval(()=>{},1000);
 
   // Human ruling (2026-10-13, session 808feb6a): the fake has no import, so Node 22 parses it as CommonJS and a
   // top-level for-await is a SyntaxError; the body is wrapped so the criterion no longer depends on PATH's node.
-  it("stops an oversized event stream and keeps its evidence within the output bound", async () => {
+  // Ruling O5 (Orca session 0e13a9b7): 「同意。但是我们这里可能要定一下最大能支持多大的输出。作为一个hard limit ，比如1G」, Orca spec
+  // 2026-10-23-live-transcript-design.md §11.2 (a): a call printing past 16 MiB and under 1 GiB completes; events.jsonl stays
+  // capped at 16 MiB (cut at a line end, labelled stdoutTruncated) and transcript.jsonl (cap 128 MiB) holds the whole stream.
+  it("completes an event stream past 16 MiB and under 1 GiB, its evidence capped and its transcript whole", async () => {
     const f = await fixture();
     await writeFile(f.binary, `#!/usr/bin/env node
 (async()=>{
 for await(const chunk of process.stdin){}
-process.stdout.write("x".repeat(17*1024*1024));
-setInterval(()=>{},1000);
+const message={role:"assistant",content:[{type:"text",text:JSON.stringify({summary:"big",primaryTargetPaths:[]})}],provider:"gateway",model:"model-a",stopReason:"stop",usage:{input:8,output:2,cacheRead:3,cacheWrite:1,totalTokens:14}};
+const update=JSON.stringify({type:"message_update",delta:"u".repeat(64*1024)})+"\\n";
+for(let i=0;i<17*16+1;i++){if(!process.stdout.write(update))await new Promise(r=>process.stdout.once("drain",r));}
+process.stdout.write([{type:"message_end",message},{type:"agent_end",isTerminal:true}].map(r=>JSON.stringify(r)).join("\\n")+"\\n");
 })();
 `, { mode: 0o700 });
     const outcome = await runOmpPhase(f.config, "plan", "prompt", f.context);
+    expect(outcome.reason).toBe("completed");
+    expect(outcome.stream.phase!.value()).toMatchObject({ summary: "big", tokenUsage: 14 });
+    const events = await readFile(join(outcome.evidenceDir, "events.jsonl")), transcript = await readFile(join(outcome.evidenceDir, "transcript.jsonl"));
+    expect(transcript.length).toBeGreaterThan(17 * 1024 * 1024); expect(transcript.at(-1)).toBe(10);
+    expect(events.length).toBeLessThanOrEqual(16 * 1024 * 1024); expect(events.length).toBeGreaterThan(15 * 1024 * 1024); expect(events.at(-1)).toBe(10);
+    expect(transcript.subarray(0, events.length).equals(events)).toBe(true);
+    expect(JSON.parse(await readFile(join(outcome.evidenceDir, "outcome.json"), "utf8"))).toMatchObject({ reason: "completed", stdoutTruncated: true, transcriptTruncatedAt: null });
+  }, 30000);
+
+  // Ruling O5 (as above), spec §11.2 (b): a call whose stdout passes 1 GiB is stopped with output-limit.
+  it("stops an event stream past 1 GiB with output-limit", async () => {
+    const f = await fixture();
+    await writeFile(f.binary, `#!/usr/bin/env node
+(async()=>{
+for await(const chunk of process.stdin){}
+const block=Buffer.alloc(1024*1024,0x78);
+const pump=()=>{while(process.stdout.write(block));process.stdout.once("drain",pump);};pump();
+})();
+`, { mode: 0o700 });
+    const config = { ...f.config, installation: { ...f.config.installation, timeoutMs: 120_000 } };
+    const outcome = await runOmpPhase(config, "plan", "prompt", { ...f.context, state: { ...f.context.state, budgetSnapshot: { ...f.context.state.budgetSnapshot, timeRemainingMs: 120_000 } } });
     expect(outcome.reason).toBe("output-limit");
-    expect((await stat(join(outcome.evidenceDir, "events.jsonl"))).size).toBe(16 * 1024 * 1024);
-  });
+    expect(JSON.parse(await readFile(join(outcome.evidenceDir, "outcome.json"), "utf8"))).toMatchObject({ reason: "output-limit", stdoutTruncated: true });
+  }, 150_000);
 });

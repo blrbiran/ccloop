@@ -54,10 +54,31 @@ describe("Codex phase process",()=>{
     expect((await runCodexPhase(f.config,{phase:"plan",prompt:"p",context:f.context})).reason).toBe("spawn-error");
     await expect(read(f.marker)).rejects.toThrow();
   });
-  it.each(["nonzero","missing-final","symlink","output-limit"])("refuses %s output",async(mode)=>{
+  it.each(["nonzero","missing-final","symlink"])("refuses %s output",async(mode)=>{
     const f=await fixture(mode);const r=await runCodexPhase(f.config,{phase:"plan",prompt:"p",context:f.context});
-    expect(r.reason).toBe(mode==="nonzero"?"exit-error":mode==="output-limit"?"output-limit":"io-error");
+    expect(r.reason).toBe(mode==="nonzero"?"exit-error":"io-error");
   },10000);
+  // Ruling O5 (Orca session 0e13a9b7): 「同意。但是我们这里可能要定一下最大能支持多大的输出。作为一个hard limit ，比如1G」, Orca spec
+  // 2026-10-23-live-transcript-design.md §11.2 (a): a call printing past 16 MiB and under 1 GiB completes; events.jsonl stays
+  // capped at 16 MiB (cut at a line end, labelled stdoutTruncated) and transcript.jsonl (cap 128 MiB) holds the whole stream.
+  it("completes a call printing past 16 MiB and under 1 GiB, its evidence capped and its transcript whole",async()=>{
+    const f=await fixture("large-stream");const r=await runCodexPhase(f.config,{phase:"plan",prompt:"p",context:f.context});
+    expect(r.reason).toBe("completed");expect(r.final).not.toBeNull();
+    const events=await readFile(join(r.evidenceDir,"events.jsonl")),transcript=await readFile(join(r.evidenceDir,"transcript.jsonl"));
+    expect(transcript.length).toBeGreaterThan(17*1024*1024);expect(transcript.at(-1)).toBe(10);
+    expect(transcript.toString("utf8")).toContain('"type":"turn.completed"');
+    expect(events.length).toBeLessThanOrEqual(16*1024*1024);expect(events.length).toBeGreaterThan(15*1024*1024);expect(events.at(-1)).toBe(10);
+    expect(transcript.subarray(0,events.length).equals(events)).toBe(true);
+    expect(JSON.parse(await read(join(r.evidenceDir,"outcome.json")))).toMatchObject({reason:"completed",stdoutTruncated:true,transcriptTruncatedAt:null});
+  },30000);
+  // Ruling O5 (as above), spec §11.2 (b): a call whose stdout passes 1 GiB is stopped with output-limit.
+  it("stops a call printing past 1 GiB with output-limit",async()=>{
+    const f=await fixture("flood");f.config.timeoutMs=120000;f.context.state.budgetSnapshot.timeRemainingMs=120000;
+    const r=await runCodexPhase(f.config,{phase:"plan",prompt:"p",context:f.context});
+    expect(r.reason).toBe("output-limit");
+    expect(JSON.parse(await read(join(r.evidenceDir,"outcome.json")))).toMatchObject({reason:"output-limit",stdoutTruncated:true});
+    const {pid}=JSON.parse(await read(f.marker));await expect.poll(()=>alive(pid),{timeout:2000}).toBe(false);
+  },150000);
   it("never reuses a preceding final message",async()=>{
     const f=await fixture();const a=await runCodexPhase(f.config,{phase:"plan",prompt:"p",context:f.context});
     f.config.command[2]="missing-final";const b=await runCodexPhase(f.config,{phase:"plan",prompt:"p",context:f.context});
