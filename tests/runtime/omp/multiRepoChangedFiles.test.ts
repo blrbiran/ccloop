@@ -42,6 +42,8 @@ describe("omp with an extra repository (C13)", () => {
     const state = await runLoop(contract, runDir, new OmpAdapter(installation as never));
     expect({ status: state.status, stopReason: state.stopReason }).toEqual({ status: "succeeded", stopReason: "success condition satisfied" });
     const input = { ...envelope, work: { ...envelope.work, contract, additionalRepos: [{ key: "lib", targetRepo: lib, base: "HEAD" }] } } as LoopStartEnvelope;
-    expect((await collectExecution(input, 0)).dirs).toEqual([{ key: "lib", resultRepo: "repos/lib", changedPaths: ["lib/extra.txt"] }]);
+    // Review M7: the published run's attempt commit in the extra repository.
+    const attemptSha = await git(lib, "rev-parse", `refs/ccloop/run/attempts/1`);
+    expect((await collectExecution(input, 0)).dirs).toEqual([{ key: "lib", resultRepo: "repos/lib", changedPaths: ["lib/extra.txt"], attemptSha }]);
   }, 60_000);
 });
