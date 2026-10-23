@@ -2,6 +2,7 @@
 // `work.additionalRepos` names each extra repository's target and base, in the contract's order. At accept every extra
 // `targetRepo` is absolute and every extra contract `repoPath` is a canonical directory, and the repositories are
 // pairwise distinct with none inside another; anything else is `control-request-invalid`.
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,13 +11,16 @@ import { parseControlRequest } from "../../src/control/protocol.js";
 import { fixture } from "./optionalFixture.js";
 
 const roots: string[] = [];
+// Review I1: accept reads each working repository's git common directory, so every repoPath is a repository of its own.
+const gitInit = (path: string) => { execFileSync("git", ["init", "-q"], { cwd: path }); };
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
 async function world(keys = ["lib", "docs"]) {
   const { root, envelope } = await fixture(); roots.push(root);
+  gitInit(root);
   const elsewhere = await realpath(await mkdtemp(join(tmpdir(), "ccloop-multi-repo-"))); roots.push(elsewhere);
   const dirs: Record<string, string> = {};
-  for (const key of keys) { dirs[key] = join(elsewhere, key); await mkdir(dirs[key]!); }
+  for (const key of keys) { dirs[key] = join(elsewhere, key); await mkdir(dirs[key]!); gitInit(dirs[key]!); }
   const contract = { ...envelope.work.contract, context: { ...envelope.work.contract.context, repoKey: "app",
     additionalRepos: keys.map((key) => ({ key, repoPath: dirs[key]!, targetPaths: ["src/**"] })) } };
   const work = { ...envelope.work, contract, additionalRepos: keys.map((key) => ({ key, targetRepo: join(elsewhere, `target-${key}`), base: "main" })) };
@@ -60,8 +64,10 @@ describe("work.additionalRepos on the start envelope (C2)", () => {
     const extras = envelope.work.contract.context.additionalRepos;
     refuses(withExtras(envelope, [extras[0], { ...extras[1]!, repoPath: dirs.lib! }])); // equal
     await mkdir(join(dirs.lib!, "inner"));
+    gitInit(join(dirs.lib!, "inner")); // a repository of its own: only the nesting check refuses it
     refuses(withExtras(envelope, [extras[0], { ...extras[1]!, repoPath: join(dirs.lib!, "inner") }])); // nested
     await mkdir(join(envelope.work.contract.context.repoPath, "inside"), { recursive: true });
+    gitInit(join(envelope.work.contract.context.repoPath, "inside"));
     refuses(withExtras(envelope, [extras[0], { ...extras[1]!, repoPath: join(envelope.work.contract.context.repoPath, "inside") }])); // inside the primary
     const [lib, docs] = envelope.work.additionalRepos;
     refuses(withWork(envelope, { additionalRepos: [lib, { ...docs!, targetRepo: lib!.targetRepo }] })); // equal targets

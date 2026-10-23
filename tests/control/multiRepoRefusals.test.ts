@@ -2,6 +2,7 @@
 // recovery bundle or verify one repository, so a multi-repo envelope is refused by name at accept -- a non-null
 // inputCheckpoint answers control-multi-repo-continuation-unsupported, the verify-saved-result mode
 // control-multi-repo-recovery-unsupported -- and both eligibility methods answer ineligible with the recovery code.
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +18,8 @@ async function multiEnvelope(): Promise<LoopStartEnvelope> {
   const { root, envelope } = await fixture(); roots.push(root);
   const elsewhere = await realpath(await mkdtemp(join(tmpdir(), "ccloop-multi-refusal-"))); roots.push(elsewhere);
   await mkdir(join(elsewhere, "lib"));
+  // Review I1: accept reads each working repository's git common directory.
+  for (const path of [root, join(elsewhere, "lib")]) execFileSync("git", ["init", "-q"], { cwd: path });
   const contract = { ...envelope.work.contract, context: { ...envelope.work.contract.context, repoKey: "app",
     additionalRepos: [{ key: "lib", repoPath: join(elsewhere, "lib"), targetPaths: ["lib/**"] }] } };
   return { ...envelope, work: { ...envelope.work, contract, additionalRepos: [{ key: "lib", targetRepo: join(elsewhere, "target-lib"), base: "main" }] } };

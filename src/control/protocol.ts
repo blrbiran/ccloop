@@ -1,5 +1,6 @@
 import { budgetAmountSchema, tokenPolicySchema, type TokenPolicy, type BudgetAmount } from "../budget/tokenPolicy.js";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
@@ -421,8 +422,21 @@ function validateAdditionalRepos(work: LoopWork, method: ControlMethodV1): void 
     if (!isAbsolute(repo.repoPath)) throw new ControlProtocolError("control-request-invalid");
     if (method === "accept") validateCanonicalDirectory(repo.repoPath);
   }
+  // Review I1: two worktrees of one repository share its git common directory, so at accept each working repository's
+  // common directory (realpath) must be its own; a path that is not a git working tree is refused too.
+  if (method === "accept") {
+    const commons = [work.contract.context.repoPath, ...extras.map((repo) => repo.repoPath)].map((path) => {
+      try {
+        return realpathSync(resolve(path, execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: path, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()));
+      } catch {
+        throw new ControlProtocolError("control-request-invalid");
+      }
+    });
+    if (new Set(commons).size !== commons.length) throw new ControlProtocolError("control-request-invalid");
+  }
+  const real = (path: string): string => { try { return realpathSync(path); } catch { return resolve(path); } };
   const disjoint = (paths: string[]): void => {
-    const resolved = paths.map((path) => resolve(path));
+    const resolved = paths.map(real);
     for (const [index, left] of resolved.entries()) {
       for (const right of resolved.slice(index + 1)) {
         if (isWithin(left, right) || isWithin(right, left)) throw new ControlProtocolError("control-request-invalid");
