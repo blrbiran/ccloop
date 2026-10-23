@@ -103,3 +103,15 @@ Not merged, not pushed.
   rendered by its own lines in plan and execute (never verify, never through priorFailureLines), scoped by
   `src/runtime/operatorNote.ts`. Criterion `tests/runtime/operatorNote.test.ts`; mutations L6a-c seen red.
 - Mutations: 23, all red, restores 0 bytes (`/private/tmp/orca-ffec7b28/lt-mutations.log`).
+
+### Review round (Orca session `ffec7b28`, independent review, no Critical)
+
+- I1: codex/omp open both records before `spawn()`; a record that cannot be opened is `io-error` with no child (omp:
+  `neverStarted`), the other record closed. I2: each record in its own try; a capped record stops for good on a write error;
+  a transcript write error only stops the transcript (`transcriptError` in outcome.json), an events error still stops the
+  call. I3: positional writes, marker written at the cut before the truncate. I4: both 1 GiB cases assert the marker
+  (`transcriptTruncatedAt: 0`) and that the agent is gone.
+- collect `transcripts`: a directory that cannot be read (any error) contributes no entries and the listing goes on, so one
+  unreadable directory never fails a collect Orca polls. Order is kind-major (claude, codex, omp), attempt, phase name,
+  seq; `seq` is by `startedAt` (`ps lstart`, 1 s resolution), then the call directory's birth time, then name.
+- `work.operatorNote` is refused next to `mode: "verify-saved-result"`, as `priorFailures` is.

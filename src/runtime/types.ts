@@ -8,10 +8,10 @@ export type RequiredCheckResult = { command: string; stdout: string; stderr: str
  * attempt's plan and execute. evidence is null when it could not be recovered (e.g. after a crash, no matching file). */
 export type LastFailure = { rejectCategory: string; failingCommand: string | null; evidence: string[] | null };
 
-/** Prior-failures spec 2026-10-21 §2.2: one earlier run's failure as the attempt sees it (the wire's runId is dropped:
- * it is never rendered). Oldest first, as on the wire. */
 /** Operator note (Orca spec 2026-10-23-live-transcript-design.md §10.2.6): the person's note for the next attempt(s). */
 export type OperatorNote = { text: string; scope: "next-attempt" | "remaining-attempts" };
+/** Prior-failures spec 2026-10-21 §2.2: one earlier run's failure as the attempt sees it (the wire's runId is dropped:
+ * it is never rendered). Oldest first, as on the wire. */
 export type PriorFailure = { rejectCategory: string; failingCommand: string | null; evidence: string[] | null; failureCause?: string };
 
 export type AttemptContext = {

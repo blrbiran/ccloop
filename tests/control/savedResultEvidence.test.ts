@@ -104,6 +104,8 @@ it('captures original attempt, usage, full snapshot and exact runtime bytes befo
  const legacy=await f.rpc('collect',{input:f.input,afterSeq:0});expect(legacy.code,legacy.stderr).toBe(0);
  // Ruling: human approved rewriting all necessary criteria (Orca session 9ec98639, 2026-10-21): a failed terminal now also
  // carries the top-level failureCause (failure-causes spec §5); the v3 terminal object itself is unchanged (next line).
+ // Ruling: 「这次批准改写所有必要的判据」 (Orca session ffec7b28, 2026-10-24): collect also lists the run's transcripts (live
+ // transcript spec §10.2.4), and features (line below) answers transcripts:'v1'.
  const collected=JSON.parse(legacy.stdout);expect(Object.keys(collected)).toEqual(['events','candidate','terminal','progress','failureCause','transcripts']);expect(collected.terminal.status).toBe('failed');
  expect(Object.keys(collected.terminal)).toEqual(['status','currentAttempt','attemptsUsed','lastTransitionAt','waitingOnHuman','stopReason','budgetSnapshot','recentFailures']);
  expect(Object.hasOwn(collected.candidate,'capsule')).toBe(false);

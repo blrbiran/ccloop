@@ -28,8 +28,9 @@ export type PhaseOutcome = {
    */
   readonly stream:CodexStream;
   /**
-   * The recorded events.jsonl evidence (at most 16 MiB, cut at a line end), read from disk on access (plan D4). It equals
-   * the call's stdout whenever that was under 16 MiB. No ccloop code reads it; the decoders read `stream`. Not enumerable.
+   * The recorded events.jsonl evidence, read from disk on access (plan D4): the call's whole stdout when that was at most
+   * 16 MiB, otherwise its first complete lines up to 16 MiB (stdoutTruncated in outcome.json). No ccloop code reads it; the
+   * decoders read `stream`. Not enumerable.
    */
   readonly events:string;
   // Orca handoff delivery C-3: usage observed in the stdout of a phase that did not complete; null otherwise.
@@ -37,6 +38,7 @@ export type PhaseOutcome = {
   // Failure causes (ccloop spec 2026-10-21 §3 "Every kind"): the errno of a spawn that failed, so ENOENT is executable-missing.
   spawnErrno?:string;
 };
+// The cap on events.jsonl, stderr and final.json. stdout itself is stopped only at STDOUT_HARD_LIMIT (live transcript §11.1).
 const LIMIT=16*1024*1024;
 const execFileAsync=promisify(execFile);
 // Codex phase isolation (ccloop spec 2026-10-18 §3.3, Orca session 3d229487): with an `installation` (production, through
