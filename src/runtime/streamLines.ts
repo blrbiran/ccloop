@@ -1,4 +1,4 @@
-import { closeSync, constants, ftruncateSync, openSync, readFileSync, writeSync } from "node:fs";
+import { closeSync, constants, fstatSync, ftruncateSync, openSync, readFileSync, writeSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -66,40 +66,52 @@ export function* textLines(text: string, maxLineBytes = MAX_LINE_BYTES): Generat
 
 /**
  * Live transcript (spec §10.2.2, §11.1): a record capped at `cap` bytes. Bytes go out through a kept-open descriptor with
- * writeSync, so they are in the file when write() returns (a SIGKILLed process loses none it accepted). When a chunk would
- * pass the cap, the file is cut back to the end of the last complete line under the cap, `marker(atBytes)` (if any) is
- * appended once, and nothing more is written; the caller's process goes on.
+ * positional writeSync at the record's own offset (no O_APPEND), so they are in the file when write() returns (a SIGKILLed
+ * process loses none it accepted). When a chunk would pass the cap, the record is cut back to the end of the last complete
+ * line under the cap: the marker (if any) is written at that offset first and the file is truncated after it, so a process
+ * that dies between the two still has its marker at the cut. Nothing more is written; the caller's process goes on.
+ * Review I2 (Orca session ffec7b28): any write error stops the record for good and is rethrown; the descriptor is never
+ * written again, so a later chunk can neither land after a gap nor go to a reused descriptor number.
  */
 export class CappedLineFile {
   private readonly fd: number;
-  private size = 0;
-  private lastLineEnd = 0;
+  private size: number;
+  private lastLineEnd: number;
   private stopped = false;
   private closed = false;
   truncatedAt: number | null = null;
 
   constructor(path: string, private readonly cap: number, private readonly marker?: (atBytes: number) => string) {
-    this.fd = openSync(path, "a", 0o600);
+    this.fd = openSync(path, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+    // An existing record is continued after its last byte (callers pre-create it empty).
+    this.size = fstatSync(this.fd).size;
+    this.lastLineEnd = this.size;
   }
 
   write(chunk: Buffer): void {
     if (this.stopped || this.closed) return;
-    if (this.size + chunk.length <= this.cap) {
-      this.writeAll(chunk);
-      const newline = chunk.lastIndexOf(10);
-      if (newline >= 0) this.lastLineEnd = this.size + newline + 1;
-      this.size += chunk.length;
-      return;
+    try {
+      if (this.size + chunk.length <= this.cap) {
+        this.writeAt(chunk, this.size);
+        const newline = chunk.lastIndexOf(10);
+        if (newline >= 0) this.lastLineEnd = this.size + newline + 1;
+        this.size += chunk.length;
+        return;
+      }
+      const room = this.cap - this.size;
+      const newline = room > 0 ? chunk.subarray(0, room).lastIndexOf(10) : -1;
+      let end = this.lastLineEnd;
+      if (newline >= 0) { this.writeAt(chunk.subarray(0, newline + 1), this.size); end = this.size + newline + 1; }
+      this.stopped = true;
+      this.truncatedAt = end;
+      const marker = this.marker === undefined ? Buffer.alloc(0) : Buffer.from(this.marker(end), "utf8");
+      if (marker.length > 0) this.writeAt(marker, end);
+      ftruncateSync(this.fd, end + marker.length);
+      this.size = end + marker.length;
+    } catch (error) {
+      this.stopped = true;
+      throw error;
     }
-    const room = this.cap - this.size;
-    const newline = room > 0 ? chunk.subarray(0, room).lastIndexOf(10) : -1;
-    let end = this.lastLineEnd;
-    if (newline >= 0) { this.writeAll(chunk.subarray(0, newline + 1)); end = this.size + newline + 1; }
-    ftruncateSync(this.fd, end);
-    this.size = end;
-    this.truncatedAt = end;
-    this.stopped = true;
-    if (this.marker !== undefined) this.writeAll(Buffer.from(this.marker(end), "utf8"));
   }
 
   close(): void {
@@ -108,9 +120,9 @@ export class CappedLineFile {
     closeSync(this.fd);
   }
 
-  private writeAll(bytes: Buffer): void {
+  private writeAt(bytes: Buffer, position: number): void {
     let offset = 0;
-    while (offset < bytes.length) offset += writeSync(this.fd, bytes, offset, bytes.length - offset);
+    while (offset < bytes.length) offset += writeSync(this.fd, bytes, offset, bytes.length - offset, position + offset);
   }
 }
 

@@ -59,3 +59,35 @@ describe("capped line file", () => {
     expect(out.truncatedAt).toBeNull();
   });
 });
+
+// Review I2/I3 (Orca session ffec7b28): a write error stops the record for good (a later chunk must not land after a gap at
+// a stale offset), and the record writes at its own offsets, never relying on O_APPEND.
+describe("capped line file, failure and offsets", () => {
+  it("stops recording after a write error and never writes again", async () => {
+    const path = await file();
+    const out = new CappedLineFile(path, 1024);
+    out.write(Buffer.from('{"a":1}\n'));
+    const { closeSync } = await import("node:fs");
+    closeSync((out as unknown as { fd: number }).fd); // the descriptor goes bad underneath
+    expect(() => out.write(Buffer.from('{"b":2}\n'))).toThrow();
+    // A descriptor number reused by another open file must never be written through again.
+    const { openSync, readFileSync } = await import("node:fs");
+    const other = join(path + ".other");
+    await writeFile(other, "", { mode: 0o600 });
+    const reused = openSync(other, "r+");
+    try {
+      expect(() => out.write(Buffer.from('{"c":3}\n'))).not.toThrow();
+      expect(readFileSync(other, "utf8")).toBe("");
+    } finally { closeSync(reused); }
+    expect(await readFile(path, "utf8")).toBe('{"a":1}\n');
+  });
+
+  it("writes at its own offset even when the file is opened by others in append mode", async () => {
+    const path = await file();
+    await writeFile(path, '{"pre":0}\n', { mode: 0o600 });
+    const out = new CappedLineFile(path, 1024);
+    out.write(Buffer.from('{"a":1}\n'));
+    out.close();
+    expect(await readFile(path, "utf8")).toBe('{"pre":0}\n{"a":1}\n');
+  });
+});
