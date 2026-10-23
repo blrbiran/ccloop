@@ -291,7 +291,10 @@ export async function loadSavedResultRecovery(input:LoopStartEnvelope,requireFen
  if(requireFence)await assertSavedResultFence(input,admission);
  return {...original,input,admission,manifest:loaded.manifest};
 }
+// Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.7, §19.2 P6): a saved result holds one repository; ineligible by name.
+const MULTI_REPO_INELIGIBLE={status:"unavailable" as const,reason:"control-multi-repo-recovery-unsupported"};
 export async function readSavedResultEligibility(input:LoopStartEnvelope):Promise<SavedResultEligibility>{
+ if(input.work.additionalRepos!==undefined)return MULTI_REPO_INELIGIBLE;
  try{const value=await loadSavedResultRecovery(input);return {status:"eligible",authorityKind:value.manifest.authorityKind,normalizedExecutionHash:value.admission.recoveryOf.normalizedExecutionHash};}
  catch(error){return {status:"unavailable",reason:error instanceof Error&&(error.message.startsWith("saved-result-")||["execution-format-invalid","execution-format-ambiguous-or-hidden"].includes(error.message))?error.message:"saved-result-evidence-invalid"};}
 }
@@ -313,6 +316,7 @@ export const savedResultSourcePackageSchema=savedResultPackageSchema.omit({admis
 export type SavedResultSourcePackage=z.infer<typeof savedResultSourcePackageSchema>;
 export interface SavedResultSourceInput {source:LoopStartEnvelope;sourceAttempt:number;packagePath:string;packageHash:string}
 export async function readSavedResultSourceEligibility(input:SavedResultSourceInput){
+ if(input.source.work.additionalRepos!==undefined)return MULTI_REPO_INELIGIBLE;
  try{
   positive.parse(input.sourceAttempt);hash.parse(input.packageHash);
   const raw=await privateBytes(input.packagePath,"package.json");if(digest(raw)!==input.packageHash)fail("saved-result-package-hash-mismatch");

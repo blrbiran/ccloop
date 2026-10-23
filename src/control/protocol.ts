@@ -450,7 +450,13 @@ function validateEnvelopePaths(envelope: StartEnvelopeV3, method: ControlMethodV
     if (!isAbsolute(skillsDir)) throw new ControlProtocolError("control-request-invalid");
     if (method === "accept") validateCanonicalDirectory(skillsDir);
   }
-  if (envelope.work.additionalRepos !== undefined) validateAdditionalRepos(envelope.work, method);
+  if (envelope.work.additionalRepos !== undefined) {
+    // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.7, §19.2 P6): continuation bundles one repository only, and
+    // saved-result recovery verifies one; both are refused at accept by name.
+    if (method === "accept" && envelope.inputCheckpoint !== null) throw new ControlProtocolError("control-multi-repo-continuation-unsupported");
+    if (method === "accept" && envelope.mode === "verify-saved-result") throw new ControlProtocolError("control-multi-repo-recovery-unsupported");
+    validateAdditionalRepos(envelope.work, method);
+  }
   if (envelope.inputCheckpoint === null) return;
   const bundle = validateCanonicalDirectory(envelope.inputCheckpoint.bundlePath);
   const inputRoot = resolve(sourceDir, "input");
