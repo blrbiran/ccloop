@@ -3,8 +3,12 @@
 // never part of `npm test`. A fake codex, omp and claude each print about 1 GiB of stream lines (each ≤ 1 MiB). The process
 // that reads the stream -- the phase process for codex and omp (runCodexPhase / runOmpPhase from dist/, so run
 // `npm run build` first), the runner for claude -- runs under `node --max-old-space-size=64` and samples its own
-// heapUsed+external+arrayBuffers every 100 ms. Exit 0 when every peak is ≤ 32 MiB and every call ran to the end; non-zero
-// over the limit, on an OOM, or when a call did not complete. Usage: node scripts/perf-stream.mjs [codex|omp|claude ...]
+// heapUsed+external+arrayBuffers every 100 ms. Exit 0 when every peak's growth over the process's baseline is ≤ 32 MiB and
+// every call ran to the end; non-zero over the limit, on an OOM, or when a call did not complete.
+// The bound is on growth (spec §4.3: "leaves the phase's RSS growth under 32 MiB"), not on the absolute peak L7 words:
+// measured at 87bb4b5, the codex phase process already holds ~45 MiB of loaded modules before any stream, with 8 MiB of
+// output as with 1 GiB. The baseline is sampled after the phase module is imported (codex, omp) or when the runner
+// starts (claude). Both numbers are printed. Usage: node scripts/perf-stream.mjs [codex|omp|claude ...]
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,10 +24,14 @@ const work = mkdtempSync(join(tmpdir(), "ccloop-perf-stream-"));
 // Shared by every measured process: imported first (`--import`), samples memory every 100 ms, writes the peak on exit.
 const sampler = join(work, "sampler.mjs");
 writeFileSync(sampler, `import { writeFileSync } from "node:fs";
-let peak = 0;
-const sample = () => { const m = process.memoryUsage(); peak = Math.max(peak, m.heapUsed + m.external + m.arrayBuffers); };
+let peak = 0, baseline = null;
+const current = () => { const m = process.memoryUsage(); return m.heapUsed + m.external + m.arrayBuffers; };
+const sample = () => { peak = Math.max(peak, current()); };
+// Called by the codex/omp driver once the phase module is loaded; the runner keeps the value taken here, at its start.
+globalThis.perfBaseline = () => { baseline = current(); peak = baseline; };
+globalThis.perfBaseline();
 setInterval(sample, 100).unref();
-process.on("exit", () => { sample(); writeFileSync(process.env.PERF_PEAK_FILE, String(peak)); });
+process.on("exit", () => { sample(); writeFileSync(process.env.PERF_PEAK_FILE, JSON.stringify({ peak, baseline })); });
 `);
 
 // The fake agents: each writes TOTAL bytes of lines of at most 1 MiB, honouring backpressure, then a valid ending.
@@ -56,10 +64,12 @@ const context = { runDir: join(dir, "run"), attempt: 1, worktreePath: dir, state
 let outcome;
 if (kind === "codex") {
   const { runCodexPhase } = await import(${JSON.stringify(join(ROOT, "dist/src/runtime/codex/runCodexPhase.js"))});
+  globalThis.perfBaseline();
   outcome = await runCodexPhase({ command: [process.execPath, fake], model: "perf", budgetMode: "soft", sandbox: "read-only", timeoutMs: 600000, killGraceMs: 100, idleTimeoutMs: null }, { phase: "plan", prompt: "p", context });
   if (outcome.reason === "completed") outcome.stream.usage.value();
 } else {
   const { runOmpPhase } = await import(${JSON.stringify(join(ROOT, "dist/src/runtime/omp/runOmpPhase.js"))});
+  globalThis.perfBaseline();
   const config = { schema: "ccloop-agent-config-v1", kind: "omp", installation: { kind: "omp", command: [fake], version: "18.10.1", configDir: null, timeoutMs: 600000, killGraceMs: 100, idleTimeoutMs: null, defaultModel: "gateway/model-a", profile: null }, selection: { agent: "omp", model: "gateway/model-a", contextWindow: "agent-default" } };
   outcome = await runOmpPhase(config, "plan", "p", context);
   if (outcome.reason === "completed") outcome.stream.phase.value();
@@ -90,12 +100,13 @@ for (const kind of runtimes) {
     result = spawnSync(process.execPath, ["--max-old-space-size=64", "--import", sampler, driver, kind, fake, dir], { cwd: dir, env, maxBuffer: 1024 * 1024 });
     completed = result.status === 0 && String(result.stdout) === "completed";
   }
-  let peak = null;
-  try { peak = Number(readFileSync(peakFile, "utf8")); } catch { /* the process died before its exit hook */ }
-  const peakMiB = peak === null ? null : peak / 1024 / 1024;
-  const ok = completed && peakMiB !== null && peakMiB <= LIMIT_MIB;
+  let measured = null;
+  try { measured = JSON.parse(readFileSync(peakFile, "utf8")); } catch { /* the process died before its exit hook */ }
+  const mib = (bytes) => (bytes / 1024 / 1024).toFixed(1);
+  const growthMiB = measured === null ? null : (measured.peak - measured.baseline) / 1024 / 1024;
+  const ok = completed && growthMiB !== null && growthMiB <= LIMIT_MIB;
   if (!ok) failed = true;
-  process.stdout.write(`${kind}: ${ok ? "ok" : "FAIL"} peak=${peakMiB === null ? "unknown" : peakMiB.toFixed(1)}MiB limit=${LIMIT_MIB}MiB exit=${result.status} signal=${result.signal ?? "none"} completed=${completed} elapsedMs=${Date.now() - started}\n`);
+  process.stdout.write(`${kind}: ${ok ? "ok" : "FAIL"} growth=${growthMiB === null ? "unknown" : growthMiB.toFixed(1)}MiB limit=${LIMIT_MIB}MiB peak=${measured === null ? "unknown" : mib(measured.peak)}MiB baseline=${measured === null ? "unknown" : mib(measured.baseline)}MiB exit=${result.status} signal=${result.signal ?? "none"} completed=${completed} elapsedMs=${Date.now() - started}\n`);
   if (!ok) process.stdout.write(`  stderr: ${String(result.stderr).slice(-2000)}\n`);
 }
 rmSync(work, { recursive: true, force: true });

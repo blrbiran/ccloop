@@ -191,11 +191,13 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
         const s=await file.stat();
         if(!s.isFile())throw new Error("final is not a regular file");
         if(s.size>LIMIT){finalTruncated=true;result.reason="output-limit";}else{
-          const b=Buffer.alloc(LIMIT+1);let length=0;
-          while(length<b.length){const {bytesRead}=await file.read(b,length,b.length-length,null);if(!bytesRead)break;length+=bytesRead;}
+          // Live transcript (criterion L7): read in 64 KiB pieces, still at most LIMIT+1 bytes, instead of allocating a
+          // 16 MiB buffer for every final message.
+          const parts:Buffer[]=[];let length=0;
+          while(length<LIMIT+1){const piece=Buffer.alloc(Math.min(64*1024,LIMIT+1-length));const {bytesRead}=await file.read(piece,0,piece.length,null);if(!bytesRead)break;parts.push(piece.subarray(0,bytesRead));length+=bytesRead;}
           if(length>LIMIT){finalTruncated=true;result.reason="output-limit";}
           else if(length===0)result.reason="io-error";
-          else result.final=b.subarray(0,length).toString("utf8");
+          else result.final=Buffer.concat(parts,length).toString("utf8");
         }
       }finally{await file.close();}
     }catch{result.reason="io-error";}

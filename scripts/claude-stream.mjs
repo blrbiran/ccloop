@@ -134,17 +134,23 @@ export function createTranscriptWriter(path, cap = TRANSCRIPT_LIMIT) {
   const fail = (error) => { stopped = true; process.stderr.write(`claude-runner: transcript not written: ${String(error)}\n`); };
   try { fd = openSync(path, "a", 0o600); } catch (error) { fail(error); }
   const writeAll = (bytes) => { let offset = 0; while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset); };
+  // The line goes out as a string (writeSync encodes it), so no copy of a long line is made here; a short write, which a
+  // regular file does not do in practice, is completed from its encoded bytes.
+  const writeText = (text) => {
+    const length = Buffer.byteLength(text, "utf8");
+    const written = writeSync(fd, text, null, "utf8");
+    if (written < length) writeAll(Buffer.from(text, "utf8").subarray(written));
+    return length;
+  };
   const put = (text) => {
     if (stopped) return;
-    const bytes = Buffer.from(`${text}\n`, "utf8");
     try {
-      if (size + bytes.length > cap) {
+      if (size + Buffer.byteLength(text, "utf8") + 1 > cap) {
         stopped = true;
-        writeAll(Buffer.from(`${JSON.stringify({ type: "ccloop.transcript-truncated", atBytes: size })}\n`, "utf8"));
+        writeText(`${JSON.stringify({ type: "ccloop.transcript-truncated", atBytes: size })}\n`);
         return;
       }
-      writeAll(bytes);
-      size += bytes.length;
+      size += writeText(`${text}\n`);
     } catch (error) { fail(error); }
   };
   return {
