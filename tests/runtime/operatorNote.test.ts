@@ -10,6 +10,7 @@ import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "..
 import { operatorNoteGate } from "../../src/runtime/operatorNote.js";
 import type { AttemptContext, OperatorNote } from "../../src/runtime/types.js";
 import { fixture } from "../control/optionalFixture.js";
+import { resultFixture } from "../control/taskResultFixture.js";
 import { codexFixture } from "./codex/fixture.js";
 
 const roots: string[] = [];
@@ -40,6 +41,13 @@ describe("work.operatorNote on the start envelope", () => {
     refused({ text: "", scope: "next-attempt" });
     refused({ text: "t", scope: "every-step" });
     refused({ text: "t", scope: "next-attempt", by: "someone" });
+  });
+
+  it("is refused next to mode verify-saved-result, which builds no prompt (review minor, Orca session ffec7b28)", async () => {
+    const f = await resultFixture(); roots.push(f.root);
+    const recovery = { ...f.input, protocol: 4, mode: "verify-saved-result", savedResultRecovery: { packagePath: f.sourceDir + "/input/recovery", packageHash: "a".repeat(64), admissionHash: "b".repeat(64), recoveryOf: { sourceRunId: "old-run", sourceAttempt: 1, capsuleHash: "c".repeat(64), snapshotHash: "d".repeat(64), normalizedExecutionHash: "e".repeat(64) } } };
+    parseControlRequest("accept", recovery);
+    expect(() => parseControlRequest("accept", { ...recovery, work: { ...recovery.work, operatorNote: NOTE } })).toThrow("control-request-invalid");
   });
 });
 

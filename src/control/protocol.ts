@@ -312,8 +312,9 @@ const v4StartEnvelopeSchema = z.object({
   claim: claimSchema.extend({ grant: z.object({ work: budgetAmountSchema.extend({ sessions: positiveSafeInteger }), handoff: amountSchema }).strict() }),
   inputCheckpoint: inputCheckpointSchema.nullable(), work: nullableLoopWorkSchema,
 }).strict().refine(e => (e.mode === undefined) === (e.savedResultRecovery === undefined) && (e.mode === undefined || e.inputCheckpoint === null)
-  // Prior-failures spec §2.1: a saved-result recovery builds no prompt, so it takes no prior failures.
-  && (e.mode === undefined || e.work.priorFailures === undefined));
+  // Prior-failures spec §2.1: a saved-result recovery builds no prompt, so it takes no prior failures -- nor an operator note
+  // (live transcript spec §10.2.6; review minor, Orca session ffec7b28).
+  && (e.mode === undefined || (e.work.priorFailures === undefined && e.work.operatorNote === undefined)));
 export const startEnvelopeSchema = z.union([legacyStartEnvelopeSchema, v4StartEnvelopeSchema]);
 export const handoffRequestSchema = z
   .object({
