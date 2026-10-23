@@ -39,6 +39,9 @@ describe("a rejection whose extra-worktree removal fails (review I2)", () => {
     expect(Object.keys(commits)).toEqual(["app", "lib"]);
     const ref = `refs/ccloop/${basename(runDir)}/attempts/1`;
     expect(await git(repos.lib!, "rev-parse", ref)).toBe(commits.lib!.sha);
-    expect(await git(repos.lib!, "rev-list", "--count", `${commits.lib!.base}..${ref}`)).toBe("1");
+    // Counted from the repository's own HEAD (the worktree's start), not from commits.json's base, which a second publish
+    // would move along with it.
+    expect(await git(repos.lib!, "rev-list", "--count", `${await git(repos.lib!, "rev-parse", "HEAD")}..${ref}`)).toBe("1");
+    expect(commits.lib!.base).toBe(await git(repos.lib!, "rev-parse", "HEAD"));
   }, 30_000);
 });
