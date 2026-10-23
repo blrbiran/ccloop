@@ -250,6 +250,11 @@ const pump=()=>{while(process.stdout.write(block));process.stdout.once("drain",p
     const config = { ...f.config, installation: { ...f.config.installation, timeoutMs: 120_000 } };
     const outcome = await runOmpPhase(config, "plan", "prompt", { ...f.context, state: { ...f.context.state, budgetSnapshot: { ...f.context.state.budgetSnapshot, timeRemainingMs: 120_000 } } });
     expect(outcome.reason).toBe("output-limit");
-    expect(JSON.parse(await readFile(join(outcome.evidenceDir, "outcome.json"), "utf8"))).toMatchObject({ reason: "output-limit", stdoutTruncated: true });
+    // Review I4 (Orca session ffec7b28): the flood has no newline, so the transcript is cut back to 0 and holds only its marker,
+    // and the agent's process is gone, as the codex case checks.
+    expect(JSON.parse(await readFile(join(outcome.evidenceDir, "outcome.json"), "utf8"))).toMatchObject({ reason: "output-limit", stdoutTruncated: true, transcriptTruncatedAt: 0 });
+    expect(await readFile(join(outcome.evidenceDir, "transcript.jsonl"), "utf8")).toBe('{"type":"ccloop.transcript-truncated","atBytes":0}\n');
+    const { pid } = JSON.parse(await readFile(join(outcome.evidenceDir, "process.json"), "utf8")) as { pid: number };
+    await expect.poll(() => { try { process.kill(pid, 0); return true; } catch { return false; } }, { timeout: 2000 }).toBe(false);
   }, 150_000);
 });

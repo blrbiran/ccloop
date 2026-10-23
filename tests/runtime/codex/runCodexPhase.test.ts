@@ -77,7 +77,9 @@ describe("Codex phase process",()=>{
     const f=await fixture("flood");f.config.timeoutMs=120000;f.context.state.budgetSnapshot.timeRemainingMs=120000;
     const r=await runCodexPhase(f.config,{phase:"plan",prompt:"p",context:f.context});
     expect(r.reason).toBe("output-limit");
-    expect(JSON.parse(await read(join(r.evidenceDir,"outcome.json")))).toMatchObject({reason:"output-limit",stdoutTruncated:true});
+    // Review I4 (Orca session ffec7b28): the flood has no newline, so the transcript is cut back to 0 and holds only its marker.
+    expect(JSON.parse(await read(join(r.evidenceDir,"outcome.json")))).toMatchObject({reason:"output-limit",stdoutTruncated:true,transcriptTruncatedAt:0});
+    expect(await read(join(r.evidenceDir,"transcript.jsonl"))).toBe('{"type":"ccloop.transcript-truncated","atBytes":0}\n');
     const {pid}=JSON.parse(await read(f.marker));await expect.poll(()=>alive(pid),{timeout:2000}).toBe(false);
   },150000);
   it("never reuses a preceding final message",async()=>{
