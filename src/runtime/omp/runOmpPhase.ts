@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { MaterializedAgentConfigV1 } from "../../agents/types.js";
 import type { AttemptContext } from "../types.js";
-import { effectiveIdleTimeoutMs, IdleWatch, lineFeeder, ompToolEvent, type IdleSnapshotV1 } from "../idleWatch.js";
+import { effectiveIdleTimeoutMs, IdleWatch, ompToolRow, type IdleSnapshotV1 } from "../idleWatch.js";
+import { attachOutcomeStream, CappedLineFile, jsonLine, LineSplitter, STDOUT_HARD_LIMIT, TRANSCRIPT_LIMIT, transcriptMarker } from "../streamLines.js";
+import { OmpStream, type OmpStreamPurpose } from "./ompStream.js";
 import { ompSkillsPromptBlock } from "./ompSkills.js";
 import { phaseSystemPrompt, type OmpPhase } from "./phasePrompt.js";
 
@@ -16,8 +18,11 @@ export interface OmpPhaseOutcome {
   reason: "completed" | "aborted" | "timeout" | "stalled" | "spawn-error" | "exit-error" | "output-limit" | "io-error";
   code: number | null;
   signal: NodeJS.Signals | null;
-  events: string;
   evidenceDir: string;
+  /** Live transcript (Orca spec 2026-10-23 §10.2.3): the call's stdout folded line by line; not enumerable. */
+  readonly stream: OmpStream;
+  /** The recorded events.jsonl evidence (≤ 16 MiB, cut at a line end), read from disk on access (plan D4); not enumerable. */
+  readonly events: string;
   neverStarted: boolean;
   /** Failure causes (ccloop spec 2026-10-21 §3 "Every kind"): the errno of a spawn that failed (ENOENT ⇒ executable-missing). */
   spawnErrno?: string;
@@ -37,6 +42,8 @@ export interface OmpProcessInput {
   phase: string;
   abortSignal?: AbortSignal;
   onProcessRegistered?: AttemptContext["onProcessRegistered"];
+  /** Live transcript: which decoder folds the stdout (the phase's with its tool rules, or the single call's). */
+  purpose: OmpStreamPurpose;
 }
 
 export async function runOmpPhase(
@@ -54,8 +61,10 @@ export async function runOmpPhase(
   const args = ["--profile", profile ?? "default", "--no-extensions", "--no-skills", "--no-tools", "--tools", tools,
     "--no-session", "--no-title", "--no-prewalk", "--model", config.selection.model,
     "--mode", "json", "-p", "--system-prompt", systemPath, "--cwd", context.worktreePath];
+  const toolRules = phase === "execute" ? context.contract?.executionPolicy?.toolRules : undefined;
   return runOmpProcess(config, {
     args, prompt, cwd: context.worktreePath, evidenceDir, phase,
+    purpose: { phase, selector: config.selection.model, ...(toolRules === undefined ? {} : { toolRules: { rules: toolRules, requiredChecks: context.contract.verification.requiredChecks } }) },
     timeoutMs: Math.min(config.installation.timeoutMs, context.state.budgetSnapshot.timeRemainingMs),
     abortSignal: context.abortSignal, onProcessRegistered: context.onProcessRegistered,
   });
@@ -65,12 +74,17 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
   const { args, evidenceDir } = input;
   const eventsPath = join(evidenceDir, "events.jsonl");
   const stderrPath = join(evidenceDir, "stderr.log");
-  await Promise.all([writeFile(eventsPath, "", { mode: 0o600 }), writeFile(stderrPath, "", { mode: 0o600 })]);
-  const result: OmpPhaseOutcome = { reason: "completed", code: null, signal: null, events: "", evidenceDir, neverStarted: false };
+  const transcriptPath = join(evidenceDir, "transcript.jsonl");
+  await Promise.all([writeFile(eventsPath, "", { mode: 0o600 }), writeFile(transcriptPath, "", { mode: 0o600 }), writeFile(stderrPath, "", { mode: 0o600 })]);
+  const stream = new OmpStream(input.purpose);
+  const result = attachOutcomeStream({ reason: "completed", code: null, signal: null, evidenceDir, neverStarted: false } as OmpPhaseOutcome, evidenceDir, stream);
+  // Live transcript (spec §10.2.2): omp's outcome.json now labels a truncated events.jsonl as codex's does.
+  let stdoutTruncated = false;
+  let transcriptTruncatedAt: number | null = null;
   // Activity watchdog (spec 2026-10-21 §2.3): recorded in outcome.json when the call was stopped as stalled.
   let idle: IdleSnapshotV1 | null = null;
   const persist = async (): Promise<OmpPhaseOutcome> => {
-    await writeFile(join(evidenceDir, "outcome.json"), JSON.stringify({ reason: result.reason, code: result.code, signal: result.signal, neverStarted: result.neverStarted, executable: config.installation.command[0], args, ...(result.reason === "stalled" && idle !== null ? { idle } : {}) }, null, 2), { mode: 0o600 });
+    await writeFile(join(evidenceDir, "outcome.json"), JSON.stringify({ reason: result.reason, code: result.code, signal: result.signal, neverStarted: result.neverStarted, executable: config.installation.command[0], args, stdoutTruncated, transcriptTruncatedAt, ...(result.reason === "stalled" && idle !== null ? { idle } : {}) }, null, 2), { mode: 0o600 });
     return result;
   };
   if (input.abortSignal?.aborted) { result.reason = "aborted"; result.neverStarted = true; return persist(); }
@@ -79,7 +93,6 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
   const profile = config.installation.profile as string | null;
   const env: NodeJS.ProcessEnv = { ...process.env, OMP_PROFILE: profile ?? "default" };
   if (config.installation.configDir !== null) env.PI_CODING_AGENT_DIR = config.installation.configDir;
-  const chunks: Buffer[] = [];
   let stdoutBytes = 0;
   let stderrBytes = 0;
   await new Promise<void>((resolve) => {
@@ -103,16 +116,20 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
     const timer = setTimeout(() => stop("timeout"), timeoutMs);
     // Activity watchdog (spec 2026-10-21 §2.2 omp): stdout/stderr bytes are activity; tool executions suspend the clock.
     const watch = new IdleWatch(effectiveIdleTimeoutMs(config.installation), () => { idle = watch.snapshot(); stop("stalled"); });
-    const feedTools = lineFeeder((line) => ompToolEvent(line, watch));
+    // Live transcript (spec §10.2.1-§10.2.3, §11.1): stdout goes to the 16 MiB evidence file and the 128 MiB transcript, each
+    // cut at a line end, and through the line folds; only the 1 GiB hard limit stops the agent for its output.
+    const events = new CappedLineFile(eventsPath, OUTPUT_LIMIT);
+    const transcript = new CappedLineFile(transcriptPath, TRANSCRIPT_LIMIT, transcriptMarker);
+    const splitter = new LineSplitter((line) => { const parsed = jsonLine(line); stream.push(parsed); if (parsed.kind === "row") ompToolRow(parsed.row, watch); });
     watch.start();
     input.abortSignal?.addEventListener("abort", abort, { once: true });
     child.stdout.on("data", (chunk: Buffer) => {
-      const kept = chunk.subarray(0, Math.max(0, OUTPUT_LIMIT - stdoutBytes));
+      if (closed) return;
       stdoutBytes += chunk.length;
-      try { appendFileSync(eventsPath, kept); } catch { stop("io-error"); }
-      watch.activity(); feedTools(kept);
-      chunks.push(kept);
-      if (stdoutBytes > OUTPUT_LIMIT) stop("output-limit");
+      watch.activity();
+      if (stdoutBytes > STDOUT_HARD_LIMIT) { stdoutTruncated = true; stop("output-limit"); return; }
+      try { events.write(chunk); transcript.write(chunk); } catch { stop("io-error"); }
+      splitter.write(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
       const kept = chunk.subarray(0, Math.max(0, OUTPUT_LIMIT - stderrBytes));
@@ -149,7 +166,10 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       clearTimeout(killTimer);
       clearTimeout(drainTimer);
       input.abortSignal?.removeEventListener("abort", abort);
-      result.events = Buffer.concat(chunks).toString("utf8");
+      splitter.end();
+      events.close(); transcript.close();
+      stdoutTruncated ||= events.truncatedAt !== null;
+      transcriptTruncatedAt = transcript.truncatedAt;
       resolve();
     });
     if (input.abortSignal?.aborted) abort();

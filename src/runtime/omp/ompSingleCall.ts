@@ -68,6 +68,7 @@ export async function runOmpSingleCall(config: MaterializedAgentConfigV1, reques
     "--system-prompt", systemPath, "--cwd", request.cwd, "--config", overlayPath];
   return runOmpProcess(config, {
     args, prompt: request.prompt, cwd: request.cwd, evidenceDir, phase: "single-call",
+    purpose: { phase: "single-call", selector: config.selection.model },
     timeoutMs: Math.max(1, deadline - Date.now()),
     abortSignal: request.signal, onProcessRegistered: request.onProcessRegistered,
   });

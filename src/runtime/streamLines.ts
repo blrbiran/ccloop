@@ -1,4 +1,5 @@
-import { closeSync, ftruncateSync, openSync, writeSync } from "node:fs";
+import { closeSync, ftruncateSync, openSync, readFileSync, writeSync } from "node:fs";
+import { join } from "node:path";
 
 /**
  * Live transcript (Orca spec docs/superpowers/specs/2026-10-23-live-transcript-design.md §10.2.3, ccloop plan
@@ -128,4 +129,20 @@ export function jsonLine(line: StreamLine): JsonLine {
 export function foldText<F extends { push(line: JsonLine): void }>(text: string, fold: F): F {
   for (const line of textLines(text)) fold.push(jsonLine(line));
   return fold;
+}
+
+/** Live transcript (Orca spec 2026-10-23 §11.1): a codex/omp call whose stdout passes 1 GiB stops as output-limit (runaway guard). */
+export const STDOUT_HARD_LIMIT = 1024 * 1024 * 1024;
+/** Spec §10.2.2: the live view's record of one call; past it recording stops at a line end and a marker says where. */
+export const TRANSCRIPT_LIMIT = 128 * 1024 * 1024;
+export const transcriptMarker = (atBytes: number): string => `${JSON.stringify({ type: "ccloop.transcript-truncated", atBytes })}\n`;
+
+/**
+ * Plan D4: a codex/omp outcome carries its stream folds and, for existing readers, the recorded events.jsonl text read from
+ * disk on access. Both are non-enumerable, so the outcome.json that spreads the outcome keeps its keys.
+ */
+export function attachOutcomeStream<T extends object, S>(result: T, evidenceDir: string, stream: S): T {
+  Object.defineProperty(result, "stream", { value: stream, enumerable: false });
+  Object.defineProperty(result, "events", { enumerable: false, get: () => { try { return readFileSync(join(evidenceDir, "events.jsonl"), "utf8"); } catch { return ""; } } });
+  return result;
 }

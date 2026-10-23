@@ -145,6 +145,9 @@ process.stdin.on("end",()=>{
     setInterval(()=>{},1000); return;
   }
   if(mode==="output-limit") {process.stdout.write("x".repeat(17*1024*1024)); return;}
+  // Live transcript (Orca spec 2026-10-23 §11.1): mode `flood` writes 1 MiB blocks of "x" with no newline, honouring
+  // backpressure, until it is killed -- a stdout past the 1 GiB hard limit, written cheaply.
+  if(mode==="flood") {const block=Buffer.alloc(1024*1024,0x78);const pump=()=>{while(process.stdout.write(block));process.stdout.once("drain",pump);};pump();return;}
   if(mode==="symlink") {unlinkSync(value("-o"));symlinkSync(marker,value("-o"));return;}
   const wireSchema=JSON.parse(readFileSync(value("--output-schema"),"utf8"));
   const schema=wireSchema.properties?.result??wireSchema;
@@ -180,7 +183,7 @@ process.stdin.on("end",()=>{
   }
   const respond=()=>{
   if(mode==="script" && phase==="execute") for(const [path,content] of Object.entries(entry.files)) writeFileSync(path,content);
-  if(phase==="execute" && ["skill-integration","integration","write-hang","no-usage","false-answer","high-usage","reported"].includes(mode)) writeFileSync("answer.txt","42\n");
+  if(phase==="execute" && ["skill-integration","integration","write-hang","no-usage","false-answer","high-usage","reported","large-stream"].includes(mode)) writeFileSync("answer.txt","42\n");
   // Reported decisions and debug (ccloop spec 2026-10-20 §5): mode `reported` behaves as `integration` and its execute
   // answer also carries `decisions` and `debug`: the fields of <marker>.reported.json when present, else one major and one
   // minor decision and a debug whose two unreported members are null, as codex's strict wire schema makes them.
@@ -206,6 +209,18 @@ process.stdin.on("end",()=>{
   if(mode==="split-utf8") {
     const b=Buffer.from(events),i=b.indexOf(Buffer.from("中文"))+1;
     process.stdout.write(b.subarray(0,i));setTimeout(()=>process.stdout.write(b.subarray(i)),10);return;
+  }
+  // Live transcript (spec §10.2.2, §11.1): mode `large-stream` first prints FAKE_CODEX_STREAM_MIB (default 17) MiB of
+  // reasoning items, each line 64 KiB, then answers as `integration` does (its execute writes answer.txt).
+  if(mode==="large-stream") {
+    const total=Number(process.env.FAKE_CODEX_STREAM_MIB??"17")*1024*1024;
+    const line=n=>JSON.stringify({type:"item.completed",item:{id:`r${n}`,type:"reasoning",text:"r".repeat(64*1024-80)}})+"\n";
+    let written=0,n=0;
+    const pump=()=>{
+      while(written<total){const chunk=line(n++);written+=Buffer.byteLength(chunk);if(!process.stdout.write(chunk)){process.stdout.once("drain",pump);return;}}
+      process.stdout.write(events);
+    };
+    pump();return;
   }
   process.stdout.write(mode==="bad-json" ? "not JSON\n" : events);
   if(mode==="nonzero") process.exitCode=7;

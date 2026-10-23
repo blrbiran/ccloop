@@ -4,15 +4,13 @@ import type { MaterializedAgentConfigV1 } from "../../agents/types.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
 import type { AttemptContext, RuntimeAdapter, SingleCallRequest, SingleCallResult } from "../types.js";
 import type { PhaseResults } from "../codex/protocol.js";
-import { decodeOmpPhase, ompUsageLowerBound } from "./ompProtocol.js";
 import { runOmpPhase } from "./runOmpPhase.js";
-import { decodeOmpSingleCall, runOmpSingleCall } from "./ompSingleCall.js";
+import { runOmpSingleCall } from "./ompSingleCall.js";
 import type { OmpPhase } from "./phasePrompt.js";
 import { observedChangedPaths, worktreeHead, worktreeSnapshot } from "./worktreeSnapshot.js";
-import { classifyOmpCall, type CallClassification } from "../failureCause.js";
+import type { CallClassification } from "../failureCause.js";
 import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
 import type { OmpPhaseOutcome } from "./runOmpPhase.js";
-import { ompToolRuleViolation } from "../toolRules.js";
 
 /**
  * Per-contract tool rules (spec 2026-10-22 §4 "omp after-exit check"): an execute call ran a command outside the
@@ -50,9 +48,9 @@ export class OmpAdapter implements RuntimeAdapter {
           else if (outcome.reason === "aborted") classification = null;
           else if (outcome.reason === "timeout") classification = { cause: "budget-exhausted", workObserved: true, detail: null };
           // Activity watchdog (spec 2026-10-21 §2.3): transient; retried when the phase is read-only or no tool ran.
-          else if (outcome.reason === "stalled") classification = { cause: "stalled", workObserved: classifyOmpCall(outcome.events).workObserved, detail: null };
+          else if (outcome.reason === "stalled") classification = { cause: "stalled", workObserved: outcome.stream.call.value().workObserved, detail: null };
           else if (outcome.reason === "spawn-error") classification = { cause: outcome.spawnErrno === "ENOENT" ? "executable-missing" : "unknown", workObserved: false, detail: outcome.spawnErrno ?? null };
-          else classification = classifyOmpCall(outcome.events);
+          else classification = outcome.stream.call.value();
           const observed = (error as { observedTokens?: unknown }).observedTokens;
           const observation: TryObservation = (error as { neverStarted?: unknown }).neverStarted === true ? { kind: "rule0" }
             : typeof observed === "number" && observed > 0 ? { kind: "tokens", tokens: observed } : { kind: "null" };
@@ -70,12 +68,13 @@ export class OmpAdapter implements RuntimeAdapter {
     // Per-contract tool rules (spec 2026-10-22 §4; plan Task 4): checked on every execute outcome, before any other reading,
     // so a violation followed by a timeout, a crash or a bad answer still ends the run as tool-rule-violated.
     const toolRules = phase === "execute" ? context.contract?.executionPolicy?.toolRules : undefined;
-    const violation = toolRules === undefined ? null : ompToolRuleViolation(outcome.events, toolRules, context.contract.verification.requiredChecks);
+    // Live transcript (Orca spec 2026-10-23 §10.2.3): runOmpPhase folded the check with the same rules while the call ran.
+    const violation = toolRules === undefined ? null : outcome.stream.toolRule?.value() ?? null;
     if (violation !== null) {
       await writeFile(join(outcome.evidenceDir, "tool-rule-violation.txt"), violation, { mode: 0o600 });
       let observedTokens: number | null = null;
       if (outcome.reason === "completed") {
-        try { observedTokens = decodeOmpPhase(phase, outcome.events, this.config.selection.model).tokenUsage ?? null; } catch { /* keep unknown */ }
+        try { observedTokens = (outcome.stream.phase!.value() as PhaseResults[P]).tokenUsage ?? null; } catch { /* keep unknown */ }
       }
       throw Object.assign(new OmpToolRuleViolated(outcome.evidenceDir, violation), observedTokens === null ? {} : { observedTokens });
     }
@@ -85,18 +84,18 @@ export class OmpAdapter implements RuntimeAdapter {
         await writeFile(join(outcome.evidenceDir, "worktree-mutation.json"), JSON.stringify({ before, after }), { mode: 0o600 });
         let observedTokens: number | null = null;
         if (outcome.reason === "completed") {
-          try { observedTokens = decodeOmpPhase(phase, outcome.events, this.config.selection.model).tokenUsage ?? null; } catch { /* keep unknown */ }
+          try { observedTokens = (outcome.stream.phase!.value() as PhaseResults[P]).tokenUsage ?? null; } catch { /* keep unknown */ }
         }
         throw Object.assign(new Error(`omp-read-only-phase-mutated: ${outcome.evidenceDir}`), observedTokens === null ? {} : { observedTokens });
       }
     }
     if (outcome.reason !== "completed") {
-      const lowerBound = ompUsageLowerBound(outcome.events);
+      const lowerBound = outcome.stream.lowerBound.value();
       if (lowerBound !== null) await writeFile(join(outcome.evidenceDir, "usage-lower-bound.json"), JSON.stringify({ tokens: lowerBound }), { mode: 0o600 });
       throw Object.assign(new Error(`omp-${outcome.reason}: ${outcome.evidenceDir}`), { neverStarted: outcome.neverStarted });
     }
     try {
-      const result = decodeOmpPhase(phase, outcome.events, this.config.selection.model);
+      const result = outcome.stream.phase!.value() as PhaseResults[P];
       await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(result.usageEvidence), { mode: 0o600 });
       return result;
     } catch (error) {
@@ -136,7 +135,7 @@ export class OmpAdapter implements RuntimeAdapter {
   async singleCall(request: SingleCallRequest): Promise<SingleCallResult> {
     const outcome = await runOmpSingleCall(this.config, request);
     if (outcome.reason !== "completed") {
-      const lowerBound = ompUsageLowerBound(outcome.events);
+      const lowerBound = outcome.stream.lowerBound.value();
       // Best-effort diagnostic: a failed write must not replace the refusal below and its booking.
       if (lowerBound !== null) await writeFile(join(outcome.evidenceDir, "usage-lower-bound.json"), JSON.stringify({ tokens: lowerBound }), { mode: 0o600 }).catch(() => undefined);
       // Ruling m4: a pre-spawn abort, a timeoutMs <= 0 or a spawn error is neverStarted (books 0, as types.ts observedTokensOf).
@@ -145,7 +144,7 @@ export class OmpAdapter implements RuntimeAdapter {
         outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {});
     }
     try {
-      const result = decodeOmpSingleCall(outcome.events, this.config.selection.model, outcome.evidenceDir);
+      const result = outcome.stream.singleCall!.value(outcome.evidenceDir);
       // Best-effort evidence: a failed write must not turn the decoded, observed answer into a null-booked failure.
       await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(result.usageEvidence), { mode: 0o600 }).catch(() => undefined);
       return result;

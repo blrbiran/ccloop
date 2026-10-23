@@ -5,13 +5,12 @@ import { readAgentCatalog } from "../../agents/agentCatalog.js";
 import type { InstallationV1 } from "../../agents/types.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
 import type { AttemptContext, RuntimeAdapter, SingleCallRequest, SingleCallResult } from "../types.js";
-import { addressableMcpServer, codexSingleCallArgs, codexSingleCallHome, decodeCodexSingleCall, effectiveCodexHome } from "./codexSingleCall.js";
-import { codexModelUsage, decodeCodexUsage, decodeCodexResult, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
+import { addressableMcpServer, codexSingleCallArgs, codexSingleCallHome, effectiveCodexHome } from "./codexSingleCall.js";
+import { codexResultOf, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
 import { runCodexPhase, type PhaseOutcome } from "./runCodexPhase.js";
 import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
 import { codexToolRuleRows } from "../toolRules.js";
-import { classifyRateLimit } from "./rateLimit.js";
-import { classifyCodexCall, type CallClassification } from "../failureCause.js";
+import type { CallClassification } from "../failureCause.js";
 import { phaseLimitMs, runWithTransientRetry, tryContext, type TryObservation, type TryResult } from "../transientRetry.js";
 
 /** Codex rate-limit spec §3.2: waits before each retry of a phase rejected by 429 before any work (three retries). */
@@ -68,15 +67,15 @@ export class CodexAdapter implements RuntimeAdapter {
 
   /** Spec §3 codex and §4 retry-safety: the cause of a failed call and whether retrying it could not have changed the worktree. */
   private failedTry<T>(phase: CodexPhase, outcome: PhaseOutcome, error: Error): TryResult<T> {
-    const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? classifyRateLimit(outcome.events) : null;
+    const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? outcome.stream.rateLimit.value() : null;
     let classification: CallClassification | null;
     if (outcome.reason === "aborted") classification = null;
     else if (outcome.reason === "timeout") classification = { cause: "budget-exhausted", workObserved: true, detail: null };
     // Activity watchdog (spec 2026-10-21 §2.3): a stalled call is transient; it is retried when no work was seen or the phase is read-only.
-    else if (outcome.reason === "stalled") classification = { cause: "stalled", workObserved: classifyCodexCall(outcome.events)?.workObserved ?? true, detail: null };
+    else if (outcome.reason === "stalled") classification = { cause: "stalled", workObserved: outcome.stream.call.value()?.workObserved ?? true, detail: null };
     else if (outcome.reason === "spawn-error") classification = { cause: outcome.spawnErrno === "ENOENT" ? "executable-missing" : "unknown", workObserved: false, detail: outcome.spawnErrno ?? null };
     else if (outcome.reason.startsWith("codex-skills-") || outcome.reason.startsWith("codex-phase-isolation-")) classification = { cause: "unknown", workObserved: false, detail: outcome.reason };
-    else classification = classifyCodexCall(outcome.events) ?? { cause: "unknown", workObserved: true, detail: null };
+    else classification = outcome.stream.call.value() ?? { cause: "unknown", workObserved: true, detail: null };
     // The 429 row keeps exactly the 2026-10-13 predicate; every other retryable cause needs a read-only phase or no work seen.
     const retrySafe = classification?.cause === "rate-limited" ? rateLimited === "before-work"
       : classification !== null && (phase !== "execute" || !classification.workObserved);
@@ -95,7 +94,7 @@ export class CodexAdapter implements RuntimeAdapter {
 
   /** One call's outcome as the phase's result, or the error it fails with (unchanged from before the shared loop). */
   private async decodePhase<P extends CodexPhase>(phase: P, outcome: PhaseOutcome): Promise<PhaseResults[P]> {
-    const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? classifyRateLimit(outcome.events) : null;
+    const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? outcome.stream.rateLimit.value() : null;
     if (outcome.reason === "aborted") throw new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens);
     // Spec §3.3: named; a rejection before any work books 0 (rateLimitedBeforeWork, observedTokensOf), any other keeps
     // the usage its stdout showed, or null.
@@ -113,13 +112,13 @@ export class CodexAdapter implements RuntimeAdapter {
     }
     if (phase === "execute") {
       // Completion and usage are independent facts; invalid finals must not erase actual spend.
-      let usage:ReturnType<typeof decodeCodexUsage>;
-      try { usage=decodeCodexUsage(outcome.events,true); }
+      let usage:ReturnType<typeof outcome.stream.uniqueUsage.value>;
+      try { usage=outcome.stream.uniqueUsage.value(); }
       catch(error) {
         await writeFile(join(outcome.evidenceDir,"decode-error.txt"),String(error),{mode:0o600});
         throw new Error(`${String(error)}: ${outcome.evidenceDir}`);
       }
-      const modelUsage=codexModelUsage(outcome.events,this.config.model) ?? undefined;
+      const modelUsage=outcome.stream.modelUsage.value(this.config.model) ?? undefined;
       await writeFile(join(outcome.evidenceDir,"usage.json"),JSON.stringify(usage.usageEvidence,null,2),{mode:0o600});
       const normalization=normalizeExecutionFinal(outcome.final);
       await writeFile(join(outcome.evidenceDir,"execution-normalization.json"),JSON.stringify(normalization),{mode:0o600});
@@ -145,10 +144,10 @@ export class CodexAdapter implements RuntimeAdapter {
         await writeFile(join(outcome.evidenceDir, "final-extraction.json"), JSON.stringify({ method: extraction.method, candidates: extraction.candidates, valid: extraction.valid, hidden, originalBytes: Buffer.byteLength(outcome.final, "utf8") }), { mode: 0o600 });
       }
       const final = extraction.method === "candidate" ? JSON.stringify(extraction.value) : outcome.final;
-      const result = decodeCodexResult(phase, outcome.events, final);
+      const result = codexResultOf(phase, outcome.stream.usage.value(), final);
       await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(result.usageEvidence, null, 2), { mode: 0o600 });
       // Orca accounts plan B3: codex runs one model, so the whole usage belongs to it.
-      const modelUsage = codexModelUsage(outcome.events, this.config.model);
+      const modelUsage = outcome.stream.modelUsage.value(this.config.model);
       return modelUsage === null ? result : { ...result, modelUsage };
     } catch (error) {
       await writeFile(join(outcome.evidenceDir, "decode-error.txt"), String(error), { mode: 0o600 });
@@ -217,6 +216,6 @@ export class CodexAdapter implements RuntimeAdapter {
           outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {});
       throw neverStarted ? Object.assign(error, { neverStarted: true }) : error;
     }
-    return decodeCodexSingleCall(outcome.events, outcome.final, this.config.model, outcome.evidenceDir);
+    return outcome.stream.singleCall.value(outcome.final, this.config.model, outcome.evidenceDir);
   }
 }
