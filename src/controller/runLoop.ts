@@ -56,6 +56,7 @@ import type {
   VerificationResult,
 } from "../runtime/types.js";
 import { isPartialExecutionResult, observedTokensOf } from "../runtime/types.js";
+import { operatorNoteGate } from "../runtime/operatorNote.js";
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { FailureFingerprint, LastTrustedBoundary, RunState, StopDecision } from "../state/types.js";
 import { cleanupAttemptWorkspace, createAttemptWorkspace, publishAttemptCommit, registerAttemptRefNamespace } from "../workspace/worktreeManager.js";
@@ -1396,6 +1397,9 @@ export async function runLoopFromState(
   const priorFailures: PriorFailure[] | undefined = options?.taskResultInput?.work.kind === "loop"
     ? options.taskResultInput.work.priorFailures?.map(({ runId: _runId, ...failure }) => failure)
     : undefined;
+  // Operator note (Orca spec 2026-10-23-live-transcript-design.md §10.2.6): from the accepted envelope, for plan and execute
+  // of the attempts its scope names; never for verify.
+  const noteFor = operatorNoteGate(options?.taskResultInput?.work.kind === "loop" ? options.taskResultInput.work.operatorNote : undefined);
   const lastFailureContext = (): { lastFailure?: LastFailure; priorFailures?: PriorFailure[] } => {
     const last = state.recentFailures.at(-1);
     if (last === undefined) return priorFailures === undefined ? {} : { priorFailures };
@@ -1622,7 +1626,7 @@ export async function runLoopFromState(
         await heartbeat.assertHeld();
         activePhase = "plan";
         const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal) =>
-          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext() }),
+          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt) }),
           { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true },
         );
 
@@ -1689,7 +1693,7 @@ export async function runLoopFromState(
         ? { timedOut: false as const, elapsedMs: 0, result: continuation.execution! }
         : await runPhaseWithTimeout(
         executeTimeoutMs,
-        (abortSignal) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext() }),
+        (abortSignal) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext(), ...noteFor(attempt) }),
         { awaitAbortedResult: true },
       );
 

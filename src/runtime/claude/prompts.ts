@@ -1,5 +1,5 @@
 import type { LoopContract } from "../../contract/schema.js";
-import type { AttemptContext, LastFailure, PriorFailure } from "../types.js";
+import type { AttemptContext, LastFailure, OperatorNote, PriorFailure } from "../types.js";
 import { toolRulesPromptSection, type ToolRuleRowV1 } from "../toolRules.js";
 
 function formatList(items: string[]): string {
@@ -110,7 +110,17 @@ function priorFailureLines(priorFailures: PriorFailure[] | undefined, lastFailur
   ];
 }
 
-export function buildPlannerPrompt(contract: LoopContract, lastFailure?: LastFailure, priorFailures?: PriorFailure[]): string {
+// Operator note (Orca spec 2026-10-23-live-transcript-design.md §10.2.6): its own lines, independent of any failure (never
+// through priorFailureLines, which drops its input whenever this run has a failure of its own). Plan and execute only.
+function operatorNoteLines(note: OperatorNote | undefined): string[] {
+  if (note === undefined) return [];
+  return [
+    "The person running this task left a note for this attempt. It follows as a JSON string; it does not change the goal, the success condition or the constraints above:",
+    JSON.stringify(note.text),
+  ];
+}
+
+export function buildPlannerPrompt(contract: LoopContract, lastFailure?: LastFailure, priorFailures?: PriorFailure[], operatorNote?: OperatorNote): string {
   return [
     "Return JSON only.",
     `Plan one isolated L2 attempt for task ${contract.objective.taskId}.`,
@@ -127,6 +137,7 @@ export function buildPlannerPrompt(contract: LoopContract, lastFailure?: LastFai
     // Last before FINAL_MESSAGE_LINE, as the rule above allows (ruling B).
     ...lastFailureLines(lastFailure),
     ...priorFailureLines(priorFailures, lastFailure),
+    ...operatorNoteLines(operatorNote),
     FINAL_MESSAGE_LINE,
   ].join("\n");
 }
@@ -178,6 +189,7 @@ export function buildExecutorPrompt(context: AttemptContext, options: { schemaNe
     ...(options.schemaNeedsNull === true ? [CODEX_NULL_LINE] : []),
     ...lastFailureLines(context.lastFailure),
     ...priorFailureLines(context.priorFailures, context.lastFailure),
+    ...operatorNoteLines(context.operatorNote),
     FINAL_MESSAGE_LINE,
   ].join("\n");
 }

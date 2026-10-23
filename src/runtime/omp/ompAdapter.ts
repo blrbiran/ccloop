@@ -104,7 +104,7 @@ export class OmpAdapter implements RuntimeAdapter {
     }
   }
 
-  plan(context: AttemptContext) { return this.phase("plan", buildPlannerPrompt(context.contract, context.lastFailure, context.priorFailures), context); }
+  plan(context: AttemptContext) { return this.phase("plan", buildPlannerPrompt(context.contract, context.lastFailure, context.priorFailures, context.operatorNote), context); }
   async execute(context: AttemptContext) {
     try {
       const headBefore = await worktreeHead(context.worktreePath);

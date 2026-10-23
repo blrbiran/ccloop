@@ -83,6 +83,8 @@ export interface LoopWork {
   ompSkillsDir?: string;
   /** Prior-failures spec 2026-10-21 §2.1: earlier runs' failures, oldest first, for plan and execute of this run. */
   priorFailures?: PriorFailureV1[];
+  /** Operator note (Orca spec 2026-10-23-live-transcript-design.md §10.2.6): the person's note for plan and execute. */
+  operatorNote?: { text: string; scope: "next-attempt" | "remaining-attempts" };
 }
 
 /** Prior-failures spec 2026-10-21 §2.1: one earlier run's failure; runId is for audit and never rendered. */
@@ -255,6 +257,9 @@ const priorFailureSchema = z
   })
   .strict();
 const priorFailuresSchema = z.array(priorFailureSchema).min(1).max(3).optional();
+// Operator note (Orca spec 2026-10-23-live-transcript-design.md §10.2.6): optional, so an envelope without it parses and
+// hashes exactly as before; text is 1-4096 UTF-8 bytes.
+const operatorNoteSchema = z.object({ text: utf8Bounded(4096), scope: z.enum(["next-attempt", "remaining-attempts"]) }).strict().optional();
 function atMostOneSkillDirectory(work: { skillPluginDir?: string; codexSkillsDir?: string; ompSkillsDir?: string }): boolean {
   return [work.skillPluginDir, work.codexSkillsDir, work.ompSkillsDir].filter((dir) => dir !== undefined).length <= 1;
 }
@@ -271,6 +276,7 @@ const loopWorkSchema = z
     codexSkillsDir: z.string().min(1).optional(),
     ompSkillsDir: z.string().min(1).optional(),
     priorFailures: priorFailuresSchema,
+    operatorNote: operatorNoteSchema,
   })
   .strict()
   .refine((work) => atMostOneSkillDirectory(work), {
@@ -298,6 +304,7 @@ const nullableLoopWorkSchema = z.object({
   targetRepo: z.string().min(1), base: z.string().min(1), sourceDir: z.string().min(1),
   skillPluginDir: z.string().min(1).optional(), codexSkillsDir: z.string().min(1).optional(), ompSkillsDir: z.string().min(1).optional(),
   priorFailures: priorFailuresSchema,
+  operatorNote: operatorNoteSchema,
 }).strict().refine(work => atMostOneSkillDirectory(work));
 const v4StartEnvelopeSchema = z.object({
   protocol: z.literal(4), contractHash: hashSchema, tokenPolicy: tokenPolicySchema.optional(),

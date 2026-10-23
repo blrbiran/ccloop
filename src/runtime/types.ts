@@ -10,6 +10,8 @@ export type LastFailure = { rejectCategory: string; failingCommand: string | nul
 
 /** Prior-failures spec 2026-10-21 §2.2: one earlier run's failure as the attempt sees it (the wire's runId is dropped:
  * it is never rendered). Oldest first, as on the wire. */
+/** Operator note (Orca spec 2026-10-23-live-transcript-design.md §10.2.6): the person's note for the next attempt(s). */
+export type OperatorNote = { text: string; scope: "next-attempt" | "remaining-attempts" };
 export type PriorFailure = { rejectCategory: string; failingCommand: string | null; evidence: string[] | null; failureCause?: string };
 
 export type AttemptContext = {
@@ -28,6 +30,8 @@ export type AttemptContext = {
   lastFailure?: LastFailure;
   /** Prior-failures spec §2.2: set for plan and execute only while the run has no failure of its own. */
   priorFailures?: PriorFailure[];
+  /** Operator note (spec §10.2.6): set for plan and execute only, per its scope (src/runtime/operatorNote.ts). */
+  operatorNote?: OperatorNote;
   onProcessRegistered?: (process: {
     pid: number;
     pgid: number;
