@@ -143,8 +143,11 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-22，Orca 会话 `b37f7ce9`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-23，Orca 会话 `0e13a9b7`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。Orca 的 pin 是本仓 `fbd3512`（工具规则＋`debug.located`＋`flow` 键）。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。**Orca 会话 `0e13a9b7` 没改本仓代码**；Orca 的 pin 仍是本仓 `fbd3512`（工具规则＋`debug.located`＋`flow` 键）。
+- **等本仓写 plan 的活**：Orca 仓 spec `docs/superpowers/specs/2026-10-23-live-transcript-design.md` §10.2、§11 里有本仓的部分——单独的 `transcript.jsonl`、增量解码、每次调用 stdout 1 GiB 硬上限（`output-limit`）、`events.jsonl` 16 MiB、transcript 128 MiB（后两者到限只停记录）、`control collect` 在 features flag 后面给 `transcripts`；§11.2（O5）点名要改写的测试 `tests/runtime/codex/runCodexPhase.test.ts:57-60`、`tests/runtime/omp/ompPhase.test.ts:225-226`（本仓 plan 在自己的提交里再点名一次，守本仓规则）。**落地顺序**：Orca 先接受 `transcripts` 并装上，本仓 pin 才动。
+- 本仓的下一件仍是 **codex 额度 2026-10-27 之后的 strict schema 验收**（见「当前状态」）。
+- ⚠️ 沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`——Orca Task 11 的沙箱没设，写进了真 `~/.cache/ccloop/agent-catalog`（只是缓存，未删）。
 - **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid` 码名；`ompSingleCall`、`codexSingleCall` 读 JSON 对象的语义；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`、`toolRules`（Orca 的 collect 解析是 strict；`cause` 当有界字符串读，新增值不破线、改名／删除才破）；契约 `executionPolicy.toolRules` 的形状与四个状态值（Orca 流程引擎 spec §16.2／§18 冻结）；codex wire `flow` 的封闭形状（Orca 不依赖 codex 报 `candidates`）；resolution 的 `contextWindowSource`；启动 envelope `work.priorFailures`；`agent-version-drift` 措辞 `<id>: table X, observed Y`；`control agent-installation-observe`；Orca 复现检查照 `runLoop.js` 跑 required check 的方式；`refs/ccloop/*`；fake 参数约定（`fake-codex.mjs <mode> <marker>`、`fake-omp.mjs <marker>`，`<marker>.tools.json` 可选）；`blockRun` 原因串 `terminal:<outcome>`；`isRepeatedFailure`。
 - ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`（卡代理 ⇒ `--fetch-timeout=60000 --fetch-retries=5`）。Orca 测试的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build；**别指本仓工作树的 `dist`**。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
