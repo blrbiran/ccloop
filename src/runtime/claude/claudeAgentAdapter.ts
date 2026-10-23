@@ -15,6 +15,7 @@ import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./
 import type { ClaudePhaseRequest } from "./types.js";
 import { classifyClaudeCall, isExecutableMissing, parseClaudeSignals, type CallClassification } from "../failureCause.js";
 import { effectiveIdleTimeoutMs, IdleWatch, lineFeeder, type IdleSnapshotV1 } from "../idleWatch.js";
+import { transcriptTruncatedAt as transcriptTruncatedAtOf } from "../streamLines.js";
 import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
 import { claudeToolRuleArgs, claudeToolRuleRows, type ToolRulesV1 } from "../toolRules.js";
 
@@ -199,6 +200,10 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     const runner = claudeRunnerPath();
     const result: Outcome = { reason: "completed", code: null, signal: null, stdout: "", evidenceDir };
     let stderr = "", ioError: string | undefined, stdoutTruncated = false, stderrTruncated = false;
+    // Live transcript (Orca spec 2026-10-23 §10.2.1-§10.2.2): the runner writes the call's transcript.jsonl; outcome.json
+    // records where it stopped recording, read from its marker once the call has ended.
+    const transcriptPath = join(evidenceDir, "transcript.jsonl");
+    let transcriptTruncatedAt: number | null = null, logsCreated = false;
     // Activity watchdog (spec 2026-10-21 §2.3): recorded in outcome.json when the call was stopped as stalled.
     let idle: IdleSnapshotV1 | null = null;
     // --allowedTools takes a list: it goes before --model, so the list ends at an option and never swallows the prompt.
@@ -208,11 +213,13 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     const lists = phase === "single-call" ? { allow: allow.rules, disallow: [] } : claudeToolRuleArgs(call.toolRules, phase, allow.rules, requiredCheckAllowRules);
     const extraArgs = [...(lists.allow.length === 0 ? [] : ["--allowedTools", ...lists.allow]), ...(lists.disallow.length === 0 ? [] : ["--disallowedTools", ...lists.disallow]), ...this.extraArgs];
     const persist = async (): Promise<Outcome> => {
+      if (!logsCreated) await save("transcript.jsonl", "");
+      else transcriptTruncatedAt = await transcriptTruncatedAtOf(transcriptPath);
       await save("outcome.json", JSON.stringify({
         reason: result.reason, code: result.code, signal: result.signal, evidenceDir,
         runner, claudeCommand: this.command, extraArgs, configDir: installation.configDir,
         ...(allow.notAllowed.length === 0 ? {} : { requiredChecksNotAllowed: allow.notAllowed }),
-        ioError, stdoutTruncated, stderrTruncated, observedUsagePath: join(evidenceDir, OBSERVED_USAGE_FILE),
+        ioError, stdoutTruncated, stderrTruncated, transcriptTruncatedAt, observedUsagePath: join(evidenceDir, OBSERVED_USAGE_FILE),
         ...(result.reason === "stalled" && idle !== null ? { idle } : {}),
       }, null, 2));
       return result;
@@ -221,13 +228,15 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     const timeout = Math.min(installation.timeoutMs, call.timeLimitMs);
     if (timeout <= 0) { result.reason = "timeout"; return persist(); }
     // Pre-create the raw logs with private permissions; the streams append to them.
-    await save("stdout.json", ""); await save("stderr.log", "");
+    await save("stdout.json", ""); await save("stderr.log", ""); await save("transcript.jsonl", ""); logsCreated = true;
     // The environment is not recorded in request.json (spec M6); outcome.json names the command and arguments.
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       CCLOOP_CLAUDE_COMMAND: JSON.stringify(this.command),
       CCLOOP_CLAUDE_EXTRA_ARGS: JSON.stringify(extraArgs),
       CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: join(evidenceDir, OBSERVED_USAGE_FILE),
+      // Live transcript (spec §10.2.1): phases and single calls alike.
+      CCLOOP_CLAUDE_TRANSCRIPT_PATH: transcriptPath,
       // Phases only: a single call is never retried here (its caller owns retries), so it records no signals.
       ...(phase === "single-call" ? {} : { CCLOOP_CLAUDE_SIGNALS_PATH: join(evidenceDir, SIGNALS_FILE) }),
     };

@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { appendFileSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { Socket } from "node:net";
 import { promisify } from "node:util";
-import { buildModelUsage, buildUsageEvidence, createLineSplitter, createUsageObserver, writeObservation } from "./claude-stream.mjs";
+import { buildModelUsage, buildUsageEvidence, createLineSplitter, createTranscriptWriter, createUsageObserver, writeObservation } from "./claude-stream.mjs";
 
 // scripts/ is shipped alongside dist/src/: source and packaged runners share the runtime metadata bound.
 import { boundedTaskResult } from "../dist/src/runtime/taskResult.js";
@@ -669,11 +669,14 @@ async function runClaude(request, claudeCommand, extraArgs) {
   const observer = createUsageObserver();
   const signals = createSignalsRecorder(process.env.CCLOOP_CLAUDE_SIGNALS_PATH);
   const activity = createActivityReporter();
+  // Live transcript (Orca spec 2026-10-23 §10.2.1): the adapter names the call's transcript.jsonl for phases and single calls.
+  const transcript = createTranscriptWriter(process.env.CCLOOP_CLAUDE_TRANSCRIPT_PATH);
   let resultEvent = null;
   let fallbackEnvelope = null;
   const splitter = createLineSplitter((line) => {
     let event;
-    try { event = JSON.parse(line); } catch { return; }
+    try { event = JSON.parse(line); } catch { transcript.line(line, undefined); return; }
+    transcript.line(line, event);
     signals.observe(event);
     activity.event(event);
     if (event && event.type === "result") { resultEvent = event; return; }
@@ -693,7 +696,7 @@ async function runClaude(request, claudeCommand, extraArgs) {
         try { writeObservation(observationPath, snapshot); } catch (error) { process.stderr.write(`claude-runner: observation not written: ${String(error)}\n`); }
       }
     }
-  });
+  }, undefined, (bytes) => transcript.dropped(bytes));
 
   try {
     return await new Promise((resolve, reject) => {
@@ -713,6 +716,7 @@ async function runClaude(request, claudeCommand, extraArgs) {
       child.on("error", reject);
       child.on("close", (code) => {
         splitter.end();
+        transcript.close();
         if (code !== 0) { reject(new Error(failureMessage(code, { tail: stdoutTail, length: stdoutLength }, stderr))); return; }
         resolve({ envelope: resultEvent ?? fallbackEnvelope, stderr });
       });

@@ -1,4 +1,5 @@
-import { closeSync, ftruncateSync, openSync, readFileSync, writeSync } from "node:fs";
+import { closeSync, constants, ftruncateSync, openSync, readFileSync, writeSync } from "node:fs";
+import { open, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 
 /**
@@ -145,4 +146,26 @@ export function attachOutcomeStream<T extends object, S>(result: T, evidenceDir:
   Object.defineProperty(result, "stream", { value: stream, enumerable: false });
   Object.defineProperty(result, "events", { enumerable: false, get: () => { try { return readFileSync(join(evidenceDir, "events.jsonl"), "utf8"); } catch { return ""; } } });
   return result;
+}
+
+/**
+ * Live transcript (spec §10.2.2, §10.2.4): where a transcript stopped recording, read from its last line -- the
+ * `ccloop.transcript-truncated` marker -- and checked against the file's size (the marker's atBytes plus the marker line
+ * is the whole file). Null when it was not truncated, or the file cannot be read. Reads at most the last 256 bytes.
+ */
+export async function transcriptTruncatedAt(path: string): Promise<number | null> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const { size } = await handle.stat();
+    const length = Math.min(size, 256);
+    const tail = Buffer.alloc(length);
+    await handle.read(tail, 0, length, size - length);
+    const text = tail.toString("utf8");
+    if (!text.endsWith("\n")) return null;
+    const line = text.slice(text.lastIndexOf("\n", text.length - 2) + 1);
+    const marker = JSON.parse(line) as { type?: unknown; atBytes?: unknown };
+    if (marker.type !== "ccloop.transcript-truncated" || typeof marker.atBytes !== "number" || !Number.isSafeInteger(marker.atBytes)) return null;
+    return marker.atBytes + Buffer.byteLength(transcriptMarker(marker.atBytes)) === size ? marker.atBytes : null;
+  } catch { return null; } finally { await handle?.close(); }
 }

@@ -2,7 +2,7 @@
 // the Orca repository: the claude phase runner reads claude's `--output-format stream-json` line by line. This
 // module holds the parts that need no process: the usage measure (moved here unchanged from the runner), the line
 // splitter, and the observation of usage streamed before a phase ends.
-import { renameSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, renameSync, writeFileSync, writeSync } from "node:fs";
 
 const USAGE_FIELDS = ["input_tokens", "inputTokens", "output_tokens", "outputTokens"];
 // Orca paid claude round (2026-09-27), human ruling on its findings ("B1–B3 按你推荐"): claude's input_tokens leaves
@@ -75,10 +75,15 @@ export function buildUsageEvidence(envelope) {
 
 export const OBSERVED_USAGE_SCHEMA = "ccloop-claude-observed-usage-v1";
 
-/** Feed text chunks; `onLine` gets each complete line. A line longer than `maxLineBytes` is dropped, not kept. */
-export function createLineSplitter(onLine, maxLineBytes = 10 * 1024 * 1024) {
+/**
+ * Feed text chunks; `onLine` gets each complete line. A line longer than `maxLineBytes` is dropped, not kept.
+ * Live transcript (Orca spec 2026-10-23 §10.2.1): `onDropped(bytes)`, when given, hears of every dropped line and its
+ * size in UTF-8 bytes, so the transcript can say a line was there (nothing is dropped silently).
+ */
+export function createLineSplitter(onLine, maxLineBytes = 10 * 1024 * 1024, onDropped = () => {}) {
   let buffer = "";
   let dropping = false;
+  let droppedBytes = 0;
   const emit = (line) => { if (line.trim() !== "") onLine(line); };
   return {
     push(chunk) {
@@ -88,19 +93,67 @@ export function createLineSplitter(onLine, maxLineBytes = 10 * 1024 * 1024) {
         if (newline < 0) break;
         const line = buffer + text.slice(0, newline);
         buffer = "";
-        if (!dropping && Buffer.byteLength(line) <= maxLineBytes) emit(line);
+        if (dropping) onDropped(droppedBytes + Buffer.byteLength(line));
+        else if (Buffer.byteLength(line) <= maxLineBytes) emit(line);
+        else onDropped(Buffer.byteLength(line));
         dropping = false;
+        droppedBytes = 0;
         text = text.slice(newline + 1);
       }
-      if (dropping) return;
+      if (dropping) { droppedBytes += Buffer.byteLength(text); return; }
       buffer += text;
-      if (Buffer.byteLength(buffer) > maxLineBytes) { buffer = ""; dropping = true; }
+      if (Buffer.byteLength(buffer) > maxLineBytes) { droppedBytes = Buffer.byteLength(buffer); buffer = ""; dropping = true; }
     },
     end() {
-      if (!dropping && buffer !== "") emit(buffer);
+      if (dropping) onDropped(droppedBytes);
+      else if (buffer !== "") emit(buffer);
       buffer = "";
       dropping = false;
+      droppedBytes = 0;
     },
+  };
+}
+
+/** Live transcript (Orca spec 2026-10-23 §10.2.2): a call's transcript stops recording at this many bytes. */
+export const TRANSCRIPT_LIMIT = 128 * 1024 * 1024;
+
+/**
+ * Live transcript (Orca spec 2026-10-23 §10.2.1-§10.2.2): the call's transcript.jsonl, written by the runner. Every complete
+ * stream line is appended except a `stream_event` whose inner event is `content_block_delta` (deltas repeat the final
+ * message and multiply the size; message_start and message_delta stay, they are small and carry usage). Writes go through
+ * a kept-open descriptor with writeSync, because the adapter SIGKILLs the runner's group: every line handed here is in the
+ * file when line() returns. Lines are written whole, so at the cap the file already ends at a line end; one
+ * `ccloop.transcript-truncated` line then says where, and nothing more is written. A write error is reported once on
+ * stderr and stops the transcript, never the call. No path (no CCLOOP_CLAUDE_TRANSCRIPT_PATH) writes nothing.
+ */
+export function createTranscriptWriter(path, cap = TRANSCRIPT_LIMIT) {
+  if (!path) return { line() {}, dropped() {}, close() {} };
+  let fd = null;
+  let size = 0;
+  let stopped = false;
+  const fail = (error) => { stopped = true; process.stderr.write(`claude-runner: transcript not written: ${String(error)}\n`); };
+  try { fd = openSync(path, "a", 0o600); } catch (error) { fail(error); }
+  const writeAll = (bytes) => { let offset = 0; while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset); };
+  const put = (text) => {
+    if (stopped) return;
+    const bytes = Buffer.from(`${text}\n`, "utf8");
+    try {
+      if (size + bytes.length > cap) {
+        stopped = true;
+        writeAll(Buffer.from(`${JSON.stringify({ type: "ccloop.transcript-truncated", atBytes: size })}\n`, "utf8"));
+        return;
+      }
+      writeAll(bytes);
+      size += bytes.length;
+    } catch (error) { fail(error); }
+  };
+  return {
+    line(text, event) {
+      if (event && typeof event === "object" && event.type === "stream_event" && event.event && event.event.type === "content_block_delta") return;
+      put(text);
+    },
+    dropped(bytes) { put(JSON.stringify({ type: "ccloop.line-dropped", bytes })); },
+    close() { if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } fd = null; } stopped = true; },
   };
 }
 
