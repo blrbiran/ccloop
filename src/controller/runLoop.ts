@@ -209,13 +209,17 @@ async function runRequiredChecks(
   // Ruling R, option (b) (spec 2026-10-20-verifier-sees-checks-and-last-failure-design.md §3): true only on the
   // lineage's first attempt outside saved-result recovery; every other path keeps today's terminal state.
   checkFailureRetryable = false,
+  // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.4): an extra repository's checks are shown as `[<key>] <command>`;
+  // the primary's carry no label, so their evidence bytes are as before.
+  label = "",
 ): Promise<RequiredChecksOutcome> {
   const evidence: string[] = [];
   const results: RequiredCheckResult[] = [];
 
-  for (const [checkIndex,command] of requiredChecks.entries()) {
+  for (const [checkIndex,rawCommand] of requiredChecks.entries()) {
+    const command = `${label}${rawCommand}`;
     try {
-      const { stdout, stderr } = checkRunner ? await checkRunner(command,checkIndex) : await execFileAsync("sh", ["-lc", command], {
+      const { stdout, stderr } = checkRunner ? await checkRunner(rawCommand,checkIndex) : await execFileAsync("sh", ["-lc", rawCommand], {
         cwd: worktreePath,
         signal: abortSignal,
         maxBuffer: 10 * 1024 * 1024,
@@ -305,6 +309,16 @@ async function runVerification(
 
   if (!requiredChecks.passed) {
     return requiredChecks.verification;
+  }
+  // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.4): then each extra repository's checks, in contract order,
+  // with that repository's worktree as cwd; the first failure stops them as before.
+  for (const extra of context.extraWorktrees ?? []) {
+    const extraChecks = await runRequiredChecks(extra.requiredChecks, extra.worktreePath, primaryTargetPaths, context.abortSignal, undefined, checkFailureRetryable, `[${extra.key}] `);
+    if (!extraChecks.passed) {
+      return { ...extraChecks.verification, evidence: [...requiredChecks.evidence, ...extraChecks.verification.evidence] };
+    }
+    requiredChecks.evidence.push(...extraChecks.evidence);
+    requiredChecks.results.push(...extraChecks.results);
   }
 
   if (contract.verification.verifierType === "command") {
