@@ -4,7 +4,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import type { AgentSelectionV1, PartialSelectionV1 } from "../agents/types.js";
-import { loopContractSchema, type LoopContract } from "../contract/schema.js";
+import { loopContractSchema, repoKeySchema, type LoopContract } from "../contract/schema.js";
 
 export type ControlMethodV1 =
   | "features"
@@ -85,6 +85,14 @@ export interface LoopWork {
   priorFailures?: PriorFailureV1[];
   /** Operator note (Orca spec 2026-10-23-live-transcript-design.md §10.2.6): the person's note for plan and execute. */
   operatorNote?: { text: string; scope: "next-attempt" | "remaining-attempts" };
+  /** Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.1): each extra repository's target and base, contract order. */
+  additionalRepos?: AdditionalRepoWorkV1[];
+}
+
+export interface AdditionalRepoWorkV1 {
+  key: string;
+  targetRepo: string;
+  base: string;
 }
 
 /** Prior-failures spec 2026-10-21 §2.1: one earlier run's failure; runId is for audit and never rendered. */
@@ -260,6 +268,15 @@ const priorFailuresSchema = z.array(priorFailureSchema).min(1).max(3).optional()
 // Operator note (Orca spec 2026-10-23-live-transcript-design.md §10.2.6): optional, so an envelope without it parses and
 // hashes exactly as before; text is 1-4096 UTF-8 bytes.
 const operatorNoteSchema = z.object({ text: utf8Bounded(4096), scope: z.enum(["next-attempt", "remaining-attempts"]) }).strict().optional();
+// Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.1): optional, so a single-repo envelope parses and hashes exactly
+// as before; when present its keys are the contract's additionalRepos keys, in the same order.
+const additionalReposWorkSchema = z.array(z.object({ key: repoKeySchema, targetRepo: z.string().min(1), base: z.string().min(1) }).strict())
+  .min(1).max(7).optional();
+function workKeysMatchContract(work: { contract: LoopContract; additionalRepos?: { key: string }[] }): boolean {
+  const contractKeys = work.contract.context.additionalRepos?.map((repo) => repo.key);
+  const workKeys = work.additionalRepos?.map((repo) => repo.key);
+  return JSON.stringify(contractKeys) === JSON.stringify(workKeys);
+}
 function atMostOneSkillDirectory(work: { skillPluginDir?: string; codexSkillsDir?: string; ompSkillsDir?: string }): boolean {
   return [work.skillPluginDir, work.codexSkillsDir, work.ompSkillsDir].filter((dir) => dir !== undefined).length <= 1;
 }
@@ -277,12 +294,14 @@ const loopWorkSchema = z
     ompSkillsDir: z.string().min(1).optional(),
     priorFailures: priorFailuresSchema,
     operatorNote: operatorNoteSchema,
+    additionalRepos: additionalReposWorkSchema,
   })
   .strict()
   .refine((work) => atMostOneSkillDirectory(work), {
     path: ["codexSkillsDir"],
     message: "skill directory fields are mutually exclusive",
-  });
+  })
+  .refine((work) => workKeysMatchContract(work), { path: ["additionalRepos"], message: "additionalRepos keys must match the contract's" });
 // Orca single-call estimate (2026-09-27), spec §4.1: the claude API takes the schema as a tool's input_schema, whose top
 // level must be `type: "object"` (scripts/claude-phase-runner.mjs records the 400 it answers otherwise).
 const singleCallWorkSchema = z
@@ -305,7 +324,8 @@ const nullableLoopWorkSchema = z.object({
   skillPluginDir: z.string().min(1).optional(), codexSkillsDir: z.string().min(1).optional(), ompSkillsDir: z.string().min(1).optional(),
   priorFailures: priorFailuresSchema,
   operatorNote: operatorNoteSchema,
-}).strict().refine(work => atMostOneSkillDirectory(work));
+  additionalRepos: additionalReposWorkSchema,
+}).strict().refine(work => atMostOneSkillDirectory(work)).refine(work => workKeysMatchContract(work));
 const v4StartEnvelopeSchema = z.object({
   protocol: z.literal(4), contractHash: hashSchema, tokenPolicy: tokenPolicySchema.optional(),
   mode: z.literal("verify-saved-result").optional(), savedResultRecovery: savedResultRecoveryInputSchema.optional(),
@@ -391,6 +411,28 @@ function validateCanonicalDirectory(path: string): string {
   }
 }
 
+// Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.1): every extra targetRepo is absolute; at accept every extra
+// contract repoPath is a canonical directory (like the skill directories, Orca may remove it before a later collect); the
+// working repositories, and the targets, are pairwise distinct and none lies inside another.
+function validateAdditionalRepos(work: LoopWork, method: ControlMethodV1): void {
+  const extras = work.contract.context.additionalRepos ?? [];
+  for (const repo of work.additionalRepos ?? []) if (!isAbsolute(repo.targetRepo)) throw new ControlProtocolError("control-request-invalid");
+  for (const repo of extras) {
+    if (!isAbsolute(repo.repoPath)) throw new ControlProtocolError("control-request-invalid");
+    if (method === "accept") validateCanonicalDirectory(repo.repoPath);
+  }
+  const disjoint = (paths: string[]): void => {
+    const resolved = paths.map((path) => resolve(path));
+    for (const [index, left] of resolved.entries()) {
+      for (const right of resolved.slice(index + 1)) {
+        if (isWithin(left, right) || isWithin(right, left)) throw new ControlProtocolError("control-request-invalid");
+      }
+    }
+  };
+  disjoint([work.contract.context.repoPath, ...extras.map((repo) => repo.repoPath)]);
+  disjoint([work.targetRepo, ...(work.additionalRepos ?? []).map((repo) => repo.targetRepo)]);
+}
+
 function validateEnvelopePaths(envelope: StartEnvelopeV3, method: ControlMethodV1): void {
   const sourceDir = validateCanonicalDirectory(envelope.work.sourceDir);
   // Orca single-call estimate (2026-09-27), spec §5.1: a single call names no repository and takes no input
@@ -408,6 +450,7 @@ function validateEnvelopePaths(envelope: StartEnvelopeV3, method: ControlMethodV
     if (!isAbsolute(skillsDir)) throw new ControlProtocolError("control-request-invalid");
     if (method === "accept") validateCanonicalDirectory(skillsDir);
   }
+  if (envelope.work.additionalRepos !== undefined) validateAdditionalRepos(envelope.work, method);
   if (envelope.inputCheckpoint === null) return;
   const bundle = validateCanonicalDirectory(envelope.inputCheckpoint.bundlePath);
   const inputRoot = resolve(sourceDir, "input");

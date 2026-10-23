@@ -22,6 +22,21 @@ const terminalStatesSchema = z.array(terminalStateSchema).refine(
   },
 );
 
+// Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.1, §19.2 P7): a key names one repository in prompts, evidence
+// and collect; at most 7 extra repositories (8 directories in all).
+export const repoKeySchema = z.string().regex(/^[a-z0-9_](?:[a-z0-9._-]*[a-z0-9_])?$/);
+const additionalRepoSchema = z
+  .object({
+    key: repoKeySchema,
+    repoPath: z.string().min(1),
+    targetPaths: z.array(z.string()).min(1),
+    allowlistPaths: z.array(z.string()).optional(),
+    denylistPaths: z.array(z.string()).optional(),
+    requiredChecks: z.array(z.string()).optional(),
+  })
+  .strict();
+export type AdditionalRepo = z.infer<typeof additionalRepoSchema>;
+
 export const loopContractSchema = z
   .object({
     objective: z
@@ -39,8 +54,21 @@ export const loopContractSchema = z
         relevantDocs: z.array(z.string()).default([]),
         buildTestCommands: z.array(z.string()).min(1),
         constraints: z.array(z.string()).default([]),
+        // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.1): optional, no default -- absent leaves the contract
+        // byte-identical. repoKey names the primary (repoPath); each extra repository has its own key and paths.
+        repoKey: repoKeySchema.optional(),
+        additionalRepos: z.array(additionalRepoSchema).min(1).max(7).optional(),
       })
-      .strict(),
+      .strict()
+      .superRefine((context, issues) => {
+        if ((context.repoKey === undefined) !== (context.additionalRepos === undefined)) {
+          issues.addIssue({ code: z.ZodIssueCode.custom, message: "repoKey is present if and only if additionalRepos is" });
+        }
+        const keys = [context.repoKey, ...(context.additionalRepos ?? []).map((repo) => repo.key)];
+        if (context.additionalRepos !== undefined && new Set(keys).size !== keys.length) {
+          issues.addIssue({ code: z.ZodIssueCode.custom, message: "repository keys must be unique and differ from repoKey" });
+        }
+      }),
     executionPolicy: z
       .object({
         autonomyLevel: z.literal("L2"),
