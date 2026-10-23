@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, lstat, mkdir } from "node:fs/promises";
+import { access, lstat, mkdir, rmdir } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -133,4 +133,58 @@ export async function publishAttemptCommit(worktreePath: string): Promise<Attemp
 
 export async function cleanupAttemptWorkspace(repoPath: string, worktreePath: string): Promise<void> {
   await execFileAsync("git", ["worktree", "remove", "--force", worktreePath], { cwd: repoPath });
+}
+
+/**
+ * Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.2, review 7): an extra repository's attempt worktree lives at
+ * <runDir>/dirs/attempt-<n>/<key>, outside worktrees/, so every reader of worktrees/ (resume's residual scan,
+ * attemptRefName, the fresh-run guard, the result repository) stays as it is. It starts from that repository's HEAD.
+ */
+export function extraWorktreePath(runDir: string, attempt: number, key: string): string {
+  return join(runDir, "dirs", `attempt-${attempt}`, key);
+}
+
+export async function createExtraWorktree(repoPath: string, runDir: string, attempt: number, key: string): Promise<{ worktreePath: string; startSha: string }> {
+  const worktreePath = extraWorktreePath(runDir, attempt, key);
+  await mkdir(dirname(worktreePath), { recursive: true });
+  if (await pathExists(worktreePath)) {
+    throw new Error(`attempt workspace path already exists: ${worktreePath}`);
+  }
+  await execFileAsync("git", ["worktree", "add", "--detach", worktreePath], { cwd: repoPath });
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath });
+  return { worktreePath, startSha: stdout.trim() };
+}
+
+/**
+ * Multi-repo runs (spec §11.2): commits an extra worktree and pins it in its own repository under the primary's ref names,
+ * computed from the run directory and the attempt number (not from the path, which is not under worktrees/). Throws on
+ * any failure, as publishAttemptCommit does.
+ */
+export async function publishExtraAttemptCommit(worktreePath: string, runDir: string, attempt: number): Promise<AttemptCommit> {
+  const ref = `refs/ccloop/${basename(runDir)}/attempts/${attempt}`;
+  const { stdout: baseOut } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath });
+  await execFileAsync("git", ["add", "-A"], { cwd: worktreePath });
+  await execFileAsync("git", [...ATTEMPT_IDENTITY, "commit", "--allow-empty", "-m", `ccloop attempt: ${ref}`], { cwd: worktreePath });
+  const { stdout: shaOut } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath });
+  const sha = shaOut.trim();
+  await execFileAsync("git", ["update-ref", ref, sha], { cwd: worktreePath });
+  const namespace = attemptRefNamespaces.get(resolve(runDir));
+  if (namespace !== undefined) {
+    await execFileAsync("git", ["update-ref", `refs/ccloop/${namespace}/attempts/${attempt}`, sha], { cwd: worktreePath });
+  }
+  return { sha, base: baseOut.trim(), ref };
+}
+
+/** Multi-repo runs (spec §11.2, round 2 N4): removes <runDir>/dirs/attempt-<n>, then <runDir>/dirs, each only when empty. */
+export async function removeEmptyExtraDirs(runDir: string, attempt: number): Promise<void> {
+  for (const path of [join(runDir, "dirs", `attempt-${attempt}`), join(runDir, "dirs")]) {
+    try {
+      await rmdir(path);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") continue;
+      if (code === "ENOTEMPTY" || code === "EEXIST") return;
+      throw error;
+    }
+  }
 }

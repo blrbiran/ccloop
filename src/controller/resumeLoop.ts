@@ -23,6 +23,7 @@ import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
 import {
   cleanupAttemptWorkspaceBestEffort,
+  cleanupResidualExtraWorktrees,
   createLeaseLossSignal,
   OWNER_TRANSFER_LOCK_RETRY_ATTEMPTS,
   OWNER_TRANSFER_LOCK_RETRY_DELAY_MS,
@@ -395,6 +396,8 @@ export async function resumeLoop(
 
   try {
     await cleanupResidualWorktrees(contract.context.repoPath, runDir);
+    // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.2): the extra worktrees under dirs/, beside the above.
+    await cleanupResidualExtraWorktrees(contract, runDir);
 
     // The interrupted attempt (and its worktree) is discarded by cleanup above, so resume
     // always restarts from a fresh "planning" phase for the next attempt — regardless of

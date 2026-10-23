@@ -70,6 +70,11 @@ export async function ensureFreshRunDir(runDir: string): Promise<void> {
   if (await directoryHasEntries(join(runDir, "worktrees"))) {
     throw new Error("runDir already contains prior run data (worktrees); V1 does not support reinitializing an existing automated run");
   }
+
+  // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.2): extra worktrees live under dirs/, outside worktrees/.
+  if (await directoryHasEntries(join(runDir, "dirs"))) {
+    throw new Error("runDir already contains prior run data (dirs); V1 does not support reinitializing an existing automated run");
+  }
 }
 
 export async function initializeRunFiles(runDir: string, contract: LoopContract, initialState: RunState): Promise<void> {

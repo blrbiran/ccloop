@@ -7,8 +7,8 @@ import type { MaterializedAgentConfigV1 } from "../agents/types.js";
 import { captureExecutionFormatFailure, ExecutionFormatFailure, resolveCheckpointOriginalBase } from "./executionFormatFailure.js";
 import { remainingTokens, minTokenCeiling, budgetAmountSchema, type BudgetAmount, type TokenPolicy } from "../budget/tokenPolicy.js";
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
   appendEvent,
@@ -59,7 +59,7 @@ import { isPartialExecutionResult, observedTokensOf } from "../runtime/types.js"
 import { operatorNoteGate } from "../runtime/operatorNote.js";
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { FailureFingerprint, LastTrustedBoundary, RunState, StopDecision } from "../state/types.js";
-import { cleanupAttemptWorkspace, createAttemptWorkspace, publishAttemptCommit, registerAttemptRefNamespace } from "../workspace/worktreeManager.js";
+import { cleanupAttemptWorkspace, createAttemptWorkspace, createExtraWorktree, extraWorktreePath, publishAttemptCommit, publishExtraAttemptCommit, registerAttemptRefNamespace, removeEmptyExtraDirs, type AttemptCommit } from "../workspace/worktreeManager.js";
 import { materializeFirstWorkspace } from "../control/materialize.js";
 import { captureTaskResult } from "../control/taskResults.js";
 import type { StartEnvelopeV3, InputCheckpointV1 } from "../control/protocol.js";
@@ -396,7 +396,116 @@ function buildAttemptContext(
     onProcessRegistered: hooks?.onProcessRegistered,
     ...(plan === undefined || plan === null ? {} : { plan }),
     ...(execution === undefined || execution === null ? {} : { execution }),
+    ...extraWorktreeContext(worktreePath),
   };
+}
+
+/**
+ * Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.2): the extra worktrees of the attempt whose primary worktree is
+ * the key, registered when the attempt's worktrees are created and settled (published, removed) right after the primary,
+ * by every publish/cleanup path below. Keyed by the primary worktree, the one handle every cleanup call site already holds,
+ * as attemptRefNamespaces is keyed by the run directory. A single-repo attempt registers nothing, so nothing changes.
+ */
+type ExtraAttemptWorktree = { key: string; repoPath: string; worktreePath: string; startSha: string; targetPaths: string[];
+  allowlistPaths: string[]; denylistPaths: string[]; requiredChecks: string[] };
+type ExtraAttempt = { runDir: string; attempt: number; repoKey: string; extras: ExtraAttemptWorktree[] };
+const extraAttempts = new Map<string, ExtraAttempt>();
+
+function extraAttemptOf(primaryWorktreePath: string): ExtraAttempt | undefined {
+  return extraAttempts.get(resolve(primaryWorktreePath));
+}
+
+function extraWorktreeContext(primaryWorktreePath: string): Pick<AttemptContext, "extraWorktrees"> {
+  const entry = extraAttemptOf(primaryWorktreePath);
+  if (entry === undefined) return {};
+  return { extraWorktrees: entry.extras.map(({ key, worktreePath, targetPaths, requiredChecks }) => ({ key, worktreePath, targetPaths, requiredChecks })) };
+}
+
+/** Spec §11.2: one worktree per extra repository, in contract order; a failure removes the ones already made and rethrows. */
+async function createExtraAttemptWorktrees(contract: LoopContract, runDir: string, attempt: number, primaryWorktreePath: string): Promise<void> {
+  const repos = contract.context.additionalRepos;
+  if (repos === undefined) return;
+  const extras: ExtraAttemptWorktree[] = [];
+  try {
+    for (const repo of repos) {
+      const { worktreePath, startSha } = await createExtraWorktree(repo.repoPath, runDir, attempt, repo.key);
+      extras.push({ key: repo.key, repoPath: repo.repoPath, worktreePath, startSha, targetPaths: repo.targetPaths,
+        allowlistPaths: repo.allowlistPaths ?? repo.targetPaths, denylistPaths: repo.denylistPaths ?? [], requiredChecks: repo.requiredChecks ?? [] });
+    }
+  } catch (error) {
+    for (const made of extras) await cleanupAttemptWorkspace(made.repoPath, made.worktreePath).catch(() => undefined);
+    await removeEmptyExtraDirs(runDir, attempt).catch(() => undefined);
+    throw error;
+  }
+  extraAttempts.set(resolve(primaryWorktreePath), { runDir, attempt, repoKey: contract.context.repoKey!, extras });
+}
+
+/**
+ * Spec §11.2: after the primary, every extra worktree is published (a failure is an event, as for the primary) and then
+ * removed; run/attempts/<n>/commits.json (0600) lists every published commit, primary first; the empty
+ * dirs/attempt-<n> and dirs/ go last (round 2, N4). With `throwOnRemoveFailure` a removal failure is thrown, as the
+ * retry path's primary removal is; the extras not yet removed stay registered for the best-effort pass that follows.
+ */
+async function settleExtraWorktrees(primaryWorktreePath: string, primaryCommit: AttemptCommit | null, detail: string, throwOnRemoveFailure: boolean): Promise<void> {
+  const entry = extraAttemptOf(primaryWorktreePath);
+  if (entry === undefined) return;
+  const commits: Record<string, AttemptCommit> = primaryCommit === null ? {} : { [entry.repoKey]: primaryCommit };
+  for (const extra of [...entry.extras]) {
+    try {
+      commits[extra.key] = await publishExtraAttemptCommit(extra.worktreePath, entry.runDir, entry.attempt);
+    } catch (error) {
+      await appendEvent(entry.runDir, { type: "attempt_commit_publish_failed", at: new Date().toISOString(), detail: `${detail}: ${extra.key}: ${String(error)}` });
+    }
+    try {
+      await cleanupAttemptWorkspace(extra.repoPath, extra.worktreePath);
+      entry.extras.splice(entry.extras.indexOf(extra), 1);
+    } catch (error) {
+      if (throwOnRemoveFailure) throw error;
+      await appendEvent(entry.runDir, { type: "workspace_cleanup_failed", at: new Date().toISOString(), detail: `${detail}: ${extra.key}: ${String(error)}` });
+    }
+  }
+  const attemptDir = join(entry.runDir, "attempts", String(entry.attempt));
+  await mkdir(attemptDir, { recursive: true });
+  await writeFile(join(attemptDir, "commits.json"), JSON.stringify(commits, null, 2), { mode: 0o600 });
+  extraAttempts.delete(resolve(primaryWorktreePath));
+  await removeEmptyExtraDirs(entry.runDir, entry.attempt);
+}
+
+/**
+ * Multi-repo runs (spec §11.2): crash resume's cleanup of residual extra worktrees, beside the untouched
+ * cleanupResidualWorktrees: each <runDir>/dirs/attempt-<n>/<key> of the contract is published in its own repository, then
+ * removed, then the empty directories go.
+ */
+export async function cleanupResidualExtraWorktrees(contract: LoopContract, runDir: string): Promise<void> {
+  const repos = contract.context.additionalRepos;
+  if (repos === undefined) return;
+  let names: string[];
+  try {
+    names = await readdir(join(runDir, "dirs"));
+  } catch {
+    return;
+  }
+  const detail = "best-effort cleanup of residual extra worktree before resume";
+  for (const name of names) {
+    const match = /^attempt-([1-9][0-9]*)$/.exec(name);
+    if (match === null) continue;
+    const attempt = Number(match[1]);
+    for (const repo of repos) {
+      const worktreePath = extraWorktreePath(runDir, attempt, repo.key);
+      try { await access(worktreePath); } catch { continue; }
+      try {
+        await publishExtraAttemptCommit(worktreePath, runDir, attempt);
+      } catch (error) {
+        await appendEvent(runDir, { type: "attempt_commit_publish_failed", at: new Date().toISOString(), detail: `${detail}: ${repo.key}: ${String(error)}` });
+      }
+      try {
+        await cleanupAttemptWorkspace(repo.repoPath, worktreePath);
+      } catch (error) {
+        await appendEvent(runDir, { type: "workspace_cleanup_failed", at: new Date().toISOString(), detail: `${detail}: ${repo.key}: ${String(error)}` });
+      }
+    }
+    await removeEmptyExtraDirs(runDir, attempt);
+  }
 }
 
 async function appendTransitionEvent(runDir: string, state: RunState, type: string, detail: string): Promise<void> {
@@ -422,8 +531,9 @@ async function cleanupAttemptWorkspaceWithStatus(
   // already answers — and every event on this path lands in events.jsonl,
   // whose exact sequence seventeen existing criteria pin. Only the failure is
   // unobservable without an event, and only the failure gets one.
+  let primaryCommit: AttemptCommit | null = null;
   try {
-    await publishAttemptCommit(worktreePath);
+    primaryCommit = await publishAttemptCommit(worktreePath);
   } catch (error) {
     await appendEvent(runDir, {
       type: "attempt_commit_publish_failed",
@@ -432,17 +542,21 @@ async function cleanupAttemptWorkspaceWithStatus(
     });
   }
 
+  let status: ExecutionRecovery["cleanupStatus"];
   try {
     await cleanupAttemptWorkspace(repoPath, worktreePath);
-    return "removed";
+    status = "removed";
   } catch (error) {
     await appendEvent(runDir, {
       type: "workspace_cleanup_failed",
       at: new Date().toISOString(),
       detail: `${detail}: ${String(error)}`,
     });
-    return "retained";
+    status = "retained";
   }
+  // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.2): the extra worktrees, after the primary; nothing otherwise.
+  await settleExtraWorktrees(worktreePath, primaryCommit, detail, false);
+  return status;
 }
 
 /**
@@ -462,8 +576,9 @@ async function cleanupAttemptWorkspaceOrThrow(
   runDir: string,
   detail: string,
 ): Promise<void> {
+  let primaryCommit: AttemptCommit | null = null;
   try {
-    await publishAttemptCommit(worktreePath);
+    primaryCommit = await publishAttemptCommit(worktreePath);
   } catch (error) {
     await appendEvent(runDir, {
       type: "attempt_commit_publish_failed",
@@ -473,6 +588,8 @@ async function cleanupAttemptWorkspaceOrThrow(
   }
 
   await cleanupAttemptWorkspace(repoPath, worktreePath);
+  // Multi-repo runs (spec §11.2): the extra worktrees, after the primary; a removal failure stays fatal here too.
+  await settleExtraWorktrees(worktreePath, primaryCommit, detail, true);
 }
 
 export async function cleanupAttemptWorkspaceBestEffort(
@@ -1563,6 +1680,19 @@ export async function runLoopFromState(
           : attempt === 1 && options?.firstWorkspaceInput
           ? await materializeFirstWorkspace(contract.context.repoPath, runDir, attempt, options.firstWorkspaceInput)
           : await createAttemptWorkspace(contract.context.repoPath, runDir, attempt, initializedBase ?? undefined)).worktreePath;
+        if (contract.context.additionalRepos !== undefined) {
+          // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.2): the extra worktrees, after the primary. A failure
+          // takes the primary off again (no agent has run in it, so there is nothing to publish) and goes through the same
+          // infrastructure retry as a failed primary.
+          try {
+            await createExtraAttemptWorktrees(contract, runDir, attempt, worktreePath);
+          } catch (error) {
+            const made = worktreePath;
+            worktreePath = null;
+            await cleanupAttemptWorkspace(contract.context.repoPath, made).catch(() => undefined);
+            throw error;
+          }
+        }
       } catch (error) {
         // §8.1: a refused lease is not a workspace-infrastructure failure and must consume
         // neither the infra retry nor the blocked_waiting_human escalation below. No worktree

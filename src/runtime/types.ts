@@ -14,6 +14,8 @@ export type OperatorNote = { text: string; scope: "next-attempt" | "remaining-at
  * it is never rendered). Oldest first, as on the wire. */
 export type PriorFailure = { rejectCategory: string; failingCommand: string | null; evidence: string[] | null; failureCause?: string };
 
+export type ExtraWorktreeContext = { key: string; worktreePath: string; targetPaths: string[]; requiredChecks: string[] };
+
 export type AttemptContext = {
   contract: LoopContract;
   state: RunState;
@@ -32,6 +34,11 @@ export type AttemptContext = {
   priorFailures?: PriorFailure[];
   /** Operator note (spec §10.2.6): set for plan and execute only, per its scope (src/runtime/operatorNote.ts). */
   operatorNote?: OperatorNote;
+  /**
+   * Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5): the extra repositories' worktrees, contract order; set only
+   * when the contract has additionalRepos. Agents get them as extra directories; prompts list them.
+   */
+  extraWorktrees?: ExtraWorktreeContext[];
   onProcessRegistered?: (process: {
     pid: number;
     pgid: number;
