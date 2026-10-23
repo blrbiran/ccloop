@@ -88,3 +88,29 @@ eligibility methods answer `{status:"unavailable", reason:<that code>}`). Human 
   `vitest run --reporter=json --outputFile=$S/vitest.json`, `node scripts/check-known-reds.mjs $S/vitest.json` ⇒ RC 0;
   any red not on the roster shown red on untouched `f4de340` too, or green alone.
 - C12: `git diff --name-status f4de340...HEAD -- tests > $S/tests-diff.txt`, every line `A`.
+
+## As built (implementer, Orca session `ffec7b28`, 2026-10-24; anchors measured on this branch)
+
+Where the code departs from, or adds to, the spec text (each is reversible and flagged for review):
+
+1. **`run/attempts/<n>/dirs.json`** (0600, `[{key, changedPaths}]`) is a new run file not listed in spec §11.8: the
+   §11.3 observation, written when the path policy runs after execute, so `collect` can answer `dirs[].changedPaths`
+   after the worktrees are gone. Absent ⇒ `changedPaths: []`.
+2. **commits.json on crash resume:** `cleanupResidualExtraWorktrees` publishes and removes residual extra worktrees but
+   writes no `commits.json` (the primary's residual publish runs through the untouched `cleanupResidualWorktrees`, which
+   has no commit to hand over). The refs are in each repository.
+3. **`executionRecovery.cleanupStatus`** stays the primary's; an extra worktree's failed removal is an event only.
+4. **Extra-worktree creation failure** removes the just-made primary without publishing it (no agent ran in it), then
+   takes the existing infrastructure retry.
+5. **Skill directories "outside every worktree"** (spec §11.5): no new check. Extra worktrees are made by ccloop under
+   `<runDir>/dirs/` after accept, so a skill snapshot can be inside one only if it is inside the run directory.
+6. **`extra-repo-head-moved: <key>`** is a human gate (`blocked_waiting_human`), as §11.3 says, not `failed` like omp's
+   `omp-head-mutated`.
+7. **`publishExtraAttemptCommit(worktreePath, runDir, attempt)`** drops the spec's unused `repoPath` argument.
+8. **Execution-format capture** is turned off for a multi-repo run in the worker (`config.kind === "codex" &&` no
+   `additionalRepos`); no criterion pins this branch (C11 does not name one).
+9. **C6, claude:** `tests/fixtures/fake-claude-cli.mjs` refuses unknown options, so `--add-dir` makes the fake exit 2 after
+   recording its argv. C6 reads that argv (the fake is unchanged, C12). No claude run with extra worktrees succeeds
+   against the existing fake.
+10. The verifier prompt's existing line "ccloop already ran every required check above in this worktree" is unchanged;
+    the extra checks' results follow it labelled `[<key>]`.
