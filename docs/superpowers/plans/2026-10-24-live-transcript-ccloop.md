@@ -85,18 +85,21 @@ Not merged, not pushed.
 
 ## As built (Orca session `ffec7b28`, 2026-10-24; supersedes the task list above where they differ)
 
-- **Two branches.** `feat/live-transcript` holds Tasks 1-4 (line splitter, codex/omp folds, codex/omp transcript and
-  caps, the O5 rewrite) and turns no other existing criterion red. `feat/live-transcript-rulings` is stacked on it and holds
-  Tasks 5-7 (claude runner transcript, collect `transcripts` + `features.transcripts`, `perf:stream`) plus a collect fix.
-  Those tasks necessarily change bytes that five existing criteria pin exactly; per the dispatch they were not rewritten
-  and wait for a named ruling (re-measured at the stacked branch's tip):
-  `tests/runtime/claude/claudeAgentAdapter.test.ts:133` (a call's evidence file list gains `transcript.jsonl`),
-  `tests/control/singleCall.test.ts:87-107` (the source tree gains `run/claude/1/single-call/call-*/transcript.jsonl`),
-  `tests/control/protocol4.test.ts:13` and `tests/control/savedResultEvidence.test.ts:110` (`features` gains
-  `transcripts: "v1"`), `tests/control/savedResultEvidence.test.ts:107` and `tests/control/toolRulesCollect.test.ts:107`
-  (collect's exact key list gains `transcripts` after real agent calls).
+- **One linear branch.** Tasks 1-7 were first split across `feat/live-transcript` and a stacked
+  `feat/live-transcript-rulings`, because Tasks 5-6 change bytes five existing criteria pin exactly. The coordinator then
+  relayed the human's ruling 「这次批准改写所有必要的判据」 (Orca session `ffec7b28`, 2026-10-24) for exactly those five, rewritten
+  minimally (only the new key/file added), one commit each: `tests/runtime/claude/claudeAgentAdapter.test.ts:133`,
+  `tests/control/singleCall.test.ts:87-107`, `tests/control/protocol4.test.ts:13`,
+  `tests/control/savedResultEvidence.test.ts:107,110`, `tests/control/toolRulesCollect.test.ts:107`. The stacked branch was
+  rebased onto `feat/live-transcript` and that branch fast-forwarded to it.
+- **collect fix.** collect read the loop state's status before progressOf validated it (TypeError on an unknown status,
+  seen red in a full run); progress is now computed first.
 - **L7 bounds growth, not the absolute peak** (spec §4.3 wording). Measured: the codex phase process peaked at ~47 MiB with
   only 8 MiB of output, from a pre-existing 16 MiB up-front buffer for final.json (now read in 64 KiB pieces). Growth over
   baseline after that, three runs: codex 24.5-26.2 MiB, omp 24.4-26.3 MiB, claude 25.6-31.0 MiB (main's unchanged runner,
   same workload: 25.2-26.0 MiB). Margin for claude is small and set by V8's floating garbage, not retention.
-- **D3 stands**: no 1 GiB stop on claude's own stream. **D1 stands**: `work.operatorNote` (10.2.6, L6) is not built.
+- **D3 stands** (coordinator: the spec ties the 1 GiB stop to codex/omp): no 1 GiB stop on claude's own stream.
+- **D1 superseded**: `work.operatorNote` (10.2.6, L6) is built — optional on both loop work schemas (absent ⇒ same hash),
+  rendered by its own lines in plan and execute (never verify, never through priorFailureLines), scoped by
+  `src/runtime/operatorNote.ts`. Criterion `tests/runtime/operatorNote.test.ts`; mutations L6a-c seen red.
+- Mutations: 23, all red, restores 0 bytes (`/private/tmp/orca-ffec7b28/lt-mutations.log`).
