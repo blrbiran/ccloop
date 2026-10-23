@@ -207,7 +207,7 @@ const collectionSchema = z.object({
   decisions: z.unknown().optional(),
   debug: z.unknown().optional(),
   // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.6): present iff the contract has additionalRepos; protocols 3 and 4.
-  dirs: z.array(z.object({ key: z.string().min(1), resultRepo: z.string().min(1), changedPaths: z.array(z.string()) }).strict()).optional(),
+  dirs: z.array(z.object({ key: z.string().min(1), resultRepo: z.string().min(1), changedPaths: z.array(z.string()), attemptSha: z.string().min(1).nullable() }).strict()).optional(),
   // Orca's flow-step report (spec 2026-10-22-flow-answer-key-design.md §4 item 7): the same, protocols 3 and 4.
   flow: z.unknown().optional(),
   // Failure causes (spec 2026-10-21 §5): top level, present iff terminal and the state has one. Orca's strict collect parse

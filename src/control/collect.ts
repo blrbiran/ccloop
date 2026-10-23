@@ -65,23 +65,31 @@ export interface CollectedDirV1 {
   key: string;
   resultRepo: string;
   changedPaths: string[];
+  /** Review M7 (Orca spec §7.3): the attempt's commit in that repository, from run/attempts/<n>/commits.json; null before
+   * the attempt is published, and after a crash resume (which writes no commits.json). */
+  attemptSha: string | null;
 }
 
 /** Spec §11.6: run/attempts/<currentAttempt>/dirs.json, written by the run loop after execute; absent ⇒ []. */
 async function dirsOf(sourceDir: string, keys: string[], state: unknown): Promise<CollectedDirV1[]> {
   const attempt = state === null ? 0 : (state as { currentAttempt: number }).currentAttempt;
-  let observed: unknown = [];
-  if (attempt >= 1) {
+  const read = async (name: string): Promise<unknown> => {
+    if (attempt < 1) return undefined;
     try {
-      observed = JSON.parse((await readPrivateFile(sourceDir, join(sourceDir, "run", "attempts", String(attempt), "dirs.json"))).toString("utf8"));
+      return JSON.parse((await readPrivateFile(sourceDir, join(sourceDir, "run", "attempts", String(attempt), name))).toString("utf8"));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return undefined;
     }
-  }
+  };
+  const observed = await read("dirs.json");
+  const commits = await read("commits.json") as Record<string, { sha?: unknown }> | undefined;
   const byKey = new Map(Array.isArray(observed) ? observed.map((entry) => [(entry as { key?: unknown }).key, (entry as { changedPaths?: unknown }).changedPaths]) : []);
   return keys.map((key) => {
     const changed = byKey.get(key);
-    return { key, resultRepo: `repos/${key}`, changedPaths: Array.isArray(changed) && changed.every((path) => typeof path === "string") ? changed as string[] : [] };
+    const sha = commits !== null && typeof commits === "object" ? commits[key]?.sha : undefined;
+    return { key, resultRepo: `repos/${key}`, changedPaths: Array.isArray(changed) && changed.every((path) => typeof path === "string") ? changed as string[] : [],
+      attemptSha: typeof sha === "string" && sha.length > 0 ? sha : null };
   });
 }
 

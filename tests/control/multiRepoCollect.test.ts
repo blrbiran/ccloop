@@ -57,10 +57,13 @@ describe("extra result repositories (C8)", () => {
     await writeFile(join(w.runDir, "loop-state.json"), JSON.stringify({ status: "executing", currentAttempt: 1, attemptsUsed: 1, lastTransitionAt: "2026-10-24T00:00:00Z",
       waitingOnHuman: false, stopReason: null, budgetSnapshot: { attemptsRemaining: 1, timeRemainingMs: 10, tokenBudgetRemaining: 10 }, recentFailures: [] }), { mode: 0o600 });
     expect((await collectExecution(w.envelope, 0)).dirs).toEqual([
-      { key: "lib", resultRepo: "repos/lib", changedPaths: [] }, { key: "docs", resultRepo: "repos/docs", changedPaths: [] }]);
+      { key: "lib", resultRepo: "repos/lib", changedPaths: [], attemptSha: null }, { key: "docs", resultRepo: "repos/docs", changedPaths: [], attemptSha: null }]);
     await writeFile(join(w.runDir, "attempts", "1", "dirs.json"), JSON.stringify([{ key: "lib", changedPaths: ["lib/a.txt"] }, { key: "docs", changedPaths: ["docs/b.txt", "docs/c.txt"] }]), { mode: 0o600 });
     expect((await collectExecution(w.envelope, 0)).dirs).toEqual([
-      { key: "lib", resultRepo: "repos/lib", changedPaths: ["lib/a.txt"] }, { key: "docs", resultRepo: "repos/docs", changedPaths: ["docs/b.txt", "docs/c.txt"] }]);
+      { key: "lib", resultRepo: "repos/lib", changedPaths: ["lib/a.txt"], attemptSha: null }, { key: "docs", resultRepo: "repos/docs", changedPaths: ["docs/b.txt", "docs/c.txt"], attemptSha: null }]);
+    // Review M7 (Orca spec §7.3): each repository's attempt commit, from the attempt's commits.json once it is published.
+    await writeFile(join(w.runDir, "attempts", "1", "commits.json"), JSON.stringify({ app: { sha: "a".repeat(40), base: "b", ref: "r" }, lib: { sha: "1".repeat(40), base: "b", ref: "r" } }), { mode: 0o600 });
+    expect((await collectExecution(w.envelope, 0)).dirs!.map((dir) => dir.attemptSha)).toEqual(["1".repeat(40), null]);
 
     const { root, envelope } = await fixture(); roots.push(root);
     await mkdir(join(root, "run"));
