@@ -65,6 +65,10 @@ const CODEX_TOOL_ITEMS = new Set(["command_execution", "mcp_tool_call", "web_sea
 export function codexToolEvent(line: string, watch: IdleWatch): void {
   let row: unknown;
   try { row = JSON.parse(line); } catch { return; }
+  codexToolRow(row, watch);
+}
+/** codexToolEvent on a line already parsed (live transcript: the phase's stream fold parses each line once). */
+export function codexToolRow(row: unknown, watch: IdleWatch): void {
   const r = row as { type?: unknown; item?: { id?: unknown; type?: unknown } } | null;
   if (r === null || typeof r !== "object" || typeof r.item?.id !== "string") return;
   if (r.type === "item.started" && typeof r.item.type === "string" && CODEX_TOOL_ITEMS.has(r.item.type)) watch.toolStarted(r.item.id);
@@ -75,6 +79,10 @@ export function codexToolEvent(line: string, watch: IdleWatch): void {
 export function ompToolEvent(line: string, watch: IdleWatch): void {
   let row: unknown;
   try { row = JSON.parse(line); } catch { return; }
+  ompToolRow(row, watch);
+}
+/** ompToolEvent on a line already parsed (live transcript: the phase's stream fold parses each line once). */
+export function ompToolRow(row: unknown, watch: IdleWatch): void {
   const r = row as { type?: unknown; toolCallId?: unknown } | null;
   if (r === null || typeof r !== "object" || typeof r.toolCallId !== "string") return;
   if (r.type === "tool_execution_start") watch.toolStarted(r.toolCallId);

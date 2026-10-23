@@ -111,3 +111,21 @@ export class CappedLineFile {
     while (offset < bytes.length) offset += writeSync(this.fd, bytes, offset, bytes.length - offset);
   }
 }
+
+/** One stdout line as every runtime decoder reads it: blank, a parsed JSON value, text that does not parse, or too large. */
+export type JsonLine = { kind: "blank" } | { kind: "row"; row: unknown } | { kind: "unparsed" } | { kind: "too-large" };
+
+export function jsonLine(line: StreamLine): JsonLine {
+  if (line.tooLarge) return { kind: "too-large" };
+  if (!line.text.trim()) return { kind: "blank" };
+  try { return { kind: "row", row: JSON.parse(line.text) }; } catch { return { kind: "unparsed" }; }
+}
+
+/**
+ * Live transcript (spec §10.2.3): a decoder written as a fold reads lines one at a time. Its string form is
+ * `fold(lines(text))`: this feeds a whole text through the same fold.
+ */
+export function foldText<F extends { push(line: JsonLine): void }>(text: string, fold: F): F {
+  for (const line of textLines(text)) fold.push(jsonLine(line));
+  return fold;
+}

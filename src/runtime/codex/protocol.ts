@@ -4,6 +4,7 @@ import { z } from "zod";
 import { boundedTaskResult } from "../taskResult.js";
 import type { ModelUsageV1 } from "../../control/usage.js";
 import type { AttemptPlan, ExecutionResult, UsageEvidence, VerificationResult } from "../types.js";
+import { foldText, type JsonLine } from "../streamLines.js";
 
 export type CodexPhase = "plan" | "execute" | "verify";
 const configSchema = z.object({
@@ -101,30 +102,56 @@ export type PhaseResults = {plan:AttemptPlan; execute:ExecutionResult; verify:Ve
  * reads, and that it answers null rather than an estimate, is unchanged. ***
  */
 export function observedTurnUsage(events: string): number | null {
-  let observed: number | null = null;
-  for (const line of events.split("\n")) {
-    let row: unknown;
-    try { row = JSON.parse(line); } catch { continue; }
-    if (!record(row) || row.type !== "turn.completed" || !record(row.usage)) continue;
+  return foldText(events, new TurnUsageFold()).value();
+}
+
+/** Live transcript (Orca spec 2026-10-23 §10.2.3): observedTurnUsage as a fold over lines. */
+export class TurnUsageFold {
+  private observed: number | null = null;
+  push(line: JsonLine): void {
+    if (line.kind !== "row") return;
+    const row = line.row;
+    if (!record(row) || row.type !== "turn.completed" || !record(row.usage)) return;
     const input = row.usage.input_tokens, output = row.usage.output_tokens;
-    if (!integer(input) || !integer(output) || !Number.isSafeInteger(input + output) || input + output === 0) continue;
-    observed = input + output;
+    if (!integer(input) || !integer(output) || !Number.isSafeInteger(input + output) || input + output === 0) return;
+    this.observed = input + output;
   }
-  return observed;
+  value(): number | null { return this.observed; }
 }
 
 export function decodeCodexUsage(events:string, uniqueCompletion=false): {tokenUsage:number;usageEvidence:UsageEvidence} {
-  let completed: Record<string, unknown> | undefined;
-  for (const line of events.split("\n")) {
-    if (!line.trim()) continue;
-    let row: unknown;
-    try { row = JSON.parse(line); } catch { throw new Error("codex-events-invalid"); }
-    if (!record(row) || typeof row.type !== "string") throw new Error("codex-events-invalid");
-    if (row.type === "turn.failed" || row.type === "error") throw new Error("codex-event-error");
-    if (row.type !== "turn.completed") continue;
-    if (completed && (uniqueCompletion || JSON.stringify(completed) !== JSON.stringify(row))) throw new Error("codex-conflicting-completion");
-    completed = row;
+  return foldText(events, new CodexUsageFold(uniqueCompletion)).value();
+}
+
+/**
+ * Live transcript (Orca spec 2026-10-23 §10.2.3): decodeCodexUsage as a fold. The first failing line decides, as the loop's
+ * first throw did; later lines are not read. A line too large to keep is `codex-events-line-too-large` (spec §10.2.3), where
+ * the whole stream used to be stopped at 16 MiB instead.
+ */
+export class CodexUsageFold {
+  private error: string | null = null;
+  private completed: Record<string, unknown> | undefined;
+  private completedJson = "";
+  constructor(private readonly uniqueCompletion = false) {}
+  push(line: JsonLine): void {
+    if (this.error !== null || line.kind === "blank") return;
+    if (line.kind === "too-large") { this.error = "codex-events-line-too-large"; return; }
+    if (line.kind === "unparsed") { this.error = "codex-events-invalid"; return; }
+    const row = line.row;
+    if (!record(row) || typeof row.type !== "string") { this.error = "codex-events-invalid"; return; }
+    if (row.type === "turn.failed" || row.type === "error") { this.error = "codex-event-error"; return; }
+    if (row.type !== "turn.completed") return;
+    const json = JSON.stringify(row);
+    if (this.completed && (this.uniqueCompletion || this.completedJson !== json)) { this.error = "codex-conflicting-completion"; return; }
+    this.completed = row; this.completedJson = json;
   }
+  value(): {tokenUsage:number;usageEvidence:UsageEvidence} {
+    if (this.error !== null) throw new Error(this.error);
+    return codexUsageOf(this.completed);
+  }
+}
+
+function codexUsageOf(completed: Record<string, unknown> | undefined): {tokenUsage:number;usageEvidence:UsageEvidence} {
   if (!completed) throw new Error("codex-no-completion");
   const usage = completed.usage;
   if (!record(usage)) throw new Error("codex-usage-invalid");
@@ -144,7 +171,12 @@ export function decodeCodexUsage(events:string, uniqueCompletion=false): {tokenU
 }
 
 export function decodeCodexResult<P extends CodexPhase>(phase:P, events:string, final:string): PhaseResults[P] {
-  const {tokenUsage,usageEvidence}=decodeCodexUsage(events);
+  return codexResultOf(phase, decodeCodexUsage(events), final);
+}
+
+/** decodeCodexResult with the usage already decoded (by CodexUsageFold, lenient mode). */
+export function codexResultOf<P extends CodexPhase>(phase:P, decodedUsage:{tokenUsage:number;usageEvidence:UsageEvidence}, final:string): PhaseResults[P] {
+  const {tokenUsage,usageEvidence}=decodedUsage;
   let raw: unknown;
   try { raw = JSON.parse(final); } catch { throw new Error("codex-result-invalid"); }
   if (phase === "execute" && record(raw) && Object.hasOwn(raw, "taskResult")) raw.taskResult = boundedTaskResult(raw.taskResult);
@@ -161,13 +193,20 @@ export function decodeCodexResult<P extends CodexPhase>(phase:P, events:string, 
  * model name is one the usage schema refuses (empty, over 200 chars): absent, never a guess.
  */
 export function codexModelUsage(events: string, model: string): ModelUsageV1[] | null {
-  if (model.length < 1 || model.length > 200) return null;
-  let usage: Record<string, unknown> | undefined;
-  for (const line of events.split("\n")) {
-    let row: unknown;
-    try { row = JSON.parse(line); } catch { continue; }
-    if (record(row) && row.type === "turn.completed" && record(row.usage)) usage = row.usage;
+  return foldText(events, new ModelUsageFold()).value(model);
+}
+
+/** Live transcript (Orca spec 2026-10-23 §10.2.3): codexModelUsage as a fold; it keeps only the last completion's usage. */
+export class ModelUsageFold {
+  private usage: Record<string, unknown> | undefined;
+  push(line: JsonLine): void {
+    if (line.kind === "row" && record(line.row) && line.row.type === "turn.completed" && record(line.row.usage)) this.usage = line.row.usage;
   }
+  value(model: string): ModelUsageV1[] | null { return modelUsageOf(this.usage, model); }
+}
+
+function modelUsageOf(usage: Record<string, unknown> | undefined, model: string): ModelUsageV1[] | null {
+  if (model.length < 1 || model.length > 200) return null;
   if (!usage) return null;
   const { input_tokens: total, output_tokens: output, cached_input_tokens: cached = 0 } = usage;
   if (!integer(total) || !integer(output) || !integer(cached) || cached > total) return null;

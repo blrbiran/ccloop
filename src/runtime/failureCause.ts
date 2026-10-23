@@ -4,6 +4,8 @@
  * error rows only -- never model text, tool output or check output. Anything no row matches is `unknown`: a wrong class
  * would retry money away or hide a real cause, so absence of evidence answers `unknown`, not a guess.
  */
+import { foldText, type JsonLine } from "./streamLines.js";
+
 export const FAILURE_CAUSES = [
   "auth", "quota", "rate-limited", "provider-5xx", "network", "context-overflow", "stalled", "executable-missing",
   "required-check-failed", "verifier-rejected", "budget-exhausted", "unknown",
@@ -58,22 +60,29 @@ function codexRowCause(message: string): FailureCauseV1 {
  * `workObserved`: any `item.*` row, or any line that does not parse (absence of work not proven).
  */
 export function classifyCodexCall(events: string): CallClassification | null {
-  let message: string | null = null, completed = false, workObserved = false;
-  for (const line of events.split("\n")) {
-    if (!line.trim()) continue;
-    let row: unknown;
-    try { row = JSON.parse(line); } catch { workObserved = true; continue; }
-    if (row === null || typeof row !== "object" || Array.isArray(row)) { workObserved = true; continue; }
+  return foldText(events, new CodexCallFold()).value();
+}
+
+/** Live transcript (Orca spec 2026-10-23 §10.2.3): classifyCodexCall as a fold; a line too large to keep counts as unparsed. */
+export class CodexCallFold {
+  private message: string | null = null; private completed = false; private workObserved = false;
+  push(line: JsonLine): void {
+    if (line.kind === "blank") return;
+    if (line.kind !== "row") { this.workObserved = true; return; }
+    const row = line.row;
+    if (row === null || typeof row !== "object" || Array.isArray(row)) { this.workObserved = true; return; }
     const r = row as { type?: unknown; message?: unknown; error?: { message?: unknown } | null };
-    if (typeof r.type !== "string") { workObserved = true; continue; }
-    if (r.type.startsWith("item.")) workObserved = true;
-    if (r.type === "turn.completed") completed = true;
+    if (typeof r.type !== "string") { this.workObserved = true; return; }
+    if (r.type.startsWith("item.")) this.workObserved = true;
+    if (r.type === "turn.completed") this.completed = true;
     const text = r.type === "error" ? r.message : r.type === "turn.failed" ? r.error?.message : undefined;
-    if (typeof text === "string") message = text;
+    if (typeof text === "string") this.message = text;
   }
-  if (completed) return null;
-  if (message === null) return { cause: "unknown", workObserved, detail: null };
-  return { cause: codexRowCause(message), workObserved, detail: causeDetail(message) };
+  value(): CallClassification | null {
+    if (this.completed) return null;
+    if (this.message === null) return { cause: "unknown", workObserved: this.workObserved, detail: null };
+    return { cause: codexRowCause(this.message), workObserved: this.workObserved, detail: causeDetail(this.message) };
+  }
 }
 
 /** What the claude runner records per call (spec §3 claude), written to CCLOOP_CLAUDE_SIGNALS_PATH. */
@@ -124,19 +133,23 @@ export function parseClaudeSignals(text: string): ClaudeSignalsV1 | null {
  * stopReason "error" records its errorMessage as detail. `workObserved`: any tool_execution_start.
  */
 export function classifyOmpCall(events: string): CallClassification {
-  let workObserved = false, detail: string | null = null;
-  for (const line of events.split("\n")) {
-    if (!line.trim()) continue;
-    let row: unknown;
-    try { row = JSON.parse(line); } catch { continue; }
-    if (row === null || typeof row !== "object" || Array.isArray(row)) continue;
+  return foldText(events, new OmpCallFold()).value();
+}
+
+/** Live transcript (Orca spec 2026-10-23 §10.2.3): classifyOmpCall as a fold. */
+export class OmpCallFold {
+  private workObserved = false; private detail: string | null = null;
+  push(line: JsonLine): void {
+    if (line.kind !== "row") return;
+    const row = line.row;
+    if (row === null || typeof row !== "object" || Array.isArray(row)) return;
     const r = row as { type?: unknown; message?: { role?: unknown; stopReason?: unknown; errorMessage?: unknown } };
-    if (r.type === "tool_execution_start") workObserved = true;
+    if (r.type === "tool_execution_start") this.workObserved = true;
     if (r.type === "message_end" && r.message?.role === "assistant" && r.message.stopReason === "error" && typeof r.message.errorMessage === "string") {
-      detail = causeDetail(r.message.errorMessage);
+      this.detail = causeDetail(r.message.errorMessage);
     }
   }
-  return { cause: "unknown", workObserved, detail };
+  value(): CallClassification { return { cause: "unknown", workObserved: this.workObserved, detail: this.detail }; }
 }
 
 /** Spec §3 "Every kind": a spawn that failed with ENOENT. `spawnError` is the runner's `<code>: <message>` string. */
