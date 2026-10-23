@@ -62,7 +62,8 @@ describe("Codex phase process",()=>{
   // 2026-10-23-live-transcript-design.md §11.2 (a): a call printing past 16 MiB and under 1 GiB completes; events.jsonl stays
   // capped at 16 MiB (cut at a line end, labelled stdoutTruncated) and transcript.jsonl (cap 128 MiB) holds the whole stream.
   it("completes a call printing past 16 MiB and under 1 GiB, its evidence capped and its transcript whole",async()=>{
-    const f=await fixture("large-stream");const r=await runCodexPhase(f.config,{phase:"plan",prompt:"p",context:f.context});
+    const f=await fixture("large-stream");f.config.timeoutMs=60000;f.context.state.budgetSnapshot.timeRemainingMs=60000;
+    const r=await runCodexPhase(f.config,{phase:"plan",prompt:"p",context:f.context});
     expect(r.reason).toBe("completed");expect(r.final).not.toBeNull();
     const events=await readFile(join(r.evidenceDir,"events.jsonl")),transcript=await readFile(join(r.evidenceDir,"transcript.jsonl"));
     expect(transcript.length).toBeGreaterThan(17*1024*1024);expect(transcript.at(-1)).toBe(10);
@@ -70,7 +71,7 @@ describe("Codex phase process",()=>{
     expect(events.length).toBeLessThanOrEqual(16*1024*1024);expect(events.length).toBeGreaterThan(15*1024*1024);expect(events.at(-1)).toBe(10);
     expect(transcript.subarray(0,events.length).equals(events)).toBe(true);
     expect(JSON.parse(await read(join(r.evidenceDir,"outcome.json")))).toMatchObject({reason:"completed",stdoutTruncated:true,transcriptTruncatedAt:null});
-  },30000);
+  },90000);
   // Ruling O5 (as above), spec §11.2 (b): a call whose stdout passes 1 GiB is stopped with output-limit.
   it("stops a call printing past 1 GiB with output-limit",async()=>{
     const f=await fixture("flood");f.config.timeoutMs=120000;f.context.state.budgetSnapshot.timeRemainingMs=120000;

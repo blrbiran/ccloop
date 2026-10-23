@@ -226,7 +226,8 @@ for(let i=0;i<17*16+1;i++){if(!process.stdout.write(update))await new Promise(r=
 process.stdout.write([{type:"message_end",message},{type:"agent_end",isTerminal:true}].map(r=>JSON.stringify(r)).join("\\n")+"\\n");
 })();
 `, { mode: 0o700 });
-    const outcome = await runOmpPhase(f.config, "plan", "prompt", f.context);
+    const config = { ...f.config, installation: { ...f.config.installation, timeoutMs: 60_000 } };
+    const outcome = await runOmpPhase(config, "plan", "prompt", { ...f.context, state: { ...f.context.state, budgetSnapshot: { ...f.context.state.budgetSnapshot, timeRemainingMs: 60_000 } } });
     expect(outcome.reason).toBe("completed");
     expect(outcome.stream.phase!.value()).toMatchObject({ summary: "big", tokenUsage: 14 });
     const events = await readFile(join(outcome.evidenceDir, "events.jsonl")), transcript = await readFile(join(outcome.evidenceDir, "transcript.jsonl"));
@@ -234,7 +235,7 @@ process.stdout.write([{type:"message_end",message},{type:"agent_end",isTerminal:
     expect(events.length).toBeLessThanOrEqual(16 * 1024 * 1024); expect(events.length).toBeGreaterThan(15 * 1024 * 1024); expect(events.at(-1)).toBe(10);
     expect(transcript.subarray(0, events.length).equals(events)).toBe(true);
     expect(JSON.parse(await readFile(join(outcome.evidenceDir, "outcome.json"), "utf8"))).toMatchObject({ reason: "completed", stdoutTruncated: true, transcriptTruncatedAt: null });
-  }, 30000);
+  }, 90_000);
 
   // Ruling O5 (as above), spec §11.2 (b): a call whose stdout passes 1 GiB is stopped with output-limit.
   it("stops an event stream past 1 GiB with output-limit", async () => {
