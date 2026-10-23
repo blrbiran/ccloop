@@ -51,10 +51,13 @@ describe("collect lists the run's transcripts", () => {
   it("orders a phase's calls by startedAt, not by their names, and lists a pre-change call with path null", async () => {
     const w = await world("executing");
     const line = '{"type":"assistant"}\n';
-    // Names sort the other way round from the start times.
-    await call(w.run, "codex", 1, "plan", "call-zzzzzz", { startedAt: "Fri Oct 24 01:00:00 2026", transcript: line, outcome: true });
-    await call(w.run, "codex", 1, "plan", "call-mmmmmm", { startedAt: "Fri Oct 24 01:00:05 2026", transcript: line + line, outcome: true });
+    // Names sort the other way round from the start times, and the directories are created in name order, so neither the
+    // name nor the birth-time tie-break can produce the start-time order by accident.
     await call(w.run, "codex", 1, "plan", "call-aaaaaa", { startedAt: "Fri Oct 24 02:00:00 2026", transcript: "" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await call(w.run, "codex", 1, "plan", "call-mmmmmm", { startedAt: "Fri Oct 24 01:00:05 2026", transcript: line + line, outcome: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await call(w.run, "codex", 1, "plan", "call-zzzzzz", { startedAt: "Fri Oct 24 01:00:00 2026", transcript: line, outcome: true });
     await call(w.run, "codex", 1, "execute", "call-bbbbbb", { startedAt: "Fri Oct 24 03:00:00 2026", outcome: true });
     const report = await collectExecution(w.envelope, 0);
     expect(report.transcripts).toEqual([
