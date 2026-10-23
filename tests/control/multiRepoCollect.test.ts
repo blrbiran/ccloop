@@ -17,10 +17,11 @@ afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { rec
 
 async function world() {
   const { root, envelope } = await fixture(); roots.push(root);
-  const repos = { lib: await createKeyedRepo("lib"), docs: await createKeyedRepo("docs") };
-  roots.push(repos.lib, repos.docs);
+  const repos = { app: await createKeyedRepo("app"), lib: await createKeyedRepo("lib"), docs: await createKeyedRepo("docs") };
+  roots.push(repos.app, repos.lib, repos.docs);
   const keys = ["lib", "docs"] as const;
-  const contract = { ...envelope.work.contract, context: { ...envelope.work.contract.context, repoKey: "app",
+  // The primary is a repository of its own, so a result repository made from it is told apart by its files.
+  const contract = { ...envelope.work.contract, context: { ...envelope.work.contract.context, repoPath: repos.app, repoKey: "app",
     additionalRepos: keys.map((key) => ({ key, repoPath: repos[key], targetPaths: [`${key}/**`] })) } };
   const bases = { lib: await git(repos.lib, "rev-parse", "HEAD"), docs: await git(repos.docs, "rev-parse", "HEAD") };
   const work = { ...envelope.work, contract, additionalRepos: keys.map((key) => ({ key, targetRepo: repos[key], base: bases[key] })) };
