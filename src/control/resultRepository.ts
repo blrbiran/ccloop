@@ -3,7 +3,7 @@ import { access, cp, copyFile, lstat, mkdir, readdir, realpath, rm } from "node:
 import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { codexSkillsPendingPath } from "../runtime/codex/codexSkills.js";
-import { namespacedAttemptRefName } from "../workspace/worktreeManager.js";
+import { extraWorktreePath, namespacedAttemptRefName } from "../workspace/worktreeManager.js";
 import type { LoopStartEnvelope } from "./protocol.js";
 
 const exec = promisify(execFile);
@@ -87,4 +87,41 @@ export async function materializeResultRepository(
   }
   await cloneAt(envelope.work.targetRepo, destination, envelope.work.base);
   return destination;
+}
+
+/**
+ * Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.6): one result repository per extra repository, at
+ * <sourceDir>/repos/<key> (directories 0700, as <sourceDir>/repo is made), by the same three cases as the primary's: a
+ * live copy of <runDir>/dirs/attempt-<n>/<key>, the attempt ref in that repository, or a clone of its targetRepo at its
+ * base. <sourceDir>/repo is untouched; a single-repo envelope makes nothing.
+ */
+export async function materializeExtraResultRepositories(envelope: LoopStartEnvelope, runDir: string, currentAttempt: number): Promise<void> {
+  const repos = envelope.work.contract.context.additionalRepos;
+  const targets = envelope.work.additionalRepos;
+  if (repos === undefined || targets === undefined) return;
+  const root = join(envelope.work.sourceDir, "repos");
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  for (const [index, repo] of repos.entries()) {
+    const destination = join(root, repo.key);
+    if (await exists(destination)) {
+      if (!(await lstat(destination)).isDirectory()) throw new Error("control-result-repository-invalid");
+      try {
+        await git(destination, "rev-parse", "--git-dir");
+        continue;
+      } catch {
+        throw new Error("control-result-repository-invalid");
+      }
+    }
+    if (currentAttempt > 0) {
+      const live = extraWorktreePath(runDir, currentAttempt, repo.key);
+      if (await exists(live)) {
+        await copyLiveWorkspace(live, destination);
+        continue;
+      }
+      const sha = await git(repo.repoPath, "rev-parse", `refs/ccloop/${envelope.claim.runId}/attempts/${currentAttempt}`);
+      await cloneAt(repo.repoPath, destination, sha);
+      continue;
+    }
+    await cloneAt(targets[index]!.targetRepo, destination, targets[index]!.base);
+  }
 }

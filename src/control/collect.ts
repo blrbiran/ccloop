@@ -53,6 +53,36 @@ export interface CollectionV1 {
    * there is at least one; absent otherwise, like toolRules. Advertised by `features.transcripts: "v1"`.
    */
   transcripts?: TranscriptEntryV1[];
+  /**
+   * Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.6): one entry per extra repository, contract order, present
+   * iff the contract has additionalRepos. changedPaths is ccloop's own observation of the current attempt (§11.3), [] before
+   * there is one. Top level, like toolRules, so the protocol-3 terminal projection is untouched.
+   */
+  dirs?: CollectedDirV1[];
+}
+
+export interface CollectedDirV1 {
+  key: string;
+  resultRepo: string;
+  changedPaths: string[];
+}
+
+/** Spec §11.6: run/attempts/<currentAttempt>/dirs.json, written by the run loop after execute; absent ⇒ []. */
+async function dirsOf(sourceDir: string, keys: string[], state: unknown): Promise<CollectedDirV1[]> {
+  const attempt = state === null ? 0 : (state as { currentAttempt: number }).currentAttempt;
+  let observed: unknown = [];
+  if (attempt >= 1) {
+    try {
+      observed = JSON.parse((await readPrivateFile(sourceDir, join(sourceDir, "run", "attempts", String(attempt), "dirs.json"))).toString("utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  const byKey = new Map(Array.isArray(observed) ? observed.map((entry) => [(entry as { key?: unknown }).key, (entry as { changedPaths?: unknown }).changedPaths]) : []);
+  return keys.map((key) => {
+    const changed = byKey.get(key);
+    return { key, resultRepo: `repos/${key}`, changedPaths: Array.isArray(changed) && changed.every((path) => typeof path === "string") ? changed as string[] : [] };
+  });
 }
 
 const safe = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -163,6 +193,9 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const progress = loopState === null ? null : progressOf(loopState.state);
   const runFinal = proof !== null || (progress !== null && isTerminalRunStatus(progress.status));
   const transcripts = await listTranscripts(input.work.sourceDir, runFinal);
+  const extraKeys = input.work.kind === "loop" ? input.work.contract.context.additionalRepos?.map((repo) => repo.key) : undefined;
+  // Evaluated after progressOf, which has checked the loop state's currentAttempt.
+  const dirs = extraKeys === undefined ? undefined : await dirsOf(input.work.sourceDir, extraKeys, loopState === null ? null : loopState.state);
   return {
     events,
     candidate: storedCandidate === null ? null : candidateOf(storedCandidate, proof),
@@ -173,6 +206,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     ...(failureCause === undefined ? {} : { failureCause }),
     ...(toolRules === undefined ? {} : { toolRules }),
     ...(transcripts.length === 0 ? {} : { transcripts }),
+    ...(dirs === undefined ? {} : { dirs }),
   };
 }
 

@@ -24,7 +24,7 @@ import {
 import { readProcessStartedAt } from "./workerLauncher.js";
 import { recordCompletedPhase } from "./stopProof.js";
 import { testCrashPoint } from "./testCrashPoint.js";
-import { materializeResultRepository } from "./resultRepository.js";
+import { materializeExtraResultRepositories, materializeResultRepository } from "./resultRepository.js";
 import { runSingleCall } from "./singleCall.js";
 import { registerAttemptRefNamespace } from "../workspace/worktreeManager.js";
 import { codexConfigTomlPath, readCodexNetworkAccess } from "../agents/codexNetworkConfig.js";
@@ -318,7 +318,11 @@ export async function runControlWorker(argv: string[]): Promise<void> {
             Object.assign(runState,{status:"failed",waitingOnHuman:false,stopReason:error instanceof Error&&["saved-result-publication-unavailable","saved-result-source-stale"].includes(error.message)?error.message:"saved-result-modified-during-verification",lastTransitionAt:new Date().toISOString()});
             await createOwnedRunStateWriter()(runDir,runState);
           }
-        }else await materializeResultRepository(envelope, runDir, runState.currentAttempt);
+        }else{
+          await materializeResultRepository(envelope, runDir, runState.currentAttempt);
+          // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.6): <sourceDir>/repos/<key> beside <sourceDir>/repo.
+          await materializeExtraResultRepositories(envelope, runDir, runState.currentAttempt);
+        }
         let result = (deadlineInterrupted || envelope.mode==="verify-saved-result"&&!isTerminalRunStatus(runState.status))
           ? "partial" as const
           : request !== null && !isTerminalRunStatus(runState.status)
