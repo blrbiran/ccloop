@@ -87,4 +87,16 @@ describe("collect lists the run's transcripts", () => {
     expect(answer.code, answer.stderr).toBe(0);
     expect((JSON.parse(answer.stdout) as { transcripts?: unknown }).transcripts).toEqual([{ attempt: 1, phase: "plan", seq: 1, path: "claude/1/plan/call-qwerty/transcript.jsonl", bytes: 3, final: false, truncatedAt: null }]);
   });
+
+  it("leaves out a directory it cannot read and lists the rest (review minor, Orca session ffec7b28)", async () => {
+    const w = await world("executing");
+    await call(w.run, "codex", 1, "plan", "call-aaaaaa", { startedAt: "Fri Oct 24 01:00:00 2026", transcript: "{}\n", outcome: true });
+    await call(w.run, "codex", 2, "plan", "call-bbbbbb", { startedAt: "Fri Oct 24 02:00:00 2026", transcript: "{}\n", outcome: true });
+    const { chmod } = await import("node:fs/promises");
+    await chmod(join(w.run, "codex", "1"), 0o000);
+    try {
+      const report = await collectExecution(w.envelope, 0);
+      expect(report.transcripts).toEqual([{ attempt: 2, phase: "plan", seq: 1, path: "codex/2/plan/call-bbbbbb/transcript.jsonl", bytes: 3, final: true, truncatedAt: null }]);
+    } finally { await chmod(join(w.run, "codex", "1"), 0o700); }
+  });
 });

@@ -26,17 +26,19 @@ const ATTEMPT = /^[1-9][0-9]{0,8}$/;
 const PHASE = /^[a-z][a-z-]{0,31}$/;
 const CALL = /^call-[A-Za-z0-9]{1,64}$/;
 
-async function realDirectories(dir: string, pattern: RegExp): Promise<string[]> {
+/**
+ * Real directories under `dir` whose names match, with their birth time. Review minor (Orca session ffec7b28): a directory
+ * that cannot be read (any error, not only ENOENT) contributes nothing, and the listing goes on -- one unreadable attempt or
+ * phase directory must not make collect, which Orca polls for the whole run, fail.
+ */
+async function realDirectories(dir: string, pattern: RegExp): Promise<Array<{ name: string; birthtimeMs: number }>> {
   let names: string[];
-  try { names = await readdir(dir); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") return [];
-    throw error;
-  }
-  const kept: string[] = [];
+  try { names = await readdir(dir); } catch { return []; }
+  const kept: Array<{ name: string; birthtimeMs: number }> = [];
   for (const name of names.filter((candidate) => pattern.test(candidate)).sort()) {
     // lstat: a symlink is never followed, so every listed path stays inside the run directory.
     const stats = await lstat(join(dir, name)).catch(() => null);
-    if (stats?.isDirectory()) kept.push(name);
+    if (stats?.isDirectory()) kept.push({ name, birthtimeMs: stats.birthtimeMs });
   }
   return kept;
 }
@@ -60,21 +62,23 @@ async function startedAtMs(callDir: string): Promise<number | null> {
 }
 
 /**
- * Every call under `<sourceDir>/run/<kind>/<attempt>/<phase>/call-*`, ordered by kind, attempt, phase and seq. Call
- * directories are mkdtemp names, so their order means nothing: within a phase, calls are ordered by process.json
- * `startedAt` (then by name), and calls that never registered a process follow, by name.
+ * Every call under `<sourceDir>/run/<kind>/<attempt>/<phase>/call-*`. Order: kind-major (claude, codex, omp), then attempt
+ * (numeric), then phase (by name), then seq. Call directories are mkdtemp names, so their order means nothing: within a
+ * phase, calls are ordered by process.json `startedAt` -- `ps lstart`, which has 1 s resolution -- then, for calls started
+ * in the same second, by the call directory's birth time (where the file system has none it reads 0 and falls through),
+ * then by name; calls that never registered a process follow, by birth time, then name.
  */
 export async function listTranscripts(sourceDir: string, runFinal: boolean): Promise<TranscriptEntryV1[]> {
   const runDir = join(sourceDir, "run");
   const entries: TranscriptEntryV1[] = [];
   for (const kind of KINDS) {
     const kindDir = join(runDir, kind);
-    const attempts = (await realDirectories(kindDir, ATTEMPT)).sort((left, right) => Number(left) - Number(right));
+    const attempts = (await realDirectories(kindDir, ATTEMPT)).map(({ name }) => name).sort((left, right) => Number(left) - Number(right));
     for (const attempt of attempts) {
-      for (const phase of await realDirectories(join(kindDir, attempt), PHASE)) {
+      for (const { name: phase } of await realDirectories(join(kindDir, attempt), PHASE)) {
         const phaseDir = join(kindDir, attempt, phase);
-        const calls = await Promise.all((await realDirectories(phaseDir, CALL)).map(async (name) => ({ name, startedAt: await startedAtMs(join(phaseDir, name)) })));
-        calls.sort((left, right) => (left.startedAt ?? Infinity) - (right.startedAt ?? Infinity) || (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+        const calls = await Promise.all((await realDirectories(phaseDir, CALL)).map(async ({ name, birthtimeMs }) => ({ name, birthtimeMs, startedAt: await startedAtMs(join(phaseDir, name)) })));
+        calls.sort((left, right) => (left.startedAt ?? Infinity) - (right.startedAt ?? Infinity) || left.birthtimeMs - right.birthtimeMs || (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
         for (const [index, call] of calls.entries()) {
           const callDir = join(phaseDir, call.name);
           const transcript = await regularFile(join(callDir, "transcript.jsonl"));
