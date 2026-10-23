@@ -10,7 +10,7 @@ describe("optional token policy protocol boundary", () => {
  it("negotiates implemented recovery independently of core capabilities", async () => {
    const result = await runControlCommand(["features"], "{}");
    expect(result.code).toBe(0);
-   expect(JSON.parse(result.stdout)).toEqual({protocol:1, tokenPolicy:"optional-v1", savedResultRecovery:"v1", agentInstallationUpdate:"v1"});
+   expect(JSON.parse(result.stdout)).toEqual({protocol:1, tokenPolicy:"optional-v1", savedResultRecovery:"v1", agentInstallationUpdate:"v1", transcripts:"v1"});
  });
  it("accepts v4 nullable normal work while preserving v3 hash and refusing nullable v3", async () => {
    const {envelope} = await fixture(); const hash=canonicalHash(envelope);
