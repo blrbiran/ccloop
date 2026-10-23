@@ -114,3 +114,31 @@ Where the code departs from, or adds to, the spec text (each is reversible and f
    against the existing fake.
 10. The verifier prompt's existing line "ccloop already ran every required check above in this worktree" is unchanged;
     the extra checks' results follow it labelled `[<key>]`.
+
+### Review round 1 (independent review relayed by the Orca controller, session `ffec7b28`, 2026-10-24): no Critical
+
+Each fix is its own commit (subject ends `(review <id>)`), with a new or extended criterion and a named mutation seen red
+(`/private/tmp/orca-ffec7b28/mr-mutations.log`, names `R-*`). Items 2, 8 and 9 above are revised by this section.
+
+- **I1** At accept, each working repository's `git rev-parse --git-common-dir` (realpath) must be its own: a linked worktree
+  of another listed repository, or a repoPath that is not a git working tree, is `control-request-invalid`. Paths are
+  compared by real path (a symlinked targetRepo equal to another is refused).
+- **I2** Commits published by a cleanup pass are kept on the attempt; `commits.json` is written before a removal failure is
+  rethrown, and the best-effort pass that follows removes an already-published extra without publishing it again.
+- **M3** Extra worktrees are observed again right before publish on the verify-completed path, so `dirs.json` matches
+  `repos/<key>`; a verify-phase file that breaks an extra's policy is the same human gate (`allowlist miss: <key>:<path>`).
+- **M4** (revises 8) The format-capture guard moved from the worker into `runLoopFromState`, where
+  `tests/controller/multiRepoFormatCapture.test.ts` reaches it (with a single-repo positive control).
+- **M5** (revises 9) New fake `tests/fixtures/fake-claude-cli-multi.mjs` (fake-claude-cli.mjs plus `--add-dir` as a list
+  option); `tests/runtime/claude/multiRepoClaudeRun.test.ts` runs a whole claude run with an extra repository.
+- **M6** The verifier prompt of a multi-repo run gains one line: "A required check labelled [<key>] ran in that
+  directory's worktree, not in the working directory."
+- **M7** (revises 2) collect `dirs[]` gains `attemptSha: string | null`, read from `run/attempts/<n>/commits.json`. It is
+  null before the attempt is published, and **after a crash resume, which writes no commits.json** (the refs are still
+  in each repository).
+- **M8** An extra worktree whose HEAD is not the envelope's base for it records the event `extra_repo_base_mismatch`
+  (`<key>: base <base> is <sha|unresolvable>, worktree HEAD <sha>`); the worker passes the bases as `extraRepoBases`.
+- **M9 — for the human:** `extra-repo-head-moved: <key>` stays a human gate (`blocked_waiting_human`), as spec §11.3
+  says, where omp's own `omp-head-mutated` fails the run. The human should confirm or change that.
+
+Collect shape after this round: `dirs?: { key; resultRepo: "repos/<key>"; changedPaths: string[]; attemptSha: string | null }[]`.
