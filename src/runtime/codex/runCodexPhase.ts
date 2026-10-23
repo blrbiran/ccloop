@@ -51,7 +51,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   const evidenceDir=await mkdtemp(join(root,"call-"));
   const stream=new CodexStream();
   const result=attachOutcomeStream({reason:"completed",code:null,signal:null,final:null,evidenceDir,observedTokens:null} as PhaseOutcome,evidenceDir,stream);
-  let transcriptTruncatedAt:number|null=null;
+  let transcriptTruncatedAt:number|null=null,transcriptError:string|undefined;
   const save=async(name:string,data:string)=>writeFile(join(evidenceDir,name),data,{mode:0o600});
   const schemaPath=join(evidenceDir,"schema.json"),finalPath=join(evidenceDir,"final.json");
   const args=request.spawn!==undefined?[...config.command.slice(1),...request.spawn.args({schemaPath,finalPath})]:[...config.command.slice(1),"exec","--json","--ephemeral","--color","never","--model",config.model,
@@ -66,7 +66,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   let idle:IdleSnapshotV1|null=null;
   const persist=async()=>{
     if(!logsCreated){await save("events.jsonl","");await save("transcript.jsonl","");await save("stderr.log",stderr);}
-    await save("outcome.json",JSON.stringify({...result,final:undefined,executable:config.command[0],args,ioError,stdoutTruncated,stderrTruncated,finalTruncated,transcriptTruncatedAt,...(isolation===undefined?{}:{isolation}),...(result.reason==="stalled"&&idle!==null?{idle}:{})},null,2));
+    await save("outcome.json",JSON.stringify({...result,final:undefined,executable:config.command[0],args,ioError,stdoutTruncated,stderrTruncated,finalTruncated,transcriptTruncatedAt,transcriptError,...(isolation===undefined?{}:{isolation}),...(result.reason==="stalled"&&idle!==null?{idle}:{})},null,2));
     return result;
   };
   if(context.abortSignal?.aborted){result.reason="aborted";return persist();}
@@ -108,12 +108,14 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   // Pre-create files with private permissions before handing paths to the CLI.
   await save("final.json","");await save("events.jsonl","");await save("transcript.jsonl","");await save("stderr.log","");logsCreated=true;
   const runChild = async () => new Promise<void>(resolve=>{
-    const child=spawn(config.command[0],args,{cwd:context.worktreePath,detached:true,stdio:["pipe","pipe","pipe"],env:request.spawn?.env??spawnEnv});
-    const err=new StringDecoder("utf8");
     // Live transcript (spec §10.2.1-§10.2.3, §11.1): stdout goes to the 16 MiB evidence file and the 128 MiB transcript, each
     // cut at a line end, and through the line folds; only the 1 GiB hard limit stops the agent for its output.
-    const events=new CappedLineFile(join(evidenceDir,"events.jsonl"),LIMIT);
-    const transcript=new CappedLineFile(join(evidenceDir,"transcript.jsonl"),TRANSCRIPT_LIMIT,transcriptMarker);
+    // Review I1: both records are opened before anything is spawned; a record that cannot be opened is io-error with no child.
+    let events:CappedLineFile,transcript:CappedLineFile;
+    try{events=new CappedLineFile(join(evidenceDir,"events.jsonl"),LIMIT);}catch(e){ioError=String(e);result.reason="io-error";resolve();return;}
+    try{transcript=new CappedLineFile(join(evidenceDir,"transcript.jsonl"),TRANSCRIPT_LIMIT,transcriptMarker);}catch(e){events.close();ioError=String(e);result.reason="io-error";resolve();return;}
+    const child=spawn(config.command[0],args,{cwd:context.worktreePath,detached:true,stdio:["pipe","pipe","pipe"],env:request.spawn?.env??spawnEnv});
+    const err=new StringDecoder("utf8");
     let outBytes=0,errBytes=0,done=false,exited=false;
     let killTimer:NodeJS.Timeout|undefined,drainTimer:NodeJS.Timeout|undefined;
     const kill=(signal:NodeJS.Signals)=>{if(child.pid!==undefined){try{process.kill(-child.pid,signal);}catch(e){if((e as NodeJS.ErrnoException).code!=="ESRCH"){ioError=String(e);result.reason="io-error";}}}};
@@ -146,7 +148,11 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       if(done)return;
       outBytes+=b.length;watch.activity();
       if(outBytes>STDOUT_HARD_LIMIT){stdoutTruncated=true;stop("output-limit");return;}
-      try{events.write(b);transcript.write(b);}catch(e){ioError=String(e);stop("io-error");}
+      // Review I2: each record in its own try. The evidence is what saved-result recovery reads, so losing it stops the call
+      // (as before); losing the live view's transcript only stops recording it (spec §4.2: the cap, and so a failure of the
+      // transcript, never stops the agent) and is named in outcome.json.
+      try{events.write(b);}catch(e){ioError=String(e);stop("io-error");}
+      try{transcript.write(b);}catch(e){transcriptError??=String(e);}
       splitter.write(b);
     });
     child.stderr.on("data",(b:Buffer)=>{

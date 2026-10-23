@@ -81,10 +81,11 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
   // Live transcript (spec §10.2.2): omp's outcome.json now labels a truncated events.jsonl as codex's does.
   let stdoutTruncated = false;
   let transcriptTruncatedAt: number | null = null;
+  let transcriptError: string | undefined;
   // Activity watchdog (spec 2026-10-21 §2.3): recorded in outcome.json when the call was stopped as stalled.
   let idle: IdleSnapshotV1 | null = null;
   const persist = async (): Promise<OmpPhaseOutcome> => {
-    await writeFile(join(evidenceDir, "outcome.json"), JSON.stringify({ reason: result.reason, code: result.code, signal: result.signal, neverStarted: result.neverStarted, executable: config.installation.command[0], args, stdoutTruncated, transcriptTruncatedAt, ...(result.reason === "stalled" && idle !== null ? { idle } : {}) }, null, 2), { mode: 0o600 });
+    await writeFile(join(evidenceDir, "outcome.json"), JSON.stringify({ reason: result.reason, code: result.code, signal: result.signal, neverStarted: result.neverStarted, executable: config.installation.command[0], args, stdoutTruncated, transcriptTruncatedAt, transcriptError, ...(result.reason === "stalled" && idle !== null ? { idle } : {}) }, null, 2), { mode: 0o600 });
     return result;
   };
   if (input.abortSignal?.aborted) { result.reason = "aborted"; result.neverStarted = true; return persist(); }
@@ -95,6 +96,12 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
   if (config.installation.configDir !== null) env.PI_CODING_AGENT_DIR = config.installation.configDir;
   let stdoutBytes = 0;
   let stderrBytes = 0;
+  // Live transcript (spec §10.2.1-§10.2.3, §11.1): stdout goes to the 16 MiB evidence file and the 128 MiB transcript, each
+  // cut at a line end, and through the line folds; only the 1 GiB hard limit stops the agent for its output.
+  // Review I1: both records are opened before anything is spawned; a record that cannot be opened is io-error with no child.
+  let events: CappedLineFile, transcript: CappedLineFile;
+  try { events = new CappedLineFile(eventsPath, OUTPUT_LIMIT); } catch { result.reason = "io-error"; result.neverStarted = true; return persist(); }
+  try { transcript = new CappedLineFile(transcriptPath, TRANSCRIPT_LIMIT, transcriptMarker); } catch { events.close(); result.reason = "io-error"; result.neverStarted = true; return persist(); }
   await new Promise<void>((resolve) => {
     const child = spawn(config.installation.command[0], args, { cwd: input.cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
     let stopped = false;
@@ -116,10 +123,6 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
     const timer = setTimeout(() => stop("timeout"), timeoutMs);
     // Activity watchdog (spec 2026-10-21 §2.2 omp): stdout/stderr bytes are activity; tool executions suspend the clock.
     const watch = new IdleWatch(effectiveIdleTimeoutMs(config.installation), () => { idle = watch.snapshot(); stop("stalled"); });
-    // Live transcript (spec §10.2.1-§10.2.3, §11.1): stdout goes to the 16 MiB evidence file and the 128 MiB transcript, each
-    // cut at a line end, and through the line folds; only the 1 GiB hard limit stops the agent for its output.
-    const events = new CappedLineFile(eventsPath, OUTPUT_LIMIT);
-    const transcript = new CappedLineFile(transcriptPath, TRANSCRIPT_LIMIT, transcriptMarker);
     const splitter = new LineSplitter((line) => { const parsed = jsonLine(line); stream.push(parsed); if (parsed.kind === "row") ompToolRow(parsed.row, watch); });
     watch.start();
     input.abortSignal?.addEventListener("abort", abort, { once: true });
@@ -128,7 +131,9 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       stdoutBytes += chunk.length;
       watch.activity();
       if (stdoutBytes > STDOUT_HARD_LIMIT) { stdoutTruncated = true; stop("output-limit"); return; }
-      try { events.write(chunk); transcript.write(chunk); } catch { stop("io-error"); }
+      // Review I2: each record in its own try; losing the transcript only stops recording it (named in outcome.json).
+      try { events.write(chunk); } catch { stop("io-error"); }
+      try { transcript.write(chunk); } catch (error) { transcriptError ??= String(error); }
       splitter.write(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
