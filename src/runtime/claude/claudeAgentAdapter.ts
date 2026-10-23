@@ -164,6 +164,8 @@ type ClaudeCall = {
   requiredChecks?: readonly string[];
   /** Per-contract tool rules (spec 2026-10-22 §4): the contract's toolRules, absent when it has none. */
   toolRules?: ToolRulesV1;
+  /** Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5): the extra worktrees, passed as --add-dir on every phase. */
+  addDirs?: readonly string[];
 };
 
 export class ClaudeAgentAdapter implements RuntimeAdapter {
@@ -211,7 +213,9 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     // Per-contract tool rules (spec 2026-10-22 §4 claude): grants join the allow list on execute; network:false adds a
     // --disallowedTools list on every phase, also before --model (a list option). No rules ⇒ exactly the list above.
     const lists = phase === "single-call" ? { allow: allow.rules, disallow: [] } : claudeToolRuleArgs(call.toolRules, phase, allow.rules, requiredCheckAllowRules);
-    const extraArgs = [...(lists.allow.length === 0 ? [] : ["--allowedTools", ...lists.allow]), ...(lists.disallow.length === 0 ? [] : ["--disallowedTools", ...lists.disallow]), ...this.extraArgs];
+    // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5): --add-dir is a list too, so it also goes before --model.
+    const addDirs = call.addDirs ?? [];
+    const extraArgs = [...(lists.allow.length === 0 ? [] : ["--allowedTools", ...lists.allow]), ...(lists.disallow.length === 0 ? [] : ["--disallowedTools", ...lists.disallow]), ...(addDirs.length === 0 ? [] : ["--add-dir", ...addDirs]), ...this.extraArgs];
     const persist = async (): Promise<Outcome> => {
       if (!logsCreated) await save("transcript.jsonl", "");
       else transcriptTruncatedAt = await transcriptTruncatedAtOf(transcriptPath);
@@ -379,7 +383,8 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
 
   private async phaseOnce<T>(request: ClaudePhaseRequest, context: AttemptContext, seen: { outcome?: Outcome }, afterStop?: { stopGraceMs: number }): Promise<T> {
     // Plan is read-only and is not asked to run checks; execute and verify are.
-    const requiredChecks = request.phase === "plan" ? [] : context.contract.verification.requiredChecks;
+    // Multi-repo runs (spec §11.5): the extra repositories' checks are allowed too.
+    const requiredChecks = request.phase === "plan" ? [] : [...context.contract.verification.requiredChecks, ...(context.extraWorktrees ?? []).flatMap((extra) => extra.requiredChecks)];
     const outcome = await this.run(request, { ...this.call(context), requiredChecks, toolRules: context.contract.executionPolicy.toolRules, ...(afterStop ? { stopGraceMs: afterStop.stopGraceMs } : {}) });
     seen.outcome = outcome;
     throwIfNeverStarted(outcome);
@@ -426,6 +431,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       runDir: context.runDir, attempt: context.attempt, cwd: context.worktreePath,
       timeLimitMs: context.state.budgetSnapshot.timeRemainingMs,
       abortSignal: context.abortSignal, onProcessRegistered: context.onProcessRegistered,
+      ...(context.extraWorktrees === undefined ? {} : { addDirs: context.extraWorktrees.map((extra) => extra.worktreePath) }),
     };
   }
 
@@ -434,7 +440,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
   }
 
   plan(context: AttemptContext): Promise<AttemptPlan> {
-    return this.phase<AttemptPlan>({ phase: "plan", prompt: buildPlannerPrompt(context.contract, context.lastFailure, context.priorFailures, context.operatorNote), ...this.base(context) }, context);
+    return this.phase<AttemptPlan>({ phase: "plan", prompt: buildPlannerPrompt(context.contract, context.lastFailure, context.priorFailures, context.operatorNote, context), ...this.base(context) }, context);
   }
 
   async execute(context: AttemptContext): Promise<ExecutePhaseResult> {

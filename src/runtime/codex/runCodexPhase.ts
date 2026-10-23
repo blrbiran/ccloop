@@ -58,6 +58,8 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   const schemaPath=join(evidenceDir,"schema.json"),finalPath=join(evidenceDir,"final.json");
   const args=request.spawn!==undefined?[...config.command.slice(1),...request.spawn.args({schemaPath,finalPath})]:[...config.command.slice(1),"exec","--json","--ephemeral","--color","never","--model",config.model,
     "--sandbox",phase==="execute"?config.sandbox:"read-only","-C",context.worktreePath,
+    // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5, §19.2 P5): the extra worktrees, writable on execute only.
+    ...(phase==="execute"?(context.extraWorktrees??[]).flatMap(extra=>["--add-dir",extra.worktreePath]):[]),
     "--output-schema",schemaPath,"-o",finalPath,"-"];
   let isolation:{home:string|null;codexHome:string|null;catalogError:string|null}|undefined;
   let spawnEnv:NodeJS.ProcessEnv={...process.env,...extraEnv};

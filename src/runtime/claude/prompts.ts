@@ -120,13 +120,30 @@ function operatorNoteLines(note: OperatorNote | undefined): string[] {
   ];
 }
 
-export function buildPlannerPrompt(contract: LoopContract, lastFailure?: LastFailure, priorFailures?: PriorFailure[], operatorNote?: OperatorNote): string {
+// Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5): one section right after the success condition, only when the
+// attempt has extra worktrees; without them every prompt is byte-identical. The executor is also told that changedFiles
+// stays relative to its working directory (review 1): ccloop observes the other directories itself.
+type Directories = Pick<AttemptContext, "contract" | "worktreePath" | "extraWorktrees">;
+function directoriesLines(directories: Directories | undefined, executor = false): string[] {
+  const extras = directories?.extraWorktrees;
+  if (directories === undefined || extras === undefined || extras.length === 0) return [];
+  const context = directories.contract.context;
+  return [
+    "Directories (each is a separate git worktree; write only inside the allowed paths of each):",
+    `- ${context.repoKey} (working directory): ${directories.worktreePath}  allowed: ${context.targetPaths.join(", ")}`,
+    ...extras.map((extra) => `- ${extra.key}: ${extra.worktreePath}  allowed: ${extra.targetPaths.join(", ")}  checks run there: ${extra.requiredChecks.length === 0 ? "none" : extra.requiredChecks.join("; ")}`),
+    ...(executor ? ["changedFiles lists only the paths you changed in the working directory, relative to it. ccloop observes the other directories itself."] : []),
+  ];
+}
+
+export function buildPlannerPrompt(contract: LoopContract, lastFailure?: LastFailure, priorFailures?: PriorFailure[], operatorNote?: OperatorNote, directories?: Pick<AttemptContext, "worktreePath" | "extraWorktrees">): string {
   return [
     "Return JSON only.",
     `Plan one isolated L2 attempt for task ${contract.objective.taskId}.`,
     "This is the planning phase only. The workspace is read-only: do not create, edit or delete files, do not run apply_patch, and do not carry out the task. A later execute phase does the work this plan describes.",
     `Goal: ${contract.objective.goal}`,
     `Success condition: ${contract.objective.successCondition}`,
+    ...directoriesLines(directories === undefined ? undefined : { contract, ...directories }),
     "Non-goals:",
     formatList(contract.objective.nonGoals),
     "Target paths:",
@@ -163,6 +180,7 @@ export function buildExecutorPrompt(context: AttemptContext, options: { schemaNe
     `Execute one isolated attempt for task ${contract.objective.taskId}.`,
     `Goal: ${contract.objective.goal}`,
     `Success condition: ${contract.objective.successCondition}`,
+    ...directoriesLines(context, true),
     // Crash resume (2026-10-02), spec §5.2 (R-B): an executor that could not run a check reported partial/error, and the
     // run ended without the verify phase that would have run it.
     "Required checks (run by the verifier in this worktree after you finish):",
@@ -212,6 +230,7 @@ export function buildVerifierPrompt(context: AttemptContext): string {
     "This is the verify phase. Do not change the attempt's files; run commands only to check the attempt.",
     `Goal: ${contract.objective.goal}`,
     `Success condition: ${contract.objective.successCondition}`,
+    ...directoriesLines(context),
     "Required checks:",
     formatList(contract.verification.requiredChecks),
     "Reject-on conditions (if any of these holds for this attempt, approved must be false):",

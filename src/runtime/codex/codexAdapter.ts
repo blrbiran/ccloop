@@ -155,7 +155,7 @@ export class CodexAdapter implements RuntimeAdapter {
     }
   }
 
-  plan(context: AttemptContext) { return this.phase("plan", buildPlannerPrompt(context.contract, context.lastFailure, context.priorFailures, context.operatorNote), context); }
+  plan(context: AttemptContext) { return this.phase("plan", buildPlannerPrompt(context.contract, context.lastFailure, context.priorFailures, context.operatorNote, context), context); }
   async execute(context: AttemptContext) {
     // Per-contract tool rules (spec 2026-10-22 §5 "Prompt"; review round 1 M6): the prompt states this kind's final status.
     const toolRules = context.contract.executionPolicy.toolRules;

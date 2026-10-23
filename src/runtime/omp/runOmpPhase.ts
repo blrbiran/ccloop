@@ -60,7 +60,9 @@ export async function runOmpPhase(
   const profile = config.installation.profile as string | null;
   const args = ["--profile", profile ?? "default", "--no-extensions", "--no-skills", "--no-tools", "--tools", tools,
     "--no-session", "--no-title", "--no-prewalk", "--model", config.selection.model,
-    "--mode", "json", "-p", "--system-prompt", systemPath, "--cwd", context.worktreePath];
+    "--mode", "json", "-p", "--system-prompt", systemPath, "--cwd", context.worktreePath,
+    // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5, §19.2 P5): the extra worktrees, on every phase.
+    ...(context.extraWorktrees ?? []).map((extra) => `--add-dir=${extra.worktreePath}`)];
   const toolRules = phase === "execute" ? context.contract?.executionPolicy?.toolRules : undefined;
   return runOmpProcess(config, {
     args, prompt, cwd: context.worktreePath, evidenceDir, phase,
