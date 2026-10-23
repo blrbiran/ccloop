@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { classifyCodexCall } from "../../src/runtime/failureCause.js";
+import { classifyCodexCall, classifyOmpCall } from "../../src/runtime/failureCause.js";
+import { decodeOmpPhase, ompUsageLowerBound } from "../../src/runtime/omp/ompProtocol.js";
+import { decodeOmpSingleCall } from "../../src/runtime/omp/ompSingleCall.js";
+import { OmpStream, type OmpStreamPurpose } from "../../src/runtime/omp/ompStream.js";
+import { ompToolRuleViolation } from "../../src/runtime/toolRules.js";
 import { decodeCodexSingleCall } from "../../src/runtime/codex/codexSingleCall.js";
 import { CodexStream } from "../../src/runtime/codex/codexStream.js";
 import { codexModelUsage, codexResultOf, decodeCodexResult, decodeCodexUsage, observedTurnUsage } from "../../src/runtime/codex/protocol.js";
@@ -153,5 +157,72 @@ describe("codex stream fold", () => {
       expect(stream.turnUsage.value()).toBe(6);
       expect(codexFoldVerdicts(stream)).toEqual(codexVerdicts(text));
     } finally { spy.mockRestore(); }
+  });
+});
+
+// Fold vs string (L3, omp): the same comparison for every omp decoder the adapter reads.
+const usage = (total = 14) => ({ input: 8, output: 2, cacheRead: 3, cacheWrite: total - 13, totalTokens: total, cost: { total: 0 } });
+const assistant = (text: string, extra: Record<string, unknown> = {}) => ({ role: "assistant", content: [{ type: "text", text }], provider: "gateway", model: "model-a", stopReason: "stop", usage: usage(), ...extra });
+const PLAN_ANSWER = JSON.stringify({ summary: "plan 中文", primaryTargetPaths: ["a"] });
+const ompRows = (...rows: unknown[]) => rows.map((value) => row(value)).join("\n") + "\n";
+const OMP_CORPUS: Record<string, string> = {
+  ok: ompRows({ type: "session", id: "s" }, { type: "agent_start" }, { type: "message_update", delta: "中" }, { type: "message_end", message: assistant(PLAN_ANSWER) }, { type: "turn_end" }, { type: "agent_end", isTerminal: true, messages: [] }),
+  tools: ompRows({ type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: { path: "a" } }, { type: "tool_execution_end", toolCallId: "t1", toolName: "read" },
+    { type: "message_end", message: assistant("thinking", { stopReason: "toolUse" }) }, { type: "message_end", message: assistant(PLAN_ANSWER) }, { type: "agent_end", isTerminal: true }),
+  "forbidden tool": ompRows({ type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "rm -rf x" } }, { type: "message_end", message: assistant(PLAN_ANSWER) }, { type: "agent_end", isTerminal: true }),
+  "open tool": ompRows({ type: "tool_execution_start", toolCallId: "t1", toolName: "read" }, { type: "message_end", message: assistant(PLAN_ANSWER) }, { type: "agent_end", isTerminal: true }),
+  continuation: ompRows({ type: "message_end", message: assistant(PLAN_ANSWER) }, { type: "agent_start" }, { type: "agent_end", isTerminal: true }),
+  "two terminals": ompRows({ type: "message_end", message: assistant(PLAN_ANSWER) }, { type: "agent_end", isTerminal: true }, { type: "agent_end", isTerminal: true }),
+  "wrong model": ompRows({ type: "message_end", message: assistant(PLAN_ANSWER, { model: "other" }) }, { type: "agent_end", isTerminal: true }),
+  "bad usage": ompRows({ type: "message_end", message: assistant(PLAN_ANSWER, { usage: { input: 1 } }) }, { type: "agent_end", isTerminal: true }),
+  "error stop": ompRows({ type: "message_end", message: assistant("", { stopReason: "error", errorMessage: "provider said no 中" }) }, { type: "agent_end", isTerminal: true }),
+  "length stop": ompRows({ type: "message_end", message: assistant("{\"a\":", { stopReason: "length" }) }, { type: "agent_end", isTerminal: true }),
+  "single answer": ompRows({ type: "message_end", message: assistant("{\"answer\":\"42\"}") }, { type: "agent_end", isTerminal: true }),
+  unparsed: "{oops\n" + ompRows({ type: "message_end", message: assistant(PLAN_ANSWER) }, { type: "agent_end", isTerminal: true }),
+  "no completion": ompRows({ type: "agent_start" }),
+  "long answer line": ompRows({ type: "message_end", message: assistant(JSON.stringify({ summary: "x".repeat(2 * 1024 * 1024), primaryTargetPaths: [] })) }, { type: "agent_end", isTerminal: true }),
+  "xd write": ompRows({ type: "tool_execution_start", toolCallId: "w", toolName: "write", args: { path: "xd:/tmp/x" } }, { type: "message_end", message: assistant(PLAN_ANSWER) }, { type: "agent_end", isTerminal: true }),
+};
+const RULES = { commands: [{ kind: "exact" as const, value: "npm test" }], network: false, secretEnv: [] };
+function ompChunked(text: string, size: number, purpose: OmpStreamPurpose): OmpStream {
+  const stream = new OmpStream(purpose);
+  const splitter = new LineSplitter((line) => stream.push(jsonLine(line)));
+  const bytes = Buffer.from(text, "utf8");
+  for (let i = 0; i < bytes.length; i += size) splitter.write(bytes.subarray(i, i + size));
+  splitter.end();
+  return stream;
+}
+const ompVerdicts = (text: string, phase: "plan" | "execute") => ({
+  lowerBound: settle(() => ompUsageLowerBound(text)), call: settle(() => classifyOmpCall(text)),
+  phase: settle(() => decodeOmpPhase(phase, text, "gateway/model-a")), tool: settle(() => ompToolRuleViolation(text, RULES, ["npm run check"])),
+  single: settle(() => decodeOmpSingleCall(text, "gateway/model-a", "/evidence")),
+});
+const ompFoldVerdicts = (text: string, size: number, phase: "plan" | "execute") => {
+  const stream = ompChunked(text, size, { phase, selector: "gateway/model-a", toolRules: { rules: RULES, requiredChecks: ["npm run check"] } });
+  const single = ompChunked(text, size, { phase: "single-call", selector: "gateway/model-a" });
+  return {
+    lowerBound: settle(() => stream.lowerBound.value()), call: settle(() => stream.call.value()),
+    phase: settle(() => stream.phase!.value()), tool: settle(() => stream.toolRule!.value()),
+    single: settle(() => single.singleCall!.value("/evidence")),
+  };
+};
+
+describe("omp stream fold", () => {
+  it.each(Object.keys(OMP_CORPUS).flatMap((name) => [[name, "plan"], [name, "execute"]] as const))("decodes %s (%s) the same from chunks as from text", (name, phase) => {
+    const text = OMP_CORPUS[name]!;
+    const expected = ompVerdicts(text, phase);
+    for (const size of [1, 7, 65536, Buffer.byteLength(text) + 1]) {
+      if (size === 1 && text.length > 100_000) continue;
+      expect(ompFoldVerdicts(text, size, phase), `chunk ${size}`).toEqual(expected);
+    }
+  });
+
+  it("names a line over 16 MiB omp-events-line-too-large for the phase and the single call", () => {
+    const text = ompRows({ type: "message_update", delta: "a".repeat(17 * 1024 * 1024) }, { type: "message_end", message: assistant(PLAN_ANSWER) }, { type: "agent_end", isTerminal: true });
+    const folded = ompFoldVerdicts(text, 65536, "plan");
+    expect(folded.phase).toMatchObject({ error: "Error: omp-events-line-too-large" });
+    expect(folded.single).toMatchObject({ error: "Error: omp-events-line-too-large" });
+    expect(folded.lowerBound).toEqual({ ok: 14 });
+    expect(folded).toEqual(ompVerdicts(text, "plan"));
   });
 });

@@ -5,7 +5,8 @@ import { ompSingleCallExecution } from "../../agents/ompModels.js";
 import type { CatalogRowV1, MaterializedAgentConfigV1 } from "../../agents/types.js";
 import type { ModelUsageV1 } from "../../control/usage.js";
 import { SingleCallOutputInvalid, type SingleCallRequest, type SingleCallResult, type UsageEvidence } from "../types.js";
-import { assistantUsage } from "./ompProtocol.js";
+import { OmpUsageSum } from "./ompProtocol.js";
+import { foldText, type JsonLine } from "../streamLines.js";
 import { singleCallSystemPrompt } from "./phasePrompt.js";
 import { runOmpProcess, type OmpPhaseOutcome } from "./runOmpPhase.js";
 
@@ -85,13 +86,8 @@ export function parseSingleCallObject(text: string): Record<string, unknown> | u
 }
 
 /** §3.3.7: the assistant messages' usage with the per-model breakdown; unreadable usage is "not observed" (null). */
-function observedUsage(messages: Record<string, unknown>[], selector: string): { total: number; usageEvidence: UsageEvidence; modelUsage: ModelUsageV1[] } {
-  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-  for (const message of messages) {
-    const usage = assistantUsage(message);
-    for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) totals[key] += usage[key];
-  }
-  if (!Object.values(totals).every(Number.isSafeInteger) || totals.total === 0) throw new Error("omp-usage-invalid");
+function observedUsage(sum: OmpUsageSum, selector: string): { total: number; usageEvidence: UsageEvidence; modelUsage: ModelUsageV1[] } {
+  const totals = sum.checked();
   const usageEvidence: UsageEvidence = {
     usageStatus: "present",
     fields: {
@@ -112,33 +108,55 @@ function observedUsage(messages: Record<string, unknown>[], selector: string): {
  * Every refusal after the usage was read books that observed total; "length" is a truncated answer (output-invalid).
  */
 export function decodeOmpSingleCall(events: string, expectedSelector: string, evidenceDir: string): SingleCallResult {
-  const messages: Record<string, unknown>[] = [];
-  let toolEvent = false;
-  for (const line of events.split("\n")) {
-    if (!line.trim()) continue;
-    let raw: unknown;
+  return foldText(events, new OmpSingleCallFold(expectedSelector)).value(evidenceDir);
+}
+
+/**
+ * Live transcript (Orca spec 2026-10-23 §10.2.3): decodeOmpSingleCall as a fold. It keeps the first assistant message (the
+ * answer, when it is the only one), how many there were, and their summed usage. A line too large to keep is
+ * `omp-events-line-too-large`.
+ */
+export class OmpSingleCallFold {
+  private error: string | null = null;
+  private toolEvent = false;
+  private messages = 0;
+  private first: Record<string, unknown> | undefined;
+  private readonly usage = new OmpUsageSum();
+  constructor(private readonly expectedSelector: string) {}
+  push(line: JsonLine): void {
+    if (this.error !== null || line.kind === "blank") return;
+    if (line.kind === "too-large") { this.error = "omp-events-line-too-large"; return; }
     // Ruling m4: an unparseable line is not a readable usage, so this refusal books null (not observed), never 0.
-    try { raw = JSON.parse(line); } catch { throw new Error("omp-events-invalid"); }
-    if (!record(raw) || typeof raw.type !== "string") throw new Error("omp-events-invalid");
-    if (raw.type.startsWith("tool_execution_") || raw.type === "extension_ui_request" || raw.type.includes("subagent")) toolEvent = true;
-    if (raw.type === "message_end" && record(raw.message) && raw.message.role === "assistant") messages.push(raw.message);
+    if (line.kind === "unparsed") { this.error = "omp-events-invalid"; return; }
+    const raw = line.row;
+    if (!record(raw) || typeof raw.type !== "string") { this.error = "omp-events-invalid"; return; }
+    if (raw.type.startsWith("tool_execution_") || raw.type === "extension_ui_request" || raw.type.includes("subagent")) this.toolEvent = true;
+    if (raw.type === "message_end" && record(raw.message) && raw.message.role === "assistant") {
+      this.messages += 1;
+      if (this.first === undefined) this.first = raw.message;
+      this.usage.add(raw.message);
+    }
   }
-  if (messages.length === 0) throw new Error("omp-no-completion");
-  const usage = observedUsage(messages, expectedSelector);
-  const observed = { observedTokens: usage.total };
-  if (messages.length > 1) throw Object.assign(new Error("omp-single-call-multiple-requests"), observed);
-  if (toolEvent) throw Object.assign(new Error("omp-phase-tool-forbidden"), observed);
-  const message = messages[0]!;
-  if (`${message.provider}/${message.model}` !== expectedSelector) throw Object.assign(new Error("omp-model-mismatch"), observed);
-  if (message.stopReason === "length") throw new SingleCallOutputInvalid(evidenceDir, usage.total, usage.usageEvidence);
-  if (message.stopReason !== "stop") {
-    const reason = typeof message.stopReason === "string" && /^[A-Za-z]{1,32}$/.test(message.stopReason) ? message.stopReason : "invalid";
-    throw Object.assign(new Error(`omp-single-call-stop:${reason}`), { code: `omp-single-call-stop:${reason}`, ...observed });
+  value(evidenceDir: string): SingleCallResult {
+    const expectedSelector = this.expectedSelector;
+    if (this.error !== null) throw new Error(this.error);
+    if (this.messages === 0) throw new Error("omp-no-completion");
+    const usage = observedUsage(this.usage, expectedSelector);
+    const observed = { observedTokens: usage.total };
+    if (this.messages > 1) throw Object.assign(new Error("omp-single-call-multiple-requests"), observed);
+    if (this.toolEvent) throw Object.assign(new Error("omp-phase-tool-forbidden"), observed);
+    const message = this.first!;
+    if (`${message.provider}/${message.model}` !== expectedSelector) throw Object.assign(new Error("omp-model-mismatch"), observed);
+    if (message.stopReason === "length") throw new SingleCallOutputInvalid(evidenceDir, usage.total, usage.usageEvidence);
+    if (message.stopReason !== "stop") {
+      const reason = typeof message.stopReason === "string" && /^[A-Za-z]{1,32}$/.test(message.stopReason) ? message.stopReason : "invalid";
+      throw Object.assign(new Error(`omp-single-call-stop:${reason}`), { code: `omp-single-call-stop:${reason}`, ...observed });
+    }
+    const text = Array.isArray(message.content)
+      ? message.content.filter((item): item is { type: "text"; text: string } => record(item) && item.type === "text" && typeof item.text === "string").map((item) => item.text).join("")
+      : "";
+    const output = parseSingleCallObject(text);
+    if (output === undefined) throw new SingleCallOutputInvalid(evidenceDir, usage.total, usage.usageEvidence);
+    return { output, tokenUsage: usage.total, usageEvidence: usage.usageEvidence, modelUsage: usage.modelUsage };
   }
-  const text = Array.isArray(message.content)
-    ? message.content.filter((item): item is { type: "text"; text: string } => record(item) && item.type === "text" && typeof item.text === "string").map((item) => item.text).join("")
-    : "";
-  const output = parseSingleCallObject(text);
-  if (output === undefined) throw new SingleCallOutputInvalid(evidenceDir, usage.total, usage.usageEvidence);
-  return { output, tokenUsage: usage.total, usageEvidence: usage.usageEvidence, modelUsage: usage.modelUsage };
 }

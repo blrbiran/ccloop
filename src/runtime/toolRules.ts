@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { CodexNetworkSetting } from "../agents/codexNetworkConfig.js";
+import { foldText, type JsonLine } from "./streamLines.js";
 
 /**
  * Per-contract tool rules (ccloop spec docs/superpowers/specs/2026-10-22-per-contract-tool-rules-design.md; plan
@@ -259,23 +260,29 @@ function ompCommandViolation(command: string, rules: ToolRulesV1, requiredChecks
  * Lines that do not parse are skipped (decodeOmpPhase refuses them on its own). Null: clean; else a bounded detail.
  */
 export function ompToolRuleViolation(events: string, rules: ToolRulesV1, requiredChecks: readonly string[]): string | null {
-  for (const line of events.split("\n")) {
-    if (!line.trim()) continue;
-    let row: unknown;
-    try { row = JSON.parse(line); } catch { continue; }
-    if (row === null || typeof row !== "object" || Array.isArray(row)) continue;
+  return foldText(events, new OmpToolRuleFold(rules, requiredChecks)).value();
+}
+
+/** Live transcript (Orca spec 2026-10-23 §10.2.3): ompToolRuleViolation as a fold; the first violation decides. */
+export class OmpToolRuleFold {
+  private violation: string | null = null;
+  constructor(private readonly rules: ToolRulesV1, private readonly requiredChecks: readonly string[]) {}
+  push(line: JsonLine): void {
+    if (this.violation !== null || line.kind !== "row") return;
+    const row = line.row;
+    if (row === null || typeof row !== "object" || Array.isArray(row)) return;
     const event = row as { type?: unknown; toolName?: unknown; args?: { command?: unknown; path?: unknown } | null };
-    if (event.type !== "tool_execution_start") continue;
+    if (event.type !== "tool_execution_start") return;
     let detail: string | null = null;
     if (event.toolName === "bash") {
       const command = event.args?.command;
-      detail = typeof command !== "string" ? "bash call without a command string" : ompCommandViolation(command, rules, requiredChecks);
+      detail = typeof command !== "string" ? "bash call without a command string" : ompCommandViolation(command, this.rules, this.requiredChecks);
     } else if ((event.toolName === "write" || event.toolName === "edit") && typeof event.args?.path === "string" && event.args.path.trim().toLowerCase().startsWith("xd:")) {
       detail = `${event.toolName} to ${event.args.path.trim()} runs a tool without a bash event`;
     }
-    if (detail !== null) return boundedText(detail, 512);
+    if (detail !== null) this.violation = boundedText(detail, 512);
   }
-  return null;
+  value(): string | null { return this.violation; }
 }
 
 /** The omp report rows (spec §3.3, §4 omp column): the check is built, so commands-closed is `detected` on execute. */
