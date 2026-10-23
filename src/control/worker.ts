@@ -260,8 +260,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       allowanceContinuation,
       firstWorkspaceInput: envelope.inputCheckpoint ?? undefined,
       taskResultInput: envelope,
-      // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.7): execution-format capture saves one repository; not entered.
-      executionFormatCapture: config.kind === "codex" && envelope.work.contract.context.additionalRepos === undefined ? {config} : undefined,
+      executionFormatCapture: config.kind === "codex" ? {config} : undefined,
       stopRequested,
       phaseSignal: phaseAbort.signal,
       onProcessRegistered,

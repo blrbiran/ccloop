@@ -1596,6 +1596,9 @@ export async function runLoopFromState(
     if (last === undefined) return priorFailures === undefined ? {} : { priorFailures };
     return { lastFailure: { rejectCategory: last.rejectCategory, failingCommand: last.failingCommand, evidence: lastRejectionEvidence } };
   };
+  // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.7, review M4): execution-format capture saves one repository,
+  // so it is not entered for a run with extra repositories.
+  const formatCapture = contract.context.additionalRepos === undefined ? options?.executionFormatCapture : undefined;
   let activeAdapter: RuntimeAdapter | null = typeof adapter === "function" ? null : adapter;
   let activePhase: PhaseName | null = null;
   let observedTokens = 0;
@@ -1746,7 +1749,7 @@ export async function runLoopFromState(
         await heartbeat.assertHeld();
         // Preserve the ordinary fresh-workspace HEAD choice, but freeze the exact commit
         // before creating it. Each retry/attempt gets its own actual initialization fact.
-        if (!(attempt === 1 && options?.firstWorkspaceInput) && options?.executionFormatCapture) {
+        if (!(attempt === 1 && options?.firstWorkspaceInput) && formatCapture) {
           initializedBase = (await execFileAsync("/usr/bin/git", ["rev-parse", "HEAD^{commit}"], {cwd:contract.context.repoPath})).stdout.trim();
         }
         worktreePath = (recovery
@@ -1809,7 +1812,7 @@ export async function runLoopFromState(
     let verifierEntered = false;
 
     try {
-      if (options?.executionFormatCapture && options.taskResultInput?.work.kind === "loop") {
+      if (formatCapture && options?.taskResultInput?.work.kind === "loop") {
         attemptStartHead = (await execFileAsync("/usr/bin/git", ["rev-parse", "HEAD"], {cwd:worktreePath})).stdout.trim();
         if (options.firstWorkspaceInput) {
           resolvedSourceBase = await resolveCheckpointOriginalBase(options.taskResultInput.work.base, worktreePath, attemptStartHead);
@@ -2433,9 +2436,9 @@ export async function runLoopFromState(
           try{await assertSavedResultUnmodified(runDir,worktreePath,recovery,state);}catch(refusal){failureReason=String(refusal);recoveryRefusal=true;}
         }
 
-        if (failedPhase === "execute" && error.formatFailure && options?.taskResultInput && worktreePath && attemptStartHead && !handoffAborted() && !handoffRequested()) {
+        if (failedPhase === "execute" && error.formatFailure && formatCapture && options?.taskResultInput && worktreePath && attemptStartHead && !handoffAborted() && !handoffRequested()) {
           await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
-          await heartbeat.runExclusive(() => captureExecutionFormatFailure({input:options.taskResultInput!,runDir,worktreePath:worktreePath!,attempt,attemptStartHead:attemptStartHead!,resolvedBase:resolvedSourceBase,runtimeContract:contract,actualConfig:options.executionFormatCapture!.config,failure:error.formatFailure!,verifierEntered,assertHeld:()=>heartbeat.assertHeld()}));
+          await heartbeat.runExclusive(() => captureExecutionFormatFailure({input:options.taskResultInput!,runDir,worktreePath:worktreePath!,attempt,attemptStartHead:attemptStartHead!,resolvedBase:resolvedSourceBase,runtimeContract:contract,actualConfig:formatCapture!.config,failure:error.formatFailure!,verifierEntered,assertHeld:()=>heartbeat.assertHeld()}));
         }
 
         if (!recoveryRefusal && !isCodexSkillFailure(error) && !isToolRuleViolation(error) && (handoffAborted() || handoffRequested())) {
