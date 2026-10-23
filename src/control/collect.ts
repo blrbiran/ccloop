@@ -159,13 +159,15 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const failureCause = terminal === null ? undefined : (loopState!.state as RunState).failureCause;
   const declared = (input.work as { contract?: { executionPolicy?: { toolRules?: unknown } } }).contract?.executionPolicy?.toolRules;
   const toolRules = declared === undefined ? undefined : await readToolRulesReport(input.work.sourceDir);
-  const runFinal = proof !== null || (loopState !== null && isTerminalRunStatus((loopState.state as { status?: RunStatus } | null)?.status as RunStatus));
+  // progressOf validates the loop state (an unknown status is control-terminal-invalid) before its status is read here.
+  const progress = loopState === null ? null : progressOf(loopState.state);
+  const runFinal = proof !== null || (progress !== null && isTerminalRunStatus(progress.status));
   const transcripts = await listTranscripts(input.work.sourceDir, runFinal);
   return {
     events,
     candidate: storedCandidate === null ? null : candidateOf(storedCandidate, proof),
     terminal,
-    progress: loopState === null ? null : progressOf(loopState.state),
+    progress,
     // Evaluated after progressOf, which has checked the loop state's currentAttempt.
     ...(storedCandidate === null || loopState === null ? {} : await reportedOf(input.work.sourceDir, storedCandidate, loopState.state)),
     ...(failureCause === undefined ? {} : { failureCause }),
