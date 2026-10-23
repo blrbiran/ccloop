@@ -780,6 +780,55 @@ async function observeChangedPathsBestEffort(worktreePath: string): Promise<stri
   }
 }
 
+/**
+ * Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.3, reviews 1 and 6): ccloop's own observation of one extra
+ * worktree -- HEAD against the start sha, and the paths changed since it: `git diff --name-only --no-renames <start sha>`
+ * (tracked changes, staged or not, committed ones included) plus the untracked paths of `git status`. null when git
+ * fails: an unobservable worktree is never "no change".
+ */
+async function observeExtraWorktree(extra: ExtraAttemptWorktree): Promise<{ headMoved: boolean; changedPaths: string[] } | null> {
+  try {
+    const options = { cwd: extra.worktreePath, maxBuffer: 10 * 1024 * 1024 };
+    const head = (await execFileAsync("git", ["rev-parse", "HEAD"], options)).stdout.trim();
+    const tracked = (await execFileAsync("git", ["diff", "--name-only", "-z", "--no-renames", extra.startSha], options)).stdout.split("\0");
+    const status = (await execFileAsync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], options)).stdout.split("\0");
+    const untracked = status.filter((entry) => entry.startsWith("?? ")).map((entry) => entry.slice(3));
+    return { headMoved: head !== extra.startSha, changedPaths: [...new Set([...tracked, ...untracked].filter(Boolean))].sort() };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The path policy for an attempt's changes. Without extra worktrees this is exactly evaluatePathPolicy on the executor's
+ * changedFiles with the contract's lists. With them (spec §11.3): the primary is judged as today, from changedFiles; each
+ * extra repository only from ccloop's observation (written to run/attempts/<n>/dirs.json for collect) against its own
+ * lists; a moved HEAD or an unobservable worktree is a human gate; maxFilesTouched counts every repository.
+ */
+async function judgeAttemptPaths(contract: LoopContract, primaryWorktreePath: string | null, changedFiles: string[]): Promise<ReturnType<typeof evaluatePathPolicy>> {
+  const policy = { allowlistPaths: contract.safetyPolicy.allowlistPaths, denylistPaths: contract.safetyPolicy.denylistPaths };
+  const entry = primaryWorktreePath === null ? undefined : extraAttemptOf(primaryWorktreePath);
+  if (entry === undefined) return evaluatePathPolicy({ changedFiles, ...policy, maxFilesTouched: contract.safetyPolicy.maxFilesTouched });
+  const observed = await Promise.all(entry.extras.map(async (extra) => ({ extra, observation: await observeExtraWorktree(extra) })));
+  const attemptDir = join(entry.runDir, "attempts", String(entry.attempt));
+  await mkdir(attemptDir, { recursive: true });
+  await writeFile(join(attemptDir, "dirs.json"), JSON.stringify(observed.map(({ extra, observation }) => ({ key: extra.key, changedPaths: observation?.changedPaths ?? [] })), null, 2), { mode: 0o600 });
+  const gate = (reason: string) => ({ allowed: false, humanGateHit: true, reason });
+  for (const { extra, observation } of observed) {
+    if (observation === null) return gate(`diff unobservable: ${extra.key}`);
+    if (observation.headMoved) return gate(`extra-repo-head-moved: ${extra.key}`);
+  }
+  const total = changedFiles.length + observed.reduce((sum, { observation }) => sum + observation!.changedPaths.length, 0);
+  if (total > contract.safetyPolicy.maxFilesTouched) return gate(`max files exceeded: ${total}`);
+  const primary = evaluatePathPolicy({ changedFiles, ...policy, maxFilesTouched: Number.MAX_SAFE_INTEGER });
+  if (primary.humanGateHit) return primary;
+  for (const { extra, observation } of observed) {
+    const result = evaluatePathPolicy({ changedFiles: observation!.changedPaths, allowlistPaths: extra.allowlistPaths, denylistPaths: extra.denylistPaths, maxFilesTouched: Number.MAX_SAFE_INTEGER });
+    if (result.humanGateHit) return gate((result.reason ?? "").replace(/^(allowlist miss|denylist match): /, `$1: ${extra.key}:`));
+  }
+  return primary;
+}
+
 function getExecutionFailureBoundary(state: RunState): ExecutionRecovery["failureBoundary"] {
   if (state.budgetSnapshot.tokenBudgetRemaining === 0) {
     return "token_exhausted";
@@ -1933,12 +1982,7 @@ export async function runLoopFromState(
       if (!recovery && isPartialExecutionResult(completedExecution)) {
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
 
-        const partialPathPolicy = evaluatePathPolicy({
-          changedFiles: completedExecution.changedFiles,
-          allowlistPaths: contract.safetyPolicy.allowlistPaths,
-          denylistPaths: contract.safetyPolicy.denylistPaths,
-          maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
-        });
+        const partialPathPolicy = await judgeAttemptPaths(contract, worktreePath, completedExecution.changedFiles);
 
         if (partialPathPolicy.humanGateHit) {
           state = await persistTerminalState(
@@ -1988,12 +2032,8 @@ export async function runLoopFromState(
         }
       }
 
-      const pathPolicy = evaluatePathPolicy({
-        changedFiles: recovery ? [...new Set([...recovery.actualChangedPaths,...completedExecution.changedFiles])] : completedExecution.changedFiles,
-        allowlistPaths: contract.safetyPolicy.allowlistPaths,
-        denylistPaths: contract.safetyPolicy.denylistPaths,
-        maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
-      });
+      const pathPolicy = await judgeAttemptPaths(contract, worktreePath,
+        recovery ? [...new Set([...recovery.actualChangedPaths,...completedExecution.changedFiles])] : completedExecution.changedFiles);
 
       if (pathPolicy.humanGateHit) {
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
@@ -2380,12 +2420,7 @@ export async function runLoopFromState(
 
         if (!isCodexSkillFailure(error) && execution !== null && isPartialExecutionResult(execution)) {
           await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
-          const partialPathPolicy = evaluatePathPolicy({
-            changedFiles: execution.changedFiles,
-            allowlistPaths: contract.safetyPolicy.allowlistPaths,
-            denylistPaths: contract.safetyPolicy.denylistPaths,
-            maxFilesTouched: contract.safetyPolicy.maxFilesTouched,
-          });
+          const partialPathPolicy = await judgeAttemptPaths(contract, worktreePath, execution.changedFiles);
 
           if (partialPathPolicy.humanGateHit) {
             state = await persistTerminalState(

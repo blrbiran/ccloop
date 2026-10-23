@@ -62,7 +62,9 @@ export class OmpAdapter implements RuntimeAdapter {
   }
 
   private async phaseOnce<P extends OmpPhase>(phase: P, prompt: string, context: AttemptContext, seen: { outcome?: OmpPhaseOutcome }): Promise<PhaseResults[P]> {
-    const before = phase === "execute" ? null : await worktreeSnapshot(context.worktreePath);
+    // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.3): a read-only phase is checked in every worktree.
+    const watched = [{ key: null as string | null, path: context.worktreePath }, ...(context.extraWorktrees ?? []).map((extra) => ({ key: extra.key as string | null, path: extra.worktreePath }))];
+    const before = phase === "execute" ? null : await Promise.all(watched.map((tree) => worktreeSnapshot(tree.path)));
     const outcome = await runOmpPhase(this.config, phase, prompt, context, this.skillsDir === undefined ? {} : { skillsDir: this.skillsDir });
     seen.outcome = outcome;
     // Per-contract tool rules (spec 2026-10-22 §4; plan Task 4): checked on every execute outcome, before any other reading,
@@ -79,9 +81,11 @@ export class OmpAdapter implements RuntimeAdapter {
       throw Object.assign(new OmpToolRuleViolated(outcome.evidenceDir, violation), observedTokens === null ? {} : { observedTokens });
     }
     if (before !== null) {
-      const after = await worktreeSnapshot(context.worktreePath);
-      if (before !== after) {
-        await writeFile(join(outcome.evidenceDir, "worktree-mutation.json"), JSON.stringify({ before, after }), { mode: 0o600 });
+      const afterAll = await Promise.all(watched.map((tree) => worktreeSnapshot(tree.path)));
+      const changed = afterAll.findIndex((after, index) => after !== before[index]);
+      if (changed >= 0) {
+        const [snapshotBefore, after, key] = [before[changed], afterAll[changed], watched[changed]!.key];
+        await writeFile(join(outcome.evidenceDir, "worktree-mutation.json"), JSON.stringify(key === null ? { before: snapshotBefore, after } : { key, before: snapshotBefore, after }), { mode: 0o600 });
         let observedTokens: number | null = null;
         if (outcome.reason === "completed") {
           try { observedTokens = (outcome.stream.phase!.value() as PhaseResults[P]).tokenUsage ?? null; } catch { /* keep unknown */ }
