@@ -2194,13 +2194,17 @@ export async function runLoopFromState(
         return await persistHandoffBoundary("handoff_boundary", `handoff requested after verify in attempt ${attempt}`);
       }
 
+      // Multi-repo runs (review M3): the extra worktrees are observed again right before they are published, so dirs.json
+      // matches what repos/<key> will hold, and a file written after execute (during verify) is judged like any other.
+      const finalPolicy = extraAttemptOf(worktreePath) === undefined ? pathPolicy
+        : await judgeAttemptPaths(contract, worktreePath, completedExecution.changedFiles);
       const humanGateHit =
-        pathPolicy.humanGateHit ||
+        finalPolicy.humanGateHit ||
         verification.pauseSignals.some((signal) => contract.escalationAndExit.pauseOn.includes(signal));
       const matchedStopSignal = getMatchedStopSignal(contract, verification.stopSignals);
 
       let decision: StopDecision = humanGateHit
-        ? { kind: "blocked_waiting_human", reason: pathPolicy.reason ?? "human gate or denylist hit" }
+        ? { kind: "blocked_waiting_human", reason: finalPolicy.reason ?? "human gate or denylist hit" }
         : matchedStopSignal !== null
           ? { kind: "cancelled", reason: `stopOn signal matched: ${matchedStopSignal}` }
           : evaluateStopDecision({
