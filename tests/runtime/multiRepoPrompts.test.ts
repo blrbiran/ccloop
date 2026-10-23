@@ -23,6 +23,7 @@ const SECTION = [
   "- lib: /run/dirs/attempt-1/lib  allowed: lib/**, README.md  checks run there: npm test; npm run lint",
   "- docs: /run/dirs/attempt-1/docs  allowed: docs/**  checks run there: none",
 ];
+const VERIFIER_LINE = "A required check labelled [<key>] ran in that directory's worktree, not in the working directory.";
 const CHANGED_FILES = "changedFiles lists only the paths you changed in the working directory, relative to it. ccloop observes the other directories itself.";
 const after = (prompt: string, line: string) => { const lines = prompt.split("\n"); return lines.slice(lines.indexOf(line) + 1); };
 
@@ -31,15 +32,16 @@ describe("the Directories section (C7)", () => {
     const prompt = buildPlannerPrompt(multi, undefined, undefined, undefined, context);
     expect(after(prompt, "Success condition: answer is 42").slice(0, 4)).toEqual(SECTION);
     expect(prompt).not.toContain(CHANGED_FILES);
+    expect(prompt).not.toContain(VERIFIER_LINE);
   });
 
   it("executor: the same section, then the changedFiles rule", () => {
     expect(after(buildExecutorPrompt(context), "Success condition: answer is 42").slice(0, 5)).toEqual([...SECTION, CHANGED_FILES]);
   });
 
-  it("verifier: the same section, with every extra repository", () => {
+  it("verifier: the same section, with every extra repository, then the labelled-check sentence (review M6)", () => {
     const prompt = buildVerifierPrompt(context);
-    expect(after(prompt, "Success condition: answer is 42").slice(0, 4)).toEqual(SECTION);
+    expect(after(prompt, "Success condition: answer is 42").slice(0, 5)).toEqual([...SECTION, VERIFIER_LINE]);
     expect(prompt).not.toContain(CHANGED_FILES);
   });
 
@@ -51,6 +53,7 @@ describe("the Directories section (C7)", () => {
     for (const prompt of [buildPlannerPrompt(single, undefined, undefined, undefined, plain), buildExecutorPrompt(plain), buildVerifierPrompt(plain)]) {
       expect(prompt).not.toContain("Directories (");
       expect(prompt).not.toContain(CHANGED_FILES);
+      expect(prompt).not.toContain(VERIFIER_LINE);
     }
   });
 });
