@@ -28,6 +28,7 @@ describe("extra worktrees and attempt refs (C3)", () => {
         for (const extra of context.extraWorktrees ?? []) {
           seen.heads[extra.key] = await git(extra.worktreePath, "rev-parse", "HEAD");
           seen.files[extra.key] = (await readdir(extra.worktreePath)).filter((name) => name !== ".git").sort();
+          await mkdir(join(extra.worktreePath, extra.key), { recursive: true });
           await writeFile(join(extra.worktreePath, extra.key, "new.txt"), `${extra.key} change\n`);
         }
         await mkdir(join(context.worktreePath, "src"), { recursive: true });
