@@ -104,10 +104,10 @@ it('captures original attempt, usage, full snapshot and exact runtime bytes befo
  const legacy=await f.rpc('collect',{input:f.input,afterSeq:0});expect(legacy.code,legacy.stderr).toBe(0);
  // Ruling: human approved rewriting all necessary criteria (Orca session 9ec98639, 2026-10-21): a failed terminal now also
  // carries the top-level failureCause (failure-causes spec §5); the v3 terminal object itself is unchanged (next line).
- const collected=JSON.parse(legacy.stdout);expect(Object.keys(collected)).toEqual(['events','candidate','terminal','progress','failureCause']);expect(collected.terminal.status).toBe('failed');
+ const collected=JSON.parse(legacy.stdout);expect(Object.keys(collected)).toEqual(['events','candidate','terminal','progress','failureCause','transcripts']);expect(collected.terminal.status).toBe('failed');
  expect(Object.keys(collected.terminal)).toEqual(['status','currentAttempt','attemptsUsed','lastTransitionAt','waitingOnHuman','stopReason','budgetSnapshot','recentFailures']);
  expect(Object.hasOwn(collected.candidate,'capsule')).toBe(false);
- expect(JSON.parse((await f.rpc('features',{})).stdout)).toEqual({protocol:1,tokenPolicy:'optional-v1',savedResultRecovery:'v1',agentInstallationUpdate:'v1'});
+ expect(JSON.parse((await f.rpc('features',{})).stdout)).toEqual({protocol:1,tokenPolicy:'optional-v1',savedResultRecovery:'v1',agentInstallationUpdate:'v1',transcripts:'v1'});
  const foreign=await writeSavedBytes(f.sourceDir,Buffer.from('private foreign bytes'),async()=>{});
  expect((await f.rpc('read-saved-result-evidence',{input:f.input,capsuleRef:page.capsule,ref:foreign})).code).not.toBe(0);
  const changed=structuredClone(f.input);changed.claim.generation=2;
