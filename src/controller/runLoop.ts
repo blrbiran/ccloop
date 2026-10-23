@@ -421,8 +421,10 @@ function buildAttemptContext(
  * as attemptRefNamespaces is keyed by the run directory. A single-repo attempt registers nothing, so nothing changes.
  */
 type ExtraAttemptWorktree = { key: string; repoPath: string; worktreePath: string; startSha: string; targetPaths: string[];
-  allowlistPaths: string[]; denylistPaths: string[]; requiredChecks: string[] };
-type ExtraAttempt = { runDir: string; attempt: number; repoKey: string; extras: ExtraAttemptWorktree[] };
+  allowlistPaths: string[]; denylistPaths: string[]; requiredChecks: string[]; published?: boolean };
+// Review I2: the commits published so far live on the entry, so a second (best-effort) pass after a thrown removal neither
+// publishes an extra again nor loses the commits the first pass made.
+type ExtraAttempt = { runDir: string; attempt: number; repoKey: string; extras: ExtraAttemptWorktree[]; commits: Record<string, AttemptCommit> };
 const extraAttempts = new Map<string, ExtraAttempt>();
 
 function extraAttemptOf(primaryWorktreePath: string): ExtraAttempt | undefined {
@@ -451,7 +453,7 @@ async function createExtraAttemptWorktrees(contract: LoopContract, runDir: strin
     await removeEmptyExtraDirs(runDir, attempt).catch(() => undefined);
     throw error;
   }
-  extraAttempts.set(resolve(primaryWorktreePath), { runDir, attempt, repoKey: contract.context.repoKey!, extras });
+  extraAttempts.set(resolve(primaryWorktreePath), { runDir, attempt, repoKey: contract.context.repoKey!, extras, commits: {} });
 }
 
 /**
@@ -463,24 +465,33 @@ async function createExtraAttemptWorktrees(contract: LoopContract, runDir: strin
 async function settleExtraWorktrees(primaryWorktreePath: string, primaryCommit: AttemptCommit | null, detail: string, throwOnRemoveFailure: boolean): Promise<void> {
   const entry = extraAttemptOf(primaryWorktreePath);
   if (entry === undefined) return;
-  const commits: Record<string, AttemptCommit> = primaryCommit === null ? {} : { [entry.repoKey]: primaryCommit };
+  if (primaryCommit !== null && entry.commits[entry.repoKey] === undefined) entry.commits = { [entry.repoKey]: primaryCommit, ...entry.commits };
+  const writeCommits = async (): Promise<void> => {
+    const attemptDir = join(entry.runDir, "attempts", String(entry.attempt));
+    await mkdir(attemptDir, { recursive: true });
+    await writeFile(join(attemptDir, "commits.json"), JSON.stringify(entry.commits, null, 2), { mode: 0o600 });
+  };
   for (const extra of [...entry.extras]) {
-    try {
-      commits[extra.key] = await publishExtraAttemptCommit(extra.worktreePath, entry.runDir, entry.attempt);
-    } catch (error) {
-      await appendEvent(entry.runDir, { type: "attempt_commit_publish_failed", at: new Date().toISOString(), detail: `${detail}: ${extra.key}: ${String(error)}` });
+    if (extra.published !== true) {
+      try {
+        entry.commits[extra.key] = await publishExtraAttemptCommit(extra.worktreePath, entry.runDir, entry.attempt);
+        extra.published = true;
+      } catch (error) {
+        await appendEvent(entry.runDir, { type: "attempt_commit_publish_failed", at: new Date().toISOString(), detail: `${detail}: ${extra.key}: ${String(error)}` });
+      }
     }
     try {
       await cleanupAttemptWorkspace(extra.repoPath, extra.worktreePath);
       entry.extras.splice(entry.extras.indexOf(extra), 1);
     } catch (error) {
-      if (throwOnRemoveFailure) throw error;
+      if (throwOnRemoveFailure) {
+        await writeCommits();
+        throw error;
+      }
       await appendEvent(entry.runDir, { type: "workspace_cleanup_failed", at: new Date().toISOString(), detail: `${detail}: ${extra.key}: ${String(error)}` });
     }
   }
-  const attemptDir = join(entry.runDir, "attempts", String(entry.attempt));
-  await mkdir(attemptDir, { recursive: true });
-  await writeFile(join(attemptDir, "commits.json"), JSON.stringify(commits, null, 2), { mode: 0o600 });
+  await writeCommits();
   extraAttempts.delete(resolve(primaryWorktreePath));
   await removeEmptyExtraDirs(entry.runDir, entry.attempt);
 }
