@@ -102,6 +102,7 @@ describe("single-call work through the control worker (Orca single-call estimate
       "run/claude/1/single-call/call-*/request.json",
       "run/claude/1/single-call/call-*/stderr.log",
       "run/claude/1/single-call/call-*/stdout.json",
+      "run/claude/1/single-call/call-*/transcript.jsonl",
       "run/claude/1/single-call/call-*/usage.json",
       "run/owner-record.json",
     ]);
