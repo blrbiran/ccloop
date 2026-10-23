@@ -438,7 +438,7 @@ function extraWorktreeContext(primaryWorktreePath: string): Pick<AttemptContext,
 }
 
 /** Spec §11.2: one worktree per extra repository, in contract order; a failure removes the ones already made and rethrows. */
-async function createExtraAttemptWorktrees(contract: LoopContract, runDir: string, attempt: number, primaryWorktreePath: string): Promise<void> {
+async function createExtraAttemptWorktrees(contract: LoopContract, runDir: string, attempt: number, primaryWorktreePath: string, bases?: Record<string, string>): Promise<void> {
   const repos = contract.context.additionalRepos;
   if (repos === undefined) return;
   const extras: ExtraAttemptWorktree[] = [];
@@ -447,6 +447,14 @@ async function createExtraAttemptWorktrees(contract: LoopContract, runDir: strin
       const { worktreePath, startSha } = await createExtraWorktree(repo.repoPath, runDir, attempt, repo.key);
       extras.push({ key: repo.key, repoPath: repo.repoPath, worktreePath, startSha, targetPaths: repo.targetPaths,
         allowlistPaths: repo.allowlistPaths ?? repo.targetPaths, denylistPaths: repo.denylistPaths ?? [], requiredChecks: repo.requiredChecks ?? [] });
+      // Review M8: the worktree starts at the repository's HEAD; when that is not the envelope's base for it, say so.
+      const base = bases?.[repo.key];
+      if (base !== undefined) {
+        const resolved = await execFileAsync("git", ["rev-parse", "--verify", `${base}^{commit}`], { cwd: repo.repoPath }).then((out) => out.stdout.trim(), () => null);
+        if (resolved !== startSha) {
+          await appendEvent(runDir, { type: "extra_repo_base_mismatch", at: new Date().toISOString(), detail: `${repo.key}: base ${base} is ${resolved ?? "unresolvable"}, worktree HEAD ${startSha}` });
+        }
+      }
     }
   } catch (error) {
     for (const made of extras) await cleanupAttemptWorkspace(made.repoPath, made.worktreePath).catch(() => undefined);
@@ -1516,6 +1524,8 @@ export interface RunControlHooks {
   /** Only supported original provider evidence can create a recovery capsule. */
   executionFormatCapture?: {config:MaterializedAgentConfigV1};
   firstWorkspaceInput?: InputCheckpointV1;
+  /** Multi-repo runs (review M8): each extra repository's base from the envelope, compared with its worktree's HEAD. */
+  extraRepoBases?: Record<string, string>;
   stopRequested?: StopRequestSignal;
   phaseSignal?: AbortSignal;
   onPhaseSettled?: (observation: {
@@ -1762,7 +1772,7 @@ export async function runLoopFromState(
           // takes the primary off again (no agent has run in it, so there is nothing to publish) and goes through the same
           // infrastructure retry as a failed primary.
           try {
-            await createExtraAttemptWorktrees(contract, runDir, attempt, worktreePath);
+            await createExtraAttemptWorktrees(contract, runDir, attempt, worktreePath, options?.extraRepoBases);
           } catch (error) {
             const made = worktreePath;
             worktreePath = null;
