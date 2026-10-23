@@ -104,7 +104,7 @@ describe("run/tool-rules.json and collect (T6)", { timeout: 60_000 }, () => {
     await expect(stat(join(sourceDir, "run", "tool-rules.json"))).rejects.toMatchObject({ code: "ENOENT" });
     const direct = await collectExecution(envelope, 0) as unknown as Record<string, unknown>;
     expect(direct.terminal).not.toBeNull();
-    expect(Object.keys(direct)).toEqual(["events", "candidate", "terminal", "progress"]);
+    expect(Object.keys(direct)).toEqual(["events", "candidate", "terminal", "progress", "transcripts"]);
   });
 });
 
