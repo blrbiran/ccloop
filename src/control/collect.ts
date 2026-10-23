@@ -12,6 +12,7 @@ import { proveStopped, type StopProofV1 } from "./stopProof.js";
 import { inspectStart, type ExecutionStatusV1 } from "./accept.js";
 import { readAcceptedOptional } from "./store.js";
 import { readToolRulesReport } from "./toolRulesReport.js";
+import { listTranscripts, type TranscriptEntryV1 } from "./transcripts.js";
 
 /** Orca labels and progress spec §3.2 (2026-09-28): the loop's latest state, as Orca shows a task's step. */
 export interface ProgressV1 {
@@ -47,6 +48,11 @@ export interface CollectionV1 {
    * run/tool-rules.json exists. Top level, like failureCause; absent otherwise, so no existing caller sees new bytes.
    */
   toolRules?: import("../runtime/toolRules.js").ToolRulesReportV1;
+  /**
+   * Live transcript (Orca spec 2026-10-23-live-transcript-design.md §10.2.4): one entry per agent call of the run, present iff
+   * there is at least one; absent otherwise, like toolRules. Advertised by `features.transcripts: "v1"`.
+   */
+  transcripts?: TranscriptEntryV1[];
 }
 
 const safe = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -153,6 +159,8 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const failureCause = terminal === null ? undefined : (loopState!.state as RunState).failureCause;
   const declared = (input.work as { contract?: { executionPolicy?: { toolRules?: unknown } } }).contract?.executionPolicy?.toolRules;
   const toolRules = declared === undefined ? undefined : await readToolRulesReport(input.work.sourceDir);
+  const runFinal = proof !== null || (loopState !== null && isTerminalRunStatus((loopState.state as { status?: RunStatus } | null)?.status as RunStatus));
+  const transcripts = await listTranscripts(input.work.sourceDir, runFinal);
   return {
     events,
     candidate: storedCandidate === null ? null : candidateOf(storedCandidate, proof),
@@ -162,6 +170,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     ...(storedCandidate === null || loopState === null ? {} : await reportedOf(input.work.sourceDir, storedCandidate, loopState.state)),
     ...(failureCause === undefined ? {} : { failureCause }),
     ...(toolRules === undefined ? {} : { toolRules }),
+    ...(transcripts.length === 0 ? {} : { transcripts }),
   };
 }
 

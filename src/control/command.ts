@@ -216,6 +216,11 @@ const collectionSchema = z.object({
   }).strict().optional(),
   // Per-contract tool rules (spec 2026-10-22 §5): top level, present iff the contract has rules and the report exists.
   toolRules: toolRulesReportSchema.optional(),
+  // Live transcript (Orca spec 2026-10-23 §10.2.4): one entry per agent call, present iff there is one; protocols 3 and 4.
+  transcripts: z.array(z.object({
+    attempt: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), phase: z.string().min(1), seq: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    path: z.string().min(1).nullable(), bytes: safeInteger, final: z.boolean(), truncatedAt: safeInteger.nullable(),
+  }).strict()).min(1).optional(),
 }).strict();
 
 const METHODS = new Set<ControlMethodV1>([
@@ -272,7 +277,8 @@ async function tableView(agentsTablePath: string): Promise<unknown> {
 }
 
 async function defaultHandler(request: ControlRequestV1, context: ControlContextV1): Promise<unknown> {
-  if (request.method === "features") return { protocol: 1, tokenPolicy: "optional-v1", savedResultRecovery: "v1", agentInstallationUpdate: "v1" };
+  // Live transcript (Orca spec 2026-10-23 §10.2.4): collect may carry `transcripts`.
+  if (request.method === "features") return { protocol: 1, tokenPolicy: "optional-v1", savedResultRecovery: "v1", agentInstallationUpdate: "v1", transcripts: "v1" };
   if (request.method === "agent-installation-observe") return observeAgentInstallations(context.agentsTablePath);
   if (request.method === "agent-installation-preview") return previewAgentInstallations(context.agentsTablePath);
   if (request.method === "agent-installation-apply") return applyAgentInstallations(context.agentsTablePath, request);
@@ -322,7 +328,7 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
 
 function validateResponse(method: ControlMethodV1, value: unknown, protocol = 3): unknown {
   try {
-    if (method === "features") return z.object({ protocol: z.literal(1), tokenPolicy: z.literal("optional-v1"), savedResultRecovery: z.literal("v1"), agentInstallationUpdate: z.literal("v1") }).strict().parse(value);
+    if (method === "features") return z.object({ protocol: z.literal(1), tokenPolicy: z.literal("optional-v1"), savedResultRecovery: z.literal("v1"), agentInstallationUpdate: z.literal("v1"), transcripts: z.literal("v1") }).strict().parse(value);
     if (method === "agent-installation-observe") return observationSchema.parse(value);
     if (method === "agent-installation-preview") return previewSchema.parse(value);
     if (method === "agent-installation-apply") return receiptSchema.parse(value);
