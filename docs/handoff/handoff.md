@@ -1,4 +1,4 @@
-# ccloop Handoff — 在飞：`feat/multi-repo`（等人确认 P1–P7 才合）；实时转录已在 main（见「当前状态」）；Orca 关联见文末单节
+# ccloop Handoff — multi-repo 已在 main（P1–P7 与 M9 已由人确认）；实时转录亦在 main（见「当前状态」）；Orca 关联见文末单节
 
 > ⚠️ **一律自查，别信本文。** 只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是固定历史值。
 > *** **本文不写任何当前哈希** —— 指代某一笔引**提交主题行**（`git log --grep`），指代材料引**路径**。 ***
@@ -45,7 +45,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 - **已在 main 并已推**（主题行起 `docs(plan): live transcript` 系列，至 `test(control): the startedAt-order case creates its call directories in name order`）：**实时转录的 ccloop 部分**（Orca spec `docs/superpowers/specs/2026-10-23-live-transcript-design.md` §10.2、§11、§12；计划 `docs/superpowers/plans/2026-10-24-live-transcript-ccloop.md` 含 As-built 与两轮审阅）：每次调用一份 `transcript.jsonl`（0600，claude 由 runner 经 `CCLOOP_CLAUDE_TRANSCRIPT_PATH` 写，不记 `content_block_delta`；>10 MiB 行留 `ccloop.line-dropped`）；transcript 128 MiB 截到整行＋`ccloop.transcript-truncated` 标记（先写标记再 ftruncate）、`events.jsonl` 16 MiB 只停记录；codex/omp stdout 1 GiB ⇒ `output-limit`；全部解码改为按行 fold（0x0A 切行，跨块多字节安全）；collect 顶层 `transcripts`、features `transcripts:"v1"`；`work.operatorNote`（只进 plan/execute，`verify-saved-result` 时拒）。改了判据（人裁 O5「…作为一个hard limit ，比如1G」与本会话「这次批准改写所有必要的判据」，逐条在提交里）：`runCodexPhase.test.ts:57-60`、`ompPhase.test.ts:225-226`、`claudeAgentAdapter.test.ts:133`、`singleCall.test.ts:87-107`、`protocol4.test.ts:13`、`savedResultEvidence.test.ts:107,110`、`toolRulesCollect.test.ts:107`。门：tip 上 2338 条 2 红（known `runLoop.integration`＋`taskResults` 30 s 超时单跑 6/6 绿）。⚠️ push 被 Orca Tier 0 闸门拦下，由人手推。
 - **真 codex strict schema 验收已做**（gpt-6-luna，带 `debug.located`＋`flow`）：provider 接受，三阶段 completed；codex 报回两键；也读得到工作区外绝对路径。证据 `/private/tmp/orca-ffec7b28/evidence/codex-accept/RESULT.md`。
-- **在飞：`feat/multi-repo`**（工作树 `/private/tmp/orca-ffec7b28/ccloop-mr`，tip `17b9541`；Orca spec `2026-10-24-multi-dir-projects-design.md` §11、C1–C13；计划 `docs/superpowers/plans/2026-10-24-multi-repo-ccloop.md` 含 As-built 偏差 1–9 与 Review round 1）：契约 `context.repoKey`/`additionalRepos`、envelope `work.additionalRepos`、collect `dirs[]{key,resultRepo,changedPaths,attemptSha}`，缺省时逐字节不变；**没改任何既有测试**（C12）。门 RC 0（重跑）。**不合**：P1–P7 是控制器在人的「先按你的建议执行」下采纳的，不是人裁（本仓 Rule 1/18）；M9（`extra-repo-head-moved` 是人闸）也待人。付费探针：三家都能在 `--add-dir` 里写。
+- **`feat/multi-repo` 已合入 main 并已推**（主题行起 `docs(plan): multi-repo ccloop — several repositories in one run`，至 `test(omp): C13 expects dirs[].attemptSha, the published attempt commit in the extra repository (review M7 follow-up)`；Orca spec `2026-10-24-multi-dir-projects-design.md` §11、C1–C13；计划 `docs/superpowers/plans/2026-10-24-multi-repo-ccloop.md` 含 As-built 1–10 与 Review round 1）：契约 `context.repoKey`/`additionalRepos`、envelope `work.additionalRepos`、collect `dirs[]{key,resultRepo,changedPaths,attemptSha}`，缺省时逐字节不变；**没改任何既有测试**（C12：22 个测试/fake 全 `A`）。人已确认 P1–P7、M9（`extra-repo-head-moved` 保持人闸 `blocked_waiting_human`）与 As-built 1–10；真跑验收只开放 codex（claude 无额度）。门：最终 tip 全量 RC 0（known reds 7、failed 1 为名单内 Codex TERM 忽略用例、unexpected 0）；rebase 后 typecheck/build 绿、19 个多仓测试文件 55/55。分支已删、worktree 已移除。
 - 未修：perf:stream（L7）在负载 47–55 下增长 26–35 MiB、偶超 32 MiB 界（按需检查）；Orca 侧 transcript 读取器在 Orca 分支在飞。
 
 #### 上一轮（2026-10-22，Orca 会话 `b37f7ce9`）—— 已合、已推
@@ -153,7 +153,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 # 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-24，Orca 会话 `ffec7b28`）
 
 - 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。Orca 已 **repin 到本仓 `f4de340`**（Orca 先接受 `transcripts`／`operatorNote` 再钉；Orca 侧读取器/UI 在 Orca 分支在飞）。
-- **H7 多仓**：本仓 `feat/multi-repo` 等人确认 P1–P7、M9 → 合并（人推）→ Orca 接受 `additionalRepos`/`dirs` → repin。
+- **H7 多仓**：本仓 `feat/multi-repo` 已合入并已推（人已确认 P1–P7、M9、As-built 1–10）→ 下一步 Orca 接受 `additionalRepos`/`dirs` 并做 H7。Orca pin 仍是 `f4de340`，**等 Orca 真正消费多仓字段时再 repin**。真跑验收：codex 可跑（claude 无额度），付费真跑每次先问人。
 - ⚠️ 沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（软链进私有 CODEX_HOME 的结果，登记未修）。
 - **Orca 依赖本仓、改之前先同步 Orca 的**：同前（`single-call-output-invalid`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`、`toolRules`、`transcripts`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`；`executionPolicy.toolRules`；codex wire `flow` 的封闭形状；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；fake 参数约定；`blockRun` 原因串；`isRepeatedFailure`）。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受。
 - ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`。Orca 测试的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build；别指本仓工作树的 `dist`。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
