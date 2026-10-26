@@ -171,10 +171,10 @@ describe("OMP runtime phase", () => {
     const toolTurn = {
       role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read", arguments: { path: "answer.txt" } }],
       provider: "gateway", model: "model-a", stopReason: "toolUse",
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+      usage: { input: 3, output: 1, cacheRead: 1, cacheWrite: 0, totalTokens: 5 },
     };
     const emptyStop = {
-      role: "assistant", content: [{ type: "thinking", thinking: "the answer is nearly there" }],
+      role: "assistant", content: [{ type: "thinking", thinking: "the answer is nearly there", thinkingSignature: "" }],
       provider: "gateway", model: "model-a", stopReason: "stop",
       usage: { input: 6, output: 2, cacheRead: 2, cacheWrite: 0, totalTokens: 10 },
     };
@@ -197,7 +197,7 @@ describe("OMP runtime phase", () => {
       { type: "agent_end", isTerminal: true, yielded: true },
     ].map((row) => JSON.stringify(row)).join("\n");
     const plan = decodeOmpPhase("plan", events, "gateway/model-a");
-    expect(plan).toMatchObject({ summary: "one empty stop", primaryTargetPaths: ["answer.txt"], tokenUsage: 24 });
+    expect(plan).toMatchObject({ summary: "one empty stop", primaryTargetPaths: ["answer.txt"], tokenUsage: 29 });
   });
 
   it("still treats a signed thinking stop as the answer", () => {
@@ -210,14 +210,32 @@ describe("OMP runtime phase", () => {
       { type: "agent_start" },
       { type: "message_end", message: signedStop },
       { type: "turn_end" },
+      // Probe: omp would not emit agent_start after a real stop; a signed stop is followed by agent_end.
       { type: "agent_start" },
     ].map((row) => JSON.stringify(row)).join("\n");
     expect(() => decodeOmpPhase("plan", events, "gateway/model-a")).toThrow("omp-phase-continuation");
   });
 
+  it("refuses a phase whose only answer was an empty stop", () => {
+    const emptyStop = {
+      role: "assistant", content: [{ type: "thinking", thinking: "the answer is nearly there", thinkingSignature: "" }],
+      provider: "gateway", model: "model-a", stopReason: "stop",
+      usage: { input: 6, output: 2, cacheRead: 2, cacheWrite: 0, totalTokens: 10 },
+    };
+    const events = [
+      { type: "agent_start" },
+      { type: "message_end", message: emptyStop },
+      { type: "turn_end" },
+      { type: "agent_end", isTerminal: true },
+    ].map((row) => JSON.stringify(row)).join("\n");
+    let failure: unknown;
+    try { decodeOmpPhase("plan", events, "gateway/model-a"); } catch (error) { failure = error; }
+    expect(failure).toMatchObject({ message: "omp-no-completion", observedTokens: 10 });
+  });
+
   it("decodes after two consecutive empty-stop continuations", () => {
-    const emptyStop = (thinking: string) => ({
-      role: "assistant", content: [{ type: "thinking", thinking }],
+    const emptyStop = (content: Array<Record<string, unknown>>) => ({
+      role: "assistant", content,
       provider: "gateway", model: "model-a", stopReason: "stop",
       usage: { input: 6, output: 2, cacheRead: 2, cacheWrite: 0, totalTokens: 10 },
     });
@@ -228,10 +246,10 @@ describe("OMP runtime phase", () => {
     };
     const events = [
       { type: "agent_start" },
-      { type: "message_end", message: emptyStop("first try") },
+      { type: "message_end", message: emptyStop([{ type: "thinking", thinking: "first try", thinkingSignature: "" }]) },
       { type: "turn_end" },
       { type: "agent_start" },
-      { type: "message_end", message: emptyStop("second try") },
+      { type: "message_end", message: emptyStop([{ type: "text", text: "  \n" }]) },
       { type: "turn_end" },
       { type: "agent_start" },
       { type: "message_end", message: answer },

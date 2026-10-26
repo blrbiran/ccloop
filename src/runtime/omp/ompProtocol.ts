@@ -11,12 +11,12 @@ const record = (value: unknown): value is Record<string, unknown> => value !== n
 const safe = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
 // Mirrors omp's isActionableContent (messages.ts:544) for the stop branch: thinking is actionable only when signed.
-const ACTIONABLE_BLOCKS = new Set(["toolCall", "image", "redactedThinking", "anthropicServerTool"]);
+const ALWAYS_ACTIONABLE_BLOCKS = new Set(["toolCall", "image", "redactedThinking", "anthropicServerTool"]);
 function actionableStop(message: Record<string, unknown>): boolean {
   if (!Array.isArray(message.content)) return false;
   return message.content.some((block) => {
     if (!record(block) || typeof block.type !== "string") return false;
-    if (ACTIONABLE_BLOCKS.has(block.type)) return true;
+    if (ALWAYS_ACTIONABLE_BLOCKS.has(block.type)) return true;
     if (block.type === "text") return typeof block.text === "string" && block.text.trim().length > 0;
     if (block.type === "thinking") return typeof block.thinkingSignature === "string" && block.thinkingSignature.trim().length > 0;
     return false;
@@ -118,7 +118,7 @@ export class OmpPhaseFold {
       this.last = raw.message;
       this.usage.add(raw.message);
       if (`${raw.message.provider}/${raw.message.model}` !== this.expectedSelector) this.wrongModel = true;
-      // omp's isEmptyAssistantStop drops an unsigned-thinking-only stop and retries it, so it is not this phase's answer.
+      // omp's isEmptyAssistantStop retries an empty stop (measured: thinking-only, unsigned), so it is not this phase's answer.
       if (raw.message.stopReason === "stop" && actionableStop(raw.message)) this.ended = true;
     }
     if (raw.type === "agent_end") {
