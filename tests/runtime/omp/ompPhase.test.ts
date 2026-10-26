@@ -167,6 +167,81 @@ describe("OMP runtime phase", () => {
     expect(JSON.parse(await readFile(join(evidenceDir, "usage-lower-bound.json"), "utf8"))).toEqual({ tokens: 14 });
   });
 
+  it("decodes the answer that follows an empty-stop continuation", () => {
+    const toolTurn = {
+      role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read", arguments: { path: "answer.txt" } }],
+      provider: "gateway", model: "model-a", stopReason: "toolUse",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+    };
+    const emptyStop = {
+      role: "assistant", content: [{ type: "thinking", thinking: "the answer is nearly there" }],
+      provider: "gateway", model: "model-a", stopReason: "stop",
+      usage: { input: 6, output: 2, cacheRead: 2, cacheWrite: 0, totalTokens: 10 },
+    };
+    const answer = {
+      role: "assistant", content: [{ type: "text", text: JSON.stringify({ summary: "one empty stop", primaryTargetPaths: ["answer.txt"] }) }],
+      provider: "gateway", model: "model-a", stopReason: "stop",
+      usage: { input: 8, output: 2, cacheRead: 3, cacheWrite: 1, totalTokens: 14 },
+    };
+    const events = [
+      { type: "agent_start" },
+      { type: "message_end", message: toolTurn },
+      { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: { path: "answer.txt" } },
+      { type: "tool_execution_end", toolCallId: "t1", toolName: "read", result: { content: [] } },
+      { type: "turn_end" },
+      { type: "agent_start" },
+      { type: "message_end", message: emptyStop },
+      { type: "turn_end" },
+      { type: "message_end", message: answer },
+      { type: "turn_end" },
+      { type: "agent_end", isTerminal: true, yielded: true },
+    ].map((row) => JSON.stringify(row)).join("\n");
+    const plan = decodeOmpPhase("plan", events, "gateway/model-a");
+    expect(plan).toMatchObject({ summary: "one empty stop", primaryTargetPaths: ["answer.txt"], tokenUsage: 24 });
+  });
+
+  it("still treats a signed thinking stop as the answer", () => {
+    const signedStop = {
+      role: "assistant", content: [{ type: "thinking", thinking: "the plan is ready", thinkingSignature: "sig" }],
+      provider: "gateway", model: "model-a", stopReason: "stop",
+      usage: { input: 8, output: 2, cacheRead: 3, cacheWrite: 1, totalTokens: 14 },
+    };
+    const events = [
+      { type: "agent_start" },
+      { type: "message_end", message: signedStop },
+      { type: "turn_end" },
+      { type: "agent_start" },
+    ].map((row) => JSON.stringify(row)).join("\n");
+    expect(() => decodeOmpPhase("plan", events, "gateway/model-a")).toThrow("omp-phase-continuation");
+  });
+
+  it("decodes after two consecutive empty-stop continuations", () => {
+    const emptyStop = (thinking: string) => ({
+      role: "assistant", content: [{ type: "thinking", thinking }],
+      provider: "gateway", model: "model-a", stopReason: "stop",
+      usage: { input: 6, output: 2, cacheRead: 2, cacheWrite: 0, totalTokens: 10 },
+    });
+    const answer = {
+      role: "assistant", content: [{ type: "text", text: JSON.stringify({ summary: "two empty stops", primaryTargetPaths: ["answer.txt"] }) }],
+      provider: "gateway", model: "model-a", stopReason: "stop",
+      usage: { input: 8, output: 2, cacheRead: 3, cacheWrite: 1, totalTokens: 14 },
+    };
+    const events = [
+      { type: "agent_start" },
+      { type: "message_end", message: emptyStop("first try") },
+      { type: "turn_end" },
+      { type: "agent_start" },
+      { type: "message_end", message: emptyStop("second try") },
+      { type: "turn_end" },
+      { type: "agent_start" },
+      { type: "message_end", message: answer },
+      { type: "turn_end" },
+      { type: "agent_end", isTerminal: true, yielded: true },
+    ].map((row) => JSON.stringify(row)).join("\n");
+    const plan = decodeOmpPhase("plan", events, "gateway/model-a");
+    expect(plan).toMatchObject({ summary: "two empty stops", primaryTargetPaths: ["answer.txt"], tokenUsage: 34 });
+  });
+
   it("registers the process identity before the fake CLI can receive its prompt", async () => {
     const f = await fixture("registration-required");
     const plan = await ompDescriptor.createAdapter(f.config).plan({ ...f.context, onProcessRegistered: async (record) => {

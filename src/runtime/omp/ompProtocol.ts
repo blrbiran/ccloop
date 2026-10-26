@@ -10,6 +10,19 @@ const planSchema = z.object({ summary: z.string(), primaryTargetPaths: z.array(z
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const safe = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
+// Mirrors omp's isActionableContent (messages.ts:544) for the stop branch: thinking is actionable only when signed.
+const ACTIONABLE_BLOCKS = new Set(["toolCall", "image", "redactedThinking", "anthropicServerTool"]);
+function actionableStop(message: Record<string, unknown>): boolean {
+  if (!Array.isArray(message.content)) return false;
+  return message.content.some((block) => {
+    if (!record(block) || typeof block.type !== "string") return false;
+    if (ACTIONABLE_BLOCKS.has(block.type)) return true;
+    if (block.type === "text") return typeof block.text === "string" && block.text.trim().length > 0;
+    if (block.type === "thinking") return typeof block.thinkingSignature === "string" && block.thinkingSignature.trim().length > 0;
+    return false;
+  });
+}
+
 export function assistantUsage(message: Record<string, unknown>): { input: number; output: number; cacheRead: number; cacheWrite: number; total: number } {
   if (!record(message.usage)) throw new Error("omp-usage-invalid");
   const { input, output, cacheRead, cacheWrite, totalTokens } = message.usage;
@@ -105,7 +118,8 @@ export class OmpPhaseFold {
       this.last = raw.message;
       this.usage.add(raw.message);
       if (`${raw.message.provider}/${raw.message.model}` !== this.expectedSelector) this.wrongModel = true;
-      if (raw.message.stopReason === "stop") this.ended = true;
+      // omp's isEmptyAssistantStop drops an unsigned-thinking-only stop and retries it, so it is not this phase's answer.
+      if (raw.message.stopReason === "stop" && actionableStop(raw.message)) this.ended = true;
     }
     if (raw.type === "agent_end") {
       this.terminalCount += 1;

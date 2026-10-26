@@ -176,6 +176,7 @@ const OMP_CORPUS: Record<string, string> = {
   "wrong model": ompRows({ type: "message_end", message: assistant(PLAN_ANSWER, { model: "other" }) }, { type: "agent_end", isTerminal: true }),
   "bad usage": ompRows({ type: "message_end", message: assistant(PLAN_ANSWER, { usage: { input: 1 } }) }, { type: "agent_end", isTerminal: true }),
   "error stop": ompRows({ type: "message_end", message: assistant("", { stopReason: "error", errorMessage: "provider said no 中" }) }, { type: "agent_end", isTerminal: true }),
+  "empty stop continuation": ompRows({ type: "message_end", message: assistant("", { content: [{ type: "thinking", thinking: "hmm" }] }) }, { type: "agent_start" }, { type: "message_end", message: assistant(PLAN_ANSWER) }, { type: "agent_end", isTerminal: true }),
   "length stop": ompRows({ type: "message_end", message: assistant("{\"a\":", { stopReason: "length" }) }, { type: "agent_end", isTerminal: true }),
   "single answer": ompRows({ type: "message_end", message: assistant("{\"answer\":\"42\"}") }, { type: "agent_end", isTerminal: true }),
   unparsed: "{oops\n" + ompRows({ type: "message_end", message: assistant(PLAN_ANSWER) }, { type: "agent_end", isTerminal: true }),
