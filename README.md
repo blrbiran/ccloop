@@ -1,60 +1,64 @@
 # ccloop
 
-一个 **L2 自治度**的代码任务循环控制器：你写一份**契约（contract）**声明目标、边界和验收标准，ccloop 反复执行「计划 → 执行 → 验证」直到进入某个终态，全过程把状态和证据落盘。
+A **loop controller at L2 autonomy**: you write a **contract** that states the goal, the boundaries and the acceptance
+criteria, and ccloop runs *plan → execute → verify* until the run reaches a terminal state, writing its state and
+evidence to disk as it goes.
 
-它自己不写代码，也不判断对错——真正干活的是 **adapter**（一个子进程，通常是 `claude -p`）。ccloop 负责的是：预算、隔离、崩溃恢复、所有权仲裁、证据留痕。
+It does not write code and does not decide what is right — the **adapter** (a child process, usually `claude -p`) does
+the work. ccloop owns the loop, the budget, isolation, crash recovery, ownership arbitration and the evidence trail.
 
-> **状态**：V1，`private: true`，未发布到 npm。仅支持 macOS / Linux。
+> **Status**: V1, `private: true`, not published to npm. macOS and Linux only.
 
 ---
 
-## 1. 心智模型
+## 1. Mental model
 
 ```
 contract.json ──▶ ccloop run ──▶ ┌──────────────────────────────┐
                                  │  attempt N                   │
                                  │   plan → execute → verify    │──▶ approved? ──▶ succeeded
-                                 │   （在独立 git worktree 里）   │        │
-                                 └──────────────────────────────┘        └──▶ 下一次 attempt
+                                 │   (in its own git worktree)  │        │
+                                 └──────────────────────────────┘        └──▶ next attempt
                                               │
-                                        全程写入 runDir/
+                                        written to runDir/ throughout
 ```
 
-三个关键分离：
+Three separations:
 
-| 谁 | 管什么 |
+| Who | Owns |
 |---|---|
-| **contract** | 目标、边界、预算、验收标准。人写，机器不改。 |
-| **controller**（ccloop 本体） | 循环、预算扣减、worktree 隔离、状态机、租约与所有权、崩溃后续跑 |
-| **adapter** | 一次 phase 的实际执行。stdin 收 JSON 请求，stdout 吐 JSON 结果。 |
+| **contract** | Goal, boundaries, budget, acceptance criteria. A person writes it; the machine never edits it. |
+| **controller** (ccloop itself) | The loop, budget accounting, worktree isolation, the state machine, leases and ownership, resuming after a crash. |
+| **adapter** | One phase's execution. Reads a JSON request on stdin, writes a JSON result on stdout. |
 
-**controller 永不 push、永不合并、永不删分支**——这些是人的动作。
+**The controller never pushes, never merges and never deletes a branch.** Those are the person's acts.
 
 ---
 
-## 2. 安装
+## 2. Install
 
 ```bash
 cd /path/to/ccloop
 npm install
-npm run build          # 产出 dist/cli.js
+npm run build          # produces dist/cli.js
 ```
 
-然后二选一：
+Then either run it directly, or use the development path (no build):
 
 ```bash
-# 直接跑
 node dist/cli.js <command> ...
-
-# 或开发模式（免 build）
 npm run dev -- <command> ...      # tsx src/cli.ts
 ```
 
-想全局有 `ccloop` 命令，`npm link` 即可（`package.json` 已声明 `bin`）。
+`npm link` puts a global `ccloop` on PATH (`package.json` already declares `bin`).
 
-作为 Orca 的依赖时，Orca 用 git URL 钉到一个提交（`"ccloop": "github:blrbiran/ccloop#<commit>"`）。npm 会在临时 clone 里装 devDependencies、跑 `prepare`（即 `npm run build`），再只打包 `package.json` 的 `files` 列出的东西——所以除了 `dist/`，运行时从包根读的 `scripts/claude-phase-runner.mjs` 与它 import 的 `scripts/claude-stream.mjs` 也必须在 `files` 里（`tests/packaging/gitDependency.test.ts` 守着这一点）。副作用：在本仓库里 `npm install` 也会顺带 build 一次。
+As an Orca dependency, Orca pins a commit through a git URL (`"ccloop": "github:blrbiran/ccloop#<commit>"`). npm
+installs devDependencies and runs `prepare` (that is, `npm run build`) inside a temporary clone, then packs only what
+`package.json`'s `files` lists — so besides `dist/`, the runtime-read `scripts/claude-phase-runner.mjs` and the
+`scripts/claude-stream.mjs` it imports must stay in `files` (`tests/packaging/gitDependency.test.ts` guards this). Side
+effect: `npm install` in this repository also builds once.
 
-自检：
+Self-check:
 
 ```bash
 npm run typecheck
@@ -63,15 +67,17 @@ npm test              # vitest run
 
 ---
 
-## 3. 五个子命令
+## 3. Commands
 
-| 命令 | 干什么 | 退出码 |
+| Command | What it does | Exit codes |
 |---|---|---|
-| `run` | 从契约开一个新循环 | `0` succeeded / `2` 其他终态 / `1` 参数或加载失败 |
-| `resume` | 接管一个被中断的 run，从落盘状态续跑 | 同上 |
-| `ls` | 扫描一个根目录下所有 run，报告**观测到的**字段 | `0` / `1`（根目录本身读不了） |
-| `sweep` | 批量续跑：扫描 + 挑出 `eligibleForContinuation=true` 的 run，以及被直接杀掉的 run（无 `owner-transfer.json`、状态可续跑、租约已过期，见 §3.4），逐个 adopt | `0` / `1` |
-| `unlock` | 处理卡住的 owner-transfer 锁 | `0` 锁已不在 / `1` 任何拒绝 |
+| `run` | Start a new loop from a contract | `0` succeeded / `2` any other terminal state / `1` bad arguments or load failure |
+| `resume` | Adopt an interrupted run and continue from the state on disk | same as `run` |
+| `ls` | Scan every run under a root and report **observed** fields | `0` / `1` (the root itself cannot be read) |
+| `sweep` | Continue in bulk: scan, pick the runs observed as `eligibleForContinuation=true` and runs killed outright (no `owner-transfer.json`, a resumable state, an expired lease — §3.4), adopt each one | `0` / `1` |
+| `unlock` | Deal with a stuck owner-transfer lock | `0` no lock remains / `1` any refusal |
+| `agents` | Detect installed agent CLIs, validate a table, list an installation's models (§6.1) | `0` / `1` |
+| `control` | The JSON-over-stdio boundary an external controller uses (§7) | `0` answered / `2` named protocol or agent refusal / `1` malformed input or handler failure |
 
 ### 3.1 `run`
 
@@ -83,11 +89,19 @@ node dist/cli.js run \
   --agent-selection /abs/private/selection.json
 ```
 
-四个 flag **全部必填**，没有默认值。`--agents` 是 agents 表（装了哪些 agent CLI、各在哪、什么版本），`--agent-selection` 是这一次选哪个、用什么 model，连同它的 `configHash`——两份文件怎么来见 §6.0。
+All four flags are **required**, with no defaults. `--agents` is the agents table (which CLIs are installed, where, at
+what version); `--agent-selection` is this run's agent and model together with its `configHash`. §6.1 shows where both
+files come from.
 
-`run --agents` 会把校验过的选择**冻结**进 `<runDir>/agent-selection.json`（`0600`，已存在就拒绝、不覆盖）。之后 `resume`／`sweep` 不再收 `--agent-selection`，只用这份冻结的选择对着**当时的** agents 表重建 adapter——选择对应的配置变了（kind、`configDir`、kind 自己的字段或 selection；hash 对不上）或 CLI 升级了（版本漂移），都会在动 run 目录之前拒绝。
+`run --agents` **freezes** the validated selection into `<runDir>/agent-selection.json` (`0600`; it refuses an existing
+one and never overwrites). Afterwards `resume` and `sweep` take no `--agent-selection`: they rebuild the adapter from
+that frozen selection against the **then-current** agents table. A changed configuration for that selection (kind,
+`configDir`, the kind's own fields, or the selection; the hash no longer matches) or an upgraded CLI (version drift) is
+refused before the run directory is touched.
 
-⚠️ `--run-dir` 必须是**干净的**：如果里面已经有 `loop-state.json`、`events.jsonl` 或非空的 `worktrees/`，`run` 会直接报错退出；留着一份 `agent-selection.json`（比如上一次 `run --agents` 冻结后中途失败）也会被拒绝，退出码 1，错误码 `agent-selection-exists`。V1 不支持在已有 run 上重新初始化——想续跑请用 `resume`。
+⚠️ `--run-dir` must be **clean**: if it already holds `loop-state.json`, `events.jsonl` or a non-empty `worktrees/`,
+`run` exits with an error; a leftover `agent-selection.json` (for example from a `run --agents` that froze it and then
+failed) is refused too, exit 1, code `agent-selection-exists`. V1 cannot re-initialise an existing run — use `resume`.
 
 ### 3.2 `resume`
 
@@ -97,29 +111,45 @@ node dist/cli.js resume \
   --agents  /abs/private/agents.json
 ```
 
-不需要 `--agent-selection`：用的是 `run --agents` 冻结在 `<runDir>/agent-selection.json` 里的那份；没有这份文件的 run 目录（不是 `run --agents` 起的）会被拒绝。不需要 `--contract`：契约已经在 run 目录里了。resume 按顺序检查，任何一步不通过就拒绝：
+No `--agent-selection` (the run's frozen copy is used; a directory without one — not started by `run --agents` — is
+refused) and no `--contract` (the contract already sits in the run directory). Checks run in order, and any failure
+refuses:
 
-- 租约还新鲜（owner 还在续约）⇒ 拒绝。
-- run 目录是 Orca control store 里的 control run（`<dir>/run`，同级有 `control/` 目录）⇒ 拒绝，那类 run 由 Orca 自己恢复。
-- 没有 `owner-transfer.json` 的 run（进程被杀、没有人交接过）且状态可续跑（planning / executing / verifying）：**先**确认旧 owner 进程已经死亡。owner 还活着，或者死活无法确定，一律拒绝，而且此时**还没有回收任何进程组**。
-- run 里登记过、还没结束的 claude / codex 进程组（有没有 transfer 两条路径都做）：回收（终止），回收不了或无法确认身份就拒绝，拒绝原因以出问题的 call 目录开头。每个被回收的进程组记一条 `orphan_process_group_reaped` 事件。
-- 回收成功之后，没有 transfer 的 run 由 resume 自己写下 owner-transfer 和 reconciliation 记录并接管（事件 `owner_crash_adopted`，随后是 `resume_adopted`）。已经带 transfer 的 run 没有这一步，也没有 owner 死活检查，只看租约。
-- 之后照旧：8 条续跑资格检查、认领、继续跑 loop。
+- The lease is still fresh (its owner is renewing it) ⇒ refused.
+- The run directory is a control run in an Orca control store (`<dir>/run` with a sibling `control/`) ⇒ refused; Orca
+  recovers those itself.
+- A run in `verify-saved-result` mode is refused (`saved-result-controller-resume-required`); its controller continues
+  it.
+- A run without `owner-transfer.json` (the process was killed; nobody handed over) whose state is resumable
+  (planning / executing / verifying): **first** confirm the old owner process is dead. A live owner, or one that cannot
+  be shown to be dead, is refused — and at that point **no process group has been reaped**.
+- Claude / codex process groups registered by the run that have not ended (on both paths, with or without a transfer):
+  reap (terminate) them; a group that cannot be reaped or identified is refused, and the refusal names the call
+  directory at fault. Each reaped group records an `orphan_process_group_reaped` event.
+- Once reaping succeeds, a run without a transfer has `resume` write its own owner-transfer and reconciliation records
+  and take over (`owner_crash_adopted`, then `resume_adopted`). A run that already has a transfer skips this step and
+  the owner-liveness check; only the lease matters.
+- Then as always: the eight continuation-eligibility checks, the claim, and the loop continues.
 
-Ctrl-C 的后果：单次 Ctrl-C（或 SIGTERM）让 loop 在下一个 phase 边界停下，然后释放租约再退出；第二次 Ctrl-C 立即以退出码 130 退出，不释放租约。两种情况下，只要进程已经不在了，状态可续跑的 run 都能被 `resume` 接管（租约过期之后；`kill -9` 同理）。claude 的 runner 在父进程死后约 5 秒内自行退出（codex 没有这层保护）；仍残留的进程组由 resume 回收。单次 Ctrl-C 释放租约这一点，这里没有单独的测试钉住。
+What Ctrl-C does: one Ctrl-C (or SIGTERM) lets the loop stop at the next phase boundary, then releases the lease and
+exits; a second Ctrl-C exits at once with code 130 without releasing the lease. Either way, a resumable run can be
+adopted by `resume` once its process is gone and the lease has expired (`kill -9` behaves the same). The claude runner
+exits on its own about 5 seconds after its parent dies (codex has no such guard); a process group still left over is
+reaped by `resume`. No test pins the single-Ctrl-C lease release.
 
 ### 3.3 `ls`
 
 ```bash
-node dist/cli.js ls /tmp/ccloop-runs           # 人读的表
-node dist/cli.js ls --json /tmp/ccloop-runs    # 机器读的 {schemaVersion:1, rows:[...]}
+node dist/cli.js ls /tmp/ccloop-runs           # a table for a person
+node dist/cli.js ls --json /tmp/ccloop-runs    # machine-readable: {schemaVersion:1, rows:[...]}
 ```
 
-输出里每一行是一次**观测**，不是一次判定。表头那句 consistency notice 是契约的一部分：
+Every row is an **observation**, not a verdict. The consistency notice in the header is part of the contract:
 
-> 同一行里的各字段是相互独立的观测，**不构成一致快照**；`eligibleForContinuation` 是一个被观测到的字段，**不是「这个 run 可以被续跑」的结论**。
+> The fields in one row are independent observations and do **not** form a consistent snapshot; `eligibleForContinuation`
+> is an observed field, **not** the conclusion "this run can be continued".
 
-读 `ls` 输出时请认真对待这句话——它是设计意图，不是免责声明。
+Take that sentence seriously when reading `ls`: it is the design, not a disclaimer.
 
 ### 3.4 `sweep`
 
@@ -130,64 +160,90 @@ node dist/cli.js sweep \
   --max-runs 5
 ```
 
-每个被挑中的 run 各用**它自己**冻结的 `agent-selection.json` 建 adapter，所以一次 sweep 里不同 run 可以是不同的 agent。
+Each picked run builds its adapter from **its own** frozen `agent-selection.json`, so one sweep may continue runs of
+different agents.
 
-- `--max-runs` 必须是**字面上的正整数**（`1e3`、`2abc` 一律拒绝，不做容错解析）。它是人批准这次 sweep 的上限。
-- 它 bound 的是**进入的 run 数**，不是 attempt 总数——每个 run 各自还有自己契约里的 `maxAttempts`。
-- 候选有两类。(a) `owner-transfer.json` 里 `eligibleForContinuation` 观测为 `true`，banner 照旧只数这一类；(b) 被直接杀掉的 run：没有 `owner-transfer.json`、状态是 `planning`/`executing`/`verifying`、`leaseAffirmedAt` 是比 `LEASE_TTL_MS` 更早的时间戳（`null` 不算；Orca 控制 run 不算），仅在 K > 0 时多打一行 `sweep: <K> run(s) under <root> have no owner-transfer.json, a resumable status and an expired lease (observed fields; each is resumed only if its owner is confirmed dead)`。(b) 只是观测字段的筛选，owner 是否真的死了由 resume 判定，没死就拒绝。
-- 顺序是硬的：先读 agents 表（读不了就 exit 1，一个 run 都不扫），再扫描，再打 banner，最后才逐个 run 构造 adapter（某个 run 的 adapter 建不起来，那一个 run 报 `refused`）。
+- `--max-runs` must be a **literal positive integer** (`1e3` and `2abc` are refused; no forgiving parse). It is the
+  person's ceiling for this sweep.
+- It bounds the **number of runs entered**, not attempts: each run still has its own contract's `maxAttempts`.
+- Two kinds of candidate. (a) `eligibleForContinuation` is observed as `true` in `owner-transfer.json`; the banner
+  counts only these as before. (b) A run killed outright: no `owner-transfer.json`, state `planning` / `executing` /
+  `verifying`, and `leaseAffirmedAt` older than `LEASE_TTL_MS` (`null` does not count; Orca control runs do not count).
+  For (b), when K > 0, one extra line is printed: `sweep: <K> run(s) under <root> have no owner-transfer.json, a
+  resumable status and an expired lease (observed fields; each is resumed only if its owner is confirmed dead)`. (b) is
+  only a filter over observed fields; whether the owner is really dead is decided by `resume`, which refuses if it is
+  alive.
+- The order is fixed: read the agents table first (unreadable ⇒ exit 1, no run scanned), then scan, then print the
+  banner, then build adapters one run at a time (a run whose adapter cannot be built reports `refused`).
 
 ### 3.5 `unlock`
 
 ```bash
-node dist/cli.js unlock /tmp/ccloop-runs/task-1                       # 只在锁可安全判定为死锁时删
+node dist/cli.js unlock /tmp/ccloop-runs/task-1                       # deletes only a lock it can prove dead
 node dist/cli.js unlock /tmp/ccloop-runs/task-1 --force --expect <sha256>
 ```
 
-`--force` **必须**配 `--expect <锁文件的 sha256>`，这一约束在参数解析层就成立（类型上无法表达「force 但没有 digest」）。反过来，只给 `--expect` 不给 `--force` 也会被拒——不会被静默忽略。
+`--force` **requires** `--expect <sha256 of the lock file>`; the argument parser enforces this (a "force without a
+digest" state cannot be expressed). The reverse is refused too: `--expect` without `--force` is an error, never silently
+ignored.
 
-所有拒绝一律 exit 1（fail closed）。
+Every refusal exits 1 (fail closed).
+
+### 3.6 `agents`
+
+```bash
+node dist/cli.js agents detect [--home <dir>] [--path <PATH>]
+node dist/cli.js agents validate /abs/private/agents.json
+node dist/cli.js agents models --agents /abs/private/agents.json --installation <id> [--refresh]
+```
+
+`detect` looks for codex, claude and omp on PATH and in the usual install locations and prints a draft table to stdout
+only (it writes no file; `candidates` lists what it saw and refused to pick). `validate` probes every installation's
+version and exits 1 if any entry drifted. `models` lists one installation's model catalog (a miss or a failed probe is
+printed on stderr as `ccloop-agent-catalog: …`).
 
 ---
 
-## 4. 停止一个正在跑的循环
+## 4. Stopping a running loop
 
-`SIGINT` / `SIGTERM`：
+`SIGINT` / `SIGTERM`:
 
-- **第一次**：设置停止标志，循环跑到**下一个边界**再干净退出（状态与证据完整落盘）。
-- **第二次**：立刻退出，exit code `130`。
+- **First**: set the stop flag; the loop exits cleanly at the **next boundary**, with state and evidence fully on
+  disk.
+- **Second**: exit immediately with code `130`.
 
-两个信号共用一个计数器——「Ctrl-C 之后再 kill」这条最常见的升级路径能真正走到第二档。
+Both signals share one counter, so the common escalation "Ctrl-C, then kill" really reaches the second level.
 
 ---
 
-## 5. 契约怎么写
+## 5. Writing a contract
 
-Schema 在 `src/contract/schema.ts`（zod，`.strict()`——**多一个字段就报错**）。完整示例见 `examples/v1/minimal-contract.json`。六个必填块：
+The schema is `src/contract/schema.ts` (zod, `.strict()` — **one extra field rejects the whole file**). A complete
+example is `examples/v1/minimal-contract.json`. Six required blocks:
 
 ```jsonc
 {
   "objective": {
     "taskId": "example-1",
-    "goal": "……",                 // 要做成什么
-    "successCondition": "……",     // 什么算做成了
-    "nonGoals": ["……"]            // 明确不做什么
+    "goal": "…",                  // what must be achieved
+    "successCondition": "…",      // what counts as done
+    "nonGoals": ["…"]             // what must not be done
   },
   "context": {
-    "repoPath": ".",              // worktree 从这个仓库开
-    "targetPaths": ["src"],       // 至少一个
+    "repoPath": ".",              // the worktree is opened from this repository
+    "targetPaths": ["src"],       // at least one
     "relevantDocs": [],
-    "buildTestCommands": ["npm test"],   // 至少一个
+    "buildTestCommands": ["npm test"],   // at least one
     "constraints": ["smallest possible diff"]
   },
   "executionPolicy": {
-    "autonomyLevel": "L2",        // V1 只接受 "L2"
+    "autonomyLevel": "L2",        // V1 accepts only "L2"
     "maxAttempts": 3,
     "perAttemptTimeoutMs": 300000,
     "totalRuntimeBudgetMs": 900000,
-    "tokenBudget": 200000,
-    "worktreeRequired": true,     // V1 只接受 true
-    "partialOutcomeRecoveryWindowMs": 1000   // execute 被中止后，允许它再吐一次部分结果的窗口
+    "tokenBudget": 200000,        // null = no token ceiling
+    "worktreeRequired": true,     // V1 accepts only true
+    "partialOutcomeRecoveryWindowMs": 1000   // after execute is aborted, how long it may still emit a partial result
   },
   "safetyPolicy": {
     "allowlistPaths": ["src/**"],
@@ -197,49 +253,101 @@ Schema 在 `src/contract/schema.ts`（zod，`.strict()`——**多一个字段�
   },
   "verification": {
     "verifierType": "agent",      // "command" | "agent"
-    "requiredChecks": ["……"],     // 至少一个
-    "rejectOn": ["tests fail"],   // 至少一个；交给 verifier 判断的拒绝条件，ccloop 不在 evidence 里搜它。command verifier 下不起作用——按输出拒绝请写成检查命令（如 ! grep -q 'tests fail' out.log）
+    "requiredChecks": ["…"],      // at least one
+    "rejectOn": ["tests fail"],   // at least one; handed to the verifier. ccloop does not grep evidence for it. Under a command verifier it has no effect — write a check command instead (for example ! grep -q 'tests fail' out.log)
     "evidenceRequired": ["command output"]
   },
   "escalationAndExit": {
     "escalationTargets": ["human"],
     "pauseOn": ["missing information"],
     "stopOn": ["budget exhausted"],
-    "terminalStates": [ /* 必须**恰好**是下面这五个，不多不少 */ ]
+    "terminalStates": [ /* must be exactly the five below */ ]
   }
 }
 ```
 
-**终态（五个，全集固定）**：
+**Terminal states (five, a fixed set)**:
 
-| 终态 | 含义 |
+| Terminal state | Meaning |
 |---|---|
-| `succeeded` | 验证通过 |
-| `blocked_waiting_human` | 需要人做决定，循环主动停 |
-| `exhausted` | 预算（attempt / 时间 / token）耗尽 |
-| `cancelled` | 被停止信号取消 |
-| `failed` | 失败 |
+| `succeeded` | Verification passed |
+| `blocked_waiting_human` | A person must decide; the loop stopped on purpose |
+| `exhausted` | Budget (attempts / time / tokens) ran out |
+| `cancelled` | A stop signal cancelled it |
+| `failed` | It failed |
 
-`terminalStates` 必须包含且**只**包含这五个——写少写多写重都会被 schema 拒绝。这不是配置项，是让契约把 V1 的全集显式承认下来。
+`terminalStates` must contain and **only** contain these five — too few, too many or a duplicate is a schema error. This
+is not a setting: it makes V1's whole set explicit in every contract.
+
+### 5.1 Several repositories
+
+A run may work in more than one repository (a multi-directory group). `context` then carries `repoKey` **if and only
+if** it carries `additionalRepos`:
+
+```jsonc
+"context": {
+  "repoPath": "/path/to/alpha",
+  "repoKey": "alpha",
+  "targetPaths": ["."],
+  "buildTestCommands": ["true"],
+  "additionalRepos": [
+    { "key": "beta", "repoPath": "/path/to/beta", "targetPaths": ["."],
+      "allowlistPaths": ["."], "denylistPaths": [], "requiredChecks": ["true"] }
+  ]
+}
+```
+
+- `repoPath` is the primary; `repoKey` names it in prompts, evidence and `collect`.
+- 1 to 7 extras (8 repositories in all). Every key is unique and differs from `repoKey`, and each matches
+  `^[a-z0-9_](?:[a-z0-9_.-]*[a-z0-9_])?$`.
+- `targetPaths` has at least one entry. `allowlistPaths`, `denylistPaths` and `requiredChecks` are optional per extra
+  repository.
+- Each extra repository gets its own worktree, its own path policy and its own attempt commit; §8 lists the files.
+
+A contract without these fields is byte-identical to before.
+
+### 5.2 Tool rules
+
+`executionPolicy.toolRules` is optional and strict at every level:
+
+```jsonc
+"toolRules": {
+  "commands": [{ "kind": "prefix", "value": "npm test" }],
+  "network": false,
+  "secretEnv": ["DEPLOY_TOKEN"]
+}
+```
+
+`commands` (at most 64) closes the set of shell commands an adapter may run; `kind` is `exact` or `prefix`. A value
+containing a shell separator (`&`, `|`, `;`, a newline or a carriage return) is refused, because a compound command
+cannot be one rule. `network` is a boolean; `secretEnv` names at most 32 environment variables. The mapping to each
+agent is never wider than the rule, and a rule a kind cannot enforce is reported as `detected`, `recorded-only` or
+`refused` rather than silently accepted. When the contract has rules and the run wrote `run/tool-rules.json`, `collect`
+returns it as `toolRules`.
 
 ---
 
-## 6. Adapter：真正干活的那一层
+## 6. Agents and adapters
 
-Adapter 契约（`src/runtime/types.ts`）有三个 phase：`plan` / `execute` / `verify`。ccloop 通过 stdin 发一个 JSON 请求，从 stdout 读一个 JSON 结果。
+The adapter contract (`src/runtime/types.ts`) has three phases: `plan` / `execute` / `verify`. ccloop sends one JSON
+request on stdin and reads one JSON result from stdout.
 
-### 6.0 agents 表与选择文件：CLI 唯一的入口
+### 6.1 The agents table and the selection file: the CLI's only entry
 
-> consolidation step 4（2026-10-01）删掉了 `--adapter`／`--adapter-config`。`run`／`resume`／`sweep` 带上其中任何一个都会 exit 1，报 `unknown flag --adapter`（或 `unknown flag --adapter-config`）——和别的不认识的 flag 一样，没有专门的提示。现在 CLI 只认 `--agents`。
+> Consolidation step 4 (2026-10-01) removed `--adapter` / `--adapter-config`. `run` / `resume` / `sweep` with either one
+> exits 1 with `unknown flag --adapter` (or `--adapter-config`) — like any other unknown flag, with no special hint.
+> `--agents` is the only form today.
 
-agents 表（`ccloop-agents-table-v1`）登记装了哪些 agent CLI。`node dist/cli.js agents detect` 在 PATH 和常见安装目录里找 codex／claude／omp，打印一份草稿表（只打到 stdout，不写任何文件）；挑出要的条目存成文件，再用 `agents validate` 核对版本：
+The agents table (`ccloop-agents-table-v1`) records which agent CLIs are installed. Detect them, keep the entries you
+want in a file, then validate it:
 
 ```bash
-node dist/cli.js agents detect                          # 草稿：{"schema":"ccloop-agents-detect-v1","table":{...},"candidates":[...]}
-node dist/cli.js agents validate /abs/private/agents.json   # 每条安装的 --version 是否与表里一致
+node dist/cli.js agents detect                            # draft: {"schema":"ccloop-agents-detect-v1","table":{...},"candidates":[...]}
+node dist/cli.js agents validate /abs/private/agents.json  # does each installation's --version still match the table?
 ```
 
-表文件必须是**绝对路径、就是它自己的 realpath**（macOS 上 `/tmp` 要写成 `/private/tmp`），文件和所在目录都属于当前用户、组和其他人不可写。一条 codex 安装长这样：
+The table must be an **absolute path that is its own realpath** (on macOS write `/private/tmp`, not `/tmp`), owned by
+you, with the file and its directory not group- or world-writable. A codex installation looks like this:
 
 ```json
 { "schema": "ccloop-agents-table-v1",
@@ -248,43 +356,68 @@ node dist/cli.js agents validate /abs/private/agents.json   # 每条安装的 --
     "timeoutMs": 120000, "killGraceMs": 250, "sandbox": "workspace-write", "budgetMode": "soft" } } }
 ```
 
-选择文件是 `{"selection": {...}, "configHash": "<64 位 hex>"}`。两个字段都向 ccloop 要，不要手算：
+The selection file is `{"selection": {...}, "configHash": "<64 hex>"}`. Ask ccloop for both; do not compute them:
 
 ```bash
 echo '{"agent":{"agent":"codex","model":"<model>"}}' \
   | node dist/cli.js control capabilities --agents /abs/private/agents.json
-# 回答里的 selection 与 configHash 原样抄进选择文件
+# copy the answer's selection and configHash verbatim into the selection file
 ```
 
-`run` 时 ccloop 会对着当时的表重算一遍：版本对不上报 `agent-version-drift`，hash 对不上报 `control-config-hash-mismatch`，都在读契约、动 run 目录之前。
+At `run`, ccloop recomputes both against the table it has: a version mismatch is `agent-version-drift`, a hash mismatch
+is `control-config-hash-mismatch`, and both happen before the contract is read or the run directory touched.
 
-### 6.1 `scripted`——只在测试里
+### 6.2 `scripted` — tests only
 
-`ScriptedAdapter`（`{ "frames": [ { "plan": {...}, "execution": {...}, "verification": {...} } ] }`，一个 frame 就是一次 attempt 的三段回放）还在，但它只是一个库类：测试直接 new 它喂给 `runLoop`／`resumeLoop`。CLI 已经没有选它的路——`examples/v1/scripted-adapter-config.json` 随 `--adapter` 一起删了。
+`ScriptedAdapter` (`{ "frames": [ { "plan": {...}, "execution": {...}, "verification": {...} } ] }`, one frame per
+attempt) still exists as a library class: tests construct it and pass it to `runLoop` / `resumeLoop`. The CLI cannot
+select it: `examples/v1/scripted-adapter-config.json` went away with `--adapter`.
 
-### 6.2 `claude`——真跑
+### 6.3 `claude` — real runs
 
-claude 只经由 `run --agents <table> --agent-selection <file>`（及其后的 `resume`／`sweep --agents`）或 `control` 跑。`ClaudeAgentAdapter`（`src/runtime/claude/claudeAgentAdapter.ts`）每个 phase 起一个 `scripts/claude-phase-runner.mjs` 子进程：stdin 收 JSON 请求、stdout 吐 JSON 结果。
+claude is reached only through `run --agents <table> --agent-selection <file>` (and the `resume` / `sweep --agents`
+that follow) or `control`. `ClaudeAgentAdapter` (`src/runtime/claude/claudeAgentAdapter.ts`) starts one
+`scripts/claude-phase-runner.mjs` child per phase: JSON request on stdin, JSON result on stdout.
 
-仓库自带的 `scripts/claude-phase-runner.mjs` 是参考实现，它做了这些事：
+The bundled runner is the reference implementation. It:
 
-- 在 `request.worktreePath` 里调 `claude -p --output-format stream-json --verbose --include-partial-messages --json-schema <该 phase 的 schema> <prompt>`，用 JSON Schema 硬约束模型输出。
-- 用 `git status --porcelain=v1 -z --untracked-files=all` + `git diff` 采集本次 attempt 真实改了哪些文件、diff 是什么——**不信模型自报**。
-- 从 claude 的 `usage` 里提取 token 计数（同时兼容 `input_tokens` / `inputTokens` 两种字段名），并把「字段缺失 / 类型不对 / 非有限数」各自记成不同的观测状态，而不是悄悄当 0。
-- 收到 `SIGTERM` / `SIGINT` 时，在 `partialOutcomeRecoveryWindowMs` 窗口内尽量吐出一份带 `completionStatus: "partial"` 的部分结果。
+- runs `claude -p --output-format stream-json --verbose --include-partial-messages --json-schema <phase schema>
+  <prompt>` in `request.worktreePath`, with a JSON Schema constraining the model's output;
+- collects the files this attempt actually changed and the diff with `git status --porcelain=v1 -z
+  --untracked-files=all` plus `git diff` — **it does not trust the model's own report**;
+- extracts token counts from claude's `usage` (accepting both `input_tokens` and `inputTokens`) and records a missing
+  field, a wrong type and a non-finite number as distinct observations instead of quietly reading 0;
+- on `SIGTERM` / `SIGINT`, tries to emit a partial result with `completionStatus: "partial"` within
+  `partialOutcomeRecoveryWindowMs`.
 
-runner 是固定的：`ClaudeAgentAdapter` 总是起这个 `scripts/claude-phase-runner.mjs`，不能换成别的 runner。能配的只有 agents 表里的 `installation.command`——也就是 runner 去调的那个 claude CLI。
+The runner is fixed: `ClaudeAgentAdapter` always starts this file. The only configurable part is the installation's
+`command` — the claude CLI the runner calls.
 
-### 6.3 Prompt 从哪来
+### 6.4 `codex` — real runs
 
-`src/runtime/claude/prompts.ts` 从契约机械生成三个 phase 的 prompt。其中两条硬约束值得单独指出：
+The codex adapter uses the installation's `sandbox` (`read-only` or `workspace-write`) and accepts only
+`budgetMode: "soft"`; codex budget enforcement is soft, and ccloop does not claim a strict token cap. Each phase runs
+in the installation's private homes.
 
-- executor 的 prompt 里写着 **"Never declare final success; only report what changed in this attempt."**——判定成功是 verifier 的职责，不是 executor 的。
-- verifier 的 prompt 会把 `rejectOn` 和 `evidenceRequired` 原样注入，并要求「证据缺失即 `approved: false`」。
+- A call rejected with a 429 **before any work** is tried again after 30 s, 60 s and 120 s, within the phase's time
+  limit; each call keeps its own evidence directory and a rejected one also records `rate-limit.json`.
+- A provider 5xx or a network failure is retried only for a read-only phase (plan, verify) or for a call that observed
+  no work. The contract's `perAttemptTimeoutMs` bounds the whole phase, not each try.
+- An execute phase must answer in the strict `{ "result": … }` envelope whose `result` passes the execution union; plan
+  and verify use their own phase schemas. Only an established strict execute envelope owns an opaque report subtree.
+- **Single calls** bring their own JSON Schema, and the codex provider accepts strict schemas only: every object closed,
+  every property in `required`, an optional property spelled `anyOf: [schema, null]`. ccloop projects the caller's
+  schema on the wire and removes the nulls it added, guided by the caller's own schema; the call's schema, prompt hash
+  and answer validation are unchanged. A schema strict mode cannot express (a free-form object, `oneOf`, `allOf`, `not`,
+  `$ref`, `$defs`, `patternProperties`) is refused **before the spawn** with
+  `codex-single-call-schema-unsupported:<path>:<reason>`.
 
-### 6.4 `omp`——单阶段受限调用
+### 6.5 `omp` — one restricted call per phase
 
-OMP 的安装只允许一个绝对路径可执行文件，不接受预置命令参数。模型名来自**该安装自己的配置**：`agents detect` 读取有效 `modelRoles.default` 与模型目录，只有能精确、唯一解析的 `provider/model` 才写入草稿；不同机器不共享默认模型名。也可以手写安装表，例如：
+An OMP installation accepts one absolute executable and no preset arguments. The model name comes from **that
+installation's own configuration**: `agents detect` reads the effective `modelRoles.default` and the model catalog and
+writes only an exactly and uniquely resolved `provider/model`; default model names are not shared across machines. A
+hand-written entry is allowed, for example:
 
 ```json
 { "schema": "ccloop-agents-table-v1", "installations": { "omp": {
@@ -294,37 +427,148 @@ OMP 的安装只允许一个绝对路径可执行文件，不接受预置命令�
 } } }
 ```
 
-`configDir` 与命名 `profile` 二选一；使用命名 profile 时把 `configDir` 设为 `null`。版本和模型目录以本机探测结果为准。现有安装的版本／路径更新必须仍能解析其**冻结的精确模型**，否则预览标记不可选，Apply 再次检查并拒绝漂移。
+`configDir` and a named `profile` are alternatives; with a profile, set `configDir` to `null`. Versions and catalogs
+come from the machine's own detection. Updating an existing installation's version or path must still resolve its
+**frozen exact model**, otherwise the preview marks it unselectable and Apply checks again and refuses drift.
 
-每个 plan／execute／verify 都是独立的一次 OMP print 调用。ccloop 传入该阶段的系统提示，关闭扩展、技能和会话；plan／verify 只开放 read／grep／glob，execute 才开放 edit／write／bash。OMP 即使习惯继续完成整个任务，也必须在本阶段 JSON 回答后停止；事件流中出现额外继续、禁用工具或模型切换会被拒绝。plan／verify 若改动 HEAD 或 Git 可见文件会被拒绝；execute 若自行提交、移动 HEAD 也会被拒绝。execute 的自报 `changedFiles` 必须与 Git 可见的实际变更完全一致，重命名的来源与目标都计入，再由现有路径策略检查。
+Each plan / execute / verify is a separate OMP print call. ccloop passes the phase's system prompt, with extensions,
+skills and sessions off; plan and verify may only read / grep / glob, while execute may also edit / write / bash. Even
+if OMP tends to finish the whole task, it must stop after this phase's JSON answer: extra continuation, a disabled tool
+or a model switch in the event stream is refused. plan and verify are refused if they move HEAD or a git-visible file;
+execute is refused if it commits on its own or moves HEAD. Execute's self-reported `changedFiles` must match the
+git-visible changes exactly, rename sources and targets included, and only then is the path policy applied.
 
-OMP 用量按每条完整 assistant 消息的 input、output、cacheRead、cacheWrite 相加；中断且只有部分消息时保持用量未知，不把下界当成已知总额。代理返回的零成本字段不代表模型免费。首轮采用受限 CLI 加隔离验收：Git 忽略文件和工作树外的主机副作用仍需外层隔离，不能把这套检查当作完整沙箱。OMP 的 syncskill 注入经 `ompSkillsDir`：ccloop 不开启 OMP 自身的技能发现，而是把冻结快照中每个技能的名称、单行描述与 `SKILL.md` 绝对路径列进每个阶段的系统提示，由模型按需用 read 读取；快照无效时在启动 OMP 前以 `omp-skills-source-invalid:<detail>` 失败。OMP 暂无单次调用（预估／澄清／拆分）：18.10.1 无法封顶单次调用的输出 token，`singleCallExecution` 仍为 null。
+OMP usage is the sum of input, output, cacheRead and cacheWrite of every complete assistant message; an interrupted call
+with only partial messages leaves usage unknown, and the lower bound is not reported as a known total. A zero-cost
+field from the proxy does not mean the model was free. The first round uses a restricted CLI plus isolated acceptance:
+git-ignored files and host side effects outside the worktree still need outer isolation; this is not a full sandbox.
+OMP's syncskill injection goes through `ompSkillsDir`: ccloop keeps OMP's own skill discovery off and lists each
+snapshot skill's name, one-line description and absolute `SKILL.md` path in every phase's system prompt, for the model
+to read on demand; an invalid snapshot fails before OMP starts with `omp-skills-source-invalid:<detail>`.
+
+OMP's **single call** (estimate / clarify / split) needs a catalog row that declares the `maxTokens` cap pi-ai sends,
+and whose provider is not `openrouter` (pi-ai sends no cap there unless one is given explicitly). Such a row reports
+`singleCallExecution: "v1"`; any other row reports `null`, and the call is refused as `omp-single-call-unavailable`. The
+call re-reads the catalog inside its own deadline, and a row whose cap exceeds the caller's `maxOutputTokens` is refused
+before the spawn (`omp-single-call-cap-exceeded`).
+
+### 6.6 Prompts
+
+`src/runtime/claude/prompts.ts` generates the three phase prompts mechanically from the contract. Two hard rules are
+worth naming:
+
+- The executor prompt says **"Never declare final success; only report what changed in this attempt."** Deciding
+  success belongs to the verifier.
+- The verifier prompt injects `rejectOn` and `evidenceRequired` verbatim and requires "missing evidence means
+  `approved: false`".
 
 ---
 
-## 7. Run 目录长什么样
+## 7. The control protocol
 
-以下是一次 run 跑完之后 run 目录的结构（`agent-selection.json` 由 `run --agents` 写入）：
+`control` is a local JSON-over-stdio boundary for an external controller such as Orca. The authoritative definitions are
+in `src/control/protocol.ts`; `docs/control-protocol-v1.md` is the published v1 description. Orca starts runs with a
+protocol 3 envelope.
+
+```bash
+echo '{}' | node dist/cli.js control features
+echo '{"agent":{"agent":"codex","model":"<model>"}}' \
+  | node dist/cli.js control capabilities --agents /abs/private/agents.json
+```
+
+- The method is an argument: `control <method> --agents <table>`. `features` is the one method that takes no table
+  (`control features`), because it must answer even when the table is broken.
+- Stdin holds exactly one JSON value (the method's strict payload; the method name is not repeated). A successful
+  response is one compact JSON value and a newline; diagnostics go to stderr only.
+- Exit codes: `0` the response passed its method's response schema; `2` a named protocol or agent refusal (for example
+  `control-request-invalid`, `control-method-unavailable`, `agent-version-drift`); `1` malformed CLI/JSON, IO failure,
+  handler failure or an invalid handler response.
+
+### 7.1 Methods
+
+| Method | Payload | Answers |
+|---|---|---|
+| `features` | `{}` | `{"protocol":1,"tokenPolicy":"optional-v1","savedResultRecovery":"v1","agentInstallationUpdate":"v1","transcripts":"v1"}` |
+| `capabilities` | `{"agent": <selection or null>}` | the protocol and capability record, including the selection and `configHash` |
+| `models` | `{"installation": <id>, "refresh": <bool>}` | that installation's model catalog |
+| `agent-installation-observe` / `-preview` / `-apply` | observation, preview, or apply request | what the installation is, a proposed change, and a receipt |
+| `accept` | a start envelope | `absent`, `accepted` (execution id and sealed config hash), `unknown`, or `stopped` (with evidence) |
+| `inspect` | a start envelope | the same execution status |
+| `handoff` | `{"input": <envelope>, "request": <handoff request>}` | `latched` or `complete` |
+| `collect` | `{"input": <envelope>, "afterSeq": <n>}` | new usage events, candidate, terminal state, progress, and the optional fields in §7.3 |
+| `read-evidence` | `{"input": <envelope>, "ref": <artifact ref>}` | the referenced bytes, base64 |
+| `task-results` / `read-task-result-evidence` | an envelope (and a ref) | the task result read model and its evidence |
+| `saved-result-*` | see `src/control/protocol.ts` | source eligibility, settlement, evidence |
+
+### 7.2 What the start envelope may carry
+
+Besides the contract, target, base and source directory:
+
+- `priorFailures` — up to three earlier failures, oldest first, for this run's plan and execute.
+- `operatorNote` — the person's note for **plan and execute only** (verify never gets it). `text` is 1–4096 UTF-8
+  bytes; `scope` is `next-attempt` or `remaining-attempts`. `remaining-attempts` reaches every attempt. `next-attempt`
+  reaches the first attempt this run plans or executes; a continuation that resumes at verify passes it on to the next
+  attempt, because the resumed attempt's plan and execute do not run again.
+- `additionalRepos` — one `{key, targetRepo, base}` per extra repository, in contract order. When present, its keys are
+  exactly the contract's `additionalRepos` keys.
+- `skillPluginDir` (claude), `codexSkillsDir` (codex) or `ompSkillsDir` (omp) — at most one; an invalid snapshot or a
+  kind mismatch is refused before anything is persisted.
+
+A saved-result recovery (`mode: "verify-saved-result"`) builds no prompt, so it takes neither `priorFailures` nor an
+operator note.
+
+### 7.3 What `collect` adds
+
+Top-level fields, each absent when it does not apply, so a caller that predates them sees no new bytes:
+
+- `decisions` and `debug` — what the collected candidate's attempt reported, carried opaquely.
+- `flow` — Orca's flow-step report, read the same way.
+- `failureCause` — why the run failed or was exhausted, present iff there is a terminal state that carries one.
+- `toolRules` — the run's tool-rule report, present iff the contract has rules and `run/tool-rules.json` exists.
+- `transcripts` — one entry per agent call (§7.4).
+- `dirs` — one entry per extra repository, in contract order: `{key, resultRepo, changedPaths, attemptSha}`.
+  `changedPaths` is ccloop's own observation of the current attempt (`[]` before there is one); `attemptSha` is null
+  before the attempt is published, and after a crash resume (which writes no `commits.json`).
+
+### 7.4 Live transcripts
+
+Each adapter call writes `transcript.jsonl` in its own evidence directory, capped at 128 MiB per call (an oversized or
+unterminated line is replaced by a marker line). `collect` lists calls as `{attempt, phase, seq, path, bytes, final,
+truncatedAt}`: `path` is relative to `<sourceDir>/run`, `seq` is the call's 1-based order within its phase, `truncatedAt`
+names the byte at which recording stopped, and `final` means the call wrote `outcome.json`, the run is terminal, or a
+stop proof exists — so a call whose worker died does not read as live forever. Listing never follows a symlink and never
+leaves the run directory. ccloop does not copy the bytes: the caller reads the file itself.
+
+---
+
+## 8. The run directory
+
+After a run finishes, the run directory looks like this (`agent-selection.json` is written by `run --agents`):
 
 ```
 <runDir>/
-├── loop-contract.json      # 契约的副本 —— 所以 resume 不需要 --contract
-├── agent-selection.json    # run --agents 冻结的选择（0600）—— resume／sweep 靠它重建 adapter
-├── loop-state.json         # 状态机快照（原子写）
-├── owner-record.json       # 所有权：epoch、进程实例 id、租约续期时间
-├── owner-transfer.json     # 仅在发生过所有权移交时出现
-├── events.jsonl            # 追加式事件流，一行一个事件
+├── loop-contract.json      # a copy of the contract — so resume needs no --contract
+├── agent-selection.json    # the selection run --agents froze (0600) — resume/sweep rebuild the adapter from it
+├── loop-state.json         # state-machine snapshot (atomic write)
+├── owner-record.json       # ownership: epoch, process instance id, last lease renewal
+├── owner-transfer.json     # only when ownership was handed over
+├── events.jsonl            # append-only event stream, one event per line
 ├── attempts/
 │   └── 1/
-│       ├── plan.json           # plan phase 的输出
-│       ├── execution.json      # execute phase 的输出
-│       ├── verify.json         # verify phase 的输出（含 approved / evidence）
-│       ├── diff.patch          # 这次 attempt 的实际 diff
+│       ├── plan.json           # plan phase output
+│       ├── execution.json      # execute phase output
+│       ├── verify.json         # verify phase output (approved / evidence)
+│       ├── diff.patch          # this attempt's actual diff
+│       ├── commits.json        # every published attempt commit, primary first (multi-repo runs)
+│       ├── dirs.json           # each extra repository's observed changed paths (multi-repo runs)
 │       └── stdout-stderr.log
-└── worktrees/                  # 跑完之后是空的，见下
+├── run/
+│   ├── tool-rules.json         # only when the contract has toolRules
+│   ├── <kind>/<attempt>/<phase>/call-*/   # each call's evidence, transcript.jsonl included
+└── worktrees/                  # empty after a normal run, see below
 ```
 
-`events.jsonl` 长这样：
+`events.jsonl` looks like this:
 
 ```jsonc
 {"type":"loop_planning","at":"…","detail":"run initialized and ready to plan"}
@@ -334,54 +578,59 @@ OMP 用量按每条完整 assistant 消息的 input、output、cacheRead、cache
 {"type":"loop_succeeded","at":"…","detail":"success condition satisfied"}
 ```
 
-**关于 `worktrees/`**：每次 attempt 会在 `worktrees/attempt-<n>/` 开一个 detached worktree
-（`git worktree add --detach`，cwd 是 `context.repoPath`），attempt 结束后 ccloop 会
-`git worktree remove --force` 掉它。所以正常跑完之后这个目录是空的——里面留着东西说明有 attempt 没走完清理。
-主工作树全程不被触碰（实测：跑完之后 `git worktree list` 在源仓库里没有多出任何条目）。
+**About `worktrees/`**: each attempt opens a detached worktree at `worktrees/attempt-<n>/` (`git worktree add --detach`
+with `context.repoPath` as cwd) and, when the attempt ends, ccloop removes it with `git worktree remove --force`. A
+normal run therefore leaves this directory empty; anything left there means an attempt did not finish cleaning up. The
+main worktree is never touched (measured: after a run, `git worktree list` in the source repository gains no entry).
 
-### Attempt commit：worktree 被移除之前，改动会先被提交并钉上一个 ref
+### Attempt commits: before the worktree goes away, the work is committed and pinned to a ref
 
-`git worktree remove --force` 之前，ccloop 会把 attempt worktree 里的东西 `git add -A` ＋ commit，
-并写一个 ref 让它在 worktree 消失之后仍然可达：
+Before `git worktree remove --force`, ccloop runs `git add -A` and commits the attempt worktree, then writes a ref so
+the commit stays reachable after the worktree is gone:
 
 ```
 refs/ccloop/<run-id>/attempts/<n>
 ```
 
-`<run-id>` 是 run 目录的 basename，`<n>` 与 `attempts/<n>/` 那个产物目录一一对应。
-attempt 的**基点就是这笔提交的第一个父提交**，所以想知道某次 attempt 改了什么：
+`<run-id>` is the basename of the run directory and `<n>` matches the `attempts/<n>/` artifact directory. An attempt's
+**base is the first parent of that commit**, so to see what an attempt changed:
 
 ```bash
 git for-each-ref --format='%(refname) %(objectname)' 'refs/ccloop/<run-id>/attempts/'
 git diff --name-only <sha>^ <sha>
 ```
 
-**什么都没改的 attempt 也会有一笔提交**（`--allow-empty`）。所以「**有 ref 但 diff 为空**」＝
-agent 什么都没干，「**没有 ref**」＝发布失败 —— 这两件事不是一回事，而后者在 `events.jsonl` 里有
-`attempt_commit_publish_failed`。**发布成功不记事件**：ref 本身就是产物，
-`git for-each-ref` 已经能回答「发布了没有」，再记一条只是重复。
+**An attempt that changed nothing still gets a commit** (`--allow-empty`). So "**a ref with an empty diff**" means the
+agent did nothing, and "**no ref**" means publishing failed — they are not the same thing, and the latter leaves
+`attempt_commit_publish_failed` in `events.jsonl`. **Publishing success records no event**: the ref is the artifact,
+and `git for-each-ref` already answers "was it published?"; one more line would only repeat it.
 
-提交身份用 `-c user.name=ccloop -c user.email=ccloop@invalid` 显式传，不依赖环境里的 git config ——
-一次性 clone 与 CI 容器常常没有可用身份，那正是这个功能最该工作的场景。
+The identity is passed explicitly with `-c user.name=ccloop -c user.email=ccloop@invalid`, never taken from the
+environment's git config — a one-off clone or a CI container often has none, and that is exactly where this feature
+matters most.
 
-`attempts/<n>/diff.patch` **一个字节没变**，它仍然是给人看的证据。但它**不是**给机器用的那一份：
-它那两处 `git diff` 都没有 `--binary`，且 `readGitDiff` 的 catch 只对 `code === 1` 返回 stdout、
-其余一律返回空串。
+`attempts/<n>/diff.patch` is **unchanged, byte for byte**; it remains evidence for a person. It is **not** the
+machine-readable copy: both of its `git diff` calls lack `--binary`, and `readGitDiff`'s catch returns stdout only for
+`code === 1` and an empty string for everything else.
 
-**已知代价**（都不是 bug，是这个设计换来的）：
+In a multi-repo attempt, each extra repository is committed and pinned the same way under its own key; `commits.json`
+lists every published commit, primary first.
 
-- **ref 会堆积。** 一个 attempt 一个 ref，ccloop **不会**清理它们 —— 删 ref 不可逆，按铁律要人单独授权。
-  run 多了之后 `git for-each-ref refs/ccloop/` 会很长。
-- **对象库会变大。** attempt 的改动此前随 worktree 一起消失，现在有 ref 拽着，gc 不会收。
-- **被 gitignore 的文件不会进去。** `git add -A` 尊重 `.gitignore`。
-- **临时文件会进去。** agent 在 worktree 里留下的任何东西都会进这笔提交。`diff.patch` 本来也收，
-  所以这不是新问题，但值得知道。
+**Known costs** (not bugs; the price of this design):
 
-`loop-state.json` 里的 `RunState`：
+- **Refs accumulate.** One ref per attempt; ccloop **does not** clean them up — deleting a ref is irreversible and needs
+  a person's separate authorization. After many runs, `git for-each-ref refs/ccloop/` gets long.
+- **The object store grows.** An attempt's changes used to vanish with its worktree; a ref now holds them, so `gc` will
+  not collect them.
+- **Git-ignored files do not go in.** `git add -A` respects `.gitignore`.
+- **Temporary files do go in.** Anything the agent left in the worktree becomes part of that commit. `diff.patch`
+  already collected those too, so this is not new, but it is worth knowing.
+
+`RunState` in `loop-state.json`:
 
 ```ts
 {
-  status,               // queued | planning | executing | verifying | 五个终态
+  status,               // queued | planning | executing | verifying | one of the five terminal states
   currentAttempt, attemptsUsed, lastTransitionAt,
   waitingOnHuman, stopReason,
   budgetSnapshot: { attemptsRemaining, timeRemainingMs, tokenBudgetRemaining },
@@ -389,74 +638,89 @@ agent 什么都没干，「**没有 ref**」＝发布失败 —— 这两件事�
 }
 ```
 
-`recentFailures` 里那个三元组叫 **failure fingerprint**：循环靠它识别「又栽在同一个地方」，而不是靠自然语言比对。
+The triple in `recentFailures` is a **failure fingerprint**: the loop recognises "stuck in the same place" by it, not
+by comparing prose.
 
 ---
 
-## 8. 所有权与租约（为什么这套代码这么重）
+## 9. Ownership and leases (why this code is heavy)
 
-多个 ccloop 进程可能同时看到同一个 run 目录（比如两个 sweep、或一次 resume 撞上一个还活着的 run）。ccloop 的处理方式是：
+Several ccloop processes may see the same run directory at once (two sweeps, or a resume meeting a live run). ccloop
+handles it like this:
 
-- **租约 + 心跳**：run 的所有者持续续租；心跳停了，别的进程才可能接管。
-- **owner-transfer 锁**：接管是一次跨进程加锁的事务（acquire → recover → 三次 rename → release），不是一次「谁先写谁赢」。
-- **fail closed**：碰到读不懂的锁，宁可抛错停下，也不假装它是死锁然后删掉它。`unlock --force` 需要人给出锁文件的 sha256——**人亲手确认过这个锁是那个锁**。
+- **Lease + heartbeat**: the run's owner keeps renewing its lease; only after the heartbeat stops may another process
+  take over.
+- **owner-transfer lock**: taking over is a cross-process locked transaction (acquire → recover → three renames →
+  release), not a "whoever writes first wins".
+- **fail closed**: a lock it cannot read makes it throw and stop rather than pretend the lock is dead and delete it.
+  `unlock --force` requires a person to supply the lock file's sha256 — **a person confirmed that this lock is that
+  lock**.
 
-如果你只是单进程跑一个 run，这些你都感觉不到。它们存在是因为并发场景下「悄悄抢走一个还活着的 run」的代价是数据丢失。
+If you run one run in one process, you never notice any of this. It exists because, under concurrency, quietly stealing
+a live run costs data loss.
 
 ---
 
-## 9. 跑通一次（codex）
+## 10. One run end to end (codex)
 
-⚠️ **CLI 上没有不调模型的跑法了。** 以前这里用 `--adapter scripted`，它随 consolidation step 4（2026-10-01）删了。测试套件不花钱，是因为它把 agents 表的 `command` 指向假的 codex（`tests/fixtures/fake-codex.mjs`）——那是测试夹具，不是给用户的生产路径。下面这条会真调 codex，**先确认你能承受它的 token 开销**。
+⚠️ **The CLI has no way to run without calling a model.** It used to be `--adapter scripted`, removed with consolidation
+step 4 (2026-10-01). The test suite spends nothing because it points the agents table's `command` at a fake codex
+(`tests/fixtures/fake-codex.mjs`) — a test fixture, not a production path for users. The command below really calls
+codex; **make sure you can afford its token spend first**.
 
 ```bash
 npm install && npm run build
-PRIV=$(cd "$(mktemp -d)" && pwd -P)       # 表必须在自己的 realpath 上
+PRIV=$(cd "$(mktemp -d)" && pwd -P)       # the table must be on its own realpath
 RUN_DIR="$PRIV/runs/run-1"
 
-node dist/cli.js agents detect             # 从草稿里取 codex 那条，存成 "$PRIV/agents.json"（见 §6.0）
+node dist/cli.js agents detect             # keep the codex entry as "$PRIV/agents.json" (see §6.1)
 chmod 600 "$PRIV/agents.json"
 echo '{"agent":{"agent":"codex","model":"<model>"}}' \
   | node dist/cli.js control capabilities --agents "$PRIV/agents.json"
-# 把回答里的 selection 与 configHash 存成 "$PRIV/selection.json"：{"selection":…,"configHash":…}
+# save the answer's selection and configHash as "$PRIV/selection.json": {"selection":…,"configHash":…}
 
 node dist/cli.js run \
   --contract examples/v1/minimal-contract.json \
   --run-dir "$RUN_DIR" \
   --agents "$PRIV/agents.json" \
   --agent-selection "$PRIV/selection.json"
-echo "exit=$?"        # 期望 0
+echo "exit=$?"        # expect 0
 
-cat "$RUN_DIR/loop-state.json"          # status 应为 succeeded
+cat "$RUN_DIR/loop-state.json"          # status should be succeeded
 cat "$RUN_DIR/events.jsonl"
 ls  "$RUN_DIR/attempts/1"               # plan.json execution.json verify.json diff.patch …
-cat "$RUN_DIR/agent-selection.json"     # run --agents 冻结的选择，resume／sweep 用它
+cat "$RUN_DIR/agent-selection.json"     # the selection run --agents froze; resume/sweep uses it
 node dist/cli.js ls "$(dirname "$RUN_DIR")"
 ```
 
-`--run-dir` 指向一个**还不存在**的路径也可以，ccloop 会建。
+A `--run-dir` that does **not** exist yet is fine; ccloop creates it.
 
-⚠️ `minimal-contract.json` 里 `context.repoPath` 是 `"."`，所以请在一个 **git 仓库**里跑，否则 `git worktree add` 会失败。
+⚠️ `minimal-contract.json` has `context.repoPath` set to `"."`, so run this inside a **git repository**, otherwise `git
+worktree add` fails.
 
-想换 claude：表里加一条 claude 安装，选择文件里 `agent` 换成它的 id（见 §6.2）。
-
----
-
-## 10. 已知边界
-
-- **V1 不支持在已有 run 目录上重新 `run`**——只能 `resume`。
-- **契约 schema 是 `.strict()` 的**：多写一个字段就整份拒绝。这是故意的。
-- **`ls` 报的是观测，不是结论**。别把 `eligibleForContinuation=true` 当成「可以放心续跑」。
-- **成本不由 ccloop 估算**。它记录 adapter 报上来的 usage；拿不到就记成「拿不到」，不猜。
-- 整套测试目前在 macOS 上绿；**Linux 上有已知红项**，见 `docs/handoff/handoff.md`。
+To use claude instead: add a claude installation to the table and change `agent` in the selection file to its id
+(§6.3).
 
 ---
 
-## 11. 更多材料
+## 11. Known limits
 
-| 想知道什么 | 看哪里 |
+- **V1 cannot `run` again on an existing run directory** — only `resume`.
+- **The contract schema is `.strict()`**: one extra field rejects the whole file. That is deliberate.
+- **`ls` reports observations, not conclusions.** Do not read `eligibleForContinuation=true` as "safe to continue".
+- **ccloop does not estimate cost.** It records the usage an adapter reports; when there is none it records "not
+  available" rather than guessing.
+- The whole suite is currently green on macOS; **Linux has known failures** — see `docs/handoff/handoff.md`.
+
+---
+
+## 12. More material
+
+| What you want | Where |
 |---|---|
-| 当前进度、待办、历史裁决 | `docs/handoff/handoff.md`（入口）、`.superpowers/sdd/**/progress.md`（真相源） |
-| 每个特性的设计与实施计划 | `docs/superpowers/specs/`、`docs/superpowers/plans/` |
-| 循环工程的方法论背景 | `docs/ref/LoopEngineering.md`、`docs/ref/loop-how-to-stop.md` |
-| 本仓库的协作规则 | `CLAUDE.md` |
+| Current progress, open items, past rulings | `docs/handoff/handoff.md` (entry point), `.superpowers/sdd/**/progress.md` (source of truth) |
+| Design and plan for each feature | `docs/superpowers/specs/`, `docs/superpowers/plans/` |
+| The control protocol | `src/control/protocol.ts`, `docs/control-protocol-v1.md` |
+| The codex adapter | `src/runtime/codex/`, `docs/codex-adapter.md` |
+| Background on loop engineering | `docs/ref/LoopEngineering.md`, `docs/ref/loop-how-to-stop.md` |
+| This repository's collaboration rules | `CLAUDE.md` |
