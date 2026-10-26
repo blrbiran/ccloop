@@ -2,9 +2,13 @@
 // Live transcript (Orca spec docs/superpowers/specs/2026-10-23-live-transcript-design.md §10.2.3, criterion L7): on demand,
 // never part of `npm test`. A fake codex, omp and claude each print about 1 GiB of stream lines (each ≤ 1 MiB). The process
 // that reads the stream -- the phase process for codex and omp (runCodexPhase / runOmpPhase from dist/, so run
-// `npm run build` first), the runner for claude -- runs under `node --max-old-space-size=64` and samples its own
-// heapUsed+external+arrayBuffers every 100 ms. Exit 0 when every peak's growth over the process's baseline is ≤ 32 MiB and
-// every call ran to the end; non-zero over the limit, on an OOM, or when a call did not complete.
+// `npm run build` first), the runner for claude -- runs under `node --max-old-space-size=64 --max-semi-space-size=1` and
+// samples its own heapUsed+external+arrayBuffers every 100 ms. Exit 0 when every peak's growth over the process's baseline
+// is ≤ 32 MiB and every call ran to the end; non-zero over the limit, on an OOM, or when a call did not complete.
+// The semi-space pin is measured, not cosmetic: on Node v24.13.0 (2026-10-26) `--max-old-space-size=64` alone leaves
+// v8.getHeapStatistics().heap_size_limit at 256 MB, because the young generation is auto-sized; the pin brings it to
+// 67 MB. The claude runner's live heap after a major GC was 4.6 MB, so its old 62-98 MiB "growth" was young-generation
+// slack, not retention. The 32 MiB threshold is unchanged.
 // The bound is on growth (spec §4.3: "leaves the phase's RSS growth under 32 MiB"), not on the absolute peak L7 words:
 // measured at 87bb4b5, the codex phase process already holds ~45 MiB of loaded modules before any stream, with 8 MiB of
 // output as with 1 GiB. The baseline is sampled after the phase module is imported (codex, omp) or when the runner
@@ -90,14 +94,14 @@ for (const kind of runtimes) {
   let result, completed;
   if (kind === "claude") {
     const transcript = join(dir, "transcript.jsonl");
-    result = spawnSync(process.execPath, ["--max-old-space-size=64", "--import", sampler, join(ROOT, "scripts/claude-phase-runner.mjs")], {
+    result = spawnSync(process.execPath, ["--max-old-space-size=64", "--max-semi-space-size=1", "--import", sampler, join(ROOT, "scripts/claude-phase-runner.mjs")], {
       cwd: dir, input: JSON.stringify({ phase: "plan", prompt: "p", attempt: 1, runDir: dir, worktreePath: dir }),
       env: { ...env, CCLOOP_CLAUDE_COMMAND: JSON.stringify([process.execPath, fake]), CCLOOP_CLAUDE_EXTRA_ARGS: "[]", CCLOOP_CLAUDE_TRANSCRIPT_PATH: transcript },
       maxBuffer: 64 * 1024 * 1024,
     });
     completed = result.status === 0 && JSON.parse(String(result.stdout)).summary === "perf";
   } else {
-    result = spawnSync(process.execPath, ["--max-old-space-size=64", "--import", sampler, driver, kind, fake, dir], { cwd: dir, env, maxBuffer: 1024 * 1024 });
+    result = spawnSync(process.execPath, ["--max-old-space-size=64", "--max-semi-space-size=1", "--import", sampler, driver, kind, fake, dir], { cwd: dir, env, maxBuffer: 1024 * 1024 });
     completed = result.status === 0 && String(result.stdout) === "completed";
   }
   let measured = null;
