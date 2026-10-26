@@ -6,6 +6,7 @@ import type { InstallationV1 } from "../../agents/types.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
 import type { AttemptContext, RuntimeAdapter, SingleCallRequest, SingleCallResult } from "../types.js";
 import { addressableMcpServer, codexSingleCallArgs, codexSingleCallHome, effectiveCodexHome } from "./codexSingleCall.js";
+import { SingleCallSchemaUnsupported, strictSingleCallSchema, stripOptionalNulls } from "./strictSingleCall.js";
 import { codexResultOf, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
 import { runCodexPhase, type PhaseOutcome } from "./runCodexPhase.js";
 import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
@@ -180,6 +181,14 @@ export class CodexAdapter implements RuntimeAdapter {
    */
   async singleCall(request: SingleCallRequest): Promise<SingleCallResult> {
     if (this.installation === undefined) throw new Error("single-call-unsupported");
+    // The provider demands a strict schema; a caller's schema that leaves keys optional is projected on the wire only,
+    // and a shape strict mode cannot express is refused before the spawn rather than sent and refused by the provider.
+    let wireSchema: Record<string, unknown>;
+    try { wireSchema = strictSingleCallSchema(request.responseSchema); }
+    catch (error) {
+      if (error instanceof SingleCallSchemaUnsupported) throw Object.assign(error, { neverStarted: true });
+      throw error;
+    }
     const deadline = Date.now() + Math.min(request.timeoutMs, this.config.timeoutMs);
     const catalog = await readAgentCatalog(this.installation, { deadline, signal: request.signal, log: (line) => { process.stderr.write(`${line}\n`); } });
     if (catalog.codexFeatures === null) {
@@ -202,7 +211,7 @@ export class CodexAdapter implements RuntimeAdapter {
     const context = { runDir: request.runDir, attempt: 1, worktreePath: request.cwd, abortSignal: request.signal, onProcessRegistered: request.onProcessRegistered,
       state: { budgetSnapshot: { timeRemainingMs: Math.max(1, deadline - Date.now()) } } } as unknown as AttemptContext;
     const outcome = await runCodexPhase(this.config, { phase: "single-call", prompt: request.prompt, context, spawn: {
-      schema: request.responseSchema, env: { ...process.env, HOME: isolated.home, CODEX_HOME: isolated.codexHome },
+      schema: wireSchema, env: { ...process.env, HOME: isolated.home, CODEX_HOME: isolated.codexHome },
       args: ({ schemaPath, finalPath }) => codexSingleCallArgs({ model: this.config.model, cwd: request.cwd, schemaPath, finalPath, features, mcpServers }),
     } });
     if (outcome.reason !== "completed") {
@@ -216,6 +225,9 @@ export class CodexAdapter implements RuntimeAdapter {
           outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {});
       throw neverStarted ? Object.assign(error, { neverStarted: true }) : error;
     }
-    return outcome.stream.singleCall.value(outcome.final, this.config.model, outcome.evidenceDir);
+    const result = outcome.stream.singleCall.value(outcome.final, this.config.model, outcome.evidenceDir);
+    // The projection made the caller's optional keys required-and-nullable, so a null for one is an absent key, not an
+    // answer; the caller's schema decides which ones (strictSingleCall.ts).
+    return { ...result, output: stripOptionalNulls(result.output, request.responseSchema) };
   }
 }

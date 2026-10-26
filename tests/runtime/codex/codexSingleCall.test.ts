@@ -367,6 +367,35 @@ describe("codex single call (spec §6.1)", { timeout: 30_000 }, () => {
     expect((await readAgentCatalog(w.config.installation)).source).toBe("probe");
   });
 
+  // Every-agent requirement chain (Orca spec 2026-10-15 §6.1): the provider accepts strict schemas only, so a caller's
+  // optional key is projected to required-and-nullable on the wire and removed from the answer again. The request's own
+  // schema -- what Orca hashes and validates the answer with -- is unchanged. Measured on the O9 run of 2026-10-26:
+  // "Invalid schema for response_format 'codex_output_schema': 'schema.required' is required to include every key in properties."
+  it("C8.12: projects an optional key onto the wire and removes its null from the answer", async () => {
+    const w = await world({ final: JSON.stringify({ answer: "42", note: null }) });
+    const responseSchema = { type: "object", additionalProperties: false, required: ["answer"], properties: { answer: { type: "string" }, note: { type: "string" } } };
+    expect(await w.adapter.singleCall!({ ...w.request, responseSchema })).toMatchObject({ output: { answer: "42" } });
+    const [call] = await readdir(join(w.request.runDir, "codex", "1", "single-call"));
+    const wire = JSON.parse(readFileSync(join(w.request.runDir, "codex", "1", "single-call", call!, "schema.json"), "utf8")) as { required: string[]; properties: Record<string, unknown> };
+    expect(wire.required).toEqual(["answer", "note"]);
+    expect(wire.properties.note).toEqual({ anyOf: [{ type: "string" }, { type: "null" }] });
+    expect(responseSchema).toEqual({ type: "object", additionalProperties: false, required: ["answer"], properties: { answer: { type: "string" }, note: { type: "string" } } });
+  });
+
+  // A free-form record cannot be said in the strict dialect; the refusal comes before the catalog read and the spawn, so
+  // nothing was sent and nothing is booked (the provider's own answer to it was a 400 after the call began).
+  it("C8.13: refuses a schema strict mode cannot express, before the catalog read and the spawn", async () => {
+    const w = await world();
+    const responseSchema = { type: "object", additionalProperties: false, required: ["candidates"], properties: {
+      candidates: { type: "object", additionalProperties: { type: "object", additionalProperties: false, required: ["items"], properties: { items: { type: "array", items: { type: "string" } } } } },
+    } };
+    const error = await failure(w.adapter.singleCall!({ ...w.request, responseSchema }));
+    expect(error).toMatchObject({ code: "codex-single-call-schema-unsupported", neverStarted: true, path: "root.properties.candidates" });
+    expect(observedTokensOf(error)).toBe(0);
+    expect(existsSync(`${w.marker}.calls`)).toBe(false);
+    expect(existsSync(`${w.marker}.catalog-calls`)).toBe(false);
+  });
+
   it("C8.6: an answer that is not one object is single-call-output-invalid with its usage", async () => {
     const w = await world({ final: "not json" });
     const error = await failure(w.adapter.singleCall!(w.request));
