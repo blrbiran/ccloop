@@ -156,9 +156,9 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-26，Orca 会话 `ffec7b28`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-27，Orca 会话 `a98b77d2`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。Orca 已 **repin 到本仓 `b97d5bd`**（历史锚点；主题行 `chore(deps): repin ccloop to b97d5bd for the codex strict single call`），主仓已 `npm ci` 装上，`verify:ccloop-pin` 绿。三仓 main 均已推（`ls-remote` 现测；本文不写当前哈希）。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。Orca 已 **repin 到本仓 `b97d5bd`**（历史锚点；主题行 `chore(deps): repin ccloop to b97d5bd for the codex strict single call`），主仓已 `npm ci` 装上，`verify:ccloop-pin` 绿。2026-10-27 Orca 又合入面板小缺口批（loop 卡计数含 document checks；会话 `a98b77d2`），**未动本仓契约、判据或 pin**。三仓 main 均已推（`ls-remote` 现测；本文不写当前哈希）。
 - **H7 多仓已合入 Orca main 并装上**（Orca 消费 `additionalRepos`/`dirs`）。O9 真 agent 验收：codex（`o9-codex-7`，pin 上 20/20）与 omp（`o9-omp-5`，旧 pin `fe985b0`；两 pin 间代码只有 `14e2080`，codex-only）都过；claude 等 2026-10-27 09:00 CST 额度重置＋人点头。证据 `/private/tmp/orca-ffec7b28/o9-*`。
 - **2026-10-26 文档轮**：三仓 README 各以英文重写（本仓主题行 `docs(readme): rewrite the operator reference`）；Orca 的 `skills/orca-control` 按当前 CLI 重写（`~/.claude/skills` 是指向仓内的软链，改仓即生效）；ccmem 另修 `forget`／`pin` 未接线的 verb（ccmem handoff §1.0000）。都不触碰本仓契约与判据。
 - ⚠️ 沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（软链进私有 CODEX_HOME 的结果，登记未修；2026-10-26 起 Orca 每轮跑完按人裁清）。
