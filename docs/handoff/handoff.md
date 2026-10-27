@@ -41,15 +41,20 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 本轮（2026-10-27，Orca 会话 `7753e97d`）—— 先读这一节
+### 本轮（2026-10-28，Orca 会话 `3cd8fb02`）—— 先读这一节
 
-- **已在本地 main、未推**（主题行起 `fix(codex): the strict fold follows every branch the projection closed…`，至 `test(omp): a duplicate tool id carries no forbidden-tool detail (mutation MI)`，8 笔；来自 Orca 对接手 agent 工作的独立审阅＋测试者 #60）：
+- **已在 main、已推**：`fix(omp): name omp's own stream watchdog exit omp-stalled …`、`test(omp): M0 stream-watchdog transcripts pin …`（测试者 #62，细节见文末 Orca 单节）。没改任何既有判据；变异 M1–M8、M9c 在 clone 里见红并 0 字节还原（日志 `/private/tmp/orca-3cd8fb02/ccloop62/mutations.log`）。
+- **门**：typecheck／build 0；全量 2429 条 2427 过，2 红＝名单内 `runLoop`「persists phase usage evidence」＋名单外 `ompPhase`「keeps a stopped phase's completed-message tokens diagnostic」1 s 轮询超时（负载 39，单跑 21/21，phase 路径未动 ⇒ 判负载，可考虑登记进 known-load-flakes）。
+
+### 上一轮（2026-10-27，Orca 会话 `7753e97d`）
+
+- **已在 main、已推，Orca 已 pin**（人推于 2026-10-27，Orca 会话 `3cd8fb02` repin）（主题行起 `fix(codex): the strict fold follows every branch the projection closed…`，至 `test(omp): a duplicate tool id carries no forbidden-tool detail (mutation MI)`，8 笔；来自 Orca 对接手 agent 工作的独立审阅＋测试者 #60）：
   - **codex strict 单调用投影**：投影与回折读同一份展平的 `anyOf` 分支（可空数组／对象分支里的可选键 null 也会被折掉）；`admitsNull` 按 JSON Schema 语义（`enum` 含 null、`const:null`、`{}`）；两个对象分支或两个数组分支的 `anyOf` 拒；`prefixItems`、`if/then/else`、`dependent*`、`unevaluated*`、与 properties 并列的 `anyOf`、`required` 无对应 property 都在 spawn 前以 `codex-single-call-schema-unsupported` 拒。Orca 现有 12 个单调用 schema 投影后的 wire schema 与改前 sha256 逐个相同。
   - **omp**：phase fold 补了 toolCall-only stop 与「答案后的工具」两条判据、删掉死守卫；**single call 的空停续跑**原来被算成第二个请求（`omp-single-call-multiple-requests`），现在照 phase fold 的做法只记 token 不记消息。
   - **#60 plan 阶段工具**（spec `docs/superpowers/specs/2026-10-27-plan-phase-tools-design.md`）：`ompPhaseTools(phase)` 一份名单喂 `--tools`、fold 与 plan 提示；plan 提示写明只有 read／grep／glob，写、shell、MCP（含 `xd://`）要等 execute；plan 里调了缺的工具 ⇒ `failureCause: tool-rule-violated`（detail 带工具名与 `args.path`），**不重试**（不在 RETRYABLE_CAUSES，Orca 阶梯豁免）。复用已有 cause 是因为 Orca 面板把名单外的 cause 一律显示成 unknown。argv 与 goldens 不变；`src/runtime/failureCause.ts:12-13` 加了 ERRATUM，工具规则 spec 追加了 Correction 节。
   - **没改任何既有判据**（全是新增）；变异逐条在 `git clone --local` 副本见红并 0 字节还原（日志 `/private/tmp/orca-7753e97d/fix-strict-and-plan-tools-mut.log`）。
 - **门**（合入后在 main 上，负载约 35）：typecheck／build RC 0；全量 2420 条 2413 过、7 红，`check-known-reds` RC 1——名单内 2 条（`runLoop.integration`「persists phase usage evidence」、`codexAdapter` watchdog），名单外 5 条（`updates.test.ts` 4 条 5 s／20 s 超时、`codexWatchdog`「double-space start identities」）；4 个红文件单跑全部 RC 0，这两处代码本轮未动 ⇒ 判负载。日志 `/private/tmp/orca-7753e97d/ccloop-main-{vitest.json,reds.log,solo-*.log}`。
-- **待人**：push ccloop main；之后 Orca 才能 repin 到这批（Orca 当前 pin 仍是 `b97d5bd`，历史锚点）。Orca 在旧 pin 上已经能把 `omp-phase-tool-forbidden` 解释成下一步文案（Orca 主题行 `fix(web): word omp's forbidden-tool stop as the run's next step`）。
+- ~~待人：push 后 Orca repin~~ **已结清**（Orca 会话 `3cd8fb02`）。
 
 ### 上一轮（2026-10-24 起，Orca 会话 `ffec7b28`；最近更新 2026-10-26）
 
@@ -166,10 +171,10 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-27 晚，Orca 会话 `3cd8fb02`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-28，Orca 会话 `3cd8fb02`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。**Orca 现 pin 本仓 `ae6fb71`**（主题行 `chore(deps): repin ccloop to ae6fb71 …`，已合入 Orca main 并装上）⇒ 本仓「本轮」那 8 笔（strict 投影、omp 单调用空停续跑、#60 plan 工具与 `tool-rule-violated`）已在 Orca 生效。
-- **下一件会动本仓**：Orca spec `docs/superpowers/specs/2026-10-27-single-call-unknown-usage-settlement-design.md`（测试者 #62）的 C1（omp 自己的 stream watchdog 错误 ⇒ `failureCause: stalled`）与 C2（单调用记录可选 `usageLowerBound`，只在 >0 时出现）。§3.1 有 omp 18.10.1 零成本实测（错误在 assistant `message_end.message.errorMessage`、`stopReason:"error"`；无 usage 块时 usage 全 0；首事件超时带 overlay 也发两次请求）；原始转录 `/private/tmp/orca-3cd8fb02/m0/`。**Orca 先接受新键，本仓再发**。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。**Orca 现 pin 本仓 `e25381f`**（主题行 `chore(deps): repin ccloop to e25381f …`，已合入 Orca main 并装上）。
+- **本仓本轮（已在 main、已推）**：主题行 `fix(omp): name omp's own stream watchdog exit omp-stalled and carry the usage lower bound in the single-call record` 与 `test(omp): M0 stream-watchdog transcripts pin …`（测试者 #62；Orca spec `2026-10-27-single-call-unknown-usage-settlement-design.md` §9 R5）：omp 单调用 `exit-error` 且最后一条 assistant 消息是 omp 自己的 stream watchdog 错误 ⇒ 记录 `errorCode: "omp-stalled"`；记录可选 `usageLowerBound:{tokens}`，只在 >0 时出现（全 0 usage 视为没观测到），从不入账。phase 路径不变（`ompAdapter.ts` phase 注释加了 ERRATUM）。新判据 `tests/control/ompSingleCallStall.test.ts`（9 条，夹具 `tests/fixtures/omp-m0/`，来自 omp 18.10.1 零成本实测），没改任何既有判据；两个互相遮蔽的「>0」守卫登记为冗余。登记未修：aborted 单调用也会带下限（Orca 审阅 m5）。
 - O9 多仓真 agent 验收：codex（`o9-codex-7`）、omp（`o9-omp-5`）、**claude（2026-10-27 `/private/tmp/orca-7753e97d/o9-claude-2/`，22/22，工具报 $0.7925112）**都已通过，都跑在 `b97d5bd` 的 build 上（omp 那次在 `fe985b0`，两者之间只有 codex 单调用投影）。
 - Orca 本轮审阅并修了接手 agent 的六条线（多目录落地、流程暂停／留言、定时、转录脱敏、目录放置、拆分指令 v2），**没动本仓契约**。
 - ⚠️ 沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（登记未修，Orca 每轮跑完按人裁清）。
