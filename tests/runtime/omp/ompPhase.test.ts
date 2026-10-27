@@ -260,6 +260,49 @@ describe("OMP runtime phase", () => {
     expect(plan).toMatchObject({ summary: "two empty stops", primaryTargetPaths: ["answer.txt"], tokenUsage: 34 });
   });
 
+  // Review of 2026-10-27 (Orca session 7753e97d): omp's isActionableContent counts a toolCall block as action, so a stop that
+  // carries only one is a real stop, not an empty one omp retries. A second agent_start after it is a continuation the phase
+  // never asked for -- folding it in would accept a second answer the plan was not given.
+  it("treats a toolCall-only stop as the answer, so an agent_start after it is a continuation", () => {
+    const toolStop = {
+      role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read", arguments: { path: "answer.txt" } }],
+      provider: "gateway", model: "model-a", stopReason: "stop",
+      usage: { input: 3, output: 1, cacheRead: 1, cacheWrite: 0, totalTokens: 5 },
+    };
+    const answer = {
+      role: "assistant", content: [{ type: "text", text: JSON.stringify({ summary: "after a tool stop", primaryTargetPaths: ["answer.txt"] }) }],
+      provider: "gateway", model: "model-a", stopReason: "stop",
+      usage: { input: 8, output: 2, cacheRead: 3, cacheWrite: 1, totalTokens: 14 },
+    };
+    const events = [
+      { type: "agent_start" },
+      { type: "message_end", message: toolStop },
+      { type: "turn_end" },
+      { type: "agent_start" },
+      { type: "message_end", message: answer },
+      { type: "turn_end" },
+      { type: "agent_end", isTerminal: true, yielded: true },
+    ].map((row) => JSON.stringify(row)).join("\n");
+    expect(() => decodeOmpPhase("plan", events, "gateway/model-a")).toThrow("omp-phase-continuation");
+  });
+
+  // A tool that starts after the phase's answer is a tool the phase ran unasked -- named as such, so a caller explains a
+  // forbidden tool rather than a generic continuation.
+  it("refuses a tool that starts after the answer as omp-phase-tool-forbidden", () => {
+    const answer = {
+      role: "assistant", content: [{ type: "text", text: JSON.stringify({ summary: "plan", primaryTargetPaths: ["answer.txt"] }) }],
+      provider: "gateway", model: "model-a", stopReason: "stop",
+      usage: { input: 8, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 10 },
+    };
+    const events = [
+      { type: "agent_start" },
+      { type: "message_end", message: answer },
+      { type: "tool_execution_start", toolCallId: "late", toolName: "read", args: { path: "answer.txt" } },
+      { type: "agent_end", isTerminal: true, yielded: true },
+    ].map((row) => JSON.stringify(row)).join("\n");
+    expect(() => decodeOmpPhase("plan", events, "gateway/model-a")).toThrow("omp-phase-tool-forbidden");
+  });
+
   it("registers the process identity before the fake CLI can receive its prompt", async () => {
     const f = await fixture("registration-required");
     const plan = await ompDescriptor.createAdapter(f.config).plan({ ...f.context, onProcessRegistered: async (record) => {

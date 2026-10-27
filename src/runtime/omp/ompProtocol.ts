@@ -103,7 +103,7 @@ export class OmpPhaseFold {
     if (this.ended && raw.type !== "turn_end" && raw.type !== "agent_end") { this.error = "omp-phase-continuation"; return; }
     if (raw.type === "extension_ui_request" || raw.type.includes("subagent")) { this.error = "omp-phase-tool-forbidden"; return; }
     if (raw.type === "tool_execution_start") {
-      if (this.ended || typeof raw.toolCallId !== "string" || typeof raw.toolName !== "string" || !this.allowed.has(raw.toolName)
+      if (typeof raw.toolCallId !== "string" || typeof raw.toolName !== "string" || !this.allowed.has(raw.toolName)
         || this.pendingTools.has(raw.toolCallId)) { this.error = "omp-phase-tool-forbidden"; return; }
       this.pendingTools.set(raw.toolCallId, raw.toolName);
     }
