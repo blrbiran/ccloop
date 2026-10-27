@@ -77,7 +77,9 @@ const message = { role: "assistant", content: [{ type: "text", text: JSON.string
 // `<marker>.tools.json` ([{toolName, args}], or {calls, hang}), when present, is emitted as real-shaped
 // tool_execution_start/end pairs before the final message (execute only); with `hang: true` the fake then hangs instead of
 // answering. Without the file nothing changes.
-const toolScript = phase === "execute" && existsSync(`${marker}.tools.json`) ? JSON.parse(readFileSync(`${marker}.tools.json`, "utf8")) : null;
+// Plan phase tools (ccloop spec 2026-10-27-plan-phase-tools): `<marker>.plan-tools.json`, same shape, is emitted in plan only.
+const toolScriptPath = phase === "execute" ? `${marker}.tools.json` : phase === "plan" ? `${marker}.plan-tools.json` : null;
+const toolScript = toolScriptPath !== null && existsSync(toolScriptPath) ? JSON.parse(readFileSync(toolScriptPath, "utf8")) : null;
 const toolRows = (Array.isArray(toolScript) ? toolScript : toolScript?.calls ?? []).flatMap((call, index) => [
   { type: "tool_execution_start", toolCallId: `fake-call-${index}`, toolName: call.toolName, args: call.args },
   { type: "tool_execution_end", toolCallId: `fake-call-${index}`, toolName: call.toolName, result: { content: [{ type: "text", text: "" }], details: {} }, isError: false },

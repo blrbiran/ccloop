@@ -3,7 +3,8 @@ import type { ModelUsageV1 } from "../../control/usage.js";
 import { normalizeExecutionFinal } from "../executionNormalizer.js";
 import type { UsageEvidence } from "../types.js";
 import { phaseFinalAccepts, scanFinalMessage, verificationSchema, type PhaseResults } from "../codex/protocol.js";
-import type { OmpPhase } from "./phasePrompt.js";
+import { ompPhaseTools, type OmpPhase } from "./phasePrompt.js";
+import { causeDetail } from "../failureCause.js";
 import { foldText, type JsonLine } from "../streamLines.js";
 
 const planSchema = z.object({ summary: z.string(), primaryTargetPaths: z.array(z.string()) }).strict();
@@ -80,6 +81,7 @@ export function decodeOmpPhase<P extends OmpPhase>(phase: P, events: string, exp
  */
 export class OmpPhaseFold {
   private error: string | null = null;
+  private forbiddenDetail: string | null = null;
   private readonly allowed: Set<string>;
   private readonly pendingTools = new Map<string, string>();
   private ended = false;
@@ -90,7 +92,15 @@ export class OmpPhaseFold {
   private last: Record<string, unknown> | undefined;
 
   constructor(private readonly phase: OmpPhase, private readonly expectedSelector: string) {
-    this.allowed = new Set(phase === "execute" ? ["read", "grep", "glob", "edit", "write", "bash"] : ["read", "grep", "glob"]);
+    this.allowed = new Set(ompPhaseTools(phase));
+  }
+
+  // Plan phase tools (spec 2026-10-27-plan-phase-tools): a tool the phase does not have is named, so the adapter can classify
+  // the refusal; a protocol anomaly in the same code family (orphan or duplicate id, pending tool) carries no detail.
+  private forbidTool(name: string, path: unknown): void {
+    this.error = "omp-phase-tool-forbidden";
+    const on = typeof path === "string" && path.trim() !== "" ? ` on ${path.trim()}` : "";
+    this.forbiddenDetail = causeDetail(`${this.phase} phase allows ${ompPhaseTools(this.phase).join(", ")}; the agent called ${name}${on}`);
   }
 
   push(line: JsonLine): void {
@@ -101,10 +111,10 @@ export class OmpPhaseFold {
     if (!record(raw) || typeof raw.type !== "string") { this.error = "omp-events-invalid"; return; }
     if (this.ended && raw.type === "tool_execution_start") { this.error = "omp-phase-tool-forbidden"; return; }
     if (this.ended && raw.type !== "turn_end" && raw.type !== "agent_end") { this.error = "omp-phase-continuation"; return; }
-    if (raw.type === "extension_ui_request" || raw.type.includes("subagent")) { this.error = "omp-phase-tool-forbidden"; return; }
+    if (raw.type === "extension_ui_request" || raw.type.includes("subagent")) { this.forbidTool(raw.type, undefined); return; }
     if (raw.type === "tool_execution_start") {
-      if (typeof raw.toolCallId !== "string" || typeof raw.toolName !== "string" || !this.allowed.has(raw.toolName)
-        || this.pendingTools.has(raw.toolCallId)) { this.error = "omp-phase-tool-forbidden"; return; }
+      if (typeof raw.toolCallId !== "string" || typeof raw.toolName !== "string" || this.pendingTools.has(raw.toolCallId)) { this.error = "omp-phase-tool-forbidden"; return; }
+      if (!this.allowed.has(raw.toolName)) { this.forbidTool(raw.toolName, record(raw.args) ? raw.args.path : undefined); return; }
       this.pendingTools.set(raw.toolCallId, raw.toolName);
     }
     if (raw.type === "tool_execution_end") {
@@ -129,7 +139,9 @@ export class OmpPhaseFold {
 
   value(): PhaseResults[OmpPhase] {
     const { phase, expectedSelector } = this;
-    if (this.error !== null) throw new Error(this.error);
+    if (this.error !== null) {
+      throw this.forbiddenDetail === null ? new Error(this.error) : Object.assign(new Error(this.error), { code: this.error, detail: this.forbiddenDetail });
+    }
     if (this.pendingTools.size !== 0) throw new Error("omp-phase-tool-forbidden");
     if (this.terminalCount !== 1 || this.messages === 0) throw new Error("omp-no-completion");
     const totals = this.usage.checked();

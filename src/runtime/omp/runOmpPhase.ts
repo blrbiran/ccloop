@@ -9,7 +9,7 @@ import { effectiveIdleTimeoutMs, IdleWatch, ompToolRow, type IdleSnapshotV1 } fr
 import { attachOutcomeStream, CappedLineFile, jsonLine, LineSplitter, STDOUT_HARD_LIMIT, TRANSCRIPT_LIMIT, transcriptMarker } from "../streamLines.js";
 import { OmpStream, type OmpStreamPurpose } from "./ompStream.js";
 import { ompSkillsPromptBlock } from "./ompSkills.js";
-import { phaseSystemPrompt, type OmpPhase } from "./phasePrompt.js";
+import { ompPhaseTools, phaseSystemPrompt, type OmpPhase } from "./phasePrompt.js";
 
 const execFileAsync = promisify(execFile);
 const OUTPUT_LIMIT = 16 * 1024 * 1024;
@@ -56,7 +56,7 @@ export async function runOmpPhase(
   const evidenceDir = await mkdtemp(join(root, "call-"));
   const systemPath = join(evidenceDir, "system-prompt.md");
   await writeFile(systemPath, skills === "" ? phaseSystemPrompt(phase) : `${phaseSystemPrompt(phase)}\n\n${skills}`, { mode: 0o600 });
-  const tools = phase === "execute" ? "read,grep,glob,edit,write,bash" : "read,grep,glob";
+  const tools = ompPhaseTools(phase).join(",");
   const profile = config.installation.profile as string | null;
   const args = ["--profile", profile ?? "default", "--no-extensions", "--no-skills", "--no-tools", "--tools", tools,
     "--no-session", "--no-title", "--no-prewalk", "--model", config.selection.model,

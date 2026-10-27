@@ -354,3 +354,10 @@ named by the human, CLAUDE.md Rule 15.)
 Flagged for the human to overrule if wanted (reversible, not questions): secrets recorded-only with no filtering (§4);
 "grants inside the mode" reading of never-widen, including refusing `network:true` against the person's explicit codex
 `network_access = false` (§3.2); a tool-rule violation ending the run (§4).
+
+## Correction (Orca session `7753e97d`, 2026-10-27; spec `2026-10-27-plan-phase-tools-design.md`)
+
+§4 says `tool-rule-violated` is classified only from the decode error code `omp-tool-rule-violated`. From the commit
+`fix(omp): name the plan phase's tools and classify a forbidden one as tool-rule-violated` on, it is **also** classified
+from the phase fold's `omp-phase-tool-forbidden` when the fold names a tool the phase does not have (any omp phase; the
+sample is a plan `write` to `xd://…`, Orca issue 60). It stays terminal. The text above is kept as written (Rule 16).

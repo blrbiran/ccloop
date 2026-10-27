@@ -11,6 +11,8 @@ export const FAILURE_CAUSES = [
   "required-check-failed", "verifier-rejected", "budget-exhausted", "unknown",
   // Per-contract tool rules (spec 2026-10-22 §4): an omp execute call ran a command outside the contract's tool rules.
   // Terminal: never in RETRYABLE_CAUSES, classified only from the decode error code `omp-tool-rule-violated`.
+  // ERRATUM (Orca session 7753e97d, 2026-10-27; spec 2026-10-27-plan-phase-tools §3): also classified from the phase fold's
+  // `omp-phase-tool-forbidden` when it names a tool the phase does not have (any omp phase, plan in issue 60).
   "tool-rule-violated",
 ] as const;
 export type FailureCauseV1 = (typeof FAILURE_CAUSES)[number];

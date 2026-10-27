@@ -24,6 +24,12 @@ export class OmpToolRuleViolated extends Error {
   }
 }
 
+/** The phase fold's named refusal of a tool the phase lacks (ompProtocol.ts `forbidTool`); null for any other error. */
+function forbiddenPhaseTool(error: unknown): string | null {
+  const { code, detail } = (error ?? {}) as { code?: unknown; detail?: unknown };
+  return code === "omp-phase-tool-forbidden" && typeof detail === "string" ? detail : null;
+}
+
 export class OmpAdapter implements RuntimeAdapter {
   constructor(private readonly config: MaterializedAgentConfigV1, private readonly skillsDir?: string, private readonly retryDelaysMs: readonly number[] = TRANSIENT_RETRY_DELAYS_MS) {}
 
@@ -44,6 +50,8 @@ export class OmpAdapter implements RuntimeAdapter {
           const outcome = seen.outcome;
           let classification: CallClassification | null;
           if (error instanceof OmpToolRuleViolated) classification = { cause: "tool-rule-violated", workObserved: true, detail: error.detail };
+          // Plan phase tools (spec 2026-10-27-plan-phase-tools): a tool the phase does not have, by its code and named detail.
+          else if (forbiddenPhaseTool(error) !== null) classification = { cause: "tool-rule-violated", workObserved: true, detail: forbiddenPhaseTool(error) };
           else if (outcome === undefined || String(error).includes("omp-read-only-phase-mutated")) classification = { cause: "unknown", workObserved: true, detail: null };
           else if (outcome.reason === "aborted") classification = null;
           else if (outcome.reason === "timeout") classification = { cause: "budget-exhausted", workObserved: true, detail: null };
