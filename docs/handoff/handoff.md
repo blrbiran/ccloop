@@ -166,9 +166,10 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-27，Orca 会话 `7753e97d`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-27 晚，Orca 会话 `3cd8fb02`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。Orca 仍 pin 本仓 `b97d5bd`（历史锚点；主题行 `chore(deps): repin ccloop to b97d5bd for the codex strict single call`）；本仓本轮的 8 笔在本地 main、**未推**，push 之后 Orca 才 repin（repin 用 npm 10／nvm Node 22.13.1，见 Orca handoff §3.3）。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。**Orca 现 pin 本仓 `ae6fb71`**（主题行 `chore(deps): repin ccloop to ae6fb71 …`，已合入 Orca main 并装上）⇒ 本仓「本轮」那 8 笔（strict 投影、omp 单调用空停续跑、#60 plan 工具与 `tool-rule-violated`）已在 Orca 生效。
+- **下一件会动本仓**：Orca spec `docs/superpowers/specs/2026-10-27-single-call-unknown-usage-settlement-design.md`（测试者 #62）的 C1（omp 自己的 stream watchdog 错误 ⇒ `failureCause: stalled`）与 C2（单调用记录可选 `usageLowerBound`，只在 >0 时出现）。§3.1 有 omp 18.10.1 零成本实测（错误在 assistant `message_end.message.errorMessage`、`stopReason:"error"`；无 usage 块时 usage 全 0；首事件超时带 overlay 也发两次请求）；原始转录 `/private/tmp/orca-3cd8fb02/m0/`。**Orca 先接受新键，本仓再发**。
 - O9 多仓真 agent 验收：codex（`o9-codex-7`）、omp（`o9-omp-5`）、**claude（2026-10-27 `/private/tmp/orca-7753e97d/o9-claude-2/`，22/22，工具报 $0.7925112）**都已通过，都跑在 `b97d5bd` 的 build 上（omp 那次在 `fe985b0`，两者之间只有 codex 单调用投影）。
 - Orca 本轮审阅并修了接手 agent 的六条线（多目录落地、流程暂停／留言、定时、转录脱敏、目录放置、拆分指令 v2），**没动本仓契约**。
 - ⚠️ 沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（登记未修，Orca 每轮跑完按人裁清）。
