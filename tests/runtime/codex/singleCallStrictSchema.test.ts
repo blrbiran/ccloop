@@ -124,9 +124,9 @@ it("removes a projected null inside a caller-side nullable object", () => {
 it("keeps a null an optional key admits through anyOf, enum, const or an empty schema", () => {
   const schema = { type: "object", additionalProperties: false, required: [], properties: {
     viaAnyOf: { anyOf: [str, { type: "null" }] }, viaEnum: { enum: ["a", null] }, viaConst: { const: null }, any: {},
-    notNull: { enum: ["a", "b"] }, typed: { type: "string", enum: ["a", null] },
+    notNull: { enum: ["a", "b"] }, typed: { type: "string", enum: ["a", null] }, notNullAnyOf: { anyOf: [str, { type: "number" }] },
   } };
-  expect(stripOptionalNulls({ viaAnyOf: null, viaEnum: null, viaConst: null, any: null, notNull: null, typed: null }, schema))
+  expect(stripOptionalNulls({ viaAnyOf: null, viaEnum: null, viaConst: null, any: null, notNull: null, typed: null, notNullAnyOf: null }, schema))
     .toEqual({ viaAnyOf: null, viaEnum: null, viaConst: null, any: null });
 });
 
