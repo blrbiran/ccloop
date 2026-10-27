@@ -41,7 +41,17 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 本轮（2026-10-24 起，Orca 会话 `ffec7b28`；最近更新 2026-10-26）—— 先读这一节
+### 本轮（2026-10-27，Orca 会话 `7753e97d`）—— 先读这一节
+
+- **已在本地 main、未推**（主题行起 `fix(codex): the strict fold follows every branch the projection closed…`，至 `test(omp): a duplicate tool id carries no forbidden-tool detail (mutation MI)`，8 笔；来自 Orca 对接手 agent 工作的独立审阅＋测试者 #60）：
+  - **codex strict 单调用投影**：投影与回折读同一份展平的 `anyOf` 分支（可空数组／对象分支里的可选键 null 也会被折掉）；`admitsNull` 按 JSON Schema 语义（`enum` 含 null、`const:null`、`{}`）；两个对象分支或两个数组分支的 `anyOf` 拒；`prefixItems`、`if/then/else`、`dependent*`、`unevaluated*`、与 properties 并列的 `anyOf`、`required` 无对应 property 都在 spawn 前以 `codex-single-call-schema-unsupported` 拒。Orca 现有 12 个单调用 schema 投影后的 wire schema 与改前 sha256 逐个相同。
+  - **omp**：phase fold 补了 toolCall-only stop 与「答案后的工具」两条判据、删掉死守卫；**single call 的空停续跑**原来被算成第二个请求（`omp-single-call-multiple-requests`），现在照 phase fold 的做法只记 token 不记消息。
+  - **#60 plan 阶段工具**（spec `docs/superpowers/specs/2026-10-27-plan-phase-tools-design.md`）：`ompPhaseTools(phase)` 一份名单喂 `--tools`、fold 与 plan 提示；plan 提示写明只有 read／grep／glob，写、shell、MCP（含 `xd://`）要等 execute；plan 里调了缺的工具 ⇒ `failureCause: tool-rule-violated`（detail 带工具名与 `args.path`），**不重试**（不在 RETRYABLE_CAUSES，Orca 阶梯豁免）。复用已有 cause 是因为 Orca 面板把名单外的 cause 一律显示成 unknown。argv 与 goldens 不变；`src/runtime/failureCause.ts:12-13` 加了 ERRATUM，工具规则 spec 追加了 Correction 节。
+  - **没改任何既有判据**（全是新增）；变异逐条在 `git clone --local` 副本见红并 0 字节还原（日志 `/private/tmp/orca-7753e97d/fix-strict-and-plan-tools-mut.log`）。
+- **门**（合入后在 main 上，负载约 35）：typecheck／build RC 0；全量 2420 条 2413 过、7 红，`check-known-reds` RC 1——名单内 2 条（`runLoop.integration`「persists phase usage evidence」、`codexAdapter` watchdog），名单外 5 条（`updates.test.ts` 4 条 5 s／20 s 超时、`codexWatchdog`「double-space start identities」）；4 个红文件单跑全部 RC 0，这两处代码本轮未动 ⇒ 判负载。日志 `/private/tmp/orca-7753e97d/ccloop-main-{vitest.json,reds.log,solo-*.log}`。
+- **待人**：push ccloop main；之后 Orca 才能 repin 到这批（Orca 当前 pin 仍是 `b97d5bd`，历史锚点）。Orca 在旧 pin 上已经能把 `omp-phase-tool-forbidden` 解释成下一步文案（Orca 主题行 `fix(web): word omp's forbidden-tool stop as the run's next step`）。
+
+### 上一轮（2026-10-24 起，Orca 会话 `ffec7b28`；最近更新 2026-10-26）
 
 - **已在 main 并已推**（主题行起 `docs(plan): live transcript` 系列，至 `test(control): the startedAt-order case creates its call directories in name order`）：**实时转录的 ccloop 部分**（Orca spec `docs/superpowers/specs/2026-10-23-live-transcript-design.md` §10.2、§11、§12；计划 `docs/superpowers/plans/2026-10-24-live-transcript-ccloop.md` 含 As-built 与两轮审阅）：每次调用一份 `transcript.jsonl`（0600，claude 由 runner 经 `CCLOOP_CLAUDE_TRANSCRIPT_PATH` 写，不记 `content_block_delta`；>10 MiB 行留 `ccloop.line-dropped`）；transcript 128 MiB 截到整行＋`ccloop.transcript-truncated` 标记（先写标记再 ftruncate）、`events.jsonl` 16 MiB 只停记录；codex/omp stdout 1 GiB ⇒ `output-limit`；全部解码改为按行 fold（0x0A 切行，跨块多字节安全）；collect 顶层 `transcripts`、features `transcripts:"v1"`；`work.operatorNote`（只进 plan/execute，`verify-saved-result` 时拒）。改了判据（人裁 O5「…作为一个hard limit ，比如1G」与本会话「这次批准改写所有必要的判据」，逐条在提交里）：`runCodexPhase.test.ts:57-60`、`ompPhase.test.ts:225-226`、`claudeAgentAdapter.test.ts:133`、`singleCall.test.ts:87-107`、`protocol4.test.ts:13`、`savedResultEvidence.test.ts:107,110`、`toolRulesCollect.test.ts:107`。门：tip 上 2338 条 2 红（known `runLoop.integration`＋`taskResults` 30 s 超时单跑 6/6 绿）。⚠️ push 被 Orca Tier 0 闸门拦下，由人手推。
 - **真 codex strict schema 验收已做**（gpt-6-luna，带 `debug.located`＋`flow`）：provider 接受，三阶段 completed；codex 报回两键；也读得到工作区外绝对路径。证据 `/private/tmp/orca-ffec7b28/evidence/codex-accept/RESULT.md`。
@@ -156,11 +166,11 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-27，Orca 会话 `a98b77d2`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-27，Orca 会话 `7753e97d`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。Orca 已 **repin 到本仓 `b97d5bd`**（历史锚点；主题行 `chore(deps): repin ccloop to b97d5bd for the codex strict single call`），主仓已 `npm ci` 装上，`verify:ccloop-pin` 绿。2026-10-27 Orca 又合入面板小缺口批（loop 卡计数含 document checks；会话 `a98b77d2`），**未动本仓契约、判据或 pin**。三仓 main 均已推（`ls-remote` 现测；本文不写当前哈希）。
-- **H7 多仓已合入 Orca main 并装上**（Orca 消费 `additionalRepos`/`dirs`）。O9 真 agent 验收：codex（`o9-codex-7`，pin 上 20/20）与 omp（`o9-omp-5`，旧 pin `fe985b0`；两 pin 间代码只有 `14e2080`，codex-only）都过；claude 等 2026-10-27 09:00 CST 额度重置＋人点头。证据 `/private/tmp/orca-ffec7b28/o9-*`。
-- **2026-10-26 文档轮**：三仓 README 各以英文重写（本仓主题行 `docs(readme): rewrite the operator reference`）；Orca 的 `skills/orca-control` 按当前 CLI 重写（`~/.claude/skills` 是指向仓内的软链，改仓即生效）；ccmem 另修 `forget`／`pin` 未接线的 verb（ccmem handoff §1.0000）。都不触碰本仓契约与判据。
-- ⚠️ 沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（软链进私有 CODEX_HOME 的结果，登记未修；2026-10-26 起 Orca 每轮跑完按人裁清）。
-- **Orca 依赖本仓、改之前先同步 Orca 的**：同前（`single-call-output-invalid`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`、`toolRules`、`transcripts`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`；`executionPolicy.toolRules`；codex wire `flow` 的封闭形状与 strict 投影；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；fake 参数约定；`blockRun` 原因串；`isRepeatedFailure`）。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。Orca 仍 pin 本仓 `b97d5bd`（历史锚点；主题行 `chore(deps): repin ccloop to b97d5bd for the codex strict single call`）；本仓本轮的 8 笔在本地 main、**未推**，push 之后 Orca 才 repin（repin 用 npm 10／nvm Node 22.13.1，见 Orca handoff §3.3）。
+- O9 多仓真 agent 验收：codex（`o9-codex-7`）、omp（`o9-omp-5`）、**claude（2026-10-27 `/private/tmp/orca-7753e97d/o9-claude-2/`，22/22，工具报 $0.7925112）**都已通过，都跑在 `b97d5bd` 的 build 上（omp 那次在 `fe985b0`，两者之间只有 codex 单调用投影）。
+- Orca 本轮审阅并修了接手 agent 的六条线（多目录落地、流程暂停／留言、定时、转录脱敏、目录放置、拆分指令 v2），**没动本仓契约**。
+- ⚠️ 沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（登记未修，Orca 每轮跑完按人裁清）。
+- **Orca 依赖本仓、改之前先同步 Orca 的**：同前（`single-call-output-invalid`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`、`toolRules`、`transcripts`、`dirs[]`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`、`work.additionalRepos`；`executionPolicy.toolRules`；codex wire `flow` 的封闭形状与 strict 投影；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；fake 参数约定；`blockRun` 原因串；`isRepeatedFailure`）。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受；Orca 面板只认得已知的 failureCause 名单，新 cause 先在 Orca 登记。
 - ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`。Orca 测试的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build；别指本仓工作树的 `dist`。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
