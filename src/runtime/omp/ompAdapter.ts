@@ -30,6 +30,9 @@ function forbiddenPhaseTool(error: unknown): string | null {
   return code === "omp-phase-tool-forbidden" && typeof detail === "string" ? detail : null;
 }
 
+/** omp 18.10.1's provider stream watchdog wording (every provider prefix in its dist/cli.js; Orca spec 2026-10-27 §3.1). */
+const OMP_STREAM_WATCHDOG = /stream (stalled|timed out) while waiting for the (next|first) event/;
+
 export class OmpAdapter implements RuntimeAdapter {
   constructor(private readonly config: MaterializedAgentConfigV1, private readonly skillsDir?: string, private readonly retryDelaysMs: readonly number[] = TRANSIENT_RETRY_DELAYS_MS) {}
 
@@ -37,6 +40,12 @@ export class OmpAdapter implements RuntimeAdapter {
    * Failure causes (ccloop spec 2026-10-21-failure-causes-and-transient-retries-design.md §3 omp, §4): omp has no provider
    * error sample, so a failed call classifies `unknown` (never retried) unless it never spawned (ENOENT ⇒ executable-missing)
    * or timed out; the shared loop is in place for the causes later rounds can name. Read-only phases are retry-safe.
+   *
+   * *** ERRATUM (Orca spec 2026-10-27-single-call-unknown-usage-settlement §3.1, R5; tester #62) -- "omp has no provider error
+   * sample" no longer holds: M0 recorded omp 18.10.1's own stream watchdog error (stopReason "error", errorMessage "... stream
+   * stalled while waiting for the next event" / "... timed out while waiting for the first event"). By that spec's ruling
+   * only the single call names it (code omp-stalled, singleCall below); this phase path is unchanged and still classifies
+   * it `unknown`. ***
    */
   private async phase<P extends OmpPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
     return runWithTransientRetry<PhaseResults[P]>({
@@ -147,13 +156,19 @@ export class OmpAdapter implements RuntimeAdapter {
   async singleCall(request: SingleCallRequest): Promise<SingleCallResult> {
     const outcome = await runOmpSingleCall(this.config, request);
     if (outcome.reason !== "completed") {
+      // Positive safe integer or null: an errored message's all-zero usage is "nothing observed", never "0 spent".
       const lowerBound = outcome.stream.lowerBound.value();
       // Best-effort diagnostic: a failed write must not replace the refusal below and its booking.
       if (lowerBound !== null) await writeFile(join(outcome.evidenceDir, "usage-lower-bound.json"), JSON.stringify({ tokens: lowerBound }), { mode: 0o600 }).catch(() => undefined);
       // Ruling m4: a pre-spawn abort, a timeoutMs <= 0 or a spawn error is neverStarted (books 0, as types.ts observedTokensOf).
       // Activity watchdog (spec 2026-10-21 §2.4): a stalled single call names its cause; its caller owns retries.
+      // Tester #62 (Orca spec 2026-10-27-single-call-unknown-usage-settlement §3.1, R5): omp's own stream watchdog ends the
+      // process non-zero after an errored assistant message; that exit is the same stall, so it carries ccloop's stall code
+      // into the record's errorCode. The observed lower bound travels with it for the record (never booked as usage).
+      const ompWatchdog = outcome.reason === "exit-error" && OMP_STREAM_WATCHDOG.test(outcome.stream.singleCall?.lastAssistantError() ?? "");
       throw Object.assign(new Error(`omp-${outcome.reason}: ${outcome.evidenceDir}`), { neverStarted: outcome.neverStarted },
-        outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {});
+        outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {},
+        ompWatchdog ? { code: "omp-stalled" } : {}, lowerBound === null ? {} : { usageLowerBound: lowerBound });
     }
     try {
       const result = outcome.stream.singleCall!.value(outcome.evidenceDir);

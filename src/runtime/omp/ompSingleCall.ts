@@ -123,6 +123,7 @@ export class OmpSingleCallFold {
   private messages = 0;
   private first: Record<string, unknown> | undefined;
   private emptyStop: Record<string, unknown> | undefined;
+  private lastAssistant: Record<string, unknown> | undefined;
   private wrongModel = false;
   private readonly usage = new OmpUsageSum();
   constructor(private readonly expectedSelector: string) {}
@@ -136,6 +137,7 @@ export class OmpSingleCallFold {
     if (raw.type.startsWith("tool_execution_") || raw.type === "extension_ui_request" || raw.type.includes("subagent")) this.toolEvent = true;
     if (raw.type === "message_end" && record(raw.message) && raw.message.role === "assistant") {
       this.usage.add(raw.message);
+      this.lastAssistant = raw.message;
       if (`${raw.message.provider}/${raw.message.model}` !== this.expectedSelector) this.wrongModel = true;
       // omp's isEmptyAssistantStop retries an empty stop (as the phase fold reads it, ompProtocol.ts): that retry is omp's,
       // not a second request. Its tokens are booked; it is the answer only when nothing followed it.
@@ -143,6 +145,14 @@ export class OmpSingleCallFold {
       this.messages += 1;
       if (this.first === undefined) this.first = raw.message;
     }
+  }
+  /**
+   * Tester #62 (Orca spec 2026-10-27-single-call-unknown-usage-settlement §3.1, R5): the last assistant message's error text
+   * when it stopped on "error" (where omp 18.10.1 puts its own stream watchdog's wording), else null.
+   */
+  lastAssistantError(): string | null {
+    const last = this.lastAssistant;
+    return last !== undefined && last.stopReason === "error" && typeof last.errorMessage === "string" ? last.errorMessage : null;
   }
   value(evidenceDir: string): SingleCallResult {
     const expectedSelector = this.expectedSelector;

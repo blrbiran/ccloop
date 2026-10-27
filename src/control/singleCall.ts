@@ -28,6 +28,12 @@ export interface SingleCallRecordV1 {
   outcome: "complete" | "aborted" | "failed";
   outputRef: ArtifactRefV1 | null;
   errorCode: string | null;
+  /**
+   * Tester #62 (Orca spec 2026-10-27-single-call-unknown-usage-settlement §4 C2, R5): the tokens the agent was seen spending
+   * before a call that did not complete, when positive. Diagnostic only -- never booked, never `observedTokens`. Absent
+   * otherwise, so every record without one is byte-identical to before.
+   */
+  usageLowerBound?: { tokens: number };
 }
 
 export interface SingleCallHooks {
@@ -55,6 +61,12 @@ function errorCodeOf(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).split(":")[0]!;
 }
 
+/** The lower bound an adapter attached to a failure (omp: ompAdapter.ts singleCall), when a positive safe integer. */
+function usageLowerBoundOf(error: unknown): number | null {
+  const tokens = error !== null && typeof error === "object" ? (error as { usageLowerBound?: unknown }).usageLowerBound : undefined;
+  return typeof tokens === "number" && Number.isSafeInteger(tokens) && tokens > 0 ? tokens : null;
+}
+
 export async function runSingleCall(
   envelope: SingleCallStartEnvelope,
   sourceDir: string,
@@ -76,6 +88,7 @@ export async function runSingleCall(
   let modelUsage: ModelUsageV1[] | undefined;
   let usageEvidence: unknown = null;
   let errorCode: string | null = null;
+  let usageLowerBound: number | null = null;
   let completedWithResult = false;
   try {
     const result = await adapter.singleCall({
@@ -111,11 +124,13 @@ export async function runSingleCall(
       // (observedTokensOf answers 0 for it). Every other aborted call is unchanged: observed tokens, or null. ***
       outcome = "aborted";
       tokens = observedTokensOf(error);
+      usageLowerBound = usageLowerBoundOf(error);
     } else {
       // A timeout or a failed call still books what the agent was observed spending before it ended, or null.
       outcome = "failed";
       tokens = observedTokensOf(error);
       errorCode = errorCodeOf(error);
+      usageLowerBound = usageLowerBoundOf(error);
     }
   }
   const elapsedMs = Date.now() - startedAt;
@@ -163,6 +178,7 @@ export async function runSingleCall(
     outcome,
     outputRef,
     errorCode,
+    ...(usageLowerBound === null ? {} : { usageLowerBound: { tokens: usageLowerBound } }),
   };
   const handoff = await writeEvidence(sourceDir, Buffer.from(canonicalJson(record)));
 
