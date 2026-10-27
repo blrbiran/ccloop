@@ -99,3 +99,68 @@ it("keeps a null an optional property's own schema admits", () => {
   const schema = { type: "object", additionalProperties: false, required: ["a"], properties: { a: str, b: { type: ["string", "null"] } } };
   expect(stripOptionalNulls({ a: "x", b: null }, schema)).toEqual({ a: "x", b: null });
 });
+
+// Review of 2026-10-27 (Orca session 7753e97d): the fold must descend wherever the projection did. The projection closes
+// an object inside a caller's nullable array (`anyOf: [array, null]`) and makes its optional key required-and-nullable, so
+// the model answers null there; the fold followed `items` only at the same level and left that null for Orca to reject.
+it("removes a projected null inside a caller-side nullable array of objects", () => {
+  const item = { type: "object", additionalProperties: false, required: ["id"], properties: { id: str, note: str } };
+  const schema = { type: "object", additionalProperties: false, required: ["list"], properties: { list: { anyOf: [{ type: "array", items: item }, { type: "null" }] } } };
+  const wire = strictSingleCallSchema(schema);
+  expect(strictErrors(wire)).toEqual([]);
+  expect(stripOptionalNulls({ list: [{ id: "a", note: null }] }, schema)).toEqual({ list: [{ id: "a" }] });
+  // The caller's own null for the nullable array is an answer and stays.
+  expect(stripOptionalNulls({ list: null }, schema)).toEqual({ list: null });
+});
+
+it("removes a projected null inside a caller-side nullable object", () => {
+  const inner = { type: "object", additionalProperties: false, required: ["a"], properties: { a: str, b: str } };
+  const schema = { type: "object", additionalProperties: false, required: ["o"], properties: { o: { anyOf: [inner, { type: "null" }] } } };
+  expect(stripOptionalNulls({ o: { a: "x", b: null } }, schema)).toEqual({ o: { a: "x" } });
+});
+
+// A deliberate null is an answer: an optional key whose own schema admits null -- by a caller-side `anyOf`, an `enum` or
+// `const` naming null, or no constraint at all -- keeps it; dropping it would change what the caller was told.
+it("keeps a null an optional key admits through anyOf, enum, const or an empty schema", () => {
+  const schema = { type: "object", additionalProperties: false, required: [], properties: {
+    viaAnyOf: { anyOf: [str, { type: "null" }] }, viaEnum: { enum: ["a", null] }, viaConst: { const: null }, any: {},
+    notNull: { enum: ["a", "b"] }, typed: { type: "string", enum: ["a", null] },
+  } };
+  expect(stripOptionalNulls({ viaAnyOf: null, viaEnum: null, viaConst: null, any: null, notNull: null, typed: null }, schema))
+    .toEqual({ viaAnyOf: null, viaEnum: null, viaConst: null, any: null });
+});
+
+// With two object (or two array) alternatives the fold could not tell which one the answer took, and folding by the wrong
+// one drops keys the other admits; such a schema is refused before the spawn instead.
+it("refuses an anyOf with two alternatives of the same container kind", () => {
+  const a = { type: "object", additionalProperties: false, required: ["a"], properties: { a: str } };
+  const b = { type: "object", additionalProperties: false, required: ["b"], properties: { b: str } };
+  for (const [schema, path, reason] of [
+    [{ type: "object", additionalProperties: false, required: ["x"], properties: { x: { anyOf: [a, b] } } }, "root.properties.x", "anyOf-several-objects"],
+    [{ anyOf: [{ anyOf: [a, { type: "null" }] }, b] }, "root", "anyOf-several-objects"],
+    [{ anyOf: [{ type: "array", items: a }, { type: "array", items: b }] }, "root", "anyOf-several-arrays"],
+  ] as const) {
+    try { strictSingleCallSchema(schema as Record<string, unknown>); throw new Error("expected a refusal"); }
+    catch (error) { expect(error).toMatchObject({ code: "codex-single-call-schema-unsupported", path, reason }); }
+  }
+  expect(() => strictSingleCallSchema({ anyOf: [a, { type: "array", items: b }, { type: "null" }] })).not.toThrow();
+});
+
+// Shapes the projection would have passed through unclosed, or rewritten into a different contract, are refused by name.
+it("refuses tuples, conditionals, dependents, an anyOf beside properties and a required key with no property", () => {
+  const obj = { type: "object", additionalProperties: false, required: ["a"], properties: { a: str } };
+  for (const [schema, path, reason] of [
+    [{ type: "array", prefixItems: [obj] }, "root", "prefixItems"],
+    [{ ...obj, if: { required: ["a"] }, then: obj }, "root", "if"],
+    [{ ...obj, then: obj }, "root", "then"],
+    [{ ...obj, else: obj }, "root", "else"],
+    [{ ...obj, dependentSchemas: { a: obj } }, "root", "dependentSchemas"],
+    [{ ...obj, unevaluatedProperties: false }, "root", "unevaluatedProperties"],
+    [{ type: "object", properties: { a: str }, anyOf: [{ required: ["a"] }] }, "root", "anyOf-beside-properties"],
+    [{ type: "object", anyOf: [obj] }, "root", "anyOf-beside-type-object"],
+    [{ type: "object", additionalProperties: false, required: ["a", "ghost"], properties: { a: str } }, "root.required.ghost", "required-without-property"],
+  ] as const) {
+    try { strictSingleCallSchema(schema as Record<string, unknown>); throw new Error("expected a refusal"); }
+    catch (error) { expect(error).toMatchObject({ code: "codex-single-call-schema-unsupported", path, reason }); }
+  }
+});
