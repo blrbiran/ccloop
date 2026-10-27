@@ -164,6 +164,19 @@ describe("decode (§3.3.5, criterion 5): one request, no tool, the selected mode
     expect(decodeFailure(lines(end(message()), end(message())))).toMatchObject({ message: "omp-single-call-multiple-requests", observedTokens: 28 });
   });
 
+  // Review of 2026-10-27 (Orca session 7753e97d): omp retries an empty stop (thinking-only, unsigned; measured on omp 18.10.1,
+  // the phase fold's fixture shape) and sends a second agent_start. That retry is omp's, not a second request the call made,
+  // so the answer after it is the call's answer; both messages' tokens were spent and are booked.
+  it("decodes the answer that follows an empty-stop retry, booking both messages", () => {
+    const emptyStop = message({ content: [{ type: "thinking", thinking: "nearly there", thinkingSignature: "" }] });
+    expect(decodeOmpSingleCall(lines({ type: "agent_start" }, end(emptyStop), { type: "turn_end" }, { type: "agent_start" }, end(message()), { type: "turn_end" },
+      { type: "agent_end", isTerminal: true }), "gateway/model-a", "/evidence")).toMatchObject({ output: { answer: "42" }, tokenUsage: 28 });
+    // A lone empty stop is still an answer that is not one object, booking what was spent.
+    expect(decodeFailure(lines(end(emptyStop)))).toMatchObject({ code: "single-call-output-invalid", tokenUsage: 14 });
+    // The retried message is still the call's: one from another model is a mismatch, as in the phase fold.
+    expect(decodeFailure(lines(end({ ...emptyStop, model: "model-b" }), { type: "agent_start" }, end(message())))).toMatchObject({ message: "omp-model-mismatch", observedTokens: 28 });
+  });
+
   it("C5: refuses a tool event even beside a complete answer, booking what was spent", () => {
     expect(decodeFailure(lines({ type: "tool_execution_start", toolCallId: "t1", toolName: "read" }, end(message())))).toMatchObject({ message: "omp-phase-tool-forbidden", observedTokens: 14 });
   });

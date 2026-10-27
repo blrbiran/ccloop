@@ -12,7 +12,7 @@ const safe = (value: unknown): value is number => typeof value === "number" && N
 
 // Mirrors omp's isActionableContent (messages.ts:544) for the stop branch: thinking is actionable only when signed.
 const ALWAYS_ACTIONABLE_BLOCKS = new Set(["toolCall", "image", "redactedThinking", "anthropicServerTool"]);
-function actionableStop(message: Record<string, unknown>): boolean {
+export function actionableStop(message: Record<string, unknown>): boolean {
   if (!Array.isArray(message.content)) return false;
   return message.content.some((block) => {
     if (!record(block) || typeof block.type !== "string") return false;

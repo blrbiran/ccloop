@@ -5,7 +5,7 @@ import { ompSingleCallExecution } from "../../agents/ompModels.js";
 import type { CatalogRowV1, MaterializedAgentConfigV1 } from "../../agents/types.js";
 import type { ModelUsageV1 } from "../../control/usage.js";
 import { SingleCallOutputInvalid, type SingleCallRequest, type SingleCallResult, type UsageEvidence } from "../types.js";
-import { OmpUsageSum } from "./ompProtocol.js";
+import { actionableStop, OmpUsageSum } from "./ompProtocol.js";
 import { foldText, type JsonLine } from "../streamLines.js";
 import { singleCallSystemPrompt } from "./phasePrompt.js";
 import { runOmpProcess, type OmpPhaseOutcome } from "./runOmpPhase.js";
@@ -122,6 +122,8 @@ export class OmpSingleCallFold {
   private toolEvent = false;
   private messages = 0;
   private first: Record<string, unknown> | undefined;
+  private emptyStop: Record<string, unknown> | undefined;
+  private wrongModel = false;
   private readonly usage = new OmpUsageSum();
   constructor(private readonly expectedSelector: string) {}
   push(line: JsonLine): void {
@@ -133,21 +135,26 @@ export class OmpSingleCallFold {
     if (!record(raw) || typeof raw.type !== "string") { this.error = "omp-events-invalid"; return; }
     if (raw.type.startsWith("tool_execution_") || raw.type === "extension_ui_request" || raw.type.includes("subagent")) this.toolEvent = true;
     if (raw.type === "message_end" && record(raw.message) && raw.message.role === "assistant") {
+      this.usage.add(raw.message);
+      if (`${raw.message.provider}/${raw.message.model}` !== this.expectedSelector) this.wrongModel = true;
+      // omp's isEmptyAssistantStop retries an empty stop (as the phase fold reads it, ompProtocol.ts): that retry is omp's,
+      // not a second request. Its tokens are booked; it is the answer only when nothing followed it.
+      if (raw.message.stopReason === "stop" && !actionableStop(raw.message)) { this.emptyStop ??= raw.message; return; }
       this.messages += 1;
       if (this.first === undefined) this.first = raw.message;
-      this.usage.add(raw.message);
     }
   }
   value(evidenceDir: string): SingleCallResult {
     const expectedSelector = this.expectedSelector;
     if (this.error !== null) throw new Error(this.error);
-    if (this.messages === 0) throw new Error("omp-no-completion");
+    const messages = this.messages === 0 && this.emptyStop !== undefined ? 1 : this.messages;
+    if (messages === 0) throw new Error("omp-no-completion");
     const usage = observedUsage(this.usage, expectedSelector);
     const observed = { observedTokens: usage.total };
-    if (this.messages > 1) throw Object.assign(new Error("omp-single-call-multiple-requests"), observed);
+    if (messages > 1) throw Object.assign(new Error("omp-single-call-multiple-requests"), observed);
     if (this.toolEvent) throw Object.assign(new Error("omp-phase-tool-forbidden"), observed);
-    const message = this.first!;
-    if (`${message.provider}/${message.model}` !== expectedSelector) throw Object.assign(new Error("omp-model-mismatch"), observed);
+    const message = (this.first ?? this.emptyStop)!;
+    if (this.wrongModel) throw Object.assign(new Error("omp-model-mismatch"), observed);
     if (message.stopReason === "length") throw new SingleCallOutputInvalid(evidenceDir, usage.total, usage.usageEvidence);
     if (message.stopReason !== "stop") {
       const reason = typeof message.stopReason === "string" && /^[A-Za-z]{1,32}$/.test(message.stopReason) ? message.stopReason : "invalid";
