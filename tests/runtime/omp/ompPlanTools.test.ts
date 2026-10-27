@@ -64,6 +64,9 @@ it("attaches a detail only to a forbidden tool, not to an orphan tool end", () =
   const orphan = decode({ type: "agent_start" }, { type: "tool_execution_end", toolCallId: "h", toolName: "bash" }, { type: "message_end", message }, { type: "agent_end", isTerminal: true });
   expect(orphan).toMatchObject({ message: "omp-phase-tool-forbidden" });
   expect((orphan as { detail?: unknown }).detail).toBeUndefined();
+  const duplicate = decode({ type: "agent_start" }, { type: "tool_execution_start", toolCallId: "t", toolName: "read" }, { type: "tool_execution_start", toolCallId: "t", toolName: "read" });
+  expect(duplicate).toMatchObject({ message: "omp-phase-tool-forbidden" });
+  expect((duplicate as { detail?: unknown }).detail).toBeUndefined();
   const subagent = decode({ type: "agent_start" }, { type: "subagent_start" });
   expect(subagent).toMatchObject({ message: "omp-phase-tool-forbidden", code: "omp-phase-tool-forbidden", detail: "plan phase allows read, grep, glob; the agent called subagent_start" });
 });
