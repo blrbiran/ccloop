@@ -41,10 +41,14 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 本轮（2026-10-28，Orca 会话 `3cd8fb02`）—— 先读这一节
+### 本轮（2026-10-28，Orca 会话 `e236bbe4`）—— 先读这一节
+
+- **已在 main、未推（push 归人）**：主题行 `test(control): an aborted single call keeps the adapter's lower bound in its record (Orca review m5)`——只加判据 W10（`tests/control/singleCall.test.ts`）：被 handoff 请求中止的单调用，记录里照样带适配器给的 `usageLowerBound`，work 用量仍 null。Orca spec `2026-10-27-single-call-unknown-usage-settlement-design.md` §4 C2 原文就是「outcome 不是 complete 即带」，审阅 m5 读窄了；人裁保留行为（Orca spec §11 更正）。没改代码、没改既有判据；变异（删掉中止分支里的 `usageLowerBound = usageLowerBoundOf(error)`）在 clone 里只打红 W10；文件 9/9、typecheck 0。⚠️ 工作树没 `npm run build` 时同文件 5 条假红（`dist/` 缺失），已知坑。Orca 不需要为它 repin。
+
+### 上一轮（2026-10-28，Orca 会话 `3cd8fb02`）
 
 - **已在 main、已推**：`fix(omp): name omp's own stream watchdog exit omp-stalled …`、`test(omp): M0 stream-watchdog transcripts pin …`（测试者 #62，细节见文末 Orca 单节）。没改任何既有判据；变异 M1–M8、M9c 在 clone 里见红并 0 字节还原（日志 `/private/tmp/orca-3cd8fb02/ccloop62/mutations.log`）。
-- **门**：typecheck／build 0；全量 2429 条 2427 过，2 红＝名单内 `runLoop`「persists phase usage evidence」＋名单外 `ompPhase`「keeps a stopped phase's completed-message tokens diagnostic」1 s 轮询超时（负载 39，单跑 21/21，phase 路径未动 ⇒ 判负载，可考虑登记进 known-load-flakes）。
+- **门**：typecheck／build 0；全量 2429 条 2427 过，2 红＝名单内 `runLoop`「persists phase usage evidence」＋名单外 `ompPhase`「keeps a stopped phase's completed-message tokens diagnostic」1 s 轮询超时（负载 39，单跑 21/21，phase 路径未动 ⇒ 判负载；已登记进 Orca `docs/handoff/known-load-flakes.md` 的 ccloop 段，会话 `e236bbe4`；进不进 `check-known-reds.mjs` 未定）。
 
 ### 上一轮（2026-10-27，Orca 会话 `7753e97d`）
 
@@ -171,12 +175,11 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-28，Orca 会话 `3cd8fb02`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-28，Orca 会话 `e236bbe4`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。**Orca 现 pin 本仓 `e25381f`**（主题行 `chore(deps): repin ccloop to e25381f …`，已合入 Orca main 并装上）。
-- **本仓本轮（已在 main、已推）**：主题行 `fix(omp): name omp's own stream watchdog exit omp-stalled and carry the usage lower bound in the single-call record` 与 `test(omp): M0 stream-watchdog transcripts pin …`（测试者 #62；Orca spec `2026-10-27-single-call-unknown-usage-settlement-design.md` §9 R5）：omp 单调用 `exit-error` 且最后一条 assistant 消息是 omp 自己的 stream watchdog 错误 ⇒ 记录 `errorCode: "omp-stalled"`；记录可选 `usageLowerBound:{tokens}`，只在 >0 时出现（全 0 usage 视为没观测到），从不入账。phase 路径不变（`ompAdapter.ts` phase 注释加了 ERRATUM）。新判据 `tests/control/ompSingleCallStall.test.ts`（9 条，夹具 `tests/fixtures/omp-m0/`，来自 omp 18.10.1 零成本实测），没改任何既有判据；两个互相遮蔽的「>0」守卫登记为冗余。登记未修：aborted 单调用也会带下限（Orca 审阅 m5）。
-- O9 多仓真 agent 验收：codex（`o9-codex-7`）、omp（`o9-omp-5`）、**claude（2026-10-27 `/private/tmp/orca-7753e97d/o9-claude-2/`，22/22，工具报 $0.7925112）**都已通过，都跑在 `b97d5bd` 的 build 上（omp 那次在 `fe985b0`，两者之间只有 codex 单调用投影）。
-- Orca 本轮审阅并修了接手 agent 的六条线（多目录落地、流程暂停／留言、定时、转录脱敏、目录放置、拆分指令 v2），**没动本仓契约**。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。**Orca 仍 pin 本仓 `e25381f`**（主题行 `chore(deps): repin ccloop to e25381f …`）；本仓之后只多了 W10 判据与 handoff，不需要 repin。
+- 本仓与 Orca #62 相关的契约（`omp-stalled` 错误码、单调用记录的可选 `usageLowerBound`，非 complete 即可带、只在 >0 时出现、从不入账）见 Orca spec `2026-10-27-single-call-unknown-usage-settlement-design.md` §4、§9 R5、§11。判据 `tests/control/ompSingleCallStall.test.ts`（9 条，夹具 `tests/fixtures/omp-m0/`）与 W10；两个互相遮蔽的「>0」守卫（适配器与记录写入方各一道）登记为冗余。Orca 本轮的其余工作（拆 import 环、组件重做与主题、走查）没动本仓契约。
+- O9 多仓真 agent 验收：codex（`o9-codex-7`）、omp（`o9-omp-5`、`o9-omp-e25`）、claude（`/private/tmp/orca-7753e97d/o9-claude-2/`，工具报 $0.7925112）都已通过。
 - ⚠️ 沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（登记未修，Orca 每轮跑完按人裁清）。
-- **Orca 依赖本仓、改之前先同步 Orca 的**：同前（`single-call-output-invalid`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`、`toolRules`、`transcripts`、`dirs[]`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`、`work.additionalRepos`；`executionPolicy.toolRules`；codex wire `flow` 的封闭形状与 strict 投影；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；fake 参数约定；`blockRun` 原因串；`isRepeatedFailure`）。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受；Orca 面板只认得已知的 failureCause 名单，新 cause 先在 Orca 登记。
-- ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`。Orca 测试的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build；别指本仓工作树的 `dist`。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
+- **Orca 依赖本仓、改之前先同步 Orca 的**：同前（`single-call-output-invalid`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`、`toolRules`、`transcripts`、`dirs[]`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`、`work.additionalRepos`；`executionPolicy.toolRules`；codex wire `flow` 的封闭形状与 strict 投影；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；fake 参数约定；`blockRun` 原因串；`isRepeatedFailure`；单调用记录的 `errorCode`／`usageLowerBound`）。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受；Orca 面板只认得已知的 failureCause 名单，新 cause 先在 Orca 登记。
+- ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`。Orca 测试的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build（现为 `/private/tmp/orca-3cd8fb02/ccloop-e25381f/dist/cli.js`）；别指本仓工作树的 `dist`。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
