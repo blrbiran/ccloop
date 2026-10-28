@@ -230,6 +230,32 @@ describe("single-call work through the control worker (Orca single-call estimate
     } finally { spy.mockRestore(); }
   });
 
+  // Orca spec 2026-10-27-single-call-unknown-usage-settlement §4 C2: the record carries the observed lower bound whenever
+  // the outcome is not complete -- a call a handoff request stopped included (Orca review m5, session 3cd8fb02, asked for
+  // this criterion; Orca session e236bbe4 kept the behaviour). Orca shows the bound when a person settles a call a stop
+  // closed; it is never booked: the work usage stays null.
+  it("W10: a call a handoff request stopped keeps the adapter's lower bound in its aborted record, never as usage", async () => {
+    let envelopeReady!: (envelope: Awaited<ReturnType<typeof world>>["envelope"]) => void;
+    const ready = new Promise<Awaited<ReturnType<typeof world>>["envelope"]>((resolve) => { envelopeReady = resolve; });
+    const spy = vi.spyOn(ClaudeAgentAdapter.prototype, "singleCall").mockImplementation(async (call: SingleCallRequest) => {
+      expect(await requestHandoff(await ready, request())).toEqual({ kind: "latched", requestId: "request-1" });
+      await expect.poll(() => call.signal?.aborted ?? false, { timeout: 10_000 }).toBe(true);
+      throw Object.assign(new Error("injected-stop"), { usageLowerBound: 133 });
+    });
+    try {
+      const w = await world("hang");
+      envelopeReady(w.envelope);
+      await w.worker;
+      expect(spy).toHaveBeenCalledTimes(1);
+      const collected = await collectExecution(w.envelope, 0);
+      expect(bookedTokens(collected.events)).toEqual([["work", null], ["handoff", 0]]);
+      expect(collected.candidate).toMatchObject({ result: "partial", terminalOutcome: "single-call-aborted" });
+      expect(JSON.parse((await readEvidence(w.sourceDir, collected.candidate!.handoff)).toString("utf8"))).toMatchObject({
+        outcome: "aborted", outputRef: null, errorCode: null, usageLowerBound: { tokens: 133 },
+      });
+    } finally { spy.mockRestore(); }
+  });
+
   // C3: the call's time limit leaves SINGLE_CALL_ACTIVE_MARGIN_MS under the grant, so the elapsed time the worker
   // reports cannot run past grant.work.activeMs. Read from the request the adapter was actually handed.
   it("W9: hands the adapter a time limit of the grant's activeMs less the 10 s margin", async () => {
