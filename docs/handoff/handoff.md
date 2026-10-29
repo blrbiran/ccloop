@@ -175,10 +175,10 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-29，Orca 测试者反馈轮实施会话 `a9f9d6de`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-29，Orca 会话 `3ea8a21e`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4。**Orca 仍 pin 本仓 `e25381f`**（主题行 `chore(deps): repin ccloop to e25381f …`）；本仓之后只多了 W10 判据与 handoff，不需要 repin。
-- Orca 测试者反馈轮（#98–#109 等）**已在 Orca 侧做完，本仓没改、没 repin、没推**。与本仓相关的结论（原数在 Orca 台账 `.superpowers/sdd/2026-10-28-tester-feedback-round/progress.md`）：① 付费 codex `gpt-6-luna` 量了澄清＋拆分：3 次单调用各一轮、无工具，input 约 12.6–13.0 k／次、cached 0（本仓 codex 总数含 `cached_input_tokens`，`src/runtime/codex/protocol.ts`）——测试者报的每稿 28–30 万没复现，要测试者的 `single-call/call-*/events.jsonl` 再查；② #105 在 Orca 侧新增原因 `context-unreported`（目录里有、没报窗口），指向本仓已有的 `declaredContextWindow`；③ 跨调用复用 agent session（#109）**不做**，与本仓 #50 一致。Orca 的负载 flake 里有一条会挂在 `git hash-object -w` 子进程上（Orca `correctionCoarseDebug`，Orca 侧问题，见 Orca `known-load-flakes.md`）。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**Orca 仍 pin 本仓 `e25381f`**（主题行 `chore(deps): repin ccloop to e25381f …`）；本仓之后只多了 W10 判据与 handoff，不需要 repin。
+- Orca 会话 `3ea8a21e`（测试者反馈轮的后续：主题删减、`orca task settle-usage` 走 person token＝Orca 控制库 schema 21、Radix Select 试样）**本仓没改、没 repin**；收尾按人临时授权把本仓 main 推到 origin（只含 handoff 提交）。测试者反馈轮里与本仓相关的结论仍成立（原数在 Orca 台账 `.superpowers/sdd/2026-10-28-tester-feedback-round/progress.md`）：付费 codex 澄清＋拆分每次 input 约 12.6–13.0 k、cached 0（本仓 codex 总数含 `cached_input_tokens`），测试者的每稿 28–30 万没复现、要其 `events.jsonl`（人说不一定拿得到）；Orca 新原因 `context-unreported` 指向本仓 `declaredContextWindow`；跨调用复用 session（#109）不做，与本仓 #50 一致。
 - 本仓与 Orca #62 相关的契约（`omp-stalled` 错误码、单调用记录的可选 `usageLowerBound`，非 complete 即可带、只在 >0 时出现、从不入账）见 Orca spec `2026-10-27-single-call-unknown-usage-settlement-design.md` §4、§9 R5、§11；判据 `tests/control/ompSingleCallStall.test.ts` 与 W10；两个互相遮蔽的「>0」守卫登记为冗余。
 - O9 多仓真 agent 验收：codex（`o9-codex-7`）、omp（`o9-omp-5`、`o9-omp-e25`）、claude（`/private/tmp/orca-7753e97d/o9-claude-2/`，工具报 $0.7925112）都已通过。
 - ⚠️ 沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（登记未修，Orca 每轮跑完按人裁清）。
