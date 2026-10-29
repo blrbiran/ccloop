@@ -173,7 +173,8 @@ const settlementSchema=z.object({method:z.literal("remaining-grant"),commandId:i
  groupId:idSchema,taskId:idSchema,workItemId:idSchema,runId:idSchema,generation:positive,highWater:safe,charged:pair,
  reservationDisposition:z.enum(["committed","released"]),report:artifactRefSchema,stopProof:stopSchema,
  handoffResolution:z.object({requestId:idSchema,previousState:z.literal("settled-unrecoverable"),previousFailureCode:z.literal("usage-unsettled"),checkpointId:idSchema,checkpointHash:hash}).strict().optional()}).strict();
-const receiptSchema=z.object({principal:z.string(),client:z.literal("web"),verb:z.literal("settle-unknown-usage"),commandId:idSchema,
+// A Web row backs the marker by its principal; a socket row (Orca `orca task settle-usage`, 2026-10-29) by the person token's account it records.
+const receiptSchema=z.object({principal:z.string(),client:z.string().min(1),personPrincipal:z.string().regex(/^user:.+/).optional(),verb:z.literal("settle-unknown-usage"),commandId:idSchema,
  result:z.object({kind:z.literal("usage-settled"),taskId:idSchema,runId:idSchema,generation:positive,charged:pair,at:safe,method:z.literal("remaining-grant")}).strict()}).strict();
 const phaseProcess=z.object({pid:positive,pgid:positive,startedAt:z.string().min(1),phase:z.string()}).strict();
 function validateAccounting(admission:SavedResultAdmission,source:LoopStartEnvelope,ledger:any,readLogical:(ref:ArtifactRefV1)=>Buffer,json:(ref:ArtifactRefV1)=>any,expectedOutcome="failed"):void{
@@ -197,7 +198,7 @@ function validateAccounting(admission:SavedResultAdmission,source:LoopStartEnvel
   if(a.settlement===null||a.receipt===null)fail("saved-result-usage-unsettled");
   const marker=settlementSchema.parse(json(a.settlement)),receipt=receiptSchema.parse(json(a.receipt));
   for(const key of ["runId","groupId","workItemId","taskId","generation"] as const)if(marker[key]!==identity[key])fail("saved-result-settlement-invalid");
-  if(marker.highWater!==a.highWater||!same(marker.report,a.report)||!same(marker.stopProof,stop)||marker.commandId!==receipt.commandId||marker.principal!==receipt.principal
+  if(marker.highWater!==a.highWater||!same(marker.report,a.report)||!same(marker.stopProof,stop)||marker.commandId!==receipt.commandId||marker.principal!==(receipt.client==="web"?receipt.principal:receipt.personPrincipal)
    ||!same(receipt.result,{kind:"usage-settled",taskId:identity.taskId,runId:identity.runId,generation:identity.generation,charged:marker.charged,at:marker.at,method:marker.method})
    ||(marker.reservationDisposition==="released")!==(marker.handoffResolution!==undefined))fail("saved-result-settlement-invalid");
   for(const bucket of ["work","handoff"] as const)for(const d of ["tokens","activeMs","attempts","sessions"] as const){
