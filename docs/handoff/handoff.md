@@ -181,13 +181,13 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-30，Orca 会话 `b999cc81`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-10-30，Orca 会话 `65b4d067`）
 
 - 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**Orca 现 pin 本仓 `ed5e4aa`**（主题行 `chore(deps): repin ccloop to ed5e4aa …`）。
-- Orca 会话 `b999cc81`：本仓只改了收据校验（见「当前状态 · 本轮」）；Orca 侧同时让收据带 `personPrincipal`（Orca spec `2026-10-29-socket-usage-settlement-design.md` §5 更正）。Orca 其余工作（Radix Select 全量换）与本仓无关。
+- Orca 会话 `65b4d067`：**本仓无改动**，Orca 只是把 Radix Select 合入、装上（与本仓无关）。本仓最近一次被 Orca 用到的改动仍是 `b999cc81` 轮的收据校验（见「当前状态 · 本轮」）；Orca 侧同时让收据带 `personPrincipal`（Orca spec `2026-10-29-socket-usage-settlement-design.md` §5 更正）。
 - 测试者反馈轮里与本仓相关的结论仍成立（原数在 Orca 台账 `.superpowers/sdd/2026-10-28-tester-feedback-round/progress.md`）：付费 codex 澄清＋拆分每次 input 约 12.6–13.0 k、cached 0（本仓 codex 总数含 `cached_input_tokens`）；测试者每稿 28–30 万没复现、要其 `events.jsonl`（人在问）；Orca 原因 `context-unreported` 指向本仓 `declaredContextWindow`；跨调用复用 session（#109）不做，与本仓 #50 一致。
 - 本仓与 Orca #62 相关的契约（`omp-stalled`、单调用记录的可选 `usageLowerBound`）见 Orca spec `2026-10-27-single-call-unknown-usage-settlement-design.md` §4、§9 R5、§11；判据 `tests/control/ompSingleCallStall.test.ts` 与 W10。
 - O9 多仓真 agent 验收：codex（`o9-codex-7`）、omp（`o9-omp-5`、`o9-omp-e25`）、claude（`/private/tmp/orca-7753e97d/o9-claude-2/`，工具报 $0.7925112）都已通过。
 - ⚠️ 沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（登记未修，Orca 每轮跑完按人裁清）。
 - **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`、`toolRules`、`transcripts`、`dirs[]`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`、`work.additionalRepos`；`executionPolicy.toolRules`；codex wire `flow` 的封闭形状与 strict 投影；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；fake 参数约定；`blockRun` 原因串；`isRepeatedFailure`；单调用记录的 `errorCode`／`usageLowerBound`；**已存结果恢复收据的 `client`／`personPrincipal` 规则**。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受；Orca 面板只认得已知的 failureCause 名单，新 cause 先在 Orca 登记。
-- ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`。Orca 测试的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build（`ed5e4aa` 的 clone 需新建：`git clone --local` 本仓 → checkout → `npm ci --prefer-offline` → `npm run build`；会话 `b999cc81` 用的在其 scratchpad，已不可依赖）；别指本仓工作树的 `dist`。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
+- ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`。Orca 测试的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build（`ed5e4aa` 的 clone 每个会话自己建：`git clone --local` 本仓 → checkout → `npm ci --prefer-offline` → `npm run build`，约 1 分钟；建在会话 scratchpad，会话结束即失）；别指本仓工作树的 `dist`。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
