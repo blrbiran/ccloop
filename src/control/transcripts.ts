@@ -21,17 +21,17 @@ export interface TranscriptEntryV1 {
   truncatedAt: number | null;
 }
 
-const KINDS = ["claude", "codex", "omp"] as const;
-const ATTEMPT = /^[1-9][0-9]{0,8}$/;
-const PHASE = /^[a-z][a-z-]{0,31}$/;
-const CALL = /^call-[A-Za-z0-9]{1,64}$/;
+export const KINDS = ["claude", "codex", "omp"] as const;
+export const ATTEMPT = /^[1-9][0-9]{0,8}$/;
+export const PHASE = /^[a-z][a-z-]{0,31}$/;
+export const CALL = /^call-[A-Za-z0-9]{1,64}$/;
 
 /**
  * Real directories under `dir` whose names match, with their birth time. Review minor (Orca session ffec7b28): a directory
  * that cannot be read (any error, not only ENOENT) contributes nothing, and the listing goes on -- one unreadable attempt or
  * phase directory must not make collect, which Orca polls for the whole run, fail.
  */
-async function realDirectories(dir: string, pattern: RegExp): Promise<Array<{ name: string; birthtimeMs: number }>> {
+export async function realDirectories(dir: string, pattern: RegExp): Promise<Array<{ name: string; birthtimeMs: number }>> {
   let names: string[];
   try { names = await readdir(dir); } catch { return []; }
   const kept: Array<{ name: string; birthtimeMs: number }> = [];

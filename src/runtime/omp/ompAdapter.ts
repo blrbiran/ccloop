@@ -133,12 +133,15 @@ export class OmpAdapter implements RuntimeAdapter {
       if (await worktreeHead(context.worktreePath) !== headBefore) {
         throw Object.assign(new Error("omp-head-mutated"), { observedTokens: execution.tokenUsage });
       }
+      // Orca #111: git is the authority for what changed, so the path policy and the verifier judge the observed list. An
+      // agent that also reports a gitignored file it wrote, or forgets one, no longer loses a finished attempt; the difference
+      // stays as evidence and a failed evidence write changes nothing.
       const actual = await observedChangedPaths(context.worktreePath);
       const reported = execution.changedFiles;
-      if (new Set(reported).size !== reported.length || JSON.stringify([...reported].sort()) !== JSON.stringify(actual)) {
-        throw Object.assign(new Error(`omp-changed-files-mismatch: actual=${JSON.stringify(actual)} reported=${JSON.stringify(reported)}`), { observedTokens: execution.tokenUsage });
+      if (JSON.stringify([...reported].sort()) !== JSON.stringify(actual)) {
+        await writeFile(join(context.runDir, "changed-files-difference.json"), JSON.stringify({ actual, reported }), { mode: 0o600 }).catch(() => undefined);
       }
-      return execution;
+      return { ...execution, changedFiles: actual };
     }
     catch (error) {
       // Per-contract tool rules (spec 2026-10-22 §4): a violation is terminal, so an abort never turns it into "no result".

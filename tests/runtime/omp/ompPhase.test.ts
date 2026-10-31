@@ -34,6 +34,8 @@ if(mode==="verify-mutates" && systemPrompt.includes("verification phase"))writeF
 if(systemPrompt.includes("execution phase")){
   writeFileSync("answer.txt","42\\n");
   result={changedFiles:["answer.txt"],diffPatch:"",commandOutputs:[],stdoutStderrLog:"changed answer"};
+  if(mode==="reports-ignored")result.changedFiles.push(".wolf/memory.md");
+  if(mode==="omits-a-file")writeFileSync("forgotten.txt","x\\n");
 }else if(systemPrompt.includes("verification phase")){
   result={approved:true,rejectCategory:"",primaryTargetPaths:["answer.txt"],failingCommand:null,safeToRetry:false,evidence:["answer is 42"],pauseSignals:[],stopSignals:[]};
 }else result={summary:"Edit answer.txt once",primaryTargetPaths:["answer.txt"]};
@@ -69,6 +71,21 @@ describe("OMP runtime phase", () => {
     expect(observed.args).not.toContain(observed.prompt);
     expect(observed.prompt).toContain("Plan one isolated L2 attempt");
     expect(observed.systemPrompt).toContain("planning phase");
+  });
+
+  // Orca #111: the path policy and the verifier judge `changedFiles`, so these two pin that the list they get is git's.
+  it("keeps a finished attempt whose agent also reported a file git does not see, judged on git's list", async () => {
+    const f = await fixture("reports-ignored");
+    const execution = await ompDescriptor.createAdapter(f.config).execute(f.context);
+    expect(execution!.changedFiles).toEqual(["answer.txt"]);
+    expect(JSON.parse(await readFile(join(f.context.runDir, "changed-files-difference.json"), "utf8"))).toEqual({ actual: ["answer.txt"], reported: ["answer.txt", ".wolf/memory.md"] });
+  });
+
+  it("puts a file the agent forgot to report in front of the path policy instead of letting it pass unseen", async () => {
+    const f = await fixture("omits-a-file");
+    const execution = await ompDescriptor.createAdapter(f.config).execute(f.context);
+    expect(execution!.changedFiles).toEqual(["answer.txt", "forgotten.txt"]);
+    expect(JSON.parse(await readFile(join(f.context.runDir, "changed-files-difference.json"), "utf8"))).toEqual({ actual: ["answer.txt", "forgotten.txt"], reported: ["answer.txt"] });
   });
 
   it("executes only the attempt's allowed file and then verifies it as separate phases", async () => {

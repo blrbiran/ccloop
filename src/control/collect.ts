@@ -13,6 +13,7 @@ import { inspectStart, type ExecutionStatusV1 } from "./accept.js";
 import { readAcceptedOptional } from "./store.js";
 import { readToolRulesReport } from "./toolRulesReport.js";
 import { listTranscripts, type TranscriptEntryV1 } from "./transcripts.js";
+import { observedUsageLowerBound } from "./usageLowerBound.js";
 
 /** Orca labels and progress spec §3.2 (2026-09-28): the loop's latest state, as Orca shows a task's step. */
 export interface ProgressV1 {
@@ -53,6 +54,8 @@ export interface CollectionV1 {
    * there is at least one; absent otherwise, like toolRules. Advertised by `features.transcripts: "v1"`.
    */
   transcripts?: TranscriptEntryV1[];
+  /** Orca #116: the floor observedUsageLowerBound found; absent when there is none. For display, never booked. */
+  usageLowerBound?: { tokens: number };
   /**
    * Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.6): one entry per extra repository, contract order, present
    * iff the contract has additionalRepos. changedPaths is ccloop's own observation of the current attempt (§11.3), [] before
@@ -201,6 +204,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const progress = loopState === null ? null : progressOf(loopState.state);
   const runFinal = proof !== null || (progress !== null && isTerminalRunStatus(progress.status));
   const transcripts = await listTranscripts(input.work.sourceDir, runFinal);
+  const usageLowerBound = await observedUsageLowerBound(input.work.sourceDir);
   const extraKeys = input.work.kind === "loop" ? input.work.contract.context.additionalRepos?.map((repo) => repo.key) : undefined;
   // Evaluated after progressOf, which has checked the loop state's currentAttempt.
   const dirs = extraKeys === undefined ? undefined : await dirsOf(input.work.sourceDir, extraKeys, loopState === null ? null : loopState.state);
@@ -214,6 +218,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     ...(failureCause === undefined ? {} : { failureCause }),
     ...(toolRules === undefined ? {} : { toolRules }),
     ...(transcripts.length === 0 ? {} : { transcripts }),
+    ...(usageLowerBound === null ? {} : { usageLowerBound: { tokens: usageLowerBound } }),
     ...(dirs === undefined ? {} : { dirs }),
   };
 }

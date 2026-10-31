@@ -223,6 +223,8 @@ const collectionSchema = z.object({
     attempt: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), phase: z.string().min(1), seq: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     path: z.string().min(1).nullable(), bytes: safeInteger, final: z.boolean(), truncatedAt: safeInteger.nullable(),
   }).strict()).min(1).optional(),
+  // Orca #116: the observed floor of calls that ended without a usage report; present iff there is one. Display only.
+  usageLowerBound: z.object({ tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
 }).strict();
 
 const METHODS = new Set<ControlMethodV1>([
