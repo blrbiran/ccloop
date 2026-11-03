@@ -188,10 +188,13 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-11-01，Orca 会话 `663fb68e`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-11-03，Orca 会话 `43913afc`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**Orca 现 pin 本仓 `026c571`**（主题行 `chore(deps): repin ccloop to 026c571 …`）。
-- Orca 会话 `663fb68e`：**本仓无改动、无需 repin**。Orca 把已有安装的 30 分钟 `timeoutMs` 迁到 2 小时的做法见 Orca spec `2026-11-01-tester-round-3-design.md` §4、§7。⚠️ codex 额度到 2026-11-04 16:12 才恢复（该会话实测）。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**Orca 现 pin 本仓 `026c571`**（主题行 `chore(deps): repin ccloop to 026c571 …`）；会话 `43913afc` **本仓无改动、无需 repin**。
+- **两件以后要动本仓契约的事（都只有 Orca 侧设计，未实施，先同步再动）**：
+  1. 不限 token 模式下 loop run 的用量未知自动按下界记账（Orca spec `2026-11-03-soft-mode-approximate-usage-design.md` §7）：Orca 的 `usageSettlement` 标记按命令台账的 principal 校验，而本仓已存结果恢复的收据（`src/control/savedResultRecovery.ts` `receiptSchema`，`client`／`personPrincipal` 规则）也按它校验 ⇒ 一个「代码自动」的 principal 要两仓一起设计。单次调用那一半 Orca 已做完，不经过本仓。
+  2. 额度感知的跨安装切换（Orca spec `2026-11-03-quota-failover-design.md`，D1–D6 待人）：建议本仓新增 `failureCause: "quota-exhausted"`，`detail` 带 `resetsAt`／`source`，按 magpie 的规则分额度与限流、解析重置时间；不进 RETRYABLE_CAUSES。Orca 面板只认已登记的 cause 名 ⇒ 先在 Orca 登记。
+- ⚠️ codex 额度到 2026-11-04 16:12（Orca 会话 `663fb68e` 实测）；真 codex 付费先问人。
 - 测试者反馈轮里与本仓相关的结论（原数在 Orca 台账 `.superpowers/sdd/2026-10-28-tester-feedback-round/progress.md`）：付费 codex 澄清＋拆分每次 input 约 12.6–13.0 k、cached 0（本仓 codex 总数含 `cached_input_tokens`），那是小仓；单调用的 input 主要是 Orca 拼进 prompt 的仓库 overview，与本仓无关（Orca spec `2026-11-01-overview-token-cost-findings.md`）；Orca 原因 `context-unreported` 指向本仓 `declaredContextWindow`；跨调用复用 session（#109）不做，与本仓 #50 一致。
 - 本仓与 Orca #62 相关的契约（`omp-stalled`、单调用记录的可选 `usageLowerBound`）见 Orca spec `2026-10-27-single-call-unknown-usage-settlement-design.md` §4、§9 R5、§11；判据 `tests/control/ompSingleCallStall.test.ts` 与 W10。
 - O9 多仓真 agent 验收：codex（`o9-codex-7`）、omp（`o9-omp-5`、`o9-omp-e25`）、claude（`/private/tmp/orca-7753e97d/o9-claude-2/`，工具报 $0.7925112）都已通过。
