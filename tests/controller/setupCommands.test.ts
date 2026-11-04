@@ -206,10 +206,16 @@ describe("runSetupCommands", () => {
   it("a timeout returns promptly though an escaped process holds the output pipe", async () => {
     const { root, logDir } = await repo();
     const started = Date.now();
-    const outcome = await runSetupCommands(["perl -e 'use POSIX; setsid(); sleep 30' & sleep 30"], root, logDir, undefined, 300);
-    expect(outcome).toMatchObject({ ok: false, detail: expect.stringMatching(/ timeout$/) });
-    expect(Date.now() - started).toBeLessThan(3500);
-    await execFileAsync("pkill", ["-f", "use POSIX; setsid\(\); sleep 30"]).catch(() => undefined);
+    const escaped = join(root, "node_modules", "escaped.pid");
+    try {
+      const outcome = await runSetupCommands([`mkdir -p node_modules; perl -e 'use POSIX; setsid(); open(F, ">", "${escaped}"); print F $$; close F; sleep 30' & sleep 30`], root, logDir, undefined, 300);
+      expect(outcome).toMatchObject({ ok: false, detail: expect.stringMatching(/ timeout$/) });
+      expect(Date.now() - started).toBeLessThan(3500);
+    } finally {
+      // The escaped process is outside every group setup kills; the test ends it itself (before the repo is removed).
+      const pid = Number(await readFile(escaped, "utf8").catch(() => "0"));
+      if (pid > 0) try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
   });
 
   // Final-review M2 ruling: running out of the attempt's remaining time is the attempt being out of time; only the
@@ -230,14 +236,21 @@ describe("runSetupCommands", () => {
     let registered: { pid: number; pgid: number; startedAt: string; phase: string } | null = null;
     const running = runSetupCommands(["sleep 30"], root, logDir, undefined, 60_000, { onProcessRegistered: async (registration) => { registered = registration; } });
     for (let waited = 0; registered === null && waited < 5000; waited += 25) await new Promise((resolve) => setTimeout(resolve, 25));
-    const processJson = JSON.parse(await readFile(join(logDir, "setup-1", "process.json"), "utf8"));
-    expect(processJson).toEqual(registered);
-    expect(existsSync(join(logDir, "setup-1", "outcome.json"))).toBe(false);
-    const started = Date.now();
-    expect(await reapRunProcesses(runDir, { graceMs: 2000 })).toEqual({ ok: true, reaped: 1 });
-    expect((await running).ok).toBe(false);
-    expect(Date.now() - started).toBeLessThan(10_000);
-    // Once ended, the command is finished for the reaper.
-    expect(existsSync(join(logDir, "setup-1", "outcome.json"))).toBe(true);
+    try {
+      const processJson = JSON.parse(await readFile(join(logDir, "setup-1", "process.json"), "utf8"));
+      expect(processJson).toEqual(registered);
+      expect(existsSync(join(logDir, "setup-1", "outcome.json"))).toBe(false);
+      const started = Date.now();
+      expect(await reapRunProcesses(runDir, { graceMs: 2000 })).toEqual({ ok: true, reaped: 1 });
+      expect((await running).ok).toBe(false);
+      expect(Date.now() - started).toBeLessThan(10_000);
+      // Once ended, the command is finished for the reaper.
+      expect(existsSync(join(logDir, "setup-1", "outcome.json"))).toBe(true);
+    } finally {
+      // A red run leaves the group alive; it is the test's to end.
+      const pgid = (registered as { pgid: number } | null)?.pgid;
+      if (pgid !== undefined) try { process.kill(-pgid, "SIGKILL"); } catch { /* already gone */ }
+      await running.catch(() => undefined);
+    }
   });
 });
