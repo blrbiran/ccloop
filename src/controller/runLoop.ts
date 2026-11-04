@@ -1,4 +1,5 @@
-import { attachedCause, type RunFailureCauseV1 } from "../runtime/failureCause.js";
+import { attachedCause, causeDetail, type RunFailureCauseV1 } from "../runtime/failureCause.js";
+import { runSetupCommands, SETUP_COMMAND_TIMEOUT_MS } from "./setupCommands.js";
 import {testCrashPoint} from "../control/testCrashPoint.js";
 import {canonicalHash} from "../control/protocol.js";
 import {loadSavedResultRecovery,materializeSavedResult,boundSavedResultRuntime,assertSavedResultFence,type LoadedSavedResult} from "../control/savedResultRecovery.js";
@@ -1515,6 +1516,8 @@ export function createStopRequestSignal(): StopRequestSignal {
 export interface RunControlHooks {
   savedResultRecovery?: import("../control/protocol.js").LoopStartEnvelope;
   onRecoveryAttemptEntered?:(input:{attempt:number})=>Promise<void>;
+  /** Task setup commands (spec 2026-11-04 §4.4): the attempt ended in setup, before any provider call. */
+  onSetupFailed?: (input: { attempt: number }) => Promise<void>;
   workGrant?: BudgetAmount;
   tokenPolicy?: TokenPolicy;
   /** Only the worker supplies this, after validating the checkpoint and reachable artifacts. */
@@ -1836,6 +1839,23 @@ export async function runLoopFromState(
       if (continuation) {
         plan = continuation.plan;
         execution = continuation.execution;
+      }
+      // Task setup commands (spec 2026-11-04 §4.4): after the worktree exists (and a continuation's tree is restored into
+      // it), before whichever agent phase comes first. A failure ends the run: the attempt stays counted, no agent phase
+      // of it runs, and the worktree comes off as for any other failed attempt.
+      if (contract.context.setupCommands !== undefined) {
+        // §8.1: setup writes into the attempt worktree, a side effect.
+        await heartbeat.assertHeld();
+        const setup = await runSetupCommands(contract.context.setupCommands, worktreePath, join(runDir, "attempts", String(attempt)),
+          options?.phaseSignal, Math.min(SETUP_COMMAND_TIMEOUT_MS, getPhaseTimeoutMs(contract, state)));
+        if (!setup.ok) {
+          await options?.onSetupFailed?.({ attempt });
+          state = await persistTerminalState(runDir, writeOwnedRunState, state, "failed", "setup failed",
+            { cause: "setup-failed", phase: "setup", retries: 0, detail: causeDetail(setup.detail) });
+          await heartbeat.assertHeld();
+          await cleanupAttemptWorkspaceBestEffort(contract.context.repoPath, worktreePath, runDir, "cleanup after terminal decision failed");
+          return state;
+        }
       }
       if (!continuation || continuation.nextPhase === "plan") {
         const planTimeoutMs = getPhaseTimeoutMs(contract, state);
