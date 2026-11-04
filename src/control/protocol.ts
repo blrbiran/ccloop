@@ -464,6 +464,11 @@ function validateEnvelopePaths(envelope: StartEnvelopeV3, method: ControlMethodV
     if (!isAbsolute(skillsDir)) throw new ControlProtocolError("control-request-invalid");
     if (method === "accept") validateCanonicalDirectory(skillsDir);
   }
+  // Task setup commands (spec 2026-11-04-task-setup-and-check-retry-design §4.5): saved-result recovery re-runs the
+  // checks on a saved result without the attempt's setup, so it is refused by name at accept.
+  if (method === "accept" && envelope.mode === "verify-saved-result" && envelope.work.contract.context.setupCommands !== undefined) {
+    throw new ControlProtocolError("control-setup-recovery-unsupported");
+  }
   if (envelope.work.additionalRepos !== undefined) {
     // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.7, §19.2 P6): continuation bundles one repository only, and
     // saved-result recovery verifies one; both are refused at accept by name.
