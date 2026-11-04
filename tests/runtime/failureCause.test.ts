@@ -6,7 +6,8 @@ import type { MaterializedAgentConfigV1 } from "../../src/agents/types.js";
 import { ClaudeAgentAdapter } from "../../src/runtime/claude/claudeAgentAdapter.js";
 import { CodexAdapter } from "../../src/runtime/codex/codexAdapter.js";
 import { parseCodexConfig } from "../../src/runtime/codex/protocol.js";
-import { attachedCause, classifyClaudeCall, classifyCodexCall, classifyOmpCall, claudeErrorCause, type ClaudeSignalsV1 } from "../../src/runtime/failureCause.js";
+import { collectionSchema } from "../../src/control/command.js";
+import { attachedCause, FAILURE_CAUSES, RETRYABLE_CAUSES, classifyClaudeCall, classifyCodexCall, classifyOmpCall, claudeErrorCause, type ClaudeSignalsV1 } from "../../src/runtime/failureCause.js";
 import { runWithTransientRetry, type TryResult } from "../../src/runtime/transientRetry.js";
 import { observedTokensOf } from "../../src/runtime/types.js";
 import { codexFixture } from "./codex/fixture.js";
@@ -210,4 +211,18 @@ describe("adapters: transient failures are retried only where the call could not
     const quotaOut = await settle(quota.a.plan(quota.context)) as { error: Error };
     expect([await quota.calls(), attachedCause(quotaOut.error)?.classification.cause]).toEqual([1, "quota"]);
   }, 30_000);
+});
+
+describe("setup-failed (task setup commands, plan 2026-11-04 Task 1)", () => {
+  it("setup-failed is a cause and is not retryable", () => {
+    // Retrying re-runs a setup that failed deterministically: the cause is terminal.
+    expect(FAILURE_CAUSES).toContain("setup-failed");
+    expect(RETRYABLE_CAUSES.has("setup-failed")).toBe(false);
+  });
+
+  it("collect accepts a setup-phase cause", () => {
+    const failureCause = { cause: "setup-failed", phase: "setup", retries: 0, detail: "npm ci exit=1" };
+    const parsed = collectionSchema.parse({ events: [], candidate: null, terminal: null, progress: null, failureCause });
+    expect(parsed.failureCause).toEqual(failureCause);
+  });
 });

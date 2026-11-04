@@ -182,7 +182,7 @@ const terminalSchema = z.object({
   budgetSnapshot: z.object({ attemptsRemaining: safeInteger, timeRemainingMs: safeInteger, tokenBudgetRemaining: safeInteger }).strict(),
   recentFailures: z.array(z.object({ rejectCategory: z.string(), primaryTargetPaths: z.array(z.string()), failingCommand: z.string().nullable() }).strict()),
 }).strict();
-const collectionSchema = z.object({
+export const collectionSchema = z.object({
   events: z.array(usageEventSchema),
   candidate: z.object({
     groupId: z.string().min(1), workItemId: z.string().min(1), taskId: z.string().min(1).nullable(), runId: z.string().min(1),
@@ -213,7 +213,7 @@ const collectionSchema = z.object({
   // Failure causes (spec 2026-10-21 §5): top level, present iff terminal and the state has one. Orca's strict collect parse
   // must accept it in the same repin.
   failureCause: z.object({
-    cause: z.enum(FAILURE_CAUSES), phase: z.enum(["plan", "execute", "verify"]).nullable(),
+    cause: z.enum(FAILURE_CAUSES), phase: z.enum(["plan", "execute", "verify", "setup"]).nullable(),
     retries: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), detail: z.string().nullable(),
   }).strict().optional(),
   // Per-contract tool rules (spec 2026-10-22 §5): top level, present iff the contract has rules and the report exists.

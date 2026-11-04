@@ -58,6 +58,8 @@ export const loopContractSchema = z
         // byte-identical. repoKey names the primary (repoPath); each extra repository has its own key and paths.
         repoKey: repoKeySchema.optional(),
         additionalRepos: z.array(additionalRepoSchema).min(1).max(7).optional(),
+        // Task setup (spec 2026-11-04 §4.4): optional, no default -- absent leaves the contract byte-identical.
+        setupCommands: z.array(z.string().min(1).max(4096).regex(/^[^\r\n]*$/)).min(1).max(8).optional(),
       })
       .strict()
       .superRefine((context, issues) => {

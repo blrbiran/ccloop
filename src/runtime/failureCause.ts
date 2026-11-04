@@ -14,6 +14,9 @@ export const FAILURE_CAUSES = [
   // ERRATUM (Orca session 7753e97d, 2026-10-27; spec 2026-10-27-plan-phase-tools §3): also classified from the phase fold's
   // `omp-phase-tool-forbidden` when it names a tool the phase does not have (any omp phase, plan in issue 60).
   "tool-rule-violated",
+  // Task setup commands (spec 2026-11-04 §4.5): a contract setup command failed, timed out or changed the tree. Terminal:
+  // never in RETRYABLE_CAUSES; the same command would fail again.
+  "setup-failed",
 ] as const;
 export type FailureCauseV1 = (typeof FAILURE_CAUSES)[number];
 
@@ -23,7 +26,7 @@ export const RETRYABLE_CAUSES: ReadonlySet<FailureCauseV1> = new Set(["rate-limi
 export type CallClassification = { cause: FailureCauseV1; workObserved: boolean; detail: string | null };
 
 /** The run-level record (spec §5), persisted on RunState and exposed at collect's top level. */
-export type RunFailureCauseV1 = { cause: FailureCauseV1; phase: "plan" | "execute" | "verify" | null; retries: number; detail: string | null };
+export type RunFailureCauseV1 = { cause: FailureCauseV1; phase: "plan" | "execute" | "verify" | "setup" | null; retries: number; detail: string | null };
 
 const DETAIL_BYTES = 512;
 
