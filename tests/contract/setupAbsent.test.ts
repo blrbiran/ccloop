@@ -28,4 +28,20 @@ describe("context.setupCommands", () => {
       expect(() => loopContractSchema.parse(withSetup(bad))).toThrow();
     }
   });
+
+  // Final-review M5: setup runs only in the primary worktree; a multi-repo contract with setup would hand the agent its
+  // other repositories unprepared, so the combination is refused at parse.
+  it("setupCommands together with additionalRepos is refused", () => {
+    const multi = (setupCommands: string[] | undefined) => {
+      const raw = withSetup(setupCommands) as { context: Record<string, unknown> };
+      if (setupCommands === undefined) delete raw.context.setupCommands;
+      raw.context.repoKey = "app";
+      raw.context.additionalRepos = [{ key: "lib", repoPath: "/tmp/lib", targetPaths: ["src"] }];
+      return raw;
+    };
+    expect(loopContractSchema.safeParse(multi(undefined)).success).toBe(true);
+    const refused = loopContractSchema.safeParse(multi(["npm ci"]));
+    expect(refused.success).toBe(false);
+    expect(refused.error?.issues.map((issue) => issue.message)).toEqual(["setup-commands-with-additional-repos"]);
+  });
 });

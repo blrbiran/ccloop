@@ -70,6 +70,11 @@ export const loopContractSchema = z
         if (context.additionalRepos !== undefined && new Set(keys).size !== keys.length) {
           issues.addIssue({ code: z.ZodIssueCode.custom, message: "repository keys must be unique and differ from repoKey" });
         }
+        // Final-review M5: setup runs in the primary worktree only, so a multi-repo contract with setup is refused rather
+        // than run with its other repositories unprepared.
+        if (context.setupCommands !== undefined && context.additionalRepos !== undefined) {
+          issues.addIssue({ code: z.ZodIssueCode.custom, message: "setup-commands-with-additional-repos" });
+        }
       }),
     executionPolicy: z
       .object({
