@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
 import { runSetupCommands, SETUP_GATE_SCRIPT, SETUP_LOG_TRUNCATED_MARKER } from "../../src/controller/setupCommands.js";
+import { reapRunProcesses } from "../../src/ownership/reapRunProcesses.js";
 
 // Task setup commands (spec 2026-11-04 §4.4): a contract's setup runs in the attempt worktree before the agent's first
 // phase. It may only write ignored files (dependencies, caches): anything Git can see would become part of the agent's
@@ -179,5 +180,64 @@ describe("runSetupCommands", () => {
     const started = Date.now();
     await expect(runSetupCommands(["sleep 5"], root, logDir, controller.signal, 10_000)).rejects.toMatchObject({ name: "AbortError" });
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  // Final-review I1: a command's background children die with it. A setup that leaves a daemon running hands the agent a
+  // tree with a process nobody registered as live, holding files and ports past the attempt.
+  it("nothing a command started in its group outlives the command", async () => {
+    const { root, logDir } = await repo();
+    let pgid = 0;
+    expect(await runSetupCommands(["sleep 5 </dev/null >/dev/null 2>&1 & echo started"], root, logDir, undefined, 10_000, {
+      onProcessRegistered: async (registration) => { pgid = registration.pgid; },
+    })).toEqual({ ok: true });
+    expect(pgid).toBeGreaterThan(0);
+    // SIGKILL is delivered at once; the orphaned children are reaped by init a moment later.
+    const deadline = Date.now() + 1000;
+    let probe = "present";
+    while (Date.now() < deadline) {
+      try { process.kill(-pgid, 0); } catch (error) { probe = String((error as NodeJS.ErrnoException).code); if (probe === "ESRCH") break; }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(probe).toBe("ESRCH");
+  });
+
+  // Final-review M7: a timeout must end setup within a bounded time even when a process outside the group holds the
+  // output pipe -- otherwise the attempt hangs as long as that process lives, past every limit.
+  it("a timeout returns promptly though an escaped process holds the output pipe", async () => {
+    const { root, logDir } = await repo();
+    const started = Date.now();
+    const outcome = await runSetupCommands(["perl -e 'use POSIX; setsid(); sleep 30' & sleep 30"], root, logDir, undefined, 300);
+    expect(outcome).toMatchObject({ ok: false, detail: expect.stringMatching(/ timeout$/) });
+    expect(Date.now() - started).toBeLessThan(3500);
+    await execFileAsync("pkill", ["-f", "use POSIX; setsid\(\); sleep 30"]).catch(() => undefined);
+  });
+
+  // Final-review M2 ruling: running out of the attempt's remaining time is the attempt being out of time; only the
+  // per-command cap is the setup's own timeout. The loop tells them apart by this flag.
+  it("a timeout at the attempt's remaining time is out of time; one at the cap is not", async () => {
+    const { root, logDir } = await repo();
+    expect(await runSetupCommands(["sleep 5"], root, logDir, undefined, 300, { commandTimeoutMs: 10_000 }))
+      .toEqual({ ok: false, command: "sleep 5", detail: "sleep 5 timeout", outOfTime: true });
+    expect(await runSetupCommands(["sleep 5"], root, logDir, undefined, 10_000, { commandTimeoutMs: 300 }))
+      .toEqual({ ok: false, command: "sleep 5", detail: "sleep 5 timeout" });
+  });
+
+  // Final-review M4: a controller crash mid-setup leaves the command's group running; resume reaps only what a
+  // process.json without an outcome.json names, so setup writes both where the reaper walks (the run directory).
+  it("a running command is recorded for reaping, and reaping a leftover setup group kills it", async () => {
+    const { root, logDir } = await repo();
+    const runDir = join(logDir, "..", "..");
+    let registered: { pid: number; pgid: number; startedAt: string; phase: string } | null = null;
+    const running = runSetupCommands(["sleep 30"], root, logDir, undefined, 60_000, { onProcessRegistered: async (registration) => { registered = registration; } });
+    for (let waited = 0; registered === null && waited < 5000; waited += 25) await new Promise((resolve) => setTimeout(resolve, 25));
+    const processJson = JSON.parse(await readFile(join(logDir, "setup-1", "process.json"), "utf8"));
+    expect(processJson).toEqual(registered);
+    expect(existsSync(join(logDir, "setup-1", "outcome.json"))).toBe(false);
+    const started = Date.now();
+    expect(await reapRunProcesses(runDir, { graceMs: 2000 })).toEqual({ ok: true, reaped: 1 });
+    expect((await running).ok).toBe(false);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    // Once ended, the command is finished for the reaper.
+    expect(existsSync(join(logDir, "setup-1", "outcome.json"))).toBe(true);
   });
 });
