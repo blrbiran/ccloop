@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { access, cp, copyFile, lstat, mkdir, readdir, realpath, rm } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { codexSkillsPendingPath } from "../runtime/codex/codexSkills.js";
 import { extraWorktreePath, namespacedAttemptRefName } from "../workspace/worktreeManager.js";
@@ -28,7 +28,17 @@ async function cloneAt(source: string, destination: string, revision: string): P
   await git(destination, "checkout", "--detach", revision);
 }
 
-async function copyLiveWorkspace(source: string, destination: string): Promise<void> {
+/**
+ * `skipIgnored` (final-review I2 ruling, spec 2026-11-04 §4.9): a contract with setup commands has its setup's output --
+ * dependencies, caches, all ignored by Git -- in the live worktree, which the result repository must not carry. Then the
+ * paths Git lists as ignored in that worktree are left out; without setup commands the copy is byte-for-byte as before.
+ */
+async function copyLiveWorkspace(source: string, destination: string, skipIgnored = false): Promise<void> {
+  const ignored = new Set<string>();
+  if (skipIgnored) {
+    const listed = (await exec("git", ["-C", source, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], { maxBuffer: 64 * 1024 * 1024 })).stdout;
+    for (const path of listed.split("\0")) if (path !== "") ignored.add(path.replace(/\/$/, ""));
+  }
   const head = await git(source, "rev-parse", "HEAD");
   await cloneAt(source, destination, head);
   for (const name of await readdir(destination)) {
@@ -40,6 +50,7 @@ async function copyLiveWorkspace(source: string, destination: string): Promise<v
         recursive: true,
         preserveTimestamps: true,
         dereference: false,
+        ...(skipIgnored ? { filter: (path: string) => !ignored.has(relative(source, path)) } : {}),
       });
     }
   }
@@ -77,7 +88,7 @@ export async function materializeResultRepository(
       return destination;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     if (await exists(attempt)) {
-      await copyLiveWorkspace(attempt, destination);
+      await copyLiveWorkspace(attempt, destination, envelope.work.contract.context.setupCommands !== undefined);
       return destination;
     }
     const ref = namespacedAttemptRefName(attempt, envelope.claim.runId);

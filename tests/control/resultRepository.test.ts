@@ -78,3 +78,35 @@ it("materializes only base after interrupted skill cleanup, including a partly r
  const destination=await materializeResultRepository(f.envelope,f.runDir,1);
  expect(await git(destination,"rev-parse","HEAD")).toBe(f.envelope.work.base);await expect(lstat(join(destination,".agents/skills/selected"))).rejects.toMatchObject({code:"ENOENT"});expect((await lstat(join(attempt,".agents/skills/selected"))).isSymbolicLink()).toBe(true);
 });
+
+// Final-review I2 ruling (spec 2026-11-04 §4.9): a contract's setup fills the worktree with ignored output (node_modules,
+// caches). The result repository Orca reads the agent's work from must hold the work, not gigabytes of installs, so
+// with setupCommands the ignored paths are left out of the live copy; a contract without setup keeps today's copy.
+describe("the live copy of a kept worktree, with and without setup commands (final-review I2)", () => {
+  async function kept(setupCommands: string[] | undefined) {
+    const f = await fixture();
+    const attempt = join(f.runDir, "worktrees/attempt-1");
+    await mkdir(join(f.runDir, "worktrees"), { recursive: true });
+    await git(f.repo, "worktree", "add", "-q", "--detach", attempt, f.envelope.work.base);
+    await writeFile(join(attempt, ".gitignore"), "node_modules/\n");
+    await mkdir(join(attempt, "node_modules"));
+    await writeFile(join(attempt, "node_modules", "x"), "installed\n");
+    await writeFile(join(attempt, "answer.txt"), "changed\n");
+    const envelope = structuredClone(f.envelope) as unknown as { work: { contract: { context: Record<string, unknown> } } };
+    if (setupCommands !== undefined) envelope.work.contract.context.setupCommands = setupCommands;
+    return materializeResultRepository(envelope as unknown as LoopStartEnvelope, f.runDir, 1);
+  }
+
+  it("with setupCommands the tracked change is copied and the ignored directory is not", async () => {
+    const destination = await kept(["npm ci"]);
+    expect((await exec("cat", [join(destination, "answer.txt")])).stdout).toBe("changed\n");
+    await expect(lstat(join(destination, "node_modules"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await lstat(join(destination, ".gitignore"))).isFile()).toBe(true);
+  });
+
+  it("without setupCommands the ignored directory is still copied", async () => {
+    const destination = await kept(undefined);
+    expect((await exec("cat", [join(destination, "answer.txt")])).stdout).toBe("changed\n");
+    expect((await exec("cat", [join(destination, "node_modules", "x")])).stdout).toBe("installed\n");
+  });
+});
