@@ -50,12 +50,13 @@ async function repoWithIgnores(): Promise<string> {
   return repo;
 }
 
-async function runWith(setupCommands: string[] | undefined, adapter: RuntimeAdapter, hooks?: RunControlHooks) {
+async function runWith(setupCommands: string[] | undefined, adapter: RuntimeAdapter, hooks?: RunControlHooks, perAttemptTimeoutMs?: number) {
   const repo = await repoWithIgnores();
   const runDir = await mkdtemp(join(tmpdir(), "ccloop-setup-run-"));
   dirs.push(runDir);
   const contract = createContract(repo, ["true"]);
   if (setupCommands !== undefined) contract.context.setupCommands = setupCommands;
+  if (perAttemptTimeoutMs !== undefined) contract.executionPolicy.perAttemptTimeoutMs = perAttemptTimeoutMs;
   const state = await runLoop(contract, runDir, adapter, hooks);
   const persisted = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8"));
   return { state, persisted, runDir };
@@ -156,6 +157,42 @@ describe("setup commands in runLoop", () => {
     const { state } = await runWith(["true"], new Recording(), { onProcessRegistered: async (registration) => { registered.push(registration); } });
     expect(state.status).toBe("succeeded");
     expect(registered.filter((entry) => entry.phase === "setup")).toHaveLength(1);
+  });
+
+  // Final-review M1: a handoff requested while setup ran stops at the boundary after setup -- the agent's first phase
+  // would otherwise start (and cost) after the operator asked the run to hand off.
+  it("a handoff requested during a setup that passes ends at the boundary after setup", async () => {
+    const adapter = new Recording();
+    const stopRequested = { requested: false };
+    const { persisted, runDir } = await runWith(["true"], adapter, {
+      stopRequested,
+      onProcessRegistered: async () => { stopRequested.requested = true; },
+    });
+    expect(adapter.calls).toBe(0);
+    expect(persisted.status).toBe("planning");
+    expect((await events(runDir)).at(-1)).toMatchObject({ type: "handoff_boundary", detail: "handoff requested after setup in attempt 1" });
+  });
+
+  // Final-review M2 ruling: a setup stopped by the attempt's time (not its own 15-minute cap) is the attempt out of
+  // time -- the operator sees the budget-exhausted reason, as for a phase that ran out of time.
+  it("a setup that runs out of the attempt's time ends exhausted, not setup-failed", async () => {
+    const adapter = new Recording();
+    const { persisted, runDir } = await runWith(["sleep 5"], adapter, undefined, 400);
+    expect(adapter.calls).toBe(0);
+    expect(persisted.status).toBe("exhausted");
+    expect(persisted.stopReason).toBe("runtime or token budget exhausted");
+    expect(persisted.failureCause).toEqual({ cause: "budget-exhausted", phase: null, retries: 0, detail: null });
+    expect(existsSync(join(runDir, "worktrees", "attempt-1"))).toBe(false);
+  });
+
+  // Final-review M6: a command may be 4096 characters; the cause Orca shows is bounded like every other cause detail.
+  it("a failing 4096-character setup command's cause detail is at most 512 bytes", async () => {
+    const command = `exit 3 #${"x".repeat(4096 - 8)}`;
+    expect(command).toHaveLength(4096);
+    const { persisted } = await run([command], new Recording());
+    expect(persisted.failureCause.cause).toBe("setup-failed");
+    expect(persisted.failureCause.detail.startsWith("exit 3 #xxx")).toBe(true);
+    expect(Buffer.byteLength(persisted.failureCause.detail)).toBeLessThanOrEqual(512);
   });
 
   describe("a continuation", () => {

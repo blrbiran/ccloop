@@ -1,5 +1,5 @@
 import { attachedCause, causeDetail, type RunFailureCauseV1 } from "../runtime/failureCause.js";
-import { runSetupCommands, SETUP_COMMAND_TIMEOUT_MS, type SetupOutcome } from "./setupCommands.js";
+import { runSetupCommands, type SetupOutcome } from "./setupCommands.js";
 import {testCrashPoint} from "../control/testCrashPoint.js";
 import {canonicalHash} from "../control/protocol.js";
 import {loadSavedResultRecovery,materializeSavedResult,boundSavedResultRuntime,assertSavedResultFence,type LoadedSavedResult} from "../control/savedResultRecovery.js";
@@ -1859,7 +1859,9 @@ export async function runLoopFromState(
         let setup: SetupOutcome;
         try {
           setup = await runSetupCommands(contract.context.setupCommands, worktreePath, join(runDir, "attempts", String(attempt)),
-            options?.phaseSignal, Math.min(SETUP_COMMAND_TIMEOUT_MS, getPhaseTimeoutMs(contract, state)),
+            // The attempt's time, not the cap: each command is capped at SETUP_COMMAND_TIMEOUT_MS inside, and a command
+            // stopped by this bound instead is out of time (final-review M2 ruling).
+            options?.phaseSignal, getPhaseTimeoutMs(contract, state),
             { onProcessRegistered: providerOptions?.onProcessRegistered });
         } catch (error) {
           const elapsedMs = chargeSetup();
@@ -1881,13 +1883,22 @@ export async function runLoopFromState(
         const setupElapsedMs = chargeSetup();
         await options?.onSetupEnded?.({ attempt, elapsedMs: setupElapsedMs, outcome: setup.ok ? "ok" : "failed" });
         if (!setup.ok) {
-          state = await persistTerminalState(runDir, writeOwnedRunState, state, "failed", "setup failed",
-            { cause: "setup-failed", phase: "setup", retries: 0, detail: causeDetail(setup.detail) });
+          // Final-review M2 ruling: a setup stopped by the attempt's remaining time ends out of time, like a phase that
+          // ran out of it; only its own cap, an exit or a changed tree is setup-failed.
+          state = setup.outOfTime === true
+            ? await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON)
+            : await persistTerminalState(runDir, writeOwnedRunState, state, "failed", "setup failed",
+              { cause: "setup-failed", phase: "setup", retries: 0, detail: causeDetail(setup.detail) });
           await heartbeat.assertHeld();
-          await cleanupAttemptWorkspaceBestEffort(contract.context.repoPath, worktreePath, runDir, "cleanup after terminal decision failed");
+          await cleanupAttemptWorkspaceBestEffort(contract.context.repoPath, worktreePath, runDir, `cleanup after terminal decision ${state.status}`);
           return state;
         }
         await writeOwnedRunState(runDir, state);
+        // Final-review M1: a handoff requested while setup ran is honoured at this boundary, before any agent phase.
+        if (handoffRequested()) {
+          await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+          return await persistHandoffBoundary("handoff_boundary", `handoff requested after setup in attempt ${attempt}`);
+        }
       }
       if (!continuation || continuation.nextPhase === "plan") {
         const planTimeoutMs = getPhaseTimeoutMs(contract, state);
