@@ -117,4 +117,17 @@
 
 ## As built
 
-(filled at the end)
+Orca session af2ceee1, 2026-11-05. Ledger `.superpowers/sdd/2026-11-04-task-setup-ccloop/progress.md` (rulings,
+mutations, reviews, gates). Orca spec §10 records what differs from its §4.4.
+
+- Merged into main by fast-forward (from `feat(contract): an optional context.setupCommands, the setup-failed cause
+  and the setup phase` to `test(loop): setup criteria end the processes they leave behind themselves`).
+- Beyond the tasks: every setup that ran writes an `attempt-<n>-setup` usage observation through `onSetupEnded`
+  (evidence `setup-ended-attempt-v1`); setup time is charged before the first phase; a handoff during or after setup
+  ends at a handoff boundary; setup groups are registered, SIGKILLed when the command ends, drained ≤ 2 s, logged with a
+  16 MiB cap, and recorded under `attempts/<n>/setup-<i>/` for reaping; a timeout bounded by the attempt's remaining
+  time ends `exhausted`; the contract schema refuses `setupCommands` with `additionalRepos`; saved-result eligibility
+  answers unavailable for a contract with setup; the result repository from a live worktree leaves out git-ignored
+  paths when the contract has setup.
+- No existing criterion was rewritten. Gate: typecheck/build 0, 2492/2492, `check-known-reds` RC 0.
+- Not pushed: the push was refused by Orca's Tier 0 gate hook (human).
