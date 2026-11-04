@@ -139,7 +139,8 @@ describe("runSetupCommands", () => {
     const { root, logDir } = await repo();
     const refusal = new Error("control-handoff-latched-before-prompt");
     await expect(runSetupCommands(["mkdir -p node_modules && touch node_modules/ran"], root, logDir, undefined, 10_000, {
-      onProcessRegistered: async () => { throw refusal; },
+      // The refusal comes late, so a command not held back until registration would have run by then.
+      onProcessRegistered: async () => { await new Promise((resolve) => setTimeout(resolve, 500)); throw refusal; },
     })).rejects.toBe(refusal);
     expect(existsSync(join(root, "node_modules", "ran"))).toBe(false);
   });
