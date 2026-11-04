@@ -1516,8 +1516,10 @@ export function createStopRequestSignal(): StopRequestSignal {
 export interface RunControlHooks {
   savedResultRecovery?: import("../control/protocol.js").LoopStartEnvelope;
   onRecoveryAttemptEntered?:(input:{attempt:number})=>Promise<void>;
-  /** Task setup commands (spec 2026-11-04 §4.4): the attempt ended in setup, before any provider call. */
-  onSetupFailed?: (input: { attempt: number; elapsedMs: number }) => Promise<void>;
+  /** Task setup commands (spec 2026-11-04 §4.4; fix round 2 ruling): called once for every setup that ran -- passed,
+   * failed, interrupted by a handoff, or ended by another error -- but not on a lease loss, so the attempt's setup time and
+   * measured-zero usage are always observed. */
+  onSetupEnded?: (input: { attempt: number; elapsedMs: number; outcome: "ok" | "failed" | "handoff" | "error" }) => Promise<void>;
   workGrant?: BudgetAmount;
   tokenPolicy?: TokenPolicy;
   /** Only the worker supplies this, after validating the checkpoint and reachable artifacts. */
@@ -1860,10 +1862,12 @@ export async function runLoopFromState(
             options?.phaseSignal, Math.min(SETUP_COMMAND_TIMEOUT_MS, getPhaseTimeoutMs(contract, state)),
             { onProcessRegistered: providerOptions?.onProcessRegistered });
         } catch (error) {
-          chargeSetup();
+          const elapsedMs = chargeSetup();
           // A handoff during setup (its deadline aborted the command, or a registration found the request latched) ends
           // the way a phase interrupted by a handoff does; anything else is the controller failure below, as for a phase.
-          if (!isLeaseStopError(error) && (handoffAborted() || handoffRequested())) {
+          if (isLeaseStopError(error)) throw error;
+          if (handoffAborted() || handoffRequested()) {
+            await options?.onSetupEnded?.({ attempt, elapsedMs, outcome: "handoff" });
             await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
             const interrupted = handoffAborted();
             return await persistHandoffBoundary(
@@ -1871,11 +1875,12 @@ export async function runLoopFromState(
               `${interrupted ? "handoff deadline interrupted" : "handoff requested during"} setup in attempt ${attempt}`,
             );
           }
+          await options?.onSetupEnded?.({ attempt, elapsedMs, outcome: "error" });
           throw error;
         }
         const setupElapsedMs = chargeSetup();
+        await options?.onSetupEnded?.({ attempt, elapsedMs: setupElapsedMs, outcome: setup.ok ? "ok" : "failed" });
         if (!setup.ok) {
-          await options?.onSetupFailed?.({ attempt, elapsedMs: setupElapsedMs });
           state = await persistTerminalState(runDir, writeOwnedRunState, state, "failed", "setup failed",
             { cause: "setup-failed", phase: "setup", retries: 0, detail: causeDetail(setup.detail) });
           await heartbeat.assertHeld();

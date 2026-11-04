@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { runSetupCommands, SETUP_LOG_TRUNCATED_MARKER } from "../../src/controller/setupCommands.js";
+import { spawn } from "node:child_process";
+import type { Writable } from "node:stream";
+import { runSetupCommands, SETUP_GATE_SCRIPT, SETUP_LOG_TRUNCATED_MARKER } from "../../src/controller/setupCommands.js";
 
 // Task setup commands (spec 2026-11-04 §4.4): a contract's setup runs in the attempt worktree before the agent's first
 // phase. It may only write ignored files (dependencies, caches): anything Git can see would become part of the agent's
@@ -133,6 +135,22 @@ describe("runSetupCommands", () => {
     for (const entry of registered) expect([entry.phase, entry.pgid === entry.pid, typeof entry.startedAt, entry.startedAt.length > 0]).toEqual(["setup", true, "string", true]);
     // The registered pid is the one the command itself runs as.
     expect(Number((await readFile(join(root, "node_modules", "pid"), "utf8")).trim())).toBe(registered[1]!.pid);
+  });
+
+  // Fix round 2 ruling: the gate opens only on an explicit newline. If the controller dies between spawn and
+  // registration its end of the gate closes with nothing written, and the command must not run unregistered. Measured on
+  // the gate script runSetupCommands spawns, since the controller's own death cannot be staged in-process.
+  it("the gate closed without a newline exits 125 and never runs the command", async () => {
+    const { root } = await repo();
+    const gated = (open: boolean) => new Promise<number | null>((resolve) => {
+      const child = spawn("sh", ["-c", SETUP_GATE_SCRIPT, "sh", "touch ran"], { cwd: root, stdio: ["ignore", "ignore", "ignore", "pipe"] });
+      (child.stdio[3] as Writable).end(open ? "\n" : "");
+      child.once("close", resolve);
+    });
+    expect(await gated(false)).toBe(125);
+    expect(existsSync(join(root, "ran"))).toBe(false);
+    expect(await gated(true)).toBe(0);
+    expect(existsSync(join(root, "ran"))).toBe(true);
   });
 
   it("a refused registration is rethrown and the command never runs", async () => {

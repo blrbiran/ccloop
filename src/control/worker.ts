@@ -271,14 +271,15 @@ export async function runControlWorker(argv: string[]): Promise<void> {
         await appendUsageObservation(sourceDir,{runId:envelope.claim.runId,generation:envelope.claim.generation,bucket:"work",observationId:`saved-result-attempt-${attempt}`,
           threadTotalTokens:0,elapsedMs:0,attempts:attempt,sessions:1,evidence:{kind:"saved-result-attempt-entry-v1",runId:envelope.claim.runId,generation:envelope.claim.generation,attempt,providerEntered:false}});
       },
-      onSetupFailed: async ({ attempt, elapsedMs }) => {
-        // Task setup commands (spec 2026-11-04 §4.4): the attempt ended in setup, before any provider call, and no phase
-        // settles on that path -- so its measured zero tokens, and the setup's measured time, are written here. The thread
+      onSetupEnded: async ({ attempt, elapsedMs, outcome }) => {
+        // Task setup commands (spec 2026-11-04 §4.4; fix round 2 ruling): every setup that ran is observed -- zero tokens
+        // (setup makes no provider call) and its measured time -- also when it ends the attempt before any phase settles,
+        // so a setup failure or a handoff during setup never leaves the run's work usage unknown. The thread
         // total is the running one (earlier attempts' usage stays as reported), under the same unknown-usage rule as a
         // settled phase.
         await appendUsageObservation(sourceDir, { runId: envelope.claim.runId, generation: envelope.claim.generation, bucket: "work", observationId: `attempt-${attempt}-setup`,
           threadTotalTokens: envelope.protocol === 4 && !usageKnown ? null : cumulativeTokens, elapsedMs, attempts: attempt, sessions: 1,
-          evidence: { kind: "setup-failed-attempt-v1", runId: envelope.claim.runId, generation: envelope.claim.generation, attempt } });
+          evidence: { kind: "setup-ended-attempt-v1", runId: envelope.claim.runId, generation: envelope.claim.generation, attempt, outcome } });
       },
       onPhaseSettled: async (observation) => {
         if (observation.completedWithResult) await recordCompletedPhase(sourceDir);

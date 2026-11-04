@@ -22,6 +22,10 @@ export const SETUP_COMMAND_TIMEOUT_MS = 900_000;
 export const SETUP_LOG_CAP_BYTES = 16_777_216;
 export const SETUP_LOG_TRUNCATED_MARKER = `[ccloop: setup output truncated at ${SETUP_LOG_CAP_BYTES} bytes]`;
 
+/** The gate opens only on an explicit newline (fix round 2 ruling): if the controller dies between spawn and registration
+ * the pipe closes without one, and the command exits 125 instead of running unregistered. */
+export const SETUP_GATE_SCRIPT = 'read -r _ <&3 || exit 125; exec 3<&-; exec sh -lc "$1"';
+
 export type SetupOutcome = { ok: true } | { ok: false; command: string; detail: string };
 
 export type SetupProcessRegistration = { pid: number; pgid: number; startedAt: string; phase: string };
@@ -82,7 +86,7 @@ async function runOne(command: string, cwd: string, logPath: string, signal: Abo
     // Its own process group, so the time limit and an abort take down whatever the command started, not only `sh`. The
     // command waits on a gate (fd 3) until its group is registered, so even a command that exits at once is registered
     // alive; `exec` keeps the registered pid and start time, and the command itself sees stdin closed and no fd 3.
-    const child = spawn("sh", ["-c", 'read -r _ <&3; exec 3<&-; exec sh -lc "$1"', "sh", command],
+    const child = spawn("sh", ["-c", SETUP_GATE_SCRIPT, "sh", command],
       { cwd, stdio: ["ignore", "pipe", "pipe", "pipe"], detached: true });
     const gate = child.stdio[3] as import("node:stream").Writable;
     gate.on("error", () => undefined);
