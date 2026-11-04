@@ -294,8 +294,11 @@ export async function loadSavedResultRecovery(input:LoopStartEnvelope,requireFen
 }
 // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.7, §19.2 P6): a saved result holds one repository; ineligible by name.
 const MULTI_REPO_INELIGIBLE={status:"unavailable" as const,reason:"control-multi-repo-recovery-unsupported"};
+// Task setup commands (spec 2026-11-04-task-setup-and-check-retry-design §4.5): recovery would re-run checks without setup.
+const SETUP_INELIGIBLE={status:"unavailable" as const,reason:"control-setup-recovery-unsupported"};
 export async function readSavedResultEligibility(input:LoopStartEnvelope):Promise<SavedResultEligibility>{
  if(input.work.additionalRepos!==undefined)return MULTI_REPO_INELIGIBLE;
+ if(input.work.contract.context.setupCommands!==undefined)return SETUP_INELIGIBLE;
  try{const value=await loadSavedResultRecovery(input);return {status:"eligible",authorityKind:value.manifest.authorityKind,normalizedExecutionHash:value.admission.recoveryOf.normalizedExecutionHash};}
  catch(error){return {status:"unavailable",reason:error instanceof Error&&(error.message.startsWith("saved-result-")||["execution-format-invalid","execution-format-ambiguous-or-hidden"].includes(error.message))?error.message:"saved-result-evidence-invalid"};}
 }
@@ -318,6 +321,7 @@ export type SavedResultSourcePackage=z.infer<typeof savedResultSourcePackageSche
 export interface SavedResultSourceInput {source:LoopStartEnvelope;sourceAttempt:number;packagePath:string;packageHash:string}
 export async function readSavedResultSourceEligibility(input:SavedResultSourceInput){
  if(input.source.work.additionalRepos!==undefined)return MULTI_REPO_INELIGIBLE;
+ if(input.source.work.contract.context.setupCommands!==undefined)return SETUP_INELIGIBLE;
  try{
   positive.parse(input.sourceAttempt);hash.parse(input.packageHash);
   const raw=await privateBytes(input.packagePath,"package.json");if(digest(raw)!==input.packageHash)fail("saved-result-package-hash-mismatch");

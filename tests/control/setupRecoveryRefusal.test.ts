@@ -4,6 +4,7 @@
 import { rm } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseControlRequest, type LoopStartEnvelope } from "../../src/control/protocol.js";
+import { readSavedResultEligibility, readSavedResultSourceEligibility } from "../../src/control/savedResultRecovery.js";
 import { fixture } from "./optionalFixture.js";
 
 const roots: string[] = [];
@@ -40,5 +41,16 @@ describe("saved-result recovery of a contract with setup commands is refused", (
     let thrown: unknown;
     try { parseControlRequest("accept", normal); } catch (error) { thrown = error; }
     expect(String(thrown)).not.toContain("control-setup-recovery-unsupported");
+  });
+
+  it("saved-result-eligibility answers unavailable by name for a contract with setupCommands", async () => {
+    expect(await readSavedResultEligibility(await recoveryEnvelope(["npm ci"])))
+      .toEqual({ status: "unavailable", reason: "control-setup-recovery-unsupported" });
+  });
+
+  it("saved-result-source-eligibility answers unavailable by name for a source with setupCommands", async () => {
+    const source = await recoveryEnvelope(["npm ci"]);
+    expect(await readSavedResultSourceEligibility({ source, sourceAttempt: 1, packagePath: "/nowhere/package", packageHash: hash }))
+      .toEqual({ status: "unavailable", reason: "control-setup-recovery-unsupported" });
   });
 });
