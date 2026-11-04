@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { runSetupCommands } from "../../src/controller/setupCommands.js";
+import { runSetupCommands, SETUP_LOG_TRUNCATED_MARKER } from "../../src/controller/setupCommands.js";
 
 // Task setup commands (spec 2026-11-04 §4.4): a contract's setup runs in the attempt worktree before the agent's first
 // phase. It may only write ignored files (dependencies, caches): anything Git can see would become part of the agent's
@@ -76,12 +77,71 @@ describe("runSetupCommands", () => {
     expect(await readFile(join(logDir, "setup-1.log"), "utf8")).toContain("got\n");
   });
 
-  it("20 MiB of output is streamed to the log", { timeout: 30_000 }, async () => {
+  // Fix round 1 ruling (Orca session af2ceee1, 2026-11-05): each log is capped at 16 MiB; past the cap the output is
+  // still drained (the command ends ok, it is not blocked on a full pipe) and one marker line says it was cut.
+  it("20 MiB of output is streamed to the log, capped at 16 MiB with one marker", { timeout: 30_000 }, async () => {
     const { root, logDir } = await repo();
     expect(await runSetupCommands(["head -c 20971520 /dev/zero | tr '\\0' a"], root, logDir, undefined, 20_000)).toEqual({ ok: true });
-    const log = await stat(join(logDir, "setup-1.log"));
-    expect(log.size).toBeGreaterThanOrEqual(20971520);
+    const path = join(logDir, "setup-1.log");
+    const marker = `\n${SETUP_LOG_TRUNCATED_MARKER}\n`;
+    expect(SETUP_LOG_TRUNCATED_MARKER).toBe("[ccloop: setup output truncated at 16777216 bytes]");
+    const log = await stat(path);
+    expect(log.size).toBe(16777216 + Buffer.byteLength(marker));
     expect(log.mode & 0o777).toBe(0o600);
+    const bytes = await readFile(path);
+    expect(bytes.subarray(-Buffer.byteLength(marker)).toString()).toBe(marker);
+    expect(bytes.subarray(16777216 - 1, 16777216).toString()).toBe("a");
+  });
+
+  it("output under the cap has no marker", async () => {
+    const { root, logDir } = await repo();
+    expect(await runSetupCommands(["echo small"], root, logDir, undefined, 10_000)).toEqual({ ok: true });
+    expect(await readFile(join(logDir, "setup-1.log"), "utf8")).not.toContain("truncated");
+  });
+
+  // Fix round 1 ruling: a command killed by a signal that is not the time limit is named by the signal.
+  it("a command killed by a signal names the signal", async () => {
+    const { root, logDir } = await repo();
+    expect(await runSetupCommands(["kill -9 $$"], root, logDir, undefined, 10_000)).toEqual({ ok: false, command: "kill -9 $$", detail: "kill -9 $$ signal=SIGKILL" });
+  });
+
+  // Fix round 1 ruling: any other setup error is a setup failure by name, not an unknown controller failure.
+  it("an error running a command is a setup failure naming the command", async () => {
+    const { root, logDir } = await repo();
+    await mkdir(join(logDir, "setup-1.log"), { recursive: true });
+    const outcome = await runSetupCommands(["true"], root, logDir, undefined, 10_000);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && outcome.command).toBe("true");
+    expect(outcome.ok === false && outcome.detail).toMatch(/^true error=EISDIR/);
+  });
+
+  it("an error before any command is a setup failure named setup", async () => {
+    const { root, logDir } = await repo();
+    const outcome = await runSetupCommands(["true"], join(root, "missing"), logDir, undefined, 10_000);
+    expect(outcome.ok === false && outcome.detail).toMatch(/^setup error=/);
+  });
+
+  // Fix round 1: every command's group is registered while it is alive -- even one that exits at once -- so a worker
+  // crash leaves no group a stop proof cannot see.
+  it("each command's process group is registered before it runs", async () => {
+    const { root, logDir } = await repo();
+    const registered: Array<{ pid: number; pgid: number; startedAt: string; phase: string }> = [];
+    expect(await runSetupCommands(["true", "mkdir -p node_modules && echo $$ > node_modules/pid"], root, logDir, undefined, 10_000, {
+      onProcessRegistered: async (registration) => { registered.push(registration); },
+    })).toEqual({ ok: true });
+    expect(registered).toHaveLength(2);
+    for (const entry of registered) expect([entry.phase, entry.pgid === entry.pid, typeof entry.startedAt, entry.startedAt.length > 0]).toEqual(["setup", true, "string", true]);
+    // The registered pid is the one the command itself runs as.
+    expect(Number((await readFile(join(root, "node_modules", "pid"), "utf8")).trim())).toBe(registered[1]!.pid);
+  });
+
+  it("a refused registration is rethrown and the command never runs", async () => {
+    const { root, logDir } = await repo();
+    const refusal = new Error("control-handoff-latched-before-prompt");
+    await expect(runSetupCommands(["mkdir -p node_modules && touch node_modules/ran"], root, logDir, undefined, 10_000, {
+      onProcessRegistered: async () => { throw refusal; },
+    })).rejects.toBe(refusal);
+    expect(existsSync(join(root, "node_modules", "ran"))).toBe(false);
   });
 
   it("each command has its own log, stdout and stderr together", async () => {

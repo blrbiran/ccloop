@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { prepareContinuationContract } from "../../src/control/materialize.js";
-import { runLoop } from "../../src/controller/runLoop.js";
+import { runLoop, type RunControlHooks } from "../../src/controller/runLoop.js";
 import { ScriptedAdapter } from "../../src/runtime/scriptedAdapter.js";
 import type { AttemptContext, AttemptPlan, ExecutePhaseResult, RuntimeAdapter, VerificationResult } from "../../src/runtime/types.js";
 import { buildBundle } from "../control/optionalMaterializeFixture.js";
@@ -50,15 +50,21 @@ async function repoWithIgnores(): Promise<string> {
   return repo;
 }
 
-async function run(setupCommands: string[] | undefined, adapter: RuntimeAdapter) {
+async function runWith(setupCommands: string[] | undefined, adapter: RuntimeAdapter, hooks?: RunControlHooks) {
   const repo = await repoWithIgnores();
   const runDir = await mkdtemp(join(tmpdir(), "ccloop-setup-run-"));
   dirs.push(runDir);
   const contract = createContract(repo, ["true"]);
   if (setupCommands !== undefined) contract.context.setupCommands = setupCommands;
-  const state = await runLoop(contract, runDir, adapter);
+  const state = await runLoop(contract, runDir, adapter, hooks);
   const persisted = JSON.parse(await readFile(join(runDir, "loop-state.json"), "utf8"));
   return { state, persisted, runDir };
+}
+
+const run = (setupCommands: string[] | undefined, adapter: RuntimeAdapter) => runWith(setupCommands, adapter);
+
+async function events(runDir: string): Promise<Array<{ type: string; detail: string }>> {
+  return (await readFile(join(runDir, "events.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
 }
 
 describe("setup commands in runLoop", () => {
@@ -96,6 +102,60 @@ describe("setup commands in runLoop", () => {
     const { state, runDir } = await run(undefined, new Recording());
     expect(state.status).toBe("succeeded");
     expect(existsSync(join(runDir, "attempts", "1", "setup-1.log"))).toBe(false);
+  });
+
+  // Fix round 1 ruling: setup's measured time comes off the remaining time before the first phase.
+  it("setup's elapsed time is deducted before the plan phase", async () => {
+    let remainingAtPlan: number | null = null;
+    const adapter = new Recording();
+    const plan = adapter.plan.bind(adapter);
+    adapter.plan = async (context) => { remainingAtPlan = context.state.budgetSnapshot.timeRemainingMs; return plan(context); };
+    await run(["sleep 0.5"], adapter);
+    expect(remainingAtPlan).not.toBeNull();
+    expect(remainingAtPlan!).toBeLessThanOrEqual(60_000 - 500);
+  });
+
+  // Fix round 1 (Review Focus 3): a handoff during setup ends the way a phase interrupted by a handoff does -- a boundary
+  // event, the run left resumable for the handoff, no agent call -- not as a failed run.
+  it("a handoff deadline during setup ends at the handoff boundary, not failed", async () => {
+    const adapter = new Recording();
+    const phaseAbort = new AbortController();
+    setTimeout(() => phaseAbort.abort(), 300);
+    const { state, persisted, runDir } = await runWith(["sleep 5"], adapter, { phaseSignal: phaseAbort.signal });
+    expect(adapter.calls).toBe(0);
+    expect(persisted.status).toBe("planning");
+    expect(state.failureCause).toBeUndefined();
+    expect((await events(runDir)).at(-1)).toMatchObject({ type: "handoff_interrupted", detail: "handoff deadline interrupted setup in attempt 1" });
+  });
+
+  it("a handoff latched at a setup registration ends at the handoff boundary", async () => {
+    const adapter = new Recording();
+    const stopRequested = { requested: false };
+    const { persisted, runDir } = await runWith(["true"], adapter, {
+      stopRequested,
+      onProcessRegistered: async () => { stopRequested.requested = true; throw new Error("control-handoff-latched-before-prompt"); },
+    });
+    expect(adapter.calls).toBe(0);
+    expect(persisted.status).toBe("planning");
+    expect((await events(runDir)).at(-1)).toMatchObject({ type: "handoff_boundary", detail: "handoff requested during setup in attempt 1" });
+  });
+
+  it("a refused setup registration with no handoff ends the run failed as for a phase", async () => {
+    const adapter = new Recording();
+    const { persisted, runDir } = await runWith(["true"], adapter, {
+      onProcessRegistered: async () => { throw new Error("control-handoff-latched-before-prompt"); },
+    });
+    expect(adapter.calls).toBe(0);
+    expect(persisted.status).toBe("failed");
+    expect(persisted.failureCause).toEqual({ cause: "unknown", phase: null, retries: 0, detail: null });
+    expect(existsSync(join(runDir, "worktrees", "attempt-1"))).toBe(false);
+  });
+
+  it("each setup command's process group is registered", async () => {
+    const registered: Array<{ phase: string; pid: number; pgid: number }> = [];
+    const { state } = await runWith(["true"], new Recording(), { onProcessRegistered: async (registration) => { registered.push(registration); } });
+    expect(state.status).toBe("succeeded");
+    expect(registered.filter((entry) => entry.phase === "setup")).toHaveLength(1);
   });
 
   describe("a continuation", () => {

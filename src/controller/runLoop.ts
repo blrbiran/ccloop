@@ -1,5 +1,5 @@
 import { attachedCause, causeDetail, type RunFailureCauseV1 } from "../runtime/failureCause.js";
-import { runSetupCommands, SETUP_COMMAND_TIMEOUT_MS } from "./setupCommands.js";
+import { runSetupCommands, SETUP_COMMAND_TIMEOUT_MS, type SetupOutcome } from "./setupCommands.js";
 import {testCrashPoint} from "../control/testCrashPoint.js";
 import {canonicalHash} from "../control/protocol.js";
 import {loadSavedResultRecovery,materializeSavedResult,boundSavedResultRuntime,assertSavedResultFence,type LoadedSavedResult} from "../control/savedResultRecovery.js";
@@ -1517,7 +1517,7 @@ export interface RunControlHooks {
   savedResultRecovery?: import("../control/protocol.js").LoopStartEnvelope;
   onRecoveryAttemptEntered?:(input:{attempt:number})=>Promise<void>;
   /** Task setup commands (spec 2026-11-04 §4.4): the attempt ended in setup, before any provider call. */
-  onSetupFailed?: (input: { attempt: number }) => Promise<void>;
+  onSetupFailed?: (input: { attempt: number; elapsedMs: number }) => Promise<void>;
   workGrant?: BudgetAmount;
   tokenPolicy?: TokenPolicy;
   /** Only the worker supplies this, after validating the checkpoint and reachable artifacts. */
@@ -1846,16 +1846,43 @@ export async function runLoopFromState(
       if (contract.context.setupCommands !== undefined) {
         // §8.1: setup writes into the attempt worktree, a side effect.
         await heartbeat.assertHeld();
-        const setup = await runSetupCommands(contract.context.setupCommands, worktreePath, join(runDir, "attempts", String(attempt)),
-          options?.phaseSignal, Math.min(SETUP_COMMAND_TIMEOUT_MS, getPhaseTimeoutMs(contract, state)));
+        const setupStartedAt = Date.now();
+        // Spec §4.4 "setup time counts toward the attempt's active time" (fix round 1 ruling): the measured elapsed comes
+        // off the remaining time before the first phase, so that phase's timeout sees it.
+        const chargeSetup = (): number => {
+          const elapsedMs = Math.max(Date.now() - setupStartedAt, 0);
+          state = { ...state, budgetSnapshot: { ...state.budgetSnapshot, timeRemainingMs: Math.max(state.budgetSnapshot.timeRemainingMs - elapsedMs, 0) } };
+          return elapsedMs;
+        };
+        let setup: SetupOutcome;
+        try {
+          setup = await runSetupCommands(contract.context.setupCommands, worktreePath, join(runDir, "attempts", String(attempt)),
+            options?.phaseSignal, Math.min(SETUP_COMMAND_TIMEOUT_MS, getPhaseTimeoutMs(contract, state)),
+            { onProcessRegistered: providerOptions?.onProcessRegistered });
+        } catch (error) {
+          chargeSetup();
+          // A handoff during setup (its deadline aborted the command, or a registration found the request latched) ends
+          // the way a phase interrupted by a handoff does; anything else is the controller failure below, as for a phase.
+          if (!isLeaseStopError(error) && (handoffAborted() || handoffRequested())) {
+            await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+            const interrupted = handoffAborted();
+            return await persistHandoffBoundary(
+              interrupted ? "handoff_interrupted" : "handoff_boundary",
+              `${interrupted ? "handoff deadline interrupted" : "handoff requested during"} setup in attempt ${attempt}`,
+            );
+          }
+          throw error;
+        }
+        const setupElapsedMs = chargeSetup();
         if (!setup.ok) {
-          await options?.onSetupFailed?.({ attempt });
+          await options?.onSetupFailed?.({ attempt, elapsedMs: setupElapsedMs });
           state = await persistTerminalState(runDir, writeOwnedRunState, state, "failed", "setup failed",
             { cause: "setup-failed", phase: "setup", retries: 0, detail: causeDetail(setup.detail) });
           await heartbeat.assertHeld();
           await cleanupAttemptWorkspaceBestEffort(contract.context.repoPath, worktreePath, runDir, "cleanup after terminal decision failed");
           return state;
         }
+        await writeOwnedRunState(runDir, state);
       }
       if (!continuation || continuation.nextPhase === "plan") {
         const planTimeoutMs = getPhaseTimeoutMs(contract, state);
