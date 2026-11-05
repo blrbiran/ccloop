@@ -288,3 +288,20 @@ only the time the phase has left" (context lifts the fixture's `perAttemptTimeou
 
 Residual: the runner's "errorText only from the message carrying the typed error" rule has no runner-level criterion (the
 classifier is tested on signals); the claude quota/overflow phrases and every codex row but 429 still rest on static strings.
+
+## Correction (2026-11-05, Orca session 3cfc2e73, batch I5; Orca tester issues 125 and 158)
+
+The sections above are kept verbatim. Two `detail` sources are added; no cause value, retry rule or contract key changes.
+
+- **omp.** §3 lists a final `message_end` with `stopReason: "error"` as omp's only `detail`. An execute answer that
+  `normalizeExecutionFinal` refuses (`omp-result-invalid`, cause still `unknown`, never retried) now also carries one:
+  `<normalizer reason>: <first issue path, or "(top level)">: <zod message>`, or `<reason>: the final message is not one
+  JSON object`, through `causeDetail` (512 B). The issues come from the shape the answer aimed at (partial when it names
+  `completionStatus`); acceptance is unchanged. The same failure writes `<runDir>/execute-format-failure.json`
+  (`ccloop-omp-execute-format-failure-v1`: attempt, evidence dir, the refs cleanup publishes the attempt under, the
+  commit they build on, the normalization and its issues), best-effort, diagnosis only: no capsule, no recovery, nothing
+  in collect.
+- **codex.** Decision 5 says phase-isolation refusals are `unknown`; their `detail` was the refusal reason alone. For
+  `codex-phase-isolation-no-mcp-list` the detail is now `<reason>: <the MCP probe's own error>` through `causeDetail`,
+  the same text is appended to the refusal's message, and `outcome.json` records it as `refusalDetail`. The reason value
+  itself is unchanged.
