@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ModelUsageV1 } from "../../control/usage.js";
 import { normalizeExecutionFinal } from "../executionNormalizer.js";
 import type { UsageEvidence } from "../types.js";
-import { phaseFinalAccepts, scanFinalMessage, verificationSchema, type PhaseResults } from "../codex/protocol.js";
+import { executionSchema, phaseFinalAccepts, scanFinalMessage, verificationSchema, type PhaseResults } from "../codex/protocol.js";
 import { ompPhaseTools, type OmpPhase } from "./phasePrompt.js";
 import { causeDetail } from "../failureCause.js";
 import { foldText, type JsonLine } from "../streamLines.js";
@@ -10,6 +10,22 @@ import { foldText, type JsonLine } from "../streamLines.js";
 const planSchema = z.object({ summary: z.string(), primaryTargetPaths: z.array(z.string()) }).strict();
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const safe = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+/**
+ * Orca tester issues 125 and 158 (session 3cfc2e73): what the strict execute shape refused in a final that is one JSON
+ * object, for diagnosis only -- the normalizer alone decides acceptance, and nothing classifies by this text. The issues
+ * are those of the shape the answer aimed at (partial when it names completionStatus), parsed alone: zod's union would
+ * report whichever branch failed only on unrecognized keys. At most 8.
+ */
+export type ExecutionFormatIssue = { path: string; message: string };
+export function executionFormatIssues(final: string): ExecutionFormatIssue[] {
+  let value: unknown;
+  try { value = JSON.parse(final); } catch { return []; }
+  if (record(value) && Object.keys(value).length === 1 && Object.hasOwn(value, "result")) value = value.result;
+  if (executionSchema.safeParse(value).success) return [];
+  const parsed = executionSchema.options[record(value) && Object.hasOwn(value, "completionStatus") ? 1 : 0].safeParse(value);
+  return parsed.success ? [] : parsed.error.issues.slice(0, 8).map((issue) => ({ path: issue.path.join("."), message: issue.message }));
+}
 
 // Mirrors omp's isActionableContent (messages.ts:544) for the stop branch: thinking is actionable only when signed.
 const ALWAYS_ACTIONABLE_BLOCKS = new Set(["toolCall", "image", "redactedThinking", "anthropicServerTool"]);
@@ -166,7 +182,12 @@ export class OmpPhaseFold {
     let result: unknown;
     if (phase === "execute") {
       const normalized = normalizeExecutionFinal(text);
-      if (normalized.status !== "available") throw Object.assign(new Error("omp-result-invalid"), { observedTokens: totals.total });
+      if (normalized.status !== "available") {
+        // Issues 125/158: the failure carries its normalization and a bounded detail; the error and its cause are unchanged.
+        const issues = executionFormatIssues(text), first = issues[0];
+        const formatDetail = causeDetail(first === undefined ? `${normalized.reason}: the final message is not one JSON object` : `${normalized.reason}: ${first.path === "" ? "(top level)" : first.path}: ${first.message}`);
+        throw Object.assign(new Error("omp-result-invalid"), { observedTokens: totals.total, formatDetail, formatNormalization: { reason: normalized.reason, diagnostic: normalized.diagnostic, issues } });
+      }
       result = normalized.execution;
     } else {
       const { extraction } = scanFinalMessage(text, phaseFinalAccepts(phase));

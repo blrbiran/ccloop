@@ -8,6 +8,7 @@ import { runOmpPhase } from "./runOmpPhase.js";
 import { runOmpSingleCall } from "./ompSingleCall.js";
 import type { OmpPhase } from "./phasePrompt.js";
 import { observedChangedPaths, worktreeHead, worktreeSnapshot } from "./worktreeSnapshot.js";
+import { attemptRefNames } from "../../workspace/worktreeManager.js";
 import type { CallClassification } from "../failureCause.js";
 import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
 import type { OmpPhaseOutcome } from "./runOmpPhase.js";
@@ -28,6 +29,23 @@ export class OmpToolRuleViolated extends Error {
 function forbiddenPhaseTool(error: unknown): string | null {
   const { code, detail } = (error ?? {}) as { code?: unknown; detail?: unknown };
   return code === "omp-phase-tool-forbidden" && typeof detail === "string" ? detail : null;
+}
+
+/**
+ * Orca tester issue 158, first step (session 3cfc2e73): an omp execute answer the strict shape refused fails the run, and
+ * the attempt's work survives only as the commit cleanup publishes under refs/ccloop/.../attempts/<n>. This file in the
+ * run directory names those refs, the commit they will build on and what the normalizer refused, so the work can be found
+ * without reading call directories. Diagnosis only: no capsule, no recovery, nothing in collect; a failed write changes
+ * nothing (as changed-files-difference.json).
+ */
+async function writeExecuteFormatFailure(context: AttemptContext, evidenceDir: string, normalization: unknown): Promise<void> {
+  let attemptRefs: string[] = [];
+  try { attemptRefs = attemptRefNames(context.worktreePath); } catch { /* not an attempt worktree path: nothing will be published */ }
+  const attemptBase = await worktreeHead(context.worktreePath).catch(() => null);
+  await writeFile(join(context.runDir, "execute-format-failure.json"), JSON.stringify({
+    schema: "ccloop-omp-execute-format-failure-v1", attempt: context.attempt, evidenceDir, attemptRefs, attemptBase,
+    normalization,
+  }, null, 2), { mode: 0o600 });
 }
 
 /** omp 18.10.1's provider stream watchdog wording (every provider prefix in its dist/cli.js; Orca spec 2026-10-27 §3.1). */
@@ -68,6 +86,9 @@ export class OmpAdapter implements RuntimeAdapter {
           else if (outcome.reason === "stalled") classification = { cause: "stalled", workObserved: outcome.stream.call.value().workObserved, detail: null };
           else if (outcome.reason === "spawn-error") classification = { cause: outcome.spawnErrno === "ENOENT" ? "executable-missing" : "unknown", workObserved: false, detail: outcome.spawnErrno ?? null };
           else classification = outcome.stream.call.value();
+          // Orca tester issue 125: an execute answer the strict shape refused names what it refused (bounded); cause unchanged.
+          const formatDetail = (error as { formatDetail?: unknown }).formatDetail;
+          if (classification !== null && typeof formatDetail === "string") classification = { ...classification, detail: formatDetail };
           const observed = (error as { observedTokens?: unknown }).observedTokens;
           const observation: TryObservation = (error as { neverStarted?: unknown }).neverStarted === true ? { kind: "rule0" }
             : typeof observed === "number" && observed > 0 ? { kind: "tokens", tokens: observed } : { kind: "null" };
@@ -121,6 +142,8 @@ export class OmpAdapter implements RuntimeAdapter {
       return result;
     } catch (error) {
       await writeFile(join(outcome.evidenceDir, "decode-error.txt"), String(error), { mode: 0o600 });
+      const normalization = (error as { formatNormalization?: unknown }).formatNormalization;
+      if (phase === "execute" && normalization !== undefined) await writeExecuteFormatFailure(context, outcome.evidenceDir, normalization).catch(() => undefined);
       throw error;
     }
   }

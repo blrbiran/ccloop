@@ -89,6 +89,15 @@ export function namespacedAttemptRefName(worktreePath: string, namespace: string
 }
 
 /**
+ * Orca tester issue 158 (session 3cfc2e73): every ref publishAttemptCommit pins this attempt under -- the path-derived one,
+ * then the claim's when its run directory registered one -- so a diagnostic can name them before the commit exists.
+ */
+export function attemptRefNames(worktreePath: string): string[] {
+  const namespace = attemptRefNamespaces.get(resolve(dirname(dirname(worktreePath))));
+  return [attemptRefName(worktreePath), ...(namespace === undefined ? [] : [namespacedAttemptRefName(worktreePath, namespace)])];
+}
+
+/**
  * Commits whatever the attempt left in its worktree and pins it with a ref.
  *
  * The worktree shares an object database with repoPath, so the commit object
