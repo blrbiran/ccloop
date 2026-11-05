@@ -1,4 +1,4 @@
-# ccloop Handoff — multi-repo 已在 main（P1–P7 与 M9 已由人确认）；实时转录亦在 main（见「当前状态」）；Orca 关联见文末单节
+# ccloop Handoff — task setup 已在 main 并已推；setup 收尾修复在本地 main 待推（见「当前状态」）；Orca 关联见文末单节
 
 > ⚠️ **一律自查，别信本文。** 只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是固定历史值。
 > *** **本文不写任何当前哈希** —— 指代某一笔引**提交主题行**（`git log --grep`），指代材料引**路径**。 ***
@@ -41,9 +41,16 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 本轮（2026-11-04／05，Orca 会话 `af2ceee1`）—— 先读这一节
+### 本轮（2026-11-05，Orca 会话 `e2ad4802`）—— 先读这一节
 
-- **已在本地 main、未推**（push 被 Orca Tier 0 闸门拦，归人）：主题行 `feat(contract): an optional context.setupCommands, the setup-failed cause and the setup phase` 至 `test(loop): setup criteria end the processes they leave behind themselves`（计划 `docs/superpowers/plans/2026-11-04-task-setup-ccloop.md`，As built 在文末；Orca spec `2026-11-04-task-setup-and-check-retry-design.md` §4.4、§10）。契约可选 `context.setupCommands`（1–8 条、无默认，缺省字节不变；与 `additionalRepos` 同时出现即拒）；每个 attempt 在 agent 首阶段前跑（`sh -lc`、stdin 关、自己的进程组并注册、命令结束 SIGKILL 组、退出后最多 2 s drain、日志 `attempts/<n>/setup-<i>.log` 16 MiB 帽、`setup-<i>/process.json` 供 reap）；前后指纹比较，改了非忽略文件即失败；失败 ⇒ `failed`＋`setup-failed`／phase `setup`／detail `<cmd> exit=|signal=|timeout|changed:|error=`（512 B），不重试；被剩余时间截断 ⇒ `exhausted`；setup 时长计入剩余时间；每次跑过的 setup 写一条 `attempt-N-setup` 用量观测（`setup-ended-attempt-v1`）；setup 中／后的 handoff 走 handoff 边界；带 setup 的已存结果恢复拒（`control-setup-recovery-unsupported`，eligibility 同样报 unavailable）；结果仓库从活 worktree 复制时跳过 git 忽略路径（仅带 setup 时）。
+- **已在本地 main、未推**（push 被 Orca Tier 0 闸门拦，人授权了也拦，没重试；归人）：主题行 `fix(setup): the verdict is taken at the shell's exit, and a cut drain is marked in the log` 与 `docs(plan): task setup follow-up -- the drain timer and the drain-cut marker`。人裁「同意按你的建议做」：setup 命令的结论在 shell 退出那一刻定，限时计时器落在退出后的 2 s 收尾里不再把 exit 0 判成 timeout；收尾不得不截断时往该命令日志写 `SETUP_DRAIN_CUT_MARKER` 一行。上一轮登记未修的四条里这两条已修，另两条（剩余时间截断时 stop reason 一律 budget 措辞；refused-registration catch 里写 outcome 失败会盖住拒因）仍登记未修。
+- **没改任何既有判据**（`tests/controller/setupCommands.test.ts` 新增 2 条；第一条改前红：exit 0 被报 `… timeout`）。变异 M1–M4 在 clone 里各红、0 字节还原。门（clone、负载约 13–35）：build 0；全量 2494 条 2493 过，唯一红＝名单内 `runLoop`「persists phase usage evidence」，`check-known-reds` RC 0。
+- 上一轮的 task-setup 系列人已推（origin 即 `a885241`），Orca 已 repin 到它并合入 Part C。本轮这笔 **Orca 不依赖**；人推后 Orca 再 repin 只为带上修复。
+- Orca 本轮的 failover **没改本仓契约**：复用已有 `failureCause: "quota"` 与 `detail`（CLI 自己的报错文本），Orca 从 `detail` 读重置时间（`try again at Oct 22nd, 2026 2:13 PM`／`try again at 16:12`）。**改 codex/claude 的 quota 行或 `detail` 截断规则前先同步 Orca**（`src/control/quotaRest.ts`）。
+
+### 上一轮（2026-11-04／05，Orca 会话 `af2ceee1`）
+
+- **已在 main、人已推、Orca 已 repin 并合入 Part C（会话 `e2ad4802`）**：主题行 `feat(contract): an optional context.setupCommands, the setup-failed cause and the setup phase` 至 `test(loop): setup criteria end the processes they leave behind themselves`（计划 `docs/superpowers/plans/2026-11-04-task-setup-ccloop.md`，As built 在文末；Orca spec `2026-11-04-task-setup-and-check-retry-design.md` §4.4、§10）。契约可选 `context.setupCommands`（1–8 条、无默认，缺省字节不变；与 `additionalRepos` 同时出现即拒）；每个 attempt 在 agent 首阶段前跑（`sh -lc`、stdin 关、自己的进程组并注册、命令结束 SIGKILL 组、退出后最多 2 s drain、日志 `attempts/<n>/setup-<i>.log` 16 MiB 帽、`setup-<i>/process.json` 供 reap）；前后指纹比较，改了非忽略文件即失败；失败 ⇒ `failed`＋`setup-failed`／phase `setup`／detail `<cmd> exit=|signal=|timeout|changed:|error=`（512 B），不重试；被剩余时间截断 ⇒ `exhausted`；setup 时长计入剩余时间；每次跑过的 setup 写一条 `attempt-N-setup` 用量观测（`setup-ended-attempt-v1`）；setup 中／后的 handoff 走 handoff 边界；带 setup 的已存结果恢复拒（`control-setup-recovery-unsupported`，eligibility 同样报 unavailable）；结果仓库从活 worktree 复制时跳过 git 忽略路径（仅带 setup 时）。
 - **没改任何既有判据**（全是新增）。门（clone、负载约 20–30）：typecheck／build 0，全量 2492/2492，`check-known-reds` RC 0。变异逐条在 clone 见红，0 字节还原（日志在 Orca 会话 scratch，会话结束即失）。
 - **Orca 依赖本仓的契约多了**：`context.setupCommands`、cause `setup-failed`、phase `setup`、观测 id `attempt-N-setup`。Orca 的 Part A 已在 Orca main（认得这些）；Orca 的 Part C（拆分产出 setup）**等本仓推了、Orca repin 后**才合。
 - 登记未修：2 s drain 截断无标记；剩余时间截断时 stop reason 一律 budget 措辞；refused-registration catch 里写 outcome 失败会盖住拒因；限时计时器可能在 drain 中触发把 exit 0 判成 timeout。
@@ -195,11 +202,12 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-11-05，Orca 会话 `af2ceee1`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-11-05，Orca 会话 `e2ad4802`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**Orca main 仍 pin 本仓 `026c571`**（主题行 `chore(deps): repin ccloop to 026c571 …`）。本仓本轮的 task-setup 系列推上 origin 后，Orca 做 Task C0 repin 并合入它的 Part C（拆分产出 `setup`）；在那之前 Orca main 不会发 `setupCommands`（人手写进计划文件的除外，旧 pin 会在 accept 时拒）。
-- Orca 侧对本仓的 setup 已就绪（Part A 在 Orca main）：认 `phase:"setup"`／`setup-failed`；阶梯对 `setup-failed` 与「检查没跑起来」（本仓 evidence 尾段 `exit=127|126`、stderr 含 `command not found`／`Missing script:`）不重试——**改 `buildRequiredCheckEvidence` 的格式前先同步 Orca**（`src/control/ladderSkip.ts` 按段解析）。
-- 两件以后要动本仓契约的事（仍只有 Orca 侧设计）：soft 模式 loop run 的「代码自动」结算 principal（Orca spec `2026-11-03-soft-mode-approximate-usage-design.md` §7，与收据 `personPrincipal` 规则一起设计）；额度感知切换的 `failureCause: "quota-exhausted"`（Orca spec `2026-11-03-quota-failover-design.md`，D1–D6 待人）。
-- ⚠️ 真 codex 付费先问人；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（Orca 每轮跑完备份后删，本轮两条已删）。沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`。
-- **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`（含 phase `setup`、cause `setup-failed`）、`toolRules`、`transcripts`、`usageLowerBound`、`dirs[]`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`、`work.additionalRepos`；契约 `executionPolicy.toolRules`、`context.setupCommands`；required check evidence 的段格式；codex wire `flow` 的封闭形状与 strict 投影（及可选键 null 折回）；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；fake 参数约定；`blockRun` 原因串；`isRepeatedFailure`；单调用记录的 `errorCode`／`usageLowerBound`；已存结果恢复收据的 `client`／`personPrincipal` 规则。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受。
-- ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`。Orca 测试的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build（每个会话自己建在 scratchpad：`git clone --local` → checkout → `npm ci --prefer-offline` → `npm run build`）；别指本仓工作树的 `dist`。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**Orca main pin 本仓 `a885241`**（主题行 `chore(deps): repin ccloop to a885241 for task setup commands`），Part C（拆分产出 `setup`）已合入并装上。本仓本轮那笔推上 origin 后 Orca 再 repin（只为带上 2 s 收尾修复）。
+- Orca 侧已认 `phase:"setup"`／`setup-failed`；阶梯对 `setup-failed` 与「检查没跑起来」（本仓 evidence 尾段 `exit=127|126`、stderr 含 `command not found`／`Missing script:`）不重试——**改 `buildRequiredCheckEvidence` 的格式前先同步 Orca**（`src/control/ladderSkip.ts` 按段解析）。
+- Orca 的 failover（额度用完自动换安装重试）读本仓的 `failureCause.cause === "quota"` 与 `detail` 文本；没有新 cause、没有契约变更。
+- 以后要动本仓契约的事（仍只有 Orca 侧设计）：soft 模式 loop run 的「代码自动」结算 principal（Orca spec `2026-11-03-soft-mode-approximate-usage-design.md` §7，与收据 `personPrincipal` 规则一起设计）。
+- ⚠️ 真 codex 付费先问人；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（Orca 每轮跑完备份后删）。沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`。
+- **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`（含 phase `setup`、cause `setup-failed`、`quota` 的 `detail` 文本）、`toolRules`、`transcripts`、`usageLowerBound`、`dirs[]`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`、`work.additionalRepos`；契约 `executionPolicy.toolRules`、`context.setupCommands`；required check evidence 的段格式；codex wire `flow` 的封闭形状与 strict 投影（及可选键 null 折回）；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；fake 参数约定（Orca 测试的 `ORCA_AGENTS_TABLE` 用 fake-codex `integration` 模式）；`blockRun` 原因串；`isRepeatedFailure`；单调用记录的 `errorCode`／`usageLowerBound`；已存结果恢复收据的 `client`／`personPrincipal` 规则。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受。
+- ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`。Orca 测试的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build（每个会话自己建在 scratchpad）；别指本仓工作树的 `dist`。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
