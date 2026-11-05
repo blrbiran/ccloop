@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { ompPhaseTools, phaseSystemPrompt } from "../../../src/runtime/omp/phasePrompt.js";
+import { normalizeExecutionFinal } from "../../../src/runtime/executionNormalizer.js";
 
 it("tells OMP that ccloop owns Git metadata and forbids staging or committing during execute", () => {
   const prompt = phaseSystemPrompt("execute");
@@ -22,4 +23,30 @@ it("names the plan phase's tools from the --tools list, and only in plan", () =>
   expect(phaseSystemPrompt("plan")).toContain("Writes, shell commands and MCP calls (including xd:// paths) are unavailable until the execute phase");
   expect(phaseSystemPrompt("execute")).not.toContain("Tools available in this phase");
   expect(phaseSystemPrompt("verify")).not.toContain("Tools available in this phase");
+});
+
+// Orca tester issue 123 (session 3cfc2e73): omp has no output schema, and a model flattened taskResult's fields to the top
+// level, which the strict execute shape refuses after the work is done. The execute system prompt now shows the exact shape:
+// both examples must decode as the normalizer decodes a final, with taskResult nested and decisions beside it.
+it("shows omp's execute phase the exact answer shape, with taskResult nested, and decodes both examples", () => {
+  const prompt = phaseSystemPrompt("execute");
+  const example = (label: string) => {
+    const line = prompt.split("\n").find((entry) => entry.startsWith(`${label}: `));
+    expect(line).toBeDefined();
+    return line!.slice(label.length + 2);
+  };
+  for (const [label, partial] of [["Complete form", false], ["Partial form", true]] as const) {
+    const normalized = normalizeExecutionFinal(example(label));
+    expect(normalized.status).toBe("available");
+    const execution = (normalized as { execution: Record<string, unknown> }).execution;
+    expect(execution.taskResult).toMatchObject({ schema: "task-result-v1" });
+    expect(Object.keys(execution)).not.toContain("goal");
+    expect(Object.hasOwn(execution, "completionStatus")).toBe(partial);
+  }
+  expect(prompt).toContain('taskResult is one nested object under the "taskResult" key: never put schema, goal, completedWork, conclusions, outputs or limitations at the top level.');
+  expect(prompt).toContain("decisions, debug and flow, when you report them, are top-level keys beside changedFiles, not inside taskResult.");
+  for (const phase of ["plan", "verify"] as const) {
+    expect(phaseSystemPrompt(phase)).not.toContain("Complete form: ");
+    expect(phaseSystemPrompt(phase)).not.toContain('"taskResult" key');
+  }
 });

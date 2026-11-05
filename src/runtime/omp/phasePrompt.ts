@@ -20,8 +20,26 @@ export function phaseSystemPrompt(phase: OmpPhase): string {
     "Do not claim that the whole task is accepted; ccloop owns checks, retries, and final status.",
     "Do not run git add, git reset, git commit, git checkout, or git branch; ccloop owns Git staging, commits, and publication.",
     ...(phase === "verify" ? ['In the final JSON, rejectCategory must be a string; use "" when approved, never null. safeToRetry must be false when approved.'] : []),
+    ...(phase === "execute" ? EXECUTE_SHAPE_LINES : []),
   ].join("\n");
 }
+
+// Execute answer shape (Orca tester issue 123, session 3cfc2e73): omp gets no output schema, only the shared prose, and a
+// model read "include taskResult metadata in that same object" as "put its fields at the top level"; the strict execute
+// shape then refused a finished attempt. Execute only, and only here: the shared executor prompt and its goldens stay as
+// they are. Both examples are checked against executionSchema (tests/runtime/omp/phasePrompt.test.ts).
+const EXECUTE_COMPLETE_EXAMPLE = {
+  changedFiles: ["src/example.ts"], diffPatch: "<unified diff of your changes>", commandOutputs: ["<command you ran and its output>"], stdoutStderrLog: "<log>",
+  taskResult: { schema: "task-result-v1", goal: "<goal>", completedWork: ["<work done>"], conclusions: ["<conclusion>"], outputs: [{ path: "src/example.ts", label: "<label>" }], limitations: [] },
+  decisions: [],
+};
+const EXECUTE_PARTIAL_EXAMPLE = { ...EXECUTE_COMPLETE_EXAMPLE, completionStatus: "partial", failureType: "error", failureMessage: "<why the attempt stopped>" };
+const EXECUTE_SHAPE_LINES = [
+  "The final execute JSON object has exactly this shape. changedFiles, diffPatch, commandOutputs and stdoutStderrLog are always present (use [] or \"\" when empty).",
+  `Complete form: ${JSON.stringify(EXECUTE_COMPLETE_EXAMPLE)}`,
+  `Partial form: ${JSON.stringify(EXECUTE_PARTIAL_EXAMPLE)}`,
+  'taskResult is one nested object under the "taskResult" key: never put schema, goal, completedWork, conclusions, outputs or limitations at the top level. decisions, debug and flow, when you report them, are top-level keys beside changedFiles, not inside taskResult. No other top-level keys.',
+];
 
 /**
  * OMP single call (Orca spec 2026-10-14 §3.3.4): the whole answer is one JSON object satisfying the request's schema.
