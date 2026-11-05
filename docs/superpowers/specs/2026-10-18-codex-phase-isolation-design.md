@@ -191,3 +191,32 @@ the private `CODEX_HOME`'s `config.toml` symlink. Codex's own project-trust book
 out-of-repo write: into the operator's real config, one table per attempt worktree path, left behind after the run.
 The human ruled it allowed: 「运行过程中 ~/.codex/config.toml 被改应该是允许的」. The byte-unchanged result holds
 only for the free measurement, not for a real exec.
+
+## Correction (2026-11-05, Orca session 3cfc2e73; Orca tester issue 121)
+
+Appended by the D5 implementer of Orca session `3cfc2e73`; the sections above are kept verbatim.
+
+§3.3 gives the private `CODEX_HOME` exactly two symlinks (`auth.json`, `config.toml`) and §3.3/§3.4 fix the phase's
+`-c` list. A `config.toml` whose top-level `model_catalog_json` is a relative path (cc-switch writes
+`model_catalog_json = "cc-switch-model-catalog.json"`) then fails to load in every isolated spawn: codex resolves the
+value against `CODEX_HOME`, and the private one does not hold the file. The tester measured the MCP probe failing
+with "failed to load configuration … No such file or directory" and passing once the file was copied in by hand.
+
+Zero-cost probe (this session, codex-cli 0.163.0, temp `HOME` and `CODEX_HOME` under the session scratchpad, no model
+call, the person's `~/.codex` untouched): with `model_catalog_json = "catalog.json"` and no such file in
+`CODEX_HOME`, `features list`, `debug models` and `mcp list --json` exit 1 ("No such file or directory"); the same
+happens when `config.toml` is a symlink into a dir that holds the file (resolution is against `CODEX_HOME`, not the
+link target); with the file in `CODEX_HOME` itself it loads; and `-c model_catalog_json="<absolute path>"` loads in
+every case (`debug models` then lists the catalog's own slug), while an absolute path to a missing file fails as
+before.
+
+So, in addition to §3.3/§3.4: when the installation's real `config.toml` has a top-level relative
+`model_catalog_json` (a basic or literal string before the first `[table]`), every isolated spawn -- the MCP probe,
+the single call and every phase -- appends `-c model_catalog_json="<real CODEX_HOME>/<value>"` (after the phase's
+own list; last before `-` in a single call). Nothing new is linked or copied (R9 unchanged), so §4's out-of-repo
+writes are unchanged. If the referenced file does not exist the spawn is refused before it starts, by name: a phase
+as `codex-phase-isolation-config-file-missing:<absolute path>` (final, booked 0, as §3.5), a single call as
+`codex-single-call-unavailable: codex-config-file-missing:<absolute path>`; the missing file is named ahead of the
+missing MCP list it also causes. A config without the key, or with an absolute value, keeps byte-identical argv.
+Other relative keys a `config.toml` may name are not handled; they fail as before, now with the probe's reason in
+the refusal (issue 125).

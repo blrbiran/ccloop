@@ -240,3 +240,31 @@ step 3 and the parked K1 item:
 
 Each rule gets criteria seen red by its own mutation; the final review's probe samples (`flip.mjs`, `perf2.mjs` in the
 session scratchpad) become tests.
+
+## 8. Addendum (2026-11-05, Orca session 3cfc2e73; Orca tester issue 122): the schema in the prompt
+
+Appended by the D5 implementer of Orca session `3cfc2e73` under the human's acceptance of the controller's D5
+proposal (「D1-D8其余都同意。」); the sections above are kept verbatim.
+
+Every codex phase and single call passes `--output-schema`. A third-party provider that does not implement Responses
+`text.format` answers each such call with `400 … This text.format type is unavailable now` before the model works;
+the same call without the flag answers (tester's measurement, Orca `orca_archived_files/issue-20261023.md` A.2).
+
+- A codex installation may carry `structuredOutput: "schema" | "prompt"` (optional). Absent or `"schema"`: today's
+  argv and prompt, byte for byte. `"prompt"`: no `--output-schema` on any phase or single call; the schema that would
+  have been sent (still written to the call's `schema.json`: the phase wire schema, `{result: …}` for execute, and for
+  a single call the strict projection) follows the prompt after one line, the OMP single call's wording: "Reply with
+  exactly one JSON object that satisfies the JSON Schema below, and nothing else: no prose before or after it." The
+  prompt text before it is unchanged.
+- Decoding is unchanged: §3.2's extraction and the strict decoders. A wrong-shaped answer fails exactly as it does
+  now (`ExecutionFormatFailure` / `codex-result-invalid` / `single-call-output-invalid`) -- but after the tokens are
+  spent, since the provider no longer enforces the shape. Never chosen automatically (a 400 is not a downgrade
+  signal); the person opts in per installation.
+- Not part of `agentConfigHash` (it is how the provider is asked, not which agent runs; setting it to unbreak an
+  installation must not strand groups frozen on it).
+- Saved-result capture is off for a prompt-mode installation (as omp): capture and recovery assume the
+  `--output-schema` wire (recovery compares `schema.json` and re-runs verify with the flag), so a prompt-mode format
+  failure keeps its plain failed outcome and writes no saved-result index.
+- Contract: the agents table is parsed strictly on both sides; Orca must accept the optional codex field
+  `structuredOutput` with exactly the values `"schema"` and `"prompt"` before anyone writes it into
+  `~/.orca/agents.json`. Nothing else Orca reads changes.
