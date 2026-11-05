@@ -77,6 +77,8 @@ process.stdin.on("end",()=>{
     if(undefinedServer!==undefined){process.stderr.write(`Error: failed to load bootstrap configuration\n\nCaused by:\n    invalid transport\n    in \`mcp_servers.${undefinedServer}\`\n`,()=>{process.exitCode=1;});return;}
     let authIsLink=null; try{authIsLink=lstatSync(`${process.env.CODEX_HOME}/auth.json`).isSymbolicLink();}catch{}
     writeFileSync(marker+".single-env.json",JSON.stringify({HOME:process.env.HOME,CODEX_HOME:process.env.CODEX_HOME,authIsLink}));
+    // Orca tester issue 122 (session 3cfc2e73): the prompt the call received, verbatim.
+    writeFileSync(marker+".single-prompt.txt",prompt);
     const script=existsSync(marker+".single.json")?JSON.parse(readFileSync(marker+".single.json","utf8")):{};
     if(script.hang===true){setInterval(()=>{},1000);return;}
     const rows=script.rows??[{type:"thread.started",thread_id:"t"},...P1_ERROR_ITEMS,{type:"turn.started"},{type:"item.completed",item:{id:"item_0",type:"agent_message",text:"{\"answer\":\"42\"}"}},{type:"turn.completed",usage:{input_tokens:20,cached_input_tokens:5,output_tokens:4}}];
@@ -149,7 +151,17 @@ process.stdin.on("end",()=>{
   // backpressure, until it is killed -- a stdout past the 1 GiB hard limit, written cheaply.
   if(mode==="flood") {const block=Buffer.alloc(1024*1024,0x78);const pump=()=>{while(process.stdout.write(block));process.stdout.once("drain",pump);};pump();return;}
   if(mode==="symlink") {unlinkSync(value("-o"));symlinkSync(marker,value("-o"));return;}
-  const wireSchema=JSON.parse(readFileSync(value("--output-schema"),"utf8"));
+  // Orca tester issue 122 (session 3cfc2e73): a prompt-mode phase sends no --output-schema; the schema is then the prompt's
+  // last line, after ccloop's "Reply with exactly one JSON object ..." line, and <marker>.prompt-schema records that it
+  // came from there. A phase with neither fails: stderr "no schema", exit 4. With the flag nothing changes.
+  let wireSchema;
+  if(args.includes("--output-schema")) wireSchema=JSON.parse(readFileSync(value("--output-schema"),"utf8"));
+  else {
+    const at=prompt.lastIndexOf("\nReply with exactly one JSON object that satisfies the JSON Schema below, and nothing else: no prose before or after it.\n");
+    if(at<0){process.stderr.write("no schema\n",()=>{process.exitCode=4;});return;}
+    wireSchema=JSON.parse(prompt.slice(prompt.indexOf("\n",at+1)+1));
+    appendFileSync(marker+".prompt-schema","prompt\n");
+  }
   const schema=wireSchema.properties?.result??wireSchema;
   let body={summary:"fixture",primaryTargetPaths:["answer.txt"]};
   if(schema.anyOf) body={changedFiles:["answer.txt"],diffPatch:"fixture patch",commandOutputs:["changed answer"],stdoutStderrLog:"fixture execution"};

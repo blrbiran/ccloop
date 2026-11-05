@@ -218,9 +218,10 @@ export class CodexAdapter implements RuntimeAdapter {
     }
     const context = { runDir: request.runDir, attempt: 1, worktreePath: request.cwd, abortSignal: request.signal, onProcessRegistered: request.onProcessRegistered,
       state: { budgetSnapshot: { timeRemainingMs: Math.max(1, deadline - Date.now()) } } } as unknown as AttemptContext;
+    const promptSchema = this.installation.structuredOutput === "prompt";
     const outcome = await runCodexPhase(this.config, { phase: "single-call", prompt: request.prompt, context, spawn: {
-      schema: wireSchema, env: { ...process.env, HOME: isolated.home, CODEX_HOME: isolated.codexHome },
-      args: ({ schemaPath, finalPath }) => codexSingleCallArgs({ model: this.config.model, cwd: request.cwd, schemaPath, finalPath, features, mcpServers, configFileArgs }),
+      schema: wireSchema, env: { ...process.env, HOME: isolated.home, CODEX_HOME: isolated.codexHome }, promptSchema,
+      args: ({ schemaPath, finalPath }) => codexSingleCallArgs({ model: this.config.model, cwd: request.cwd, schemaPath, finalPath, features, mcpServers, configFileArgs, promptSchema }),
     } });
     if (outcome.reason !== "completed") {
       // Fix round 1 (repo convention, omp "Ruling m4", claude): runCodexPhase writes the prompt only after process.json is

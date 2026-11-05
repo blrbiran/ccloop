@@ -35,7 +35,11 @@ export const codexDescriptor: AgentDescriptor = {
   contextOptions: CONTEXT_OPTIONS,
   // Declared context window (#70, ccloop spec 2026-10-21-declared-context-window-design.md §2.1): the window of a model the
   // catalog does not list; used only when the catalog was read and gave none (materialize decides, §2.2).
-  installationExtras: { sandbox: z.enum(["read-only", "workspace-write"]), budgetMode: z.literal("soft"), declaredContextWindow: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional() },
+  // Orca tester issue 122 (session 3cfc2e73): how the answer's shape is asked for. Absent or "schema" ⇒ `--output-schema`,
+  // byte-identical to before; "prompt" ⇒ no `--output-schema`, the same schema written into the prompt, for a provider
+  // without Responses `text.format` (it answers 400). Opt-in per installation, never chosen automatically.
+  installationExtras: { sandbox: z.enum(["read-only", "workspace-write"]), budgetMode: z.literal("soft"), declaredContextWindow: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+    structuredOutput: z.enum(["schema", "prompt"]).optional() },
   draftInstallationExtras: { sandbox: "workspace-write", budgetMode: "soft" },
   validateSelection(selection) {
     assertModel(selection.model);

@@ -24,9 +24,10 @@ export const addressableMcpServer = (name: string): boolean => /^[A-Za-z0-9_-]+$
  * override"): each is turned off by name -- measured on codex-cli 0.160.0 with `codex mcp list --json`, a whole-table
  * `-c mcp_servers={}` leaves them on.
  */
-export function codexSingleCallArgs(input: { model: string; cwd: string; schemaPath: string; finalPath: string; features: readonly string[]; mcpServers: readonly string[]; configFileArgs?: readonly string[] }): string[] {
+export function codexSingleCallArgs(input: { model: string; cwd: string; schemaPath: string; finalPath: string; features: readonly string[]; mcpServers: readonly string[]; configFileArgs?: readonly string[]; promptSchema?: boolean }): string[] {
   return ["exec", "--json", "--ephemeral", "--color", "never", "--skip-git-repo-check", "--model", input.model, "--sandbox", "read-only",
-    "-C", input.cwd, "--output-schema", input.schemaPath, "-o", input.finalPath,
+    // Orca tester issue 122: a prompt-mode installation gets the schema in the prompt instead (runCodexPhase).
+    "-C", input.cwd, ...(input.promptSchema === true ? [] : ["--output-schema", input.schemaPath]), "-o", input.finalPath,
     ...CODEX_SINGLE_CALL_CONFIG.flatMap((value) => ["-c", value]),
     ...input.features.filter((name) => !ALREADY_SET.has(name)).flatMap((name) => ["-c", `features.${name}=${TURNED_ON.has(name) ? "true" : "false"}`]),
     ...input.mcpServers.flatMap((name) => ["-c", `mcp_servers.${name}.enabled=false`]),

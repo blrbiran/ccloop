@@ -44,6 +44,9 @@ export function agentConfigHash(config: MaterializedAgentConfigV1): string {
     declaredContextWindow: _reportedNumberNotIdentity,
     // Activity watchdog (spec 2026-10-21 §2.1): a run limit like timeoutMs.
     idleTimeoutMs: _idleLimitNotIdentity,
+    // Orca tester issue 122: how the provider is asked for the answer's shape, not which agent or model runs; a person sets
+    // it to make a broken installation work, which must not strand the groups already frozen on it.
+    structuredOutput: _transportNotIdentity,
     ...installation
   } = config.installation;
   return canonicalHash({ ...config, installation });

@@ -18,7 +18,15 @@ import { codexToolRuleArgs } from "../toolRules.js";
 
 // Every-agent requirement chain (Orca spec 2026-10-15 §6.1): a single call brings its own argv, environment and schema.
 export type PhaseRequest = {phase:CodexPhase|"single-call";prompt:string;context:AttemptContext;
-  spawn?:{args:(paths:{schemaPath:string;finalPath:string})=>string[];env:NodeJS.ProcessEnv;schema:Record<string,unknown>}};
+  spawn?:{args:(paths:{schemaPath:string;finalPath:string})=>string[];env:NodeJS.ProcessEnv;schema:Record<string,unknown>;
+    // Orca tester issue 122: the single call's installation asks for the shape in the prompt (its args then omit --output-schema).
+    promptSchema?:boolean}};
+/**
+ * Orca tester issue 122 (session 3cfc2e73): an installation with `structuredOutput: "prompt"` sends no `--output-schema`;
+ * the schema that would have gone there (schema.json, still written) follows the prompt after this line -- the OMP single
+ * call's wording (phasePrompt.ts) -- and the answer goes through the same decoders, so a wrong shape fails as before.
+ */
+export const PROMPT_SCHEMA_LINE="Reply with exactly one JSON object that satisfies the JSON Schema below, and nothing else: no prose before or after it.";
 export type PhaseOutcome = {
   reason:"completed"|"aborted"|"timeout"|"stalled"|"spawn-error"|"exit-error"|"output-limit"|"io-error"|`codex-skills-${string}`|`codex-phase-isolation-${string}`;
   code:number|null;signal:NodeJS.Signals|null;final:string|null;evidenceDir:string;
@@ -58,11 +66,12 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   let transcriptTruncatedAt:number|null=null,transcriptError:string|undefined;
   const save=async(name:string,data:string)=>writeFile(join(evidenceDir,name),data,{mode:0o600});
   const schemaPath=join(evidenceDir,"schema.json"),finalPath=join(evidenceDir,"final.json");
+  const promptSchema=request.spawn!==undefined?request.spawn.promptSchema===true:installation?.structuredOutput==="prompt";
   const args=request.spawn!==undefined?[...config.command.slice(1),...request.spawn.args({schemaPath,finalPath})]:[...config.command.slice(1),"exec","--json","--ephemeral","--color","never","--model",config.model,
     "--sandbox",phase==="execute"?config.sandbox:"read-only","-C",context.worktreePath,
     // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5, §19.2 P5): the extra worktrees, writable on execute only.
     ...(phase==="execute"?(context.extraWorktrees??[]).flatMap(extra=>["--add-dir",extra.worktreePath]):[]),
-    "--output-schema",schemaPath,"-o",finalPath,"-"];
+    ...(promptSchema?[]:["--output-schema",schemaPath]),"-o",finalPath,"-"];
   let isolation:{home:string|null;codexHome:string|null;catalogError:string|null}|undefined;
   let spawnEnv:NodeJS.ProcessEnv={...process.env,...extraEnv};
   let stderr="", logsCreated=false;
@@ -113,6 +122,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   const wireBusinessSchema=request.spawn?.schema??(phase==="execute"?executeWireJsonSchema():phaseJsonSchema(phase as CodexPhase));
   const wireSchema=phase==="execute"?{type:"object",properties:{result:wireBusinessSchema},required:["result"],additionalProperties:false}:wireBusinessSchema;
   await save("schema.json",JSON.stringify(wireSchema));
+  const prompt=promptSchema?`${request.prompt}\n\n${PROMPT_SCHEMA_LINE}\n${JSON.stringify(wireSchema)}`:request.prompt;
   // Pre-create files with private permissions before handing paths to the CLI.
   await save("final.json","");await save("events.jsonl","");await save("transcript.jsonl","");await save("stderr.log","");logsCreated=true;
   const runChild = async () => new Promise<void>(resolve=>{
@@ -185,7 +195,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
           const registration={pid:child.pid!,pgid:child.pid!,startedAt:stdout.trim(),phase};
           await save("process.json",JSON.stringify(registration,null,2));
           await context.onProcessRegistered?.(registration);
-          if(!done&&result.reason==="completed")child.stdin.end(request.prompt);
+          if(!done&&result.reason==="completed")child.stdin.end(prompt);
         } catch(e) {ioError=String(e);stop("io-error");}
       })();
     });

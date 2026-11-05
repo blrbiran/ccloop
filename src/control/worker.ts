@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseMaterializedAgentConfig,agentConfigHash } from "../agents/materialize.js";
 import { getDescriptor } from "../agents/registry.js";
-import { AgentError } from "../agents/types.js";
+import { AgentError, type MaterializedAgentConfigV1 } from "../agents/types.js";
 import { createStopRequestSignal, runLoop } from "../controller/runLoop.js";
 import { isTerminalRunStatus } from "../state/stateMachine.js";
 import { atomicReplacePrivateFile, readPrivateFile } from "./paths.js";
@@ -131,6 +131,15 @@ async function recordWorkerError(sourceDir: string, error: unknown): Promise<voi
     target,
     Buffer.from(`${canonicalJson({ failedAt: new Date().toISOString(), message: error instanceof Error ? error.message : String(error) })}\n`),
   );
+}
+
+/**
+ * Saved-result capture of an execute format failure: codex only. Orca tester issue 122 (session 3cfc2e73): capture and
+ * recovery assume the `--output-schema` wire (recovery compares schema.json and re-runs verify with that flag), so an
+ * installation with `structuredOutput: "prompt"` captures nothing, as omp; its runs keep the plain failed outcome.
+ */
+export function executionFormatCaptureFor(config: MaterializedAgentConfigV1): { config: MaterializedAgentConfigV1 } | undefined {
+  return config.kind === "codex" && config.installation.structuredOutput !== "prompt" ? { config } : undefined;
 }
 
 export async function runControlWorker(argv: string[]): Promise<void> {
@@ -260,7 +269,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       allowanceContinuation,
       firstWorkspaceInput: envelope.inputCheckpoint ?? undefined,
       taskResultInput: envelope,
-      executionFormatCapture: config.kind === "codex" ? {config} : undefined,
+      executionFormatCapture: executionFormatCaptureFor(config),
       // Multi-repo runs (review M8): the envelope's base for each extra repository.
       ...(envelope.work.additionalRepos === undefined ? {} : { extraRepoBases: Object.fromEntries(envelope.work.additionalRepos.map((repo) => [repo.key, repo.base])) }),
       stopRequested,
