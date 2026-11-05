@@ -2,12 +2,12 @@
 // the planner, executor and verifier prompts carry one Directories section right after the success condition, naming
 // every directory's key, absolute worktree and allowed paths (and an extra's checks); the executor is told changedFiles
 // stays relative to its working directory. Without extra worktrees every prompt is as before.
-import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { loopContractSchema } from "../../src/contract/schema.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../../src/runtime/claude/prompts.js";
 import type { AttemptContext } from "../../src/runtime/types.js";
 import { RAW_CONTRACT } from "../fixtures/toolRules/argvCapture.js";
+import { currentExecutorPromptGolden } from "../fixtures/toolRules/executorPromptGolden.js";
 
 const plan = { summary: "Set answer to 42", primaryTargetPaths: ["answer.txt"] };
 const multi = loopContractSchema.parse({ ...RAW_CONTRACT, context: { ...RAW_CONTRACT.context, repoKey: "app",
@@ -45,10 +45,10 @@ describe("the Directories section (C7)", () => {
     expect(prompt).not.toContain(CHANGED_FILES);
   });
 
-  it("without extra worktrees: no section, and the executor prompt is the 2a2ae53 golden", async () => {
+  it("without extra worktrees: no section, and the executor prompt is the 2a2ae53 golden with the D6 lines replaced", async () => {
     const single = loopContractSchema.parse(structuredClone(RAW_CONTRACT));
     const plain = { contract: single, worktreePath: "/run/worktrees/attempt-1", plan } as unknown as AttemptContext;
-    expect(buildExecutorPrompt({ contract: single, plan } as unknown as AttemptContext)).toBe(await readFile(new URL("../fixtures/toolRules/golden-2a2ae53/executor-prompt.txt", import.meta.url), "utf8"));
+    expect(buildExecutorPrompt({ contract: single, plan } as unknown as AttemptContext)).toBe(await currentExecutorPromptGolden());
     expect(buildPlannerPrompt(single, undefined, undefined, undefined, plain)).toBe(buildPlannerPrompt(single));
     for (const prompt of [buildPlannerPrompt(single, undefined, undefined, undefined, plain), buildExecutorPrompt(plain), buildVerifierPrompt(plain)]) {
       expect(prompt).not.toContain("Directories (");

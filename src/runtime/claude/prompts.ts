@@ -199,7 +199,10 @@ export function buildExecutorPrompt(context: AttemptContext, options: { schemaNe
     formatJson(context.plan),
     "Execute against the current attempt plan above and report only this attempt's concrete outcome.",
     'Return either a complete object with {"changedFiles": string[], "diffPatch": string, "commandOutputs": string[], "stdoutStderrLog": string} or a partial object that also includes {"completionStatus": "partial", "failureType": "timeout" | "error", "failureMessage": string}.',
-    'When possible, include optional taskResult metadata in that same complete or partial object: {"schema":"task-result-v1","goal":string,"completedWork":string[],"conclusions":string[],"outputs":[{"path":string,"label":string}],"limitations":string[]}.',
+    // Orca tester issue 123 (session 3cfc2e73, batch D6): "in that same complete or partial object" read as "put its fields
+    // at the top level"; taskResult is one nested key, and decisions/debug/flow are its top-level siblings, as the omp
+    // execute system prompt already says (src/runtime/omp/phasePrompt.ts).
+    'When possible, include optional taskResult metadata as one nested object under the "taskResult" key of that complete or partial object, never as top-level fields: "taskResult":{"schema":"task-result-v1","goal":string,"completedWork":string[],"conclusions":string[],"outputs":[{"path":string,"label":string}],"limitations":string[]}. decisions, debug and flow, when you report them, are top-level keys beside changedFiles, not inside taskResult.',
     "This explanation describes this attempt only; it is not a product file, a verification claim, or an additional acceptance condition. Do not add task/run/group or verification identities. Missing explanation does not change the execution outcome.",
     "Keep taskResult UTF-8 JSON at most 65536 bytes: a nonempty goal at most 4000 characters; each text array and outputs at most 32 entries; text entries at most 4000 characters; output path at most 1024 and label at most 256 characters. Empty arrays are valid.",
     "Output paths must be relative POSIX file paths: no empty/dot/dot-dot components, absolute/drive or URL prefix, NUL or backslash. Report limitations honestly and leave actual verification to the verifier.",

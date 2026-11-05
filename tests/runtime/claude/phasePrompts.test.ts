@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { loopContractSchema } from "../../../src/contract/schema.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../../../src/runtime/claude/prompts.js";
 import type { AttemptContext } from "../../../src/runtime/types.js";
-import { readFile } from "node:fs/promises";
 import { claudeToolRuleRows, codexToolRuleRows, ompToolRuleRows, separatorRefusal, toolRulesPromptSection } from "../../../src/runtime/toolRules.js";
 import { requiredCheckAllowRules } from "../../../src/runtime/claude/claudeAgentAdapter.js";
 import { RAW_CONTRACT } from "../../fixtures/toolRules/argvCapture.js";
+import { currentExecutorPromptGolden } from "../../fixtures/toolRules/executorPromptGolden.js";
 
 // Codex phase output hardening (2026-10-08), spec §3.1. A third-party model ran an investigate task's plan phase as if it
 // were the execute phase (apply_patch in a read-only sandbox) and wrapped its answer in prose. The prompts now say what
@@ -85,13 +85,12 @@ describe("phase prompts (codex phase output hardening)", () => {
 // spend turns on denied calls; without rules the executor prompt is byte-identical to 2a2ae53's, and plan/verify never
 // change.
 describe("executor prompt and tool rules", () => {
-  const goldenPrompt = new URL("../../fixtures/toolRules/golden-2a2ae53/executor-prompt.txt", import.meta.url);
   const withRules = (toolRules: unknown) => ({ ...RAW_CONTRACT, executionPolicy: { ...RAW_CONTRACT.executionPolicy, toolRules } });
   const plan = { summary: "Set answer to 42", primaryTargetPaths: ["answer.txt"] };
   const executor = (raw: unknown) => buildExecutorPrompt({ contract: loopContractSchema.parse(raw), plan } as unknown as AttemptContext);
 
-  it("without toolRules: byte-identical to the 2a2ae53 golden", async () => {
-    expect(executor(RAW_CONTRACT)).toBe(await readFile(goldenPrompt, "utf8"));
+  it("without toolRules: byte-identical to the 2a2ae53 golden with the D6 lines replaced", async () => {
+    expect(executor(RAW_CONTRACT)).toBe(await currentExecutorPromptGolden());
   });
 
   it("with toolRules: one section naming the commands, the network and the secret names; everything else unchanged", async () => {
@@ -103,7 +102,7 @@ describe("executor prompt and tool rules", () => {
     expect(section).toContain("npm run build");
     expect(section).toContain("NPM_TOKEN");
     expect(section.toLowerCase()).toContain("network");
-    expect(prompt.replace(`${section}\n`, "")).toBe(await readFile(goldenPrompt, "utf8"));
+    expect(prompt.replace(`${section}\n`, "")).toBe(await currentExecutorPromptGolden());
     const open = toolRulesPromptSection({ commands: [], network: true, secretEnv: [] });
     expect(open).not.toBe(section);
   });

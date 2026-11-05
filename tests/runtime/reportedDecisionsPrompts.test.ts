@@ -17,7 +17,8 @@ const contract = loopContractSchema.parse({
   safetyPolicy: { allowlistPaths: ["answer.txt"], maxFilesTouched: 1 },
   verification: { verifierType: "agent", requiredChecks: ["true"], rejectOn: ["answer missing"] }, escalationAndExit: {},
 });
-// The executor prompt of this contract at ccloop b393c32 (before this change), line by line.
+// The executor prompt of this contract at ccloop b393c32 (before this change), line by line; the taskResult line is the one
+// Orca session 3cfc2e73 batch D6 rewrote (Orca tester issue 123: taskResult nested, decisions/debug/flow top-level).
 const BEFORE = [
   "Return JSON only.",
   "Execute one isolated attempt for task t.",
@@ -35,7 +36,7 @@ const BEFORE = [
   "null",
   "Execute against the current attempt plan above and report only this attempt's concrete outcome.",
   "Return either a complete object with {\"changedFiles\": string[], \"diffPatch\": string, \"commandOutputs\": string[], \"stdoutStderrLog\": string} or a partial object that also includes {\"completionStatus\": \"partial\", \"failureType\": \"timeout\" | \"error\", \"failureMessage\": string}.",
-  "When possible, include optional taskResult metadata in that same complete or partial object: {\"schema\":\"task-result-v1\",\"goal\":string,\"completedWork\":string[],\"conclusions\":string[],\"outputs\":[{\"path\":string,\"label\":string}],\"limitations\":string[]}.",
+  "When possible, include optional taskResult metadata as one nested object under the \"taskResult\" key of that complete or partial object, never as top-level fields: \"taskResult\":{\"schema\":\"task-result-v1\",\"goal\":string,\"completedWork\":string[],\"conclusions\":string[],\"outputs\":[{\"path\":string,\"label\":string}],\"limitations\":string[]}. decisions, debug and flow, when you report them, are top-level keys beside changedFiles, not inside taskResult.",
   "This explanation describes this attempt only; it is not a product file, a verification claim, or an additional acceptance condition. Do not add task/run/group or verification identities. Missing explanation does not change the execution outcome.",
   "Keep taskResult UTF-8 JSON at most 65536 bytes: a nonempty goal at most 4000 characters; each text array and outputs at most 32 entries; text entries at most 4000 characters; output path at most 1024 and label at most 256 characters. Empty arrays are valid.",
   "Output paths must be relative POSIX file paths: no empty/dot/dot-dot components, absolute/drive or URL prefix, NUL or backslash. Report limitations honestly and leave actual verification to the verifier.",
@@ -103,6 +104,21 @@ describe("the executor prompt asks for graded decisions (spec §4.2)", () => {
     expect(prompt[final - 1]).toContain("give decisions null");
     expect(prompt[final - 1]).toContain("null for each debug member");
     expect(lines(buildExecutorPrompt(f.context))).not.toContain(prompt[final - 1]);
+  });
+});
+
+// Orca tester issue 123 (Orca session 3cfc2e73, batch D6): "include taskResult metadata in that same complete or partial
+// object" was read as "put its fields at the top level", and the strict execute shape refused a finished attempt. Every
+// kind gets this prompt, so it says where taskResult goes and that the other reports are its siblings, as the omp execute
+// system prompt does (src/runtime/omp/phasePrompt.ts).
+describe("the executor prompt says taskResult is nested and decisions, debug and flow are top-level (Orca #123)", () => {
+  const taskResultLine = () => lines(buildExecutorPrompt(context)).find((line) => line.startsWith("When possible, include optional taskResult metadata"))!;
+  it("puts taskResult under its own key, never as top-level fields", () => {
+    expect(taskResultLine()).toContain('as one nested object under the "taskResult" key of that complete or partial object, never as top-level fields: "taskResult":{"schema":"task-result-v1"');
+    expect(taskResultLine()).not.toContain("in that same complete or partial object");
+  });
+  it("names decisions, debug and flow as top-level siblings, not inside taskResult", () => {
+    expect(taskResultLine()).toContain("decisions, debug and flow, when you report them, are top-level keys beside changedFiles, not inside taskResult.");
   });
 });
 

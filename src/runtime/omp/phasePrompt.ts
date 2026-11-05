@@ -28,6 +28,9 @@ export function phaseSystemPrompt(phase: OmpPhase): string {
 // model read "include taskResult metadata in that same object" as "put its fields at the top level"; the strict execute
 // shape then refused a finished attempt. Execute only, and only here: the shared executor prompt and its goldens stay as
 // they are. Both examples are checked against executionSchema (tests/runtime/omp/phasePrompt.test.ts).
+// ERRATUM (Orca session 3cfc2e73, batch D6): "the shared executor prompt and its goldens stay as they are" no longer holds.
+// The human ruled the shared line fixed for every kind; it now says the same as these lines (taskResult nested,
+// decisions/debug/flow top-level), so omp gets both and they agree. These lines are unchanged.
 const EXECUTE_COMPLETE_EXAMPLE = {
   changedFiles: ["src/example.ts"], diffPatch: "<unified diff of your changes>", commandOutputs: ["<command you ran and its output>"], stdoutStderrLog: "<log>",
   taskResult: { schema: "task-result-v1", goal: "<goal>", completedWork: ["<work done>"], conclusions: ["<conclusion>"], outputs: [{ path: "src/example.ts", label: "<label>" }], limitations: [] },
