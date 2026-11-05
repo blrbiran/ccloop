@@ -90,6 +90,17 @@ describe("the executor prompt asks for graded decisions (spec §4.2)", () => {
     expect(undo).toContain("git revert only fits right after the change lands, so do not rely on it");
   });
 
+  // Orca tester issue 138 (Orca session 3cfc2e73, batch D6): Orca's tier-0 gate accepts an undo.how only with a command or a
+  // named file/field (Orca src/ledger/undoExecutable.ts); an agent that changed nothing wrote "Nothing to undo", the gate
+  // downgraded it, and the group stopped on a decision the person could not approve as written. The undo of a
+  // change-nothing decision is the change it declined, named by file, and the example has to have that shape too.
+  it("says the undo of a change-nothing or declined-change decision names the declined change by file, not 'nothing to undo'", () => {
+    const [, , , undo] = added(buildExecutorPrompt(context));
+    expect(undo).toContain("When you chose to change nothing or declined a change, undo.how names that declined change concretely, with its file path or field");
+    expect(undo).toContain("(for example: if needed, add boundary assertions to test/math.test.js)");
+    expect(undo).toContain('not "nothing to undo"');
+  });
+
   it("asks for debug only when the task's goal asks for it, with its shape", () => {
     const [, , , , debug] = added(buildExecutorPrompt(context));
     expect(debug).toContain("Report debug only when the task's goal asks for it");
