@@ -6,7 +6,7 @@ import { foldText, type JsonLine } from "../streamLines.js";
 
 // Task 8 fix round 3: the isolation (the -c list and the private homes) lives in a leaf module so the catalog read can run
 // its MCP probe under it without an import cycle through registry; re-exported here for the adapter and the criteria.
-export { CODEX_SINGLE_CALL_CONFIG, codexSingleCallHome, effectiveCodexHome } from "../../agents/codexIsolation.js";
+export { CODEX_SINGLE_CALL_CONFIG, CodexConfigFileMissing, codexConfigFileArgs, codexSingleCallHome, effectiveCodexHome } from "../../agents/codexIsolation.js";
 
 const TURNED_ON = new Set(["skip_host_skill_discovery"]);
 const ALREADY_SET = new Set(CODEX_SINGLE_CALL_CONFIG.filter((value) => value.startsWith("features.")).map((value) => value.slice(9, value.indexOf("="))));
@@ -24,12 +24,14 @@ export const addressableMcpServer = (name: string): boolean => /^[A-Za-z0-9_-]+$
  * override"): each is turned off by name -- measured on codex-cli 0.160.0 with `codex mcp list --json`, a whole-table
  * `-c mcp_servers={}` leaves them on.
  */
-export function codexSingleCallArgs(input: { model: string; cwd: string; schemaPath: string; finalPath: string; features: readonly string[]; mcpServers: readonly string[] }): string[] {
+export function codexSingleCallArgs(input: { model: string; cwd: string; schemaPath: string; finalPath: string; features: readonly string[]; mcpServers: readonly string[]; configFileArgs?: readonly string[] }): string[] {
   return ["exec", "--json", "--ephemeral", "--color", "never", "--skip-git-repo-check", "--model", input.model, "--sandbox", "read-only",
     "-C", input.cwd, "--output-schema", input.schemaPath, "-o", input.finalPath,
     ...CODEX_SINGLE_CALL_CONFIG.flatMap((value) => ["-c", value]),
     ...input.features.filter((name) => !ALREADY_SET.has(name)).flatMap((name) => ["-c", `features.${name}=${TURNED_ON.has(name) ? "true" : "false"}`]),
     ...input.mcpServers.flatMap((name) => ["-c", `mcp_servers.${name}.enabled=false`]),
+    // Orca tester issue 121: the `-c model_catalog_json=<absolute>` pair of codexConfigFileArgs, when the config needs it.
+    ...(input.configFileArgs ?? []),
     "-"];
 }
 

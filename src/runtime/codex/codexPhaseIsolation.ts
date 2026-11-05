@@ -1,5 +1,5 @@
 import { isAbsolute } from "node:path";
-import { CODEX_PHASE_CONFIG, codexSingleCallHome, effectiveCodexHome } from "../../agents/codexIsolation.js";
+import { CODEX_PHASE_CONFIG, CodexConfigFileMissing, codexConfigFileArgs, codexSingleCallHome, effectiveCodexHome } from "../../agents/codexIsolation.js";
 import type { InstallationV1 } from "../../agents/types.js";
 import { addressableMcpServer } from "./codexSingleCall.js";
 
@@ -42,8 +42,9 @@ export function codexPhaseConfigArgs(mcpServers: readonly string[], realHome: st
  */
 export async function codexPhaseIsolation(input: { installation: InstallationV1; mcpServers: readonly string[] | null; runDir: string; attempt: number; env: NodeJS.ProcessEnv }): Promise<{ home: string; codexHome: string; args: string[] }> {
   let pair: { home: string; codexHome: string };
+  const source = effectiveCodexHome(input.installation, input.env);
   try {
-    pair = await codexSingleCallHome({ runDir: input.runDir, sourceCodexHome: effectiveCodexHome(input.installation, input.env), executable: input.installation.command[0],
+    pair = await codexSingleCallHome({ runDir: input.runDir, sourceCodexHome: source, executable: input.installation.command[0],
       env: input.env, fallback: ["codex", String(input.attempt), "phase-isolation"] });
   } catch (error) {
     if ((error as { code?: unknown }).code === "codex-single-call-home-invalid") {
@@ -51,10 +52,17 @@ export async function codexPhaseIsolation(input: { installation: InstallationV1;
     }
     throw error;
   }
+  // Orca tester issue 121: before the MCP list, so a missing catalog file (which also failed the MCP probe) is named as such.
+  let configFileArgs: string[];
+  try { configFileArgs = await codexConfigFileArgs(source); }
+  catch (error) {
+    if (error instanceof CodexConfigFileMissing) throw new CodexPhaseIsolationRefused(`codex-phase-isolation-config-file-missing:${error.path}`, pair);
+    throw error;
+  }
   if (input.mcpServers === null) throw new CodexPhaseIsolationRefused("codex-phase-isolation-no-mcp-list", pair);
   const unaddressable = input.mcpServers.find((name) => !addressableMcpServer(name));
   if (unaddressable !== undefined) throw new CodexPhaseIsolationRefused(`codex-phase-isolation-mcp-unaddressable:${JSON.stringify(unaddressable)}`, pair);
   const realHome = input.env.HOME;
   if (realHome === undefined || realHome === "" || !isAbsolute(realHome)) throw new CodexPhaseIsolationRefused("codex-phase-isolation-real-home-unknown", pair);
-  return { ...pair, args: codexPhaseConfigArgs(input.mcpServers, realHome) };
+  return { ...pair, args: [...codexPhaseConfigArgs(input.mcpServers, realHome), ...configFileArgs] };
 }

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { catalogCacheDir } from "./catalogCache.js";
 import { probeFailure, probeTimeoutMs, runProbe } from "./catalogProbe.js";
-import { CODEX_SINGLE_CALL_CONFIG, codexSingleCallHome, effectiveCodexHome } from "./codexIsolation.js";
+import { CODEX_SINGLE_CALL_CONFIG, codexConfigFileArgs, codexSingleCallHome, effectiveCodexHome } from "./codexIsolation.js";
 import type { CatalogRowV1, InstallationV1 } from "./types.js";
 
 /**
@@ -66,9 +66,12 @@ export function codexMcpServerNames(listed: string): string[] {
 async function readIsolatedMcpServers(installation: InstallationV1, deadline: number, signal?: AbortSignal): Promise<string[]> {
   const scratch = catalogCacheDir(process.env) === null ? await mkdtemp(join(tmpdir(), "ccloop-codex-mcp-")) : null;
   try {
-    const isolated = await codexSingleCallHome({ runDir: scratch ?? "", sourceCodexHome: effectiveCodexHome(installation, process.env), executable: installation.command[0], env: process.env });
+    const source = effectiveCodexHome(installation, process.env);
+    const isolated = await codexSingleCallHome({ runDir: scratch ?? "", sourceCodexHome: source, executable: installation.command[0], env: process.env });
+    // Orca tester issue 121: a relative model_catalog_json, resolved against the real CODEX_HOME (codexConfigFileArgs).
+    const configFileArgs = await codexConfigFileArgs(source);
     const startedAt = Date.now();
-    const listed = await runProbe(CODE, installation.command[0], [...installation.command.slice(1), ...CODEX_SINGLE_CALL_CONFIG.flatMap((value) => ["-c", value]), "mcp", "list", "--json"],
+    const listed = await runProbe(CODE, installation.command[0], [...installation.command.slice(1), ...CODEX_SINGLE_CALL_CONFIG.flatMap((value) => ["-c", value]), ...configFileArgs, "mcp", "list", "--json"],
       { ...process.env, HOME: isolated.home, CODEX_HOME: isolated.codexHome }, { timeoutMs: probeTimeoutMs(deadline), signal });
     try { return codexMcpServerNames(listed); } catch { throw probeFailure(CODE, "decode", "decode", startedAt); }
   } finally {

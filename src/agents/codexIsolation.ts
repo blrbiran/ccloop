@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, readlink, realpath, rename, rm, symlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rename, rm, stat, symlink } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { catalogCacheDir } from "./catalogCache.js";
 import type { InstallationV1 } from "./types.js";
@@ -37,6 +37,38 @@ export const CODEX_PHASE_CONFIG: readonly string[] = [
 export function effectiveCodexHome(installation: InstallationV1, env: NodeJS.ProcessEnv): string | null {
   const inherited = env.CODEX_HOME, home = env.HOME;
   return installation.configDir ?? (inherited && isAbsolute(inherited) ? inherited : home && isAbsolute(home) ? join(home, ".codex") : null);
+}
+
+/**
+ * Orca tester issue 121 (session 3cfc2e73): codex resolves a relative top-level `model_catalog_json` against CODEX_HOME,
+ * so under the private CODEX_HOME (which links only auth.json and config.toml) the file is missing and codex cannot load
+ * its config at all. Zero-cost probe on codex-cli 0.163.0 (temp HOME and CODEX_HOME, no model call): `features list`,
+ * `debug models` and `mcp list --json` fail with "No such file or directory" for a relative value whose file is not in
+ * CODEX_HOME -- also when config.toml is a symlink into a dir that has the file -- and load when given
+ * `-c model_catalog_json="<absolute path>"`. So every isolated spawn (the MCP probe, the single call, every phase) gets
+ * that `-c` pair, the path resolved against the installation's real CODEX_HOME; nothing is linked or copied (R9).
+ * Read like configuredWindow (codexCatalog.ts): the first top-level line before any `[table]`, a basic or literal string.
+ * No such key, an absolute value, or a value this reader cannot decode ⇒ no pair (codex reads it as before). A relative
+ * value whose file is missing ⇒ CodexConfigFileMissing naming the absolute path.
+ */
+export class CodexConfigFileMissing extends Error {
+  readonly neverStarted = true;
+  readonly code = "codex-config-file-missing";
+  constructor(readonly path: string) { super(`codex-config-file-missing:${path}`); this.name = "CodexConfigFileMissing"; }
+}
+export async function codexConfigFileArgs(sourceCodexHome: string | null): Promise<string[]> {
+  if (sourceCodexHome === null) return [];
+  const toml = await readFile(join(sourceCodexHome, "config.toml"), "utf8").catch(() => null);
+  if (toml === null) return [];
+  const head = toml.split(/^\s*\[/m, 1)[0]!;
+  const match = /^\s*model_catalog_json\s*=\s*(?:"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)')\s*(?:#.*)?$/m.exec(head);
+  if (match === null) return [];
+  let value: string;
+  try { value = match[2] ?? JSON.parse(`"${match[1]!}"`) as string; } catch { return []; }
+  if (value === "" || isAbsolute(value)) return [];
+  const path = join(sourceCodexHome, value);
+  if (!await stat(path).then(() => true, () => false)) throw new CodexConfigFileMissing(path);
+  return ["-c", `model_catalog_json=${JSON.stringify(path)}`];
 }
 
 /** A private dir that is not a real directory of this user (a symlink, a file, someone else's) refuses the call unspawned. */

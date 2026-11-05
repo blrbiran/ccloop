@@ -5,7 +5,7 @@ import { readAgentCatalog } from "../../agents/agentCatalog.js";
 import type { InstallationV1 } from "../../agents/types.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "../claude/prompts.js";
 import type { AttemptContext, RuntimeAdapter, SingleCallRequest, SingleCallResult } from "../types.js";
-import { addressableMcpServer, codexSingleCallArgs, codexSingleCallHome, effectiveCodexHome } from "./codexSingleCall.js";
+import { addressableMcpServer, CodexConfigFileMissing, codexConfigFileArgs, codexSingleCallArgs, codexSingleCallHome, effectiveCodexHome } from "./codexSingleCall.js";
 import { SingleCallSchemaUnsupported, strictSingleCallSchema, stripOptionalNulls } from "./strictSingleCall.js";
 import { codexResultOf, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, type CodexConfig, type CodexPhase, type PhaseResults } from "./protocol.js";
 import { runCodexPhase, type PhaseOutcome } from "./runCodexPhase.js";
@@ -199,6 +199,13 @@ export class CodexAdapter implements RuntimeAdapter {
     // also made the isolated MCP probe fail) is named as such, not as a missing list.
     const source = effectiveCodexHome(this.installation, process.env);
     const isolated = await codexSingleCallHome({ runDir: request.runDir, sourceCodexHome: source, executable: this.config.command[0], env: process.env });
+    // Orca tester issue 121: a missing catalog file (which also failed the MCP probe) is named before the missing list.
+    let configFileArgs: string[];
+    try { configFileArgs = await codexConfigFileArgs(source); }
+    catch (error) {
+      if (error instanceof CodexConfigFileMissing) throw Object.assign(new Error(`codex-single-call-unavailable: ${error.message}`), { code: "codex-single-call-unavailable", neverStarted: true });
+      throw error;
+    }
     // Task 8 fix round 2: the MCP server names are needed as much as the feature list (their servers would start otherwise).
     if (catalog.codexMcpServers === null) {
       // Orca tester issue 125: the probe's own reason, bounded, so the refusal says why the list is missing.
@@ -213,7 +220,7 @@ export class CodexAdapter implements RuntimeAdapter {
       state: { budgetSnapshot: { timeRemainingMs: Math.max(1, deadline - Date.now()) } } } as unknown as AttemptContext;
     const outcome = await runCodexPhase(this.config, { phase: "single-call", prompt: request.prompt, context, spawn: {
       schema: wireSchema, env: { ...process.env, HOME: isolated.home, CODEX_HOME: isolated.codexHome },
-      args: ({ schemaPath, finalPath }) => codexSingleCallArgs({ model: this.config.model, cwd: request.cwd, schemaPath, finalPath, features, mcpServers }),
+      args: ({ schemaPath, finalPath }) => codexSingleCallArgs({ model: this.config.model, cwd: request.cwd, schemaPath, finalPath, features, mcpServers, configFileArgs }),
     } });
     if (outcome.reason !== "completed") {
       // Fix round 1 (repo convention, omp "Ruling m4", claude): runCodexPhase writes the prompt only after process.json is
