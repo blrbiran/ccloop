@@ -24,6 +24,8 @@ export const SETUP_LOG_TRUNCATED_MARKER = `[ccloop: setup output truncated at ${
 /** After a command's shell exits (on its own, at its limit or on an abort), its pipes get this long to drain before the
  * group is killed and the pipes are closed: a process that left the group (setsid) may hold them open indefinitely. */
 export const SETUP_DRAIN_MS = 2_000;
+/** Written to the log when the drain had to be cut, so a log that stops early says why (human ruling 2026-11-05). */
+export const SETUP_DRAIN_CUT_MARKER = `[ccloop: setup output cut ${SETUP_DRAIN_MS} ms after the command ended; a process outside its group still held the output]`;
 
 /** The gate opens only on an explicit newline (fix round 2 ruling): if the controller dies between spawn and registration
  * the pipe closes without one, and the command exits 125 instead of running unregistered. */
@@ -122,18 +124,23 @@ async function runOne(command: string, cwd: string, logDir: string, index: numbe
     // Final-review M7: the end is the shell's exit plus a bounded drain, not the pipes' close -- a process that escaped
     // the group can hold them open past any kill. Final-review I1: the group is killed once the command has ended, so
     // nothing it started in the background outlives setup.
+    // Human ruling 2026-11-05: the verdict is taken at the shell's exit; the drain only collects output, so the limit
+    // timer is ignored once the shell has exited, and a drain that had to be cut is marked in the log.
+    let exited = false;
+    let drainCut = false;
     const ended = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
       let drain: NodeJS.Timeout | undefined;
       child.once("error", (error) => { clearTimeout(drain); reject(error); });
       child.once("exit", () => {
-        drain = setTimeout(() => { killGroup(); child.stdout!.destroy(); child.stderr!.destroy(); gate.destroy(); }, SETUP_DRAIN_MS);
+        exited = true;
+        drain = setTimeout(() => { drainCut = true; killGroup(); child.stdout!.destroy(); child.stderr!.destroy(); gate.destroy(); }, SETUP_DRAIN_MS);
       });
       child.once("close", (code, exitSignal) => { clearTimeout(drain); resolve({ code, signal: exitSignal }); });
     }).finally(killGroup);
     void ended.catch(() => undefined);
     let timedOut = false;
     let aborted = false;
-    const timer = setTimeout(() => { timedOut = true; killGroup(); }, limitMs);
+    const timer = setTimeout(() => { if (exited) return; timedOut = true; killGroup(); }, limitMs);
     const onAbort = (): void => { aborted = true; killGroup(); };
     signal?.addEventListener("abort", onAbort, { once: true });
     // An abort that landed between the check above and the listener would otherwise be missed.
@@ -166,6 +173,7 @@ async function runOne(command: string, cwd: string, logDir: string, index: numbe
       await writePrivateJson(processDir, "outcome.json", { code: end.code, signal: end.signal, timedOut, aborted });
       if (aborted) throw abortError(signal?.reason);
       if (dropped) writeSync(log.fd, `\n${SETUP_LOG_TRUNCATED_MARKER}\n`);
+      if (drainCut) writeSync(log.fd, `\n${SETUP_DRAIN_CUT_MARKER}\n`);
       return timedOut ? { kind: "timeout" } : { kind: "exit", ...end };
     } finally {
       clearTimeout(timer);

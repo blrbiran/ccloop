@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
-import { runSetupCommands, SETUP_GATE_SCRIPT, SETUP_LOG_TRUNCATED_MARKER } from "../../src/controller/setupCommands.js";
+import { runSetupCommands, SETUP_DRAIN_CUT_MARKER, SETUP_GATE_SCRIPT, SETUP_LOG_TRUNCATED_MARKER } from "../../src/controller/setupCommands.js";
 import { reapRunProcesses } from "../../src/ownership/reapRunProcesses.js";
 
 // Task setup commands (spec 2026-11-04 §4.4): a contract's setup runs in the attempt worktree before the agent's first
@@ -216,6 +216,32 @@ describe("runSetupCommands", () => {
       const pid = Number(await readFile(escaped, "utf8").catch(() => "0"));
       if (pid > 0) try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
     }
+  });
+
+  // Human ruling 2026-11-05 (Orca session e2ad4802, "同意按你的建议做"): the verdict is taken when the shell exits. The
+  // drain after it only collects output, so a limit that falls inside the drain must not turn an exit 0 into a timeout,
+  // and a drain that had to be cut says so in the log, or an operator cannot tell why the output stops.
+  it("a limit that falls in the drain after an exit 0 is not a timeout, and the cut drain is marked in the log", async () => {
+    const { root, logDir } = await repo();
+    const escaped = join(root, "node_modules", "escaped.pid");
+    try {
+      // The shell exits at once; the escaped process keeps the pipe open past the 1 s limit, inside the 2 s drain.
+      const outcome = await runSetupCommands([`mkdir -p node_modules; perl -e 'use POSIX; setsid(); open(F, ">", "${escaped}"); print F $$; close F; sleep 30' & echo before-exit`], root, logDir, undefined, 1_000);
+      expect(outcome).toEqual({ ok: true });
+      const log = await readFile(join(logDir, "setup-1.log"), "utf8");
+      expect(log).toContain("before-exit");
+      expect(log).toContain(SETUP_DRAIN_CUT_MARKER);
+    } finally {
+      const pid = Number(await readFile(escaped, "utf8").catch(() => "0"));
+      if (pid > 0) try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+  });
+
+  it("a drain that ends on its own leaves no drain marker", async () => {
+    const { root, logDir } = await repo();
+    expect(await runSetupCommands(["echo small"], root, logDir, undefined, 10_000)).toEqual({ ok: true });
+    const log = await readFile(join(logDir, "setup-1.log"), "utf8");
+    expect(log).toBe("small\n");
   });
 
   // Final-review M2 ruling: running out of the attempt's remaining time is the attempt being out of time; only the
