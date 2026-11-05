@@ -11,7 +11,7 @@ import { codexResultOf, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, t
 import { runCodexPhase, type PhaseOutcome } from "./runCodexPhase.js";
 import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
 import { codexToolRuleRows } from "../toolRules.js";
-import type { CallClassification } from "../failureCause.js";
+import { causeDetail, type CallClassification } from "../failureCause.js";
 import { phaseLimitMs, runWithTransientRetry, tryContext, type TryObservation, type TryResult } from "../transientRetry.js";
 
 /** Codex rate-limit spec §3.2: waits before each retry of a phase rejected by 429 before any work (three retries). */
@@ -75,7 +75,7 @@ export class CodexAdapter implements RuntimeAdapter {
     // Activity watchdog (spec 2026-10-21 §2.3): a stalled call is transient; it is retried when no work was seen or the phase is read-only.
     else if (outcome.reason === "stalled") classification = { cause: "stalled", workObserved: outcome.stream.call.value()?.workObserved ?? true, detail: null };
     else if (outcome.reason === "spawn-error") classification = { cause: outcome.spawnErrno === "ENOENT" ? "executable-missing" : "unknown", workObserved: false, detail: outcome.spawnErrno ?? null };
-    else if (outcome.reason.startsWith("codex-skills-") || outcome.reason.startsWith("codex-phase-isolation-")) classification = { cause: "unknown", workObserved: false, detail: outcome.reason };
+    else if (outcome.reason.startsWith("codex-skills-") || outcome.reason.startsWith("codex-phase-isolation-")) classification = { cause: "unknown", workObserved: false, detail: outcome.refusalDetail === undefined ? outcome.reason : causeDetail(`${outcome.reason}: ${outcome.refusalDetail}`) };
     else classification = outcome.stream.call.value() ?? { cause: "unknown", workObserved: true, detail: null };
     // The 429 row keeps exactly the 2026-10-13 predicate; every other retryable cause needs a read-only phase or no work seen.
     const retrySafe = classification?.cause === "rate-limited" ? rateLimited === "before-work"
@@ -104,7 +104,7 @@ export class CodexAdapter implements RuntimeAdapter {
     }
     if (outcome.reason.startsWith("codex-phase-isolation-")) {
       // Spec 2026-10-18 §3.5: refused before spawn, no process and no token; named exception to "usage is never booked as 0".
-      throw Object.assign(new Error(`${outcome.reason}: ${outcome.evidenceDir}`), { neverStarted: true });
+      throw Object.assign(new Error(`${outcome.reason}: ${outcome.evidenceDir}${outcome.refusalDetail === undefined ? "" : `: ${causeDetail(outcome.refusalDetail)}`}`), { neverStarted: true });
     }
     if (outcome.reason !== "completed" || outcome.final === null) {
       // Orca ruling 26 (session c85d2c4e, 2026-09-28): as the aborted path, a phase that timed out or failed carries the
@@ -201,7 +201,8 @@ export class CodexAdapter implements RuntimeAdapter {
     const isolated = await codexSingleCallHome({ runDir: request.runDir, sourceCodexHome: source, executable: this.config.command[0], env: process.env });
     // Task 8 fix round 2: the MCP server names are needed as much as the feature list (their servers would start otherwise).
     if (catalog.codexMcpServers === null) {
-      throw Object.assign(new Error("codex-single-call-unavailable: no MCP server list"), { code: "codex-single-call-unavailable", neverStarted: true });
+      // Orca tester issue 125: the probe's own reason, bounded, so the refusal says why the list is missing.
+      throw Object.assign(new Error(`codex-single-call-unavailable: no MCP server list${catalog.mcpError === undefined ? "" : `: ${causeDetail(catalog.mcpError)}`}`), { code: "codex-single-call-unavailable", neverStarted: true });
     }
     const mcpServers = catalog.codexMcpServers;
     const unaddressable = mcpServers.find((name) => !addressableMcpServer(name));

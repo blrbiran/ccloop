@@ -37,6 +37,8 @@ export type PhaseOutcome = {
   observedTokens:number|null;
   // Failure causes (ccloop spec 2026-10-21 §3 "Every kind"): the errno of a spawn that failed, so ENOENT is executable-missing.
   spawnErrno?:string;
+  // Orca tester issue 125 (session 3cfc2e73): a no-MCP-list refusal carries the MCP probe's own reason (outcome.json too).
+  refusalDetail?:string;
 };
 // The cap on events.jsonl, stderr and final.json. stdout itself is stopped only at STDOUT_HARD_LIMIT (live transcript §11.1).
 const LIMIT=16*1024*1024;
@@ -94,7 +96,9 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       if(!(error instanceof CodexPhaseIsolationRefused))throw error;
       // Spec §3.5: refused before spawn and before any skill link (plan Review Focus 3); final, booked 0 by the adapter.
       isolation={home:error.pair?.home??null,codexHome:error.pair?.codexHome??null,catalogError:catalog.catalogError};
-      result.reason=error.reason;return persist();
+      result.reason=error.reason;
+      if(error.reason==="codex-phase-isolation-no-mcp-list"&&catalog.mcpError!==undefined)result.refusalDetail=catalog.mcpError;
+      return persist();
     }
     childTimeout=deadline-Date.now();
   }

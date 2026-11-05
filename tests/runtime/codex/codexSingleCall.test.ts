@@ -355,6 +355,19 @@ describe("codex single call (spec §6.1)", { timeout: 30_000 }, () => {
     expect(existsSync(join(process.env.CCLOOP_CACHE_DIR!, entryFileName(await catalogKey(w.config.installation, process.env))))).toBe(false);
   });
 
+  // Orca tester issue 125 (session 3cfc2e73): the refusal used to say only "no MCP server list"; the probe's own reason
+  // (exit, stage, stderr tail) follows it now, bounded to 512 bytes. The code, and so the record's errorCode, is unchanged.
+  it("C8.10f: a refusal for a missing MCP list names the probe's reason, bounded", async () => {
+    const w = await world();
+    await writeFile(`${w.marker}.catalog.json`, JSON.stringify({ mcpExitCode: 4, stderr: "Error loading config.toml: model_catalog_json: No such file or directory\n" }));
+    const error = await failure(w.adapter.singleCall!(w.request));
+    expect(error).toMatchObject({ code: "codex-single-call-unavailable", neverStarted: true });
+    const message = (error as Error).message;
+    expect(message).toMatch(/^codex-single-call-unavailable: no MCP server list: agent-catalog-unavailable: exit 4 · stage exit · elapsedMs \d+ · stderr: Error loading config\.toml: model_catalog_json: No such file or directory$/);
+    expect(Buffer.byteLength(message.slice("codex-single-call-unavailable: no MCP server list: ".length), "utf8")).toBeLessThanOrEqual(512);
+    expect(existsSync(`${w.marker}.calls`)).toBe(false);
+  });
+
   // A codex cache entry written before the names were cached cannot answer them, so it is a miss, not a hit with none.
   it("C8.10c: a cached codex entry without MCP server names is a miss", async () => {
     const w = await world();

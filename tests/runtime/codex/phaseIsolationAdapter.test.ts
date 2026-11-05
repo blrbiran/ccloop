@@ -72,3 +72,21 @@ it("the descriptor's adapter isolates codex phases", async () => {
   expect(env.CODEX_HOME).toBe(join(w.base, "codex-home"));
   expect(env.CODEX_HOME).not.toBe(w.source);
 }, 30_000);
+
+// Orca tester issue 125 (session 3cfc2e73): the MCP probe's reason (here a config file codex cannot load) used to reach
+// only a stderr log line; the refusal said "no MCP server list" and nothing else. It now rides in the refusal's message,
+// in failureCause.detail (bounded to 512 bytes like every other detail) and in outcome.json. The cause stays unknown.
+it("a refusal for a missing MCP list names the probe's reason, bounded", async () => {
+  const w = await world({ mcpExitCode: 1, stderr: `${"x".repeat(2000)} Error loading config.toml: model_catalog_json: No such file or directory` });
+  const state = await runLoop(w.contract, w.runDir, w.adapter);
+  expect(state.status).toBe("failed");
+  expect(state.stopReason).toMatch(/codex-phase-isolation-no-mcp-list: \S+: agent-catalog-unavailable: exit 1 · stage exit · elapsedMs \d+ · stderr: x+ Error loading config\.toml: model_catalog_json/);
+  const detail = state.failureCause?.detail ?? "";
+  expect(state.failureCause).toMatchObject({ cause: "unknown", phase: "plan" });
+  expect(detail).toMatch(/^codex-phase-isolation-no-mcp-list: agent-catalog-unavailable: exit 1 · stage exit · elapsedMs \d+ · stderr: x+/);
+  expect(Buffer.byteLength(detail, "utf8")).toBeLessThanOrEqual(512);
+  const callDir = join(w.runDir, "codex", "1", "plan", (await readdir(join(w.runDir, "codex", "1", "plan"))).find((name) => name.startsWith("call-"))!);
+  const recorded = JSON.parse(readFileSync(join(callDir, "outcome.json"), "utf8")) as { reason: string; refusalDetail?: string };
+  expect(recorded.reason).toBe("codex-phase-isolation-no-mcp-list");
+  expect(recorded.refusalDetail).toMatch(/model_catalog_json: No such file or directory$/);
+}, 30_000);

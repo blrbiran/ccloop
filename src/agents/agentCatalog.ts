@@ -14,6 +14,8 @@ import { probeVersion } from "./versionProbe.js";
 export interface AgentCatalogV1 {
   source: "cache" | "probe"; observedAt: string; version: string | null;
   rows: CatalogRowV1[] | null; codexFeatures: string[] | null; codexMcpServers: string[] | null; catalogError: string | null;
+  /** Orca tester issue 125 (session 3cfc2e73): why a probe left codexMcpServers null; present only then (a cache hit never has it). */
+  mcpError?: string;
 }
 export interface ReadAgentCatalogOptions {
   deadline?: number; signal?: AbortSignal; refresh?: boolean; env?: NodeJS.ProcessEnv; log?: (line: string) => void; now?: () => number;
@@ -48,10 +50,10 @@ export async function readAgentCatalog(installation: InstallationV1, options: Re
   // The probes measure the deadline on the real clock, as runProbe does; `now` only dates the entry and its age.
   const version = await probeVersion(installation.command, { timeoutMs: Math.min(10_000, probeTimeoutMs(deadline)), signal: options.signal });
   let rows: CatalogRowV1[] | null = null, codexFeatures: string[] | null = null, codexMcpServers: string[] | null = null, catalogError: string | null = null;
+  let mcpError: string | null = null;
   try {
     if (installation.kind === "omp") rows = await readOmpCatalog(installation, { deadline, signal: options.signal });
     else if (installation.kind === "codex") {
-      let mcpError: string | null;
       ({ rows, features: codexFeatures, mcpServers: codexMcpServers, mcpError } = await readCodexCatalog(installation, { deadline, signal: options.signal }));
       // Task 8 fix round 3: rows and features stand; the missing MCP list is logged and keeps the entry unwritten (a codex
       // entry without the list would be a miss anyway), so the next read tries the list again.
@@ -65,5 +67,5 @@ export async function readAgentCatalog(installation: InstallationV1, options: Re
   if (dir !== null && version !== null && catalogError === null && !(installation.kind === "codex" && codexMcpServers === null)) {
     await writeCatalogEntry(dir, { schema: "ccloop-agent-catalog-v1", key, observedAt, version, rows, codexFeatures, codexMcpServers });
   }
-  return { source: "probe", observedAt, version, rows, codexFeatures, codexMcpServers, catalogError };
+  return { source: "probe", observedAt, version, rows, codexFeatures, codexMcpServers, catalogError, ...(mcpError === null ? {} : { mcpError }) };
 }
