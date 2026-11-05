@@ -131,3 +131,13 @@ mutations, reviews, gates). Orca spec §10 records what differs from its §4.4.
   paths when the contract has setup.
 - No existing criterion was rewritten. Gate: typecheck/build 0, 2492/2492, `check-known-reds` RC 0.
 - Not pushed: the push was refused by Orca's Tier 0 gate hook (human).
+
+## Follow-up (Orca session e2ad4802, 2026-11-05)
+
+Two of the registered gaps above are fixed, by human ruling 「同意按你的建议做」 (Claude Code, Opus 5.5): the setup verdict
+is taken at the shell's exit, so a per-command limit that falls inside the 2 s drain no longer turns an exit 0 into a
+timeout; and a drain that had to be cut writes `SETUP_DRAIN_CUT_MARKER` to the command's log. Commit
+`fix(setup): the verdict is taken at the shell's exit, and a cut drain is marked in the log`. Criteria added in
+`tests/controller/setupCommands.test.ts` (none changed); the first was red before the fix (`… timeout` for an exit 0).
+Mutations in a `git clone --local` copy, each red, 0 bytes after: M1 the exit guard dropped, M2 the marker never written,
+M3 the marker always written, M4 the cut never recorded.
