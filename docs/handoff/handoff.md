@@ -1,4 +1,4 @@
-# ccloop Handoff — I5 已推已 pin；D6＋D5 在本地 main 待推（见「当前状态」）；Orca 关联见文末单节
+# ccloop Handoff — 近似下界收据＋单次调用 failureCause 在本地 main 待推（见「当前状态」）；Orca 关联见文末单节
 
 > ⚠️ **一律自查，别信本文。** 只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是固定历史值。
 > *** **本文不写任何当前哈希** —— 指代某一笔引**提交主题行**（`git log --grep`），指代材料引**路径**。 ***
@@ -41,10 +41,18 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 本轮（2026-11-05／06，Orca 会话 `3cfc2e73`）—— 先读这一节
+### 本轮（2026-11-06，Orca 会话 `86352010`）—— 先读这一节
+
+- **在本地 main、未推（push 归人）**，两件，都是 Orca 新功能要的本仓半边：
+  - **近似下界收据**（主题行 `feat(control): an orca-auto receipt backs an approximate-floor marker under a finite ceiling (Orca soft loop settlement)`、`docs(control): ERRATUM -- an omp floor is booked as approximate usage…`、`docs(plan): soft loop settlement, ccloop half…`；计划 `docs/superpowers/plans/2026-11-06-soft-loop-approximate-floor-receipt.md`；Orca spec `2026-11-06-soft-mode-loop-run-settlement-design.md` §3.2、§6）：已存结果恢复的 marker 多一支 `approximate-floor`（principal 只能 `orca-auto`），收据多一支 `{principal:"orca-auto", client:"panel", verb:"settle-approximate-usage", commandId, result}`；work 上限为 null ⇒ `saved-result-settlement-invalid`（人裁 Q6「只在有限上限下」）；`reservationDisposition` 仍只认 `committed|released`（Q5）。判据只加不改（`tests/control/approximateFloorReceipt.test.ts` 12 条，`socketSettlementReceipt` 4/4 未动）。spec 列的 C3 变异（不比 verb 只比 principal）**打不红**：结果 method 检查已挡住交叉组合，两条都删才红——记在计划里。**登记**：中断前任路径（`:367` 共用 `validateAccounting`）现在也接受 approximate-floor；Orca 按 Q7 从不给恢复 run 写它，没加护栏、没判据（控制器裁定，可逆）。
+  - **单次调用的 `failureCause`**（主题行 `feat(single-call): a failed codex or claude single call records its classified failureCause`、`fix(claude): a completed single call keeps no signals file (W5 zero-write unchanged)`）：codex／claude 单次调用失败时，记录带可选 `failureCause`（与 loop 路径同一个分类）；omp 不带、字节不变；aborted／output-invalid 不带。Orca 的额度探针靠它认出 quota（Orca spec `2026-11-06-quota-rest-probe-retry-design.md`）。**契约变化**：单次调用记录多一个可选键——Orca main 已先接受。
+- 门（各自的 agent，负载 40–110）：两件都 typecheck／build 0；全量 `check-known-reds` rebase 前 RC 0，rebase 后 RC 1，名单外红逐个和未改动 main clone 交替单跑：两边都过／两边都挂（`cli`、`endToEnd` 在 main clone 上也挂，疑为 clone 的软链依赖）／两边都抖（`savedResultRecovery.native`）⇒ 判负载。明细在 Orca 台账 `.superpowers/sdd/2026-11-06-session-86352010/progress.md`。
+- **Orca pin 仍是 292ddb5**；人推后 Orca repin（Orca 不用改码：近似收据只在 Orca 的新 pass 写了之后才用得到；探针在旧 pin 上把任务留给人）。
+
+### 上一轮（2026-11-05／06，Orca 会话 `3cfc2e73`）—— D6＋D5 人已推（origin 292ddb5），Orca 已 repin（会话 `86352010`）
 
 - **已推、Orca 已 pin**（主题行 `fix(omp): the execute system prompt shows the exact answer shape, taskResult nested (#123)` 至 `test(codex): the MCP refusal's 512-byte bound…`，I5）：OMP execute 系统提示写出完整答案形状（只 OMP、只加不改）；codex MCP 探针原因进拒绝文本、OMP 格式失败的 zod 问题进 `failureCause.detail`（≤512 B，cause 值不变）；OMP 格式失败写 `<runDir>/execute-format-failure.json`（attempt refs、base、问题）。新导出 `attemptRefNames()`。
-- **在本地 main、未推（push 归人）**：
+- ~~在本地 main、未推~~ **人已推，Orca 已 repin 到 292ddb5（会话 `86352010`）**：
   - D6（主题行 `fix(prompts): the shared execute prompt nests taskResult…（#123）`、`fix(prompts): a change-nothing decision's undo names the change it declined, by file (#138)`）：三种 kind 共用的执行提示改了两句；**改写判据**（人裁「这次批准改写所有必要的判据。」）：`reportedDecisionsPrompts.test.ts:38`、`multiRepoPrompts.test.ts:51`、`claude/phasePrompts.test.ts:94,106` → 新 fixture `tests/fixtures/toolRules/executorPromptGolden.ts`（只换 2a2ae53 金样里那两行，金样文件一字未动）；`omp/phasePrompt.ts` 注释追加 ERRATUM。
   - D5（主题行 `fix(codex): every isolated spawn finds a config's relative model catalog (#121)`、`feat(codex): an installation can ask for the answer's shape in the prompt (#122)`、spec 更正）：免费探针（codex-cli 0.163.0，临时 HOME/CODEX_HOME）证实 `-c model_catalog_json=<abs>` 可用、相对路径按 CODEX_HOME 解析；隔离 spawn 都带它，引用文件缺失按名拒。codex 安装可选 `structuredOutput: "schema"|"prompt"`（缺省字节不变；prompt 模式不传 `--output-schema`、schema 进提示、**不捕获已存结果**、不进 `agentConfigHash`）。**契约变化**：agents 表多一个可选键（Orca 侧 `installations` 是 `record(unknown)`，不用改码，repin 即可）。**没有付费验收**（无那种第三方 provider）。
 - 门：D6＋D5 全量在负载约 50 时 20 红（名单外 19），对照未改动 963b856 交替单跑后，分支独有的两文件（`savedResultRecovery.native`、`skillsController`）负载 10 时 39/39 绿 ⇒ 负载；明细在 Orca 台账 `.superpowers/sdd/2026-11-05-session-3cfc2e73/progress.md`。I5 门同理（负载 30–116）。
@@ -211,11 +219,10 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-11-06，Orca 会话 `3cfc2e73`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-11-06，Orca 会话 `86352010`）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**Orca main pin 本仓 `963b856`**（主题行 `chore(deps): repin ccloop to 963b856 for omp's execute shape and the format-failure details`），已装进 7777。本仓本地 D6＋D5 推上 origin 后 Orca 再 repin（不改 Orca 码）。
-- Orca 侧已读：`phase:"setup"`／`setup-failed`；`failureCause.detail`（failover 读 `quota` 的重置时间：codex `try again at …`，claude `limit reached|<unix>`）；OMP 的 `execute-format-failure.json`（Orca `src/panel/formatFailureWork.ts` 读 `attemptRefs`／`attemptBase`／issues，`git diff --stat` 给人看）。**改这些形状前先同步 Orca**。
-- 以后要动本仓契约的事：soft 模式 loop run 自动按下界结算（Orca spec `2026-11-06-soft-mode-loop-run-settlement-design.md`，推荐 (d)：`orca-auto` 面板命令行＋本仓收据为 `approximate-floor` 方法放行；**等人答 Q1–Q8**，本仓先改）。
-- ⚠️ 真 codex 付费先问人；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（Orca 每轮跑完备份后删）。沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`。
-- **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`（含 phase `setup`、cause `setup-failed`、`quota` 的 `detail` 文本）、`toolRules`、`transcripts`、`usageLowerBound`、`dirs[]`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`、`work.additionalRepos`；契约 `executionPolicy.toolRules`、`context.setupCommands`；required check evidence 的段格式；codex wire `flow` 的封闭形状与 strict 投影（及可选键 null 折回）；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；`execute-format-failure.json`；agents 表 codex `structuredOutput`；fake 参数约定（Orca 测试的 `ORCA_AGENTS_TABLE` 用 fake-codex `integration` 模式）；`blockRun` 原因串；`isRepeatedFailure`；单调用记录的 `errorCode`／`usageLowerBound`；已存结果恢复收据的 `client`／`personPrincipal` 规则。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**Orca main pin 本仓 `292ddb5`**（主题行 `chore(deps): repin ccloop to 292ddb5 for the shared execute prompt and the codex catalog/prompt-schema options`），已装进 7777。本仓本地 main 的近似收据＋单次调用 failureCause 推上 origin 后，Orca 再 repin（不改 Orca 码）。
+- Orca 侧已读：`phase:"setup"`／`setup-failed`；`failureCause.detail`（failover 读 `quota` 的重置时间：codex `try again at …`，claude `limit reached|<unix>`）；OMP 的 `execute-format-failure.json`；**新**：单次调用记录的可选 `failureCause`（额度探针按 `cause==="quota"` 判；旧 pin 不带 ⇒ 任务留给人）；**新**：Orca 写 `settle-approximate-usage` 行（`client:"panel"`、`principal:"orca-auto"`）与 `approximate-floor` marker，本仓收据规则见上。**改这些形状前先同步 Orca**。
+- ⚠️ 真 codex 付费先问人；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（Orca 每轮跑完备份后删）。沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`。codex `workspace-write` 沙箱里开 unix socket 的测试会超时（Orca 自举 F16）——给 agent 的检查别用开 socket 的套件。
+- **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid`；单次调用记录的 `errorCode`／`usageLowerBound`／`failureCause`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`（含 phase `setup`、cause `setup-failed`、`quota` 的 `detail` 文本）、`toolRules`、`transcripts`、`usageLowerBound`、`dirs[]`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`、`work.additionalRepos`；契约 `executionPolicy.toolRules`、`context.setupCommands`；required check evidence 的段格式；codex wire `flow` 的封闭形状与 strict 投影（及可选键 null 折回）；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；`execute-format-failure.json`；agents 表 codex `structuredOutput`；fake 参数约定（Orca 测试的 `ORCA_AGENTS_TABLE` 用 fake-codex `integration` 模式）；`blockRun` 原因串；`isRepeatedFailure`；已存结果恢复收据的 `client`／`personPrincipal` 规则与 `approximate-floor`／`orca-auto` 支。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受。
 - ⚠️ Orca 主仓和服务用 `node_modules` 里装的本仓：repin 后主仓先 `npm ci`。Orca 测试的 `ORCA_CCLOOP_BIN` 用 pin 那笔的 clone build（每个会话自己建在 scratchpad）；别指本仓工作树的 `dist`。Orca 的测试规则不外溢到本仓（Orca Rule 16）。
