@@ -191,6 +191,7 @@ export class OmpAdapter implements RuntimeAdapter {
       // Tester #62 (Orca spec 2026-10-27-single-call-unknown-usage-settlement §3.1, R5): omp's own stream watchdog ends the
       // process non-zero after an errored assistant message; that exit is the same stall, so it carries ccloop's stall code
       // into the record's errorCode. The observed lower bound travels with it for the record (never booked as usage).
+      // *** ERRATUM (Orca spec 2026-11-06-soft-mode-loop-run-settlement-design.md §3.2, §6, and its parent 2026-11-03-soft-mode-approximate-usage-design.md §2; Orca session 86352010) -- "never booked" no longer holds in an unlimited group: Orca books this floor (0 when there is none) as the call's approximate work usage. It is still a floor, never an exact figure or `observedTokens`; a finite group still never books it. ***
       const ompWatchdog = outcome.reason === "exit-error" && OMP_STREAM_WATCHDOG.test(outcome.stream.singleCall?.lastAssistantError() ?? "");
       throw Object.assign(new Error(`omp-${outcome.reason}: ${outcome.evidenceDir}`), { neverStarted: outcome.neverStarted },
         outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {},

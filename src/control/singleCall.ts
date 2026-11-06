@@ -32,6 +32,8 @@ export interface SingleCallRecordV1 {
    * Tester #62 (Orca spec 2026-10-27-single-call-unknown-usage-settlement §4 C2, R5): the tokens the agent was seen spending
    * before a call that did not complete, when positive. Diagnostic only -- never booked, never `observedTokens`. Absent
    * otherwise, so every record without one is byte-identical to before.
+   *
+   * *** ERRATUM (Orca spec 2026-11-06-soft-mode-loop-run-settlement-design.md §3.2, §6, and its parent 2026-11-03-soft-mode-approximate-usage-design.md §2; Orca session 86352010) -- "never booked" no longer holds in an unlimited group: Orca books this floor (0 when there is none) as the call's approximate work usage. It is still a floor, never an exact figure or `observedTokens`; a finite group still never books it. ***
    */
   usageLowerBound?: { tokens: number };
 }

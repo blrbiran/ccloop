@@ -6,6 +6,8 @@ import { ATTEMPT, CALL, KINDS, PHASE, realDirectories } from "./transcripts.js";
  * Orca #116: the tokens the run's calls were observed to spend before they ended without a usage report (each such call's
  * usage-lower-bound.json), summed; null when there is none. A floor to show a person, never an exact figure to book. An
  * unreadable or malformed file contributes nothing, so collect, which Orca polls for the whole run, does not fail on it.
+ *
+ * *** ERRATUM (Orca spec 2026-11-06-soft-mode-loop-run-settlement-design.md §3.2, §6; Orca session 86352010) -- "never booked" no longer holds in an unlimited group: under that design Orca books this floor (0 when there is none) as the run's approximate work usage under its own principal `orca-auto`, and saved-result recovery checks that booking (src/control/savedResultRecovery.ts, `approximate-floor`). It is still a floor, never an exact figure; a finite group still never books it. ***
  */
 export async function observedUsageLowerBound(sourceDir: string): Promise<number | null> {
   let total = 0;
