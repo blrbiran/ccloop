@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
@@ -492,6 +492,9 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       singleCallCauseOf(outcome.reason === "timeout" ? { cause: "budget-exhausted", workObserved: true, detail: null }
         : outcome.reason === "stalled" ? { cause: "stalled", workObserved: false, detail: null } : await this.classify(outcome)));
     }
+    // Orca spec 2026-11-06 quota probe §4 step 2: the signals are kept only to classify a failure; a call that ran to its
+    // end leaves its evidence directory as before.
+    await rm(join(outcome.evidenceDir, SIGNALS_FILE), { force: true });
     let parsed: unknown;
     try { parsed = JSON.parse(outcome.stdout); } catch { parsed = undefined; }
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
