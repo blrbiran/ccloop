@@ -15,7 +15,7 @@ git merge-base --is-ancestor e42e062 main && git merge-base --is-ancestor 86d3bd
 git ls-remote origin refs/heads/main              # 开工一次、收尾【必须】再一次 —— 人会自己推远端
 git status --short; git worktree list; git branch -vv
 export ECC_GATEGUARD=off DISABLE_OMC=1
-which node; node --version                        # 期望 nvm 的 v22.13.1 在前（见「环境」）
+which node; node --version                        # 期望 nvm 的 v22.23.4 在前（2026-11-07 起的 nvm default；见「环境」）
 rtk proxy npm run typecheck; rtk proxy npm run build
 ./node_modules/.bin/vitest run --reporter=json --outputFile=<scratchpad>/vitest.json > <scratchpad>/vitest.log 2>&1; echo $?
 node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才算基线绿
@@ -30,12 +30,12 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
   副本建在**会话 scratchpad** 下（人裁 137）；变异与全量一律 `cd` 进副本再跑（按 cwd 找夹具的判据在别处会假红）。
 
 
-## 环境（2026-10-18 现测）
+## 环境（2026-10-18 现测；node 与 codex 两条 2026-11-07 由 Orca 会话 `b5e3c5a8` 重测）
 
-- `/opt/homebrew/bin/node` **坏的**（缺 libsimdjson）；nvm Node 22.13.1 在 PATH 最前；`/usr/local/bin/node` 是 24.13.0。
+- `/opt/homebrew/bin/node` **坏的**（缺 libsimdjson）；nvm default 是 **22.23.4**（人 2026-11-07 升级；同 ABI 127、有 fts5、npm 10.9.9）；22.13.1 仍装着，**旧终端开的会话里它仍在 PATH 最前**；`/usr/local/bin/node` 是 24.13.0。
 - 本机 `rm`、`cp` 是 `-i` alias：`rm -rf` 会**静默挂在确认提示上**，`cp` 会**静默拒绝覆盖** ⇒ 用 `/bin/rm -rf`、`cat src > dst`；删软链用 `unlink`。
 - **本仓 CLAUDE.md Rule 13（2026-10-18 已与 Orca 闸门对齐，人裁，Orca 会话 `1710772d`）**：`merge --ff-only` 合进 main、`branch -d`、不带 force 的 `worktree remove` agent 可以直接做；**push 仍由人做（不要提醒）**；开门与强制形式仍每次单独授权。
-- codex-cli **0.163.0**（2026-10-18 `codex --version`）；`hooks` 在 `codex features list` 里是 stable。真 Codex 只用 `gpt-6-luna`（在 0.160.0 下验过），**付费，每次先问人**；额度 2026-10-22 恢复。OMP 用的 LiteLLM 端点由人起停（真跑同样先问人）。
+- codex-cli **0.167.0**（2026-11-07 `codex --version`，装在 `~/.nvm/versions/node/v22.23.4/bin/codex`；Orca 的 agents 表已改到它）；`hooks` 在 `codex features list` 里仍是 stable。⚠️ codex 隔离、strict schema、MCP 关闭**只在 0.163.0 及更早版本下真跑过**，0.167.0 的付费真跑等人跑。真 Codex 只用 `gpt-6-luna`（在 0.160.0 下验过），**付费，每次先问人**；额度 2026-10-22 恢复。OMP 用的 LiteLLM 端点由人起停（真跑同样先问人）。
 
 ---
 
@@ -219,7 +219,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-11-06，Orca 会话 `86352010`）
+# 📌 Orca 那条线（单节滚动 —— 每轮【就地整段替换】本节，只放指针，不新增 Orca 章节；2026-11-06，Orca 会话 `86352010`；2026-11-07 Orca 会话 `b5e3c5a8` 只是环境轮——node 升级、agents 表改路径、codex 0.167.0，本仓无改动，见 Orca handoff §3 最新一节）
 
 - 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**Orca main pin 本仓 `a49ab7b`**（主题行 `chore(deps): repin ccloop to a49ab7b for the approximate-floor receipt and the single-call failureCause`），已装进 7777。
 - Orca 侧已读：`phase:"setup"`／`setup-failed`；`failureCause.detail`（failover 读 `quota` 的重置时间：codex `try again at …`，claude `limit reached|<unix>`）；OMP 的 `execute-format-failure.json`；**新**：单次调用记录的可选 `failureCause`（额度探针按 `cause==="quota"` 判；不带 ⇒ 任务留给人）；**新**：Orca 写 `settle-approximate-usage` 行（`client:"panel"`、`principal:"orca-auto"`）与 `approximate-floor` marker，本仓收据规则见上。**改这些形状前先同步 Orca**。
