@@ -2,11 +2,15 @@
 // today from the executor's changedFiles; an extra repository only from ccloop's own observation (HEAD against the start
 // sha, then the diff from the start sha plus untracked paths) against its own lists; maxFilesTouched counts every
 // repository. An agent that commits in an extra worktree is a human gate, and its committed change is still observed.
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runLoop } from "../../src/controller/runLoop.js";
+import { collectExecution } from "../../src/control/collect.js";
+import { finalizeHandoffCandidate } from "../../src/control/handoff.js";
+import { canonicalHash, type LoopStartEnvelope } from "../../src/control/protocol.js";
+import { FIXTURE_SELECTION } from "../control/agentsFixture.js";
 import type { AttemptContext, RuntimeAdapter } from "../../src/runtime/types.js";
 import { createContract, createRepo } from "./optionalFixture.js";
 import { git, multiRepoWorld } from "./multiRepoFixture.js";
@@ -45,6 +49,29 @@ describe("per-repository path policy (C4)", () => {
       { repoKey: null, path: "docs/one.txt" }, { repoKey: null, path: "docs/two.txt" },
       { repoKey: "lib", path: "other/one.txt" }, { repoKey: "lib", path: "other/two.txt" },
     ]);
+  }, 30_000);
+
+  it("reports an extra-repository-only miss after a blocked run is persisted and collected again", async () => {
+    const { primary, contract } = await multiRepoWorld([{ key: "lib" }]);
+    const sourceDir = await runDirOf();
+    try {
+      const runDir = join(sourceDir, "run");
+      await mkdir(runDir);
+      const state = await runLoop(contract, runDir, adapterWriting({ primary: ["src/a.txt"], lib: ["other/one.txt", "other/two.txt"] }));
+      expect(state.pathPolicyMisses).toEqual([
+        { repoKey: "lib", path: "other/one.txt" }, { repoKey: "lib", path: "other/two.txt" },
+      ]);
+      const amount = { tokens: 1_000, activeMs: 1_000, attempts: 1, sessions: 1 };
+      const envelope = { protocol: 3, claim: { groupId: "g", workItemId: "a", taskId: "a", runId: "run-a", generation: 1,
+        graphVersion: 1, targetVersion: 1, commandId: "c", configHash: "a".repeat(64), agent: FIXTURE_SELECTION,
+        grant: { work: amount, handoff: amount }, ownerToken: "owner" }, contractHash: canonicalHash(contract), inputCheckpoint: null,
+        work: { kind: "loop", contract, targetRepo: primary, base: await git(primary, "rev-parse", "HEAD"), sourceDir } } as LoopStartEnvelope;
+      await finalizeHandoffCandidate(envelope, null, state, { result: "partial", usageHighWater: 0 });
+      const first = await collectExecution(envelope, 0);
+      const afterRestart = await collectExecution(envelope, 0);
+      expect([first.pathPolicyMisses, afterRestart.pathPolicyMisses]).toEqual([state.pathPolicyMisses, state.pathPolicyMisses]);
+      expect(Object.hasOwn(afterRestart.terminal!, "pathPolicyMisses")).toBe(false);
+    } finally { await rm(sourceDir, { recursive: true, force: true }); }
   }, 30_000);
 
   it("does not offer allowlist authorization when another repository has a denylist match", async () => {
