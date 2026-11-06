@@ -39,7 +39,7 @@ export type SavedResultEligibility={status:"unavailable";reason:string}|{status:
 import {createHash} from "node:crypto";
 import {constants} from "node:fs";
 import {lstat,open,readdir,realpath,mkdtemp,writeFile,rm,mkdir,chmod} from "node:fs/promises";
-import {dirname,join,resolve} from "node:path";
+import {dirname,isAbsolute,join,resolve} from "node:path";
 import {tmpdir} from "node:os";
 import {execFile} from "node:child_process";
 import {promisify} from "node:util";
@@ -47,7 +47,11 @@ import {canonicalHash,canonicalJson,startEnvelopeSchema,type ArtifactRefV1} from
 import {loopContractSchema,type LoopContract} from "../contract/schema.js";
 import {parseMaterializedAgentConfig,agentConfigHash} from "../agents/materialize.js";
 import {normalizeExecutionFinal} from "../runtime/executionNormalizer.js";
-import {decodeCodexResult,decodeCodexUsage,phaseJsonSchema} from "../runtime/codex/protocol.js";
+import {decodeCodexResult,decodeCodexUsage,executeWireJsonSchema,phaseJsonSchema} from "../runtime/codex/protocol.js";
+import {CODEX_PHASE_CONFIG} from "../agents/codexIsolation.js";
+import {codexPhaseConfigArgs} from "../runtime/codex/codexPhaseIsolation.js";
+import {addressableMcpServer} from "../runtime/codex/codexSingleCall.js";
+import {codexToolRuleArgs} from "../runtime/toolRules.js";
 import {executionFormatFailureSchema,executionSnapshotSchema} from "./savedResultEvidence.js";
 import {safeTaskResultPath} from "./taskResultEvidence.js";
 import {createAttemptWorkspace} from "../workspace/worktreeManager.js";
@@ -55,6 +59,45 @@ import type {AttemptPlan,ExecutionResult} from "../runtime/types.js";
 const exec=promisify(execFile),digest=(b:Buffer)=>createHash("sha256").update(b).digest("hex");
 function fail(reason:string):never{throw new Error(reason);}
 const same=(a:unknown,b:unknown)=>canonicalHash(a)===canonicalHash(b);
+
+/** A later Codex phase carries only ccloop's fixed isolation flags, optional MCP disables and a resolved catalog path. */
+function savedPhaseArgsMatch(outcome:{args?:unknown;isolation?:unknown},legacyArgs:unknown[],toolArgsVariants:readonly string[][]):boolean {
+ const args=outcome.args;
+ if(!Array.isArray(args)||!args.every((value):value is string=>typeof value==="string")||!legacyArgs.every((value):value is string=>typeof value==="string"))return false;
+ if(same(args,legacyArgs))return outcome.isolation===undefined;
+ const prefix=legacyArgs.slice(0,-1);
+ if(args.at(-1)!=="-"||!same(args.slice(0,prefix.length),prefix))return false;
+ const extra=args.slice(prefix.length,-1);
+ if(extra.length%2!==0||extra.some((value,index)=>index%2===0&&value!=="-c"))return false;
+ const values=extra.filter((_,index)=>index%2===1);
+ if(values.length<CODEX_PHASE_CONFIG.length+1||!same(values.slice(0,CODEX_PHASE_CONFIG.length),CODEX_PHASE_CONFIG))return false;
+ const homeIndex=values.findIndex((value,index)=>index>=CODEX_PHASE_CONFIG.length&&value.startsWith("shell_environment_policy.set.HOME="));
+ if(homeIndex<CODEX_PHASE_CONFIG.length)return false;
+ const names=values.slice(CODEX_PHASE_CONFIG.length,homeIndex).map(value=>/^mcp_servers\.([A-Za-z0-9_-]+)\.enabled=false$/.exec(value)?.[1]??null);
+ if(names.some(name=>name===null||!addressableMcpServer(name))||new Set(names).size!==names.length)return false;
+ let home:unknown;
+ try{home=JSON.parse(values[homeIndex]!.slice("shell_environment_policy.set.HOME=".length));}catch{return false;}
+ if(typeof home!=="string"||!isAbsolute(home))return false;
+ const trailing=values.slice(homeIndex+1),hasCatalog=trailing[0]?.startsWith("model_catalog_json=")===true;
+ const catalog=hasCatalog?trailing[0]!:null;
+ if(catalog!==null){try{const path=JSON.parse(catalog.slice("model_catalog_json=".length));if(typeof path!=="string"||!isAbsolute(path))return false;}catch{return false;}}
+ const isolation=outcome.isolation as {home?:unknown;codexHome?:unknown}|null|undefined;
+ if(!isolation||typeof isolation.home!=="string"||typeof isolation.codexHome!=="string"||!isAbsolute(isolation.home)||!isAbsolute(isolation.codexHome))return false;
+ return toolArgsVariants.some(toolArgs=>same(args,[...prefix,...codexPhaseConfigArgs(names as string[],home),...(catalog===null?[]:["-c",catalog]),...toolArgs,"-"]));
+}
+
+/** The final answer and process proof can be intact while Codex omits usage; accounting still needs a later receipt. */
+function rawExecutionTokensOf(events:string):number|null {
+ try{return decodeCodexUsage(events,true).tokenUsage;}
+ catch(error){
+  if(error instanceof Error&&error.message==="codex-usage-unavailable")return null;
+  if(error instanceof Error&&error.message==="codex-usage-invalid"){
+   const completed=events.trim().split("\n").map(line=>JSON.parse(line) as {type?:unknown;usage?:unknown}).filter(row=>row.type==="turn.completed");
+   if(completed.length===1&&(completed[0]!.usage===undefined||completed[0]!.usage===null))return null;
+  }
+  throw error;
+ }
+}
 const oid=z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const path=z.string().refine(safeTaskResultPath);
 const treeEntry=z.union([
@@ -267,7 +310,7 @@ async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation
  if(executeCalls.length!==1||planCalls.length!==1)fail("saved-result-execute-call-ambiguous");
  if(archive.logs.some(e=>e.path.startsWith(`run/codex/${attempt}/verify`)||e.path===`run/attempts/${attempt}/verify.json`))fail("saved-result-verification-already-entered");
  const registered=z.array(phaseProcess.extend({registeredAt:z.string()}).strict()).parse(obj("control/processes.json"));
- const validateCall=(call:string,phase:string)=>{
+ const validateCall=(call:string,phase:"plan"|"execute")=>{
   const outcome=obj(`${call}/outcome.json`),process=phaseProcess.parse(obj(`${call}/process.json`));
   if(outcome.reason!=="completed"||outcome.code!==0||outcome.signal!==null||outcome.ioError!==undefined||outcome.stdoutTruncated!==false||outcome.stderrTruncated!==false||outcome.finalTruncated!==false)fail("saved-result-process-incomplete");
   if(process.phase!==phase||!registered.some(p=>p.pid===process.pid&&p.pgid===process.pgid&&p.startedAt===process.startedAt&&p.phase===phase))fail("saved-result-process-authority-invalid");
@@ -275,13 +318,19 @@ async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation
   const evidenceDir=join(source.work.sourceDir,call),worktree=join(source.work.sourceDir,"run/worktrees",`attempt-${attempt}`);
   const expectedArgs=[...config.installation.command.slice(1),"exec","--json","--ephemeral","--color","never","--model",config.selection.model,
    "--sandbox",phase==="execute"?config.installation.sandbox:"read-only","-C",worktree,"--output-schema",join(evidenceDir,"schema.json"),"-o",join(evidenceDir,"final.json"),"-"];
-  if(outcome.executable!==config.installation.command[0]||!same(outcome.args,expectedArgs)||outcome.evidenceDir!==evidenceDir)fail("saved-result-config-mismatch");
+  const rules=source.work.contract.executionPolicy.toolRules;
+  const sandbox=config.installation.sandbox;
+  if(sandbox!=="read-only"&&sandbox!=="workspace-write")fail("saved-result-config-mismatch");
+  const enforced=codexToolRuleArgs(rules,phase,sandbox,{kind:"absent"});
+  const variants=rules?.network===true&&phase==="execute"&&enforced.length>0?[[],enforced]:[enforced];
+  if(outcome.executable!==config.installation.command[0]||!savedPhaseArgsMatch(outcome,expectedArgs,variants)||outcome.evidenceDir!==evidenceDir)fail("saved-result-config-mismatch");
  };
  const execute=executeCalls[0]!.path,planCall=planCalls[0]!.path;validateCall(execute,"execute");validateCall(planCall,"plan");
- if(!same(obj(`${execute}/schema.json`),{type:"object",properties:{result:phaseJsonSchema("execute")},required:["result"],additionalProperties:false})||!same(obj(`${planCall}/schema.json`),phaseJsonSchema("plan")))fail("saved-result-schema-mismatch");
+ const executeSchema=obj(`${execute}/schema.json`),envelope=(result:unknown)=>({type:"object",properties:{result},required:["result"],additionalProperties:false});
+ if((!same(executeSchema,envelope(executeWireJsonSchema()))&&!same(executeSchema,envelope(phaseJsonSchema("execute"))))||!same(obj(`${planCall}/schema.json`),phaseJsonSchema("plan")))fail("saved-result-schema-mismatch");
  if(!log(`${execute}/decode-error.txt`).length)fail("saved-result-original-evidence-unavailable");
  const final=log(`${execute}/final.json`).toString(),rawEvents=log(`${execute}/events.jsonl`).toString();
- decodeCodexUsage(rawEvents,true);
+ const rawExecutionTokens=rawExecutionTokensOf(rawEvents);
  const normalized=normalizeExecutionFinal(final);if(normalized.status!=="available")fail(normalized.reason);
  const plan=decodeCodexResult("plan",log(`${planCall}/events.jsonl`).toString(),log(`${planCall}/final.json`).toString());
  const ledger=obj("control/usage.json");
@@ -295,7 +344,7 @@ async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation
  const {groupId,workItemId,taskId,runId,generation,graphVersion,targetVersion}=source.claim;
  const identity={groupId,workItemId,taskId,runId,generation,graphVersion,targetVersion,executionId:accepted.executionId,envelopeHash:accepted.envelopeHash};
  return {source,identity,plan,execution:normalized.execution,snapshot,bytes,originalBase:source.work.base,ledger,logical,registered,
-  rawExecutionTokens:decodeCodexUsage(rawEvents,true).tokenUsage,snapshotHash:archive.snapshot.hash,actualChangedPaths};
+  rawExecutionTokens,snapshotHash:archive.snapshot.hash,actualChangedPaths};
 }
 /** Execution requires both strict source eligibility and the independently fenced controller admission. */
 export async function loadSavedResultRecovery(input:LoopStartEnvelope,requireFence=true):Promise<LoadedSavedResult>{
@@ -304,6 +353,8 @@ export async function loadSavedResultRecovery(input:LoopStartEnvelope,requireFen
  if(!same(original.identity,admission.source)||!same(semantic(original.source.work.contract),semantic(input.work.contract)))fail("saved-result-source-stale");
  if(canonicalHash(original.execution)!==r.recoveryOf.normalizedExecutionHash)fail("saved-result-normalization-hash-mismatch");
  validateAccounting(admission,original.source,original.ledger,original.logical,loaded.json);
+ // A missing raw usage number is accepted only with the separate, verified orca-auto approximate receipt.
+ if(original.rawExecutionTokens===null&&(admission.accounting.settlement===null||settlementSchema.parse(loaded.json(admission.accounting.settlement)).method!=="approximate-floor"))fail("saved-result-usage-unsettled");
  const inherited=original.source.tokenPolicy?.inheritedUsage??{tokens:0,activeMs:0,attempts:0,sessions:0};
  const baseInherited=addWork(inherited,admission.accounting.work);
  const expectedInherited=await validateInterruptedPredecessor(input,loaded,baseInherited);
@@ -397,7 +448,7 @@ async function validateInterruptedPredecessor(input:LoopStartEnvelope,loaded:Awa
 
 const unavailableSchema=z.object({status:z.literal("unavailable"),reason:z.string().min(1)}).strict();
 export const savedResultEligibilitySchema=z.union([unavailableSchema,z.object({status:z.literal("eligible"),authorityKind:savedResultPackageSchema.shape.authorityKind,normalizedExecutionHash:hash}).strict()]);
-export const savedResultSourceEligibilitySchema=z.union([unavailableSchema,z.object({status:z.literal("eligible"),authorityKind:savedResultPackageSchema.shape.authorityKind,sourceIdentity:savedResultAdmissionSchema.shape.source,rawExecutionTokens:safe,recoveryOf:recoveryOfSchema,
+export const savedResultSourceEligibilitySchema=z.union([unavailableSchema,z.object({status:z.literal("eligible"),authorityKind:savedResultPackageSchema.shape.authorityKind,sourceIdentity:savedResultAdmissionSchema.shape.source,rawExecutionTokens:safe.nullable(),recoveryOf:recoveryOfSchema,
  limitation:z.literal("published-candidate-only; current membership and settled accounting require controller admission")}).strict()]);
 
 function addWork(a:z.infer<typeof amount>,b:z.infer<typeof amount>):z.infer<typeof amount>{

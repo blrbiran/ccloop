@@ -44,6 +44,18 @@ async function eligibility(o:Options){const f=await approximate(o);try{return aw
 const invalid={status:"unavailable",reason:"saved-result-settlement-invalid"};
 
 describe("an approximate-floor marker backed by an orca-auto receipt",()=>{
+ it("C1: accepts a completed Codex call with unavailable raw usage only after Orca's approximate receipt",async()=>{
+  const f=await approximate({});
+  try{
+   const entry=f.archive.logs.find((row:any)=>/^run\/codex\/1\/execute\/call-[^/]+\/events\.jsonl$/.test(row.path))!;
+   entry.ref=await f.put(Buffer.from('{"type":"turn.completed"}\n'));
+   f.manifest.source=await f.put(f.archive);
+   f.admission.recoveryOf.capsuleHash=f.manifest.source.hash;
+   f.input.savedResultRecovery!.recoveryOf.capsuleHash=f.manifest.source.hash;
+   await f.seal();
+   expect(await readSavedResultEligibility(f.input)).toMatchObject({status:"eligible"});
+  }finally{await rm(f.root,{recursive:true,force:true});}
+ },30000);
  it("C1: is eligible under a finite work ceiling",async()=>{
   expect(await eligibility({})).toMatchObject({status:"eligible"});
  },30000);
@@ -54,6 +66,32 @@ describe("an approximate-floor marker backed by an orca-auto receipt",()=>{
   expect(await eligibility({marker:{principal:"user:fixture"}})).toEqual({status:"unavailable",reason:"saved-result-evidence-invalid"});
  },30000);
 });
+
+it("does not let a person's remaining-grant receipt replace unavailable raw Codex usage",async()=>{
+ const f=await savedRecoveryFixture();
+ try{
+  const entry=f.archive.logs.find((row:any)=>/^run\/codex\/1\/execute\/call-[^/]+\/events\.jsonl$/.test(row.path))!;
+  entry.ref=await f.put(Buffer.from('{"type":"turn.completed"}\n'));
+  f.manifest.source=await f.put(f.archive);
+  f.admission.recoveryOf.capsuleHash=f.manifest.source.hash;
+  f.input.savedResultRecovery!.recoveryOf.capsuleHash=f.manifest.source.hash;
+  await f.seal();
+  expect(await readSavedResultEligibility(f.input)).toEqual({status:"unavailable",reason:"saved-result-usage-unsettled"});
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
+
+it("refuses a malformed positive Codex usage row even with an approximate receipt",async()=>{
+ const f=await approximate({});
+ try{
+  const entry=f.archive.logs.find((row:any)=>/^run\/codex\/1\/execute\/call-[^/]+\/events\.jsonl$/.test(row.path))!;
+  entry.ref=await f.put(Buffer.from('{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5,"cached_input_tokens":11}}\n'));
+  f.manifest.source=await f.put(f.archive);
+  f.admission.recoveryOf.capsuleHash=f.manifest.source.hash;
+  f.input.savedResultRecovery!.recoveryOf.capsuleHash=f.manifest.source.hash;
+  await f.seal();
+  expect(await readSavedResultEligibility(f.input)).toEqual({status:"unavailable",reason:"saved-result-evidence-invalid"});
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
 
 describe("a person row and an orca-auto row never back each other's marker (C3)",()=>{
  const personResult=(f:Fixture,charged:unknown)=>({kind:"usage-settled",taskId:f.source.claim.taskId,runId:f.source.claim.runId,generation:f.source.claim.generation,charged,at:1,method:"remaining-grant"});
