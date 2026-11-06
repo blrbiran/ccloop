@@ -194,7 +194,11 @@ process.stdin.on("end",()=>{
     if(phase==="verify") body={approved:frame.approved??true,rejectCategory:"",primaryTargetPaths:[],failingCommand:null,safeToRetry:frame.safeToRetry??false,evidence:[],pauseSignals:[],stopSignals:frame.stopSignals??[]};
   }
   const respond=()=>{
-  if(mode==="script" && phase==="execute") for(const [path,content] of Object.entries(entry.files)) writeFileSync(path,content);
+  if(mode==="script" && phase==="execute") {
+    for(const [path,content] of Object.entries(entry.files)) writeFileSync(path,content);
+    // Integration fixtures may report the paths they actually wrote; the default stays as before for older tests.
+    if(Array.isArray(entry.reportedChangedFiles)) body.changedFiles=entry.reportedChangedFiles;
+  }
   if(phase==="execute" && ["skill-integration","integration","write-hang","no-usage","false-answer","high-usage","reported","large-stream"].includes(mode)) writeFileSync("answer.txt","42\n");
   // Reported decisions and debug (ccloop spec 2026-10-20 §5): mode `reported` behaves as `integration` and its execute
   // answer also carries `decisions` and `debug`: the fields of <marker>.reported.json when present, else one major and one
