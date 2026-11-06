@@ -35,7 +35,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 - `/opt/homebrew/bin/node` **坏的**（缺 libsimdjson）；nvm default 是 **22.23.4**（人 2026-11-07 升级；同 ABI 127、有 fts5、npm 10.9.9）；22.13.1 仍装着，**旧终端开的会话里它仍在 PATH 最前**；`/usr/local/bin/node` 是 24.13.0。
 - 本机 `rm`、`cp` 是 `-i` alias：`rm -rf` 会**静默挂在确认提示上**，`cp` 会**静默拒绝覆盖** ⇒ 用 `/bin/rm -rf`、`cat src > dst`；删软链用 `unlink`。
 - **本仓 CLAUDE.md Rule 13（2026-10-18 已与 Orca 闸门对齐，人裁，Orca 会话 `1710772d`）**：`merge --ff-only` 合进 main、`branch -d`、不带 force 的 `worktree remove` agent 可以直接做；**push 仍由人做（不要提醒）**；开门与强制形式仍每次单独授权。
-- codex-cli **0.167.0**（2026-11-07 `codex --version`，装在 `~/.nvm/versions/node/v22.23.4/bin/codex`；Orca 的 agents 表已改到它）；`hooks` 在 `codex features list` 里仍是 stable。⚠️ codex 隔离、strict schema、MCP 关闭**只在 0.163.0 及更早版本下真跑过**，0.167.0 的付费真跑等人跑。真 Codex 只用 `gpt-6-luna`（在 0.160.0 下验过），**付费，每次先问人**；额度 2026-10-22 恢复。OMP 用的 LiteLLM 端点由人起停（真跑同样先问人）。
+- codex-cli **0.167.0**（2026-11-07 `codex --version`，装在 `~/.nvm/versions/node/v22.23.4/bin/codex`；Orca 的 agents 表已改到它）；`hooks` 在 `codex features list` 里仍是 stable。**0.167.0 下 loop 路径已付费真跑通过**（2026-11-07，Orca 会话 `b5e3c5a8`，跑的是 Orca 装的 pin a49ab7b）：plan、execute、verify 三个阶段都 `completed`，run 状态 `succeeded`，各阶段 stderr 0 B。隔离 `CODEX_HOME`、`--output-schema`、`notify=[]`、`features.hooks=false` 和 MCP 关闭都照常起作用，`auth.json` 前后不变；数字记在 Orca handoff §3 最新一节。0.167.0 会对人 config 里失效的 `features.rmcp_client` 发 `error` item（每个阶段 2 个），只当诊断看。single call 没在 0.167.0 下测过。真 Codex 只用 `gpt-6-luna`（在 0.160.0 下验过），**付费，每次先问人**；额度 2026-10-22 恢复。OMP 用的 LiteLLM 端点由人起停（真跑同样先问人）。
 
 ---
 
