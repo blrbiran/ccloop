@@ -169,13 +169,22 @@ async function validateSnapshot(snapshot:LegacySnapshot,get:(ref:ArtifactRefV1)=
 }
 const stopSchema=z.object({executionId:idSchema,generation:positive,isolated:z.literal(true),source:artifactRefSchema}).strict();
 const pair=z.object({work:amount,handoff:amount}).strict();
-const settlementSchema=z.object({method:z.literal("remaining-grant"),commandId:idSchema,principal:z.string().regex(/^user:.+/),at:safe,
+const personSettlementSchema=z.object({method:z.literal("remaining-grant"),commandId:idSchema,principal:z.string().regex(/^user:.+/),at:safe,
  groupId:idSchema,taskId:idSchema,workItemId:idSchema,runId:idSchema,generation:positive,highWater:safe,charged:pair,
  reservationDisposition:z.enum(["committed","released"]),report:artifactRefSchema,stopProof:stopSchema,
  handoffResolution:z.object({requestId:idSchema,previousState:z.literal("settled-unrecoverable"),previousFailureCode:z.literal("usage-unsettled"),checkpointId:idSchema,checkpointHash:hash}).strict().optional()}).strict();
+// Orca soft loop settlement (Orca spec 2026-11-06-soft-mode-loop-run-settlement-design.md §3.2, §6 Q3 = (d), Q6): Orca itself books an
+// approximate floor under its own principal and its own panel-class row; it is never a person's settlement, so it is a marker of its own.
+const approximateSettlementSchema=personSettlementSchema.omit({method:true,principal:true}).extend({method:z.literal("approximate-floor"),principal:z.literal("orca-auto"),
+ floorTokens:safe.nullable(),reason:z.string().min(1)}).strict();
+const settlementSchema=z.union([personSettlementSchema,approximateSettlementSchema]);
 // A Web row backs the marker by its principal; a socket row (Orca `orca task settle-usage`, 2026-10-29) by the person token's account it records.
-const receiptSchema=z.object({principal:z.string(),client:z.string().min(1),personPrincipal:z.string().regex(/^user:.+/).optional(),verb:z.literal("settle-unknown-usage"),commandId:idSchema,
+const personReceiptSchema=z.object({principal:z.string(),client:z.string().min(1),personPrincipal:z.string().regex(/^user:.+/).optional(),verb:z.literal("settle-unknown-usage"),commandId:idSchema,
  result:z.object({kind:z.literal("usage-settled"),taskId:idSchema,runId:idSchema,generation:positive,charged:pair,at:safe,method:z.literal("remaining-grant")}).strict()}).strict();
+// The row Orca's own pass applies in-panel (verb `settle-approximate-usage`, principal `orca-auto`); it never carries a person's account.
+const approximateReceiptSchema=z.object({principal:z.literal("orca-auto"),client:z.literal("panel"),verb:z.literal("settle-approximate-usage"),commandId:idSchema,
+ result:personReceiptSchema.shape.result.omit({method:true}).extend({method:z.literal("approximate-floor")}).strict()}).strict();
+const receiptSchema=z.union([personReceiptSchema,approximateReceiptSchema]);
 const phaseProcess=z.object({pid:positive,pgid:positive,startedAt:z.string().min(1),phase:z.string()}).strict();
 function validateAccounting(admission:SavedResultAdmission,source:LoopStartEnvelope,ledger:any,readLogical:(ref:ArtifactRefV1)=>Buffer,json:(ref:ArtifactRefV1)=>any,expectedOutcome="failed"):void{
  ledger=usageLedgerSchema.parse(ledger);
@@ -198,10 +207,20 @@ function validateAccounting(admission:SavedResultAdmission,source:LoopStartEnvel
   if(a.settlement===null||a.receipt===null)fail("saved-result-usage-unsettled");
   const marker=settlementSchema.parse(json(a.settlement)),receipt=receiptSchema.parse(json(a.receipt));
   for(const key of ["runId","groupId","workItemId","taskId","generation"] as const)if(marker[key]!==identity[key])fail("saved-result-settlement-invalid");
-  if(marker.highWater!==a.highWater||!same(marker.report,a.report)||!same(marker.stopProof,stop)||marker.commandId!==receipt.commandId||marker.principal!==(receipt.client==="web"?receipt.principal:receipt.personPrincipal)
+  if(marker.highWater!==a.highWater||!same(marker.report,a.report)||!same(marker.stopProof,stop)||marker.commandId!==receipt.commandId
+   ||(marker.method==="approximate-floor"?receipt.verb!=="settle-approximate-usage"||marker.principal!==receipt.principal
+    :receipt.verb!=="settle-unknown-usage"||marker.principal!==(receipt.client==="web"?receipt.principal:receipt.personPrincipal))
    ||!same(receipt.result,{kind:"usage-settled",taskId:identity.taskId,runId:identity.runId,generation:identity.generation,charged:marker.charged,at:marker.at,method:marker.method})
    ||(marker.reservationDisposition==="released")!==(marker.handoffResolution!==undefined))fail("saved-result-settlement-invalid");
-  for(const bucket of ["work","handoff"] as const)for(const d of ["tokens","activeMs","attempts","sessions"] as const){
+  // Q6: an approximate floor backs recovery only under a finite work ceiling; an unlimited grant stays refused, as for a person.
+  // The floor and the baseline count disjoint calls, so the floor itself is the work charge and nothing else is charged.
+  if(marker.method==="approximate-floor"){
+   if(source.claim.grant.work.tokens===null)fail("saved-result-settlement-invalid");
+   for(const bucket of ["work","handoff"] as const)for(const d of ["tokens","activeMs","attempts","sessions"] as const){
+    const charged=marker.charged[bucket][d];
+    if(charged!==(bucket==="work"&&d==="tokens"?marker.floorTokens??0:0)||a[bucket][d]!==baseline[bucket][d]+charged)fail("saved-result-settlement-invalid");
+   }
+  }else for(const bucket of ["work","handoff"] as const)for(const d of ["tokens","activeMs","attempts","sessions"] as const){
    const ceiling=source.claim.grant[bucket][d],charged=marker.charged[bucket][d];
    if(ceiling===null||charged!==Math.max(ceiling-baseline[bucket][d],0)||a[bucket][d]!==baseline[bucket][d]+charged)fail("saved-result-settlement-invalid");
   }
