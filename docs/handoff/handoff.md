@@ -41,6 +41,11 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
+### 当前进行中（2026-11-06，Codex：D2 漏路径证据）
+
+- **仅在本地分支 `codex/observed-path-misses`，未合入／未推，Orca 尚未 repin**：主题行 `feat(control): report Git-observed allowlist misses in collect`。ccloop 在 allowlist miss 造成的 `blocked_waiting_human` 上，另报可选顶层 `pathPolicyMisses`（主仓 `repoKey:null`，额外仓给 key），一次列全；主仓只信 Git 实测，不信 executor 自报；denylist／文件数超限／不可观测／超 128 项都不产生授权证据。protocol-3 terminal 投影原字节不动，protocol-4 terminal 也不带新键。Orca 的已批准设计与计划在 `Orca/docs/superpowers/{specs,plans}/2026-11-06-observed-path-retry*`；Orca 接收端仍在实施，正式 repin 要等人推本仓。
+- **门**（上述主题行的提交）：typecheck／build RC 0；全量第一次 2,554 过、2 红，`check-known-reds` RC 1（名单外 `ompPhase` 1 秒超时）；第二次 2,555 过、仅名单内 `runLoop` 红，`check-known-reds` RC 0、unexpected 0。两条全量红均在本分支与未改动 main clone 交替单跑 1/1＋1/1 绿，日志 `/private/tmp/orca-d1-kMINyw/`。新判据先红后绿；clone 变异「删列表」「删 128 帽」各打红，clone staged／unstaged 0 差。工作树的 repo-local 测试根与隔离 HOME/XDG/TMPDIR/cache 见同目录日志。
+
 ### 本轮（2026-11-06，Orca 会话 `86352010`）—— 先读这一节
 
 - ~~在本地 main、未推~~ **人已推，Orca 已 repin 到含它们的那笔并装上**（Orca 主题行 `chore(deps): repin ccloop to a49ab7b…`），两件，都是 Orca 新功能要的本仓半边：
