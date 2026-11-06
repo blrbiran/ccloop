@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { MaterializedAgentConfigV1 } from "../../../src/agents/types.js";
 import { ClaudeAgentAdapter, ClaudePhaseAborted, claudeRunnerPath } from "../../../src/runtime/claude/claudeAgentAdapter.js";
 import { observedTokensOf, SingleCallOutputInvalid, type SingleCallRequest } from "../../../src/runtime/types.js";
+import { attachedSingleCallCause } from "../../../src/runtime/failureCause.js";
 
 // Orca single-call estimate (2026-09-27), spec §5.4 and §8.2 "adapter": ClaudeAgentAdapter.singleCall drives the claude CLI
 // once through scripts/claude-phase-runner.mjs. As the stream-usage round's N7 did, these criteria read what the runner
@@ -154,5 +155,27 @@ describe("claude phase runner, single call (Orca single-call estimate)", () => {
     const [argv] = await argvOf(w.marker);
     expect(argv).not.toContain("--tools");
     expect(JSON.parse(await readFile(w.marker, "utf8")).maxOutputTokensEnv).toBeNull();
+  }, 30_000);
+});
+
+// Orca spec 2026-11-06 quota probe §4 step 2: a failed claude single call carries the cause the phase path computes for
+// the same outcome (this.classify), so runSingleCall can write it on the record; a call that ended for another reason
+// names that cause instead.
+describe("ClaudeAgentAdapter.singleCall names the classified cause (Orca quota probe)", () => {
+  async function apiError(mode: string, errorText?: string) {
+    const w = await world("script", {});
+    if (errorText !== undefined) await writeFile(`${w.marker}.error-text`, errorText);
+    const config: MaterializedAgentConfigV1 = { ...w.config, installation: { ...w.config.installation, command: [process.execPath, fakeCli, mode, w.marker] } };
+    return new ClaudeAgentAdapter(config).singleCall(w.request()).then(() => null, (e: unknown) => e);
+  }
+
+  it("a usage-limit answer is quota", async () => {
+    const error = await apiError("api-error-rate_limit-all", "Claude AI usage limit reached|1760000000");
+    expect(attachedSingleCallCause(error)).toEqual({ cause: "quota", detail: expect.any(String) });
+  }, 30_000);
+
+  it("an authentication failure is auth, not quota", async () => {
+    const error = await apiError("api-error-authentication_failed-all");
+    expect(attachedSingleCallCause(error)?.cause).toBe("auth");
   }, 30_000);
 });

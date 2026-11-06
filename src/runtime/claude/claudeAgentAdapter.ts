@@ -13,7 +13,7 @@ import { boundedTaskResult } from "../taskResult.js";
 import { dropUnreported } from "../reportedDecisions.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./prompts.js";
 import type { ClaudePhaseRequest } from "./types.js";
-import { classifyClaudeCall, isExecutableMissing, parseClaudeSignals, type CallClassification } from "../failureCause.js";
+import { classifyClaudeCall, isExecutableMissing, parseClaudeSignals, singleCallCauseOf, type CallClassification } from "../failureCause.js";
 import { effectiveIdleTimeoutMs, IdleWatch, lineFeeder, type IdleSnapshotV1 } from "../idleWatch.js";
 import { transcriptTruncatedAt as transcriptTruncatedAtOf } from "../streamLines.js";
 import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
@@ -241,8 +241,9 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       CCLOOP_CLAUDE_OBSERVED_USAGE_PATH: join(evidenceDir, OBSERVED_USAGE_FILE),
       // Live transcript (spec §10.2.1): phases and single calls alike.
       CCLOOP_CLAUDE_TRANSCRIPT_PATH: transcriptPath,
-      // Phases only: a single call is never retried here (its caller owns retries), so it records no signals.
-      ...(phase === "single-call" ? {} : { CCLOOP_CLAUDE_SIGNALS_PATH: join(evidenceDir, SIGNALS_FILE) }),
+      // A single call is never retried here (its caller owns retries); since Orca spec 2026-11-06 quota probe §4 step 2 it
+      // records its signals too, so its failure is classified as a phase's is (singleCall, singleCallCauseOf).
+      CCLOOP_CLAUDE_SIGNALS_PATH: join(evidenceDir, SIGNALS_FILE),
     };
     if (installation.configDir !== null) env.CLAUDE_CONFIG_DIR = installation.configDir;
     await new Promise<void>((resolve) => {
@@ -486,7 +487,10 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       // Activity watchdog (spec 2026-10-21 §2.4): a stalled single call names its cause; its caller owns retries.
       throw Object.assign(new Error(`claude-${outcome.reason}: ${outcome.evidenceDir}`), {
         observedTokens: await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)),
-      }, outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {});
+      }, outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {},
+      // Orca spec 2026-11-06 quota probe §4 step 2: the cause the phase path computes for the same outcome, for the record.
+      singleCallCauseOf(outcome.reason === "timeout" ? { cause: "budget-exhausted", workObserved: true, detail: null }
+        : outcome.reason === "stalled" ? { cause: "stalled", workObserved: false, detail: null } : await this.classify(outcome)));
     }
     let parsed: unknown;
     try { parsed = JSON.parse(outcome.stdout); } catch { parsed = undefined; }

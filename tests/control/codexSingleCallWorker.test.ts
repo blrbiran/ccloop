@@ -69,3 +69,24 @@ describe("codex single calls through the control worker", { timeout: 30_000 }, (
     expect(w.record).toMatchObject({ outcome: "failed", errorCode: "codex-single-call-not-single:tool" });
   });
 });
+
+// Orca spec 2026-11-06 quota probe §4 step 2: a failed single call's record carries the cause the codex phase path
+// computes for the same stream, so Orca can tell a quota failure from any other without reading model text. A complete
+// call's record is byte-identical to before: no failureCause key.
+describe("codex single-call records carry the classified cause (Orca quota probe)", { timeout: 30_000 }, () => {
+  const QUOTA = "You've hit your usage limit. Upgrade to Pro or try again in 3 days.";
+  it("a call codex refused for quota records failureCause quota with the provider's own text", async () => {
+    const w = await world({ rows: [{ type: "thread.started", thread_id: "t" }, { type: "turn.started" }, { type: "error", message: QUOTA }, { type: "turn.failed", error: { message: QUOTA } }], exitCode: 1 });
+    expect(w.record).toMatchObject({ outcome: "failed", errorCode: "codex-exit-error", failureCause: { cause: "quota", detail: QUOTA } });
+  });
+
+  it("a call that failed on any other error records that cause, not quota", async () => {
+    const w = await world({ rows: [{ type: "thread.started", thread_id: "t" }, { type: "error", message: "unexpected status 401 Unauthorized, last status: 401" }], exitCode: 1 });
+    expect(w.record).toMatchObject({ outcome: "failed", failureCause: { cause: "auth" } });
+  });
+
+  it("a complete call's record has exactly the keys it had before", async () => {
+    const w = await world();
+    expect(Object.keys(w.record).sort()).toEqual(["errorCode", "outcome", "outputRef", "promptSha256", "responseSchemaSha256", "schema"]);
+  });
+});

@@ -174,3 +174,25 @@ export function attachedCause(value: unknown): { classification: CallClassificat
     retries: typeof retries === "number" && Number.isSafeInteger(retries) && retries >= 0 ? retries : 0,
   };
 }
+
+/**
+ * Orca spec 2026-11-06 quota probe §4 step 2: the cause a failed single call's record carries. The codex and claude
+ * single-call failure paths attach it as `singleCallCause` (omp's single call does not: it classifies nothing but
+ * `unknown`); runSingleCall writes it as the record's `failureCause`. A property of its own, not the `failureCause` the
+ * stalled paths already attach, so an adapter that attaches none leaves its record byte-identical.
+ */
+export type SingleCallCauseV1 = { cause: FailureCauseV1; detail: string | null };
+
+export function singleCallCauseOf(classification: CallClassification | null): { singleCallCause?: SingleCallCauseV1 } {
+  return classification === null ? {} : { singleCallCause: { cause: classification.cause, detail: classification.detail === null ? null : causeDetail(classification.detail) } };
+}
+
+/** The single-call cause an adapter attached to a failure, when it names a cause of the vocabulary; else null. */
+export function attachedSingleCallCause(error: unknown): SingleCallCauseV1 | null {
+  if (error === null || typeof error !== "object") return null;
+  const attached = (error as { singleCallCause?: unknown }).singleCallCause;
+  if (attached === null || typeof attached !== "object") return null;
+  const { cause, detail } = attached as { cause?: unknown; detail?: unknown };
+  if (typeof cause !== "string" || !(FAILURE_CAUSES as readonly string[]).includes(cause)) return null;
+  return { cause: cause as FailureCauseV1, detail: typeof detail === "string" ? causeDetail(detail) : null };
+}

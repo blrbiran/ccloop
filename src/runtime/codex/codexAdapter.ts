@@ -11,7 +11,7 @@ import { codexResultOf, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, t
 import { runCodexPhase, type PhaseOutcome } from "./runCodexPhase.js";
 import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
 import { codexToolRuleRows } from "../toolRules.js";
-import { causeDetail, type CallClassification } from "../failureCause.js";
+import { causeDetail, singleCallCauseOf, type CallClassification } from "../failureCause.js";
 import { phaseLimitMs, runWithTransientRetry, tryContext, type TryObservation, type TryResult } from "../transientRetry.js";
 
 /** Codex rate-limit spec §3.2: waits before each retry of a phase rejected by 429 before any work (three retries). */
@@ -28,6 +28,20 @@ export class CodexPhaseAborted extends Error {
     super(`codex-aborted: ${evidenceDir}`);
     this.name = "CodexPhaseAborted";
   }
+}
+
+/**
+ * Spec §3 codex: the cause of a call that did not complete, or null for an aborted one. One classification for the phase
+ * path (failedTry) and the single call (Orca spec 2026-11-06 quota probe §4 step 2), so both name the same stream alike.
+ */
+function classifyOutcome(outcome: PhaseOutcome): CallClassification | null {
+  if (outcome.reason === "aborted") return null;
+  if (outcome.reason === "timeout") return { cause: "budget-exhausted", workObserved: true, detail: null };
+  // Activity watchdog (spec 2026-10-21 §2.3): a stalled call is transient; it is retried when no work was seen or the phase is read-only.
+  if (outcome.reason === "stalled") return { cause: "stalled", workObserved: outcome.stream.call.value()?.workObserved ?? true, detail: null };
+  if (outcome.reason === "spawn-error") return { cause: outcome.spawnErrno === "ENOENT" ? "executable-missing" : "unknown", workObserved: false, detail: outcome.spawnErrno ?? null };
+  if (outcome.reason.startsWith("codex-skills-") || outcome.reason.startsWith("codex-phase-isolation-")) return { cause: "unknown", workObserved: false, detail: outcome.refusalDetail === undefined ? outcome.reason : causeDetail(`${outcome.reason}: ${outcome.refusalDetail}`) };
+  return outcome.stream.call.value() ?? { cause: "unknown", workObserved: true, detail: null };
 }
 
 export class CodexAdapter implements RuntimeAdapter {
@@ -69,14 +83,7 @@ export class CodexAdapter implements RuntimeAdapter {
   /** Spec §3 codex and §4 retry-safety: the cause of a failed call and whether retrying it could not have changed the worktree. */
   private failedTry<T>(phase: CodexPhase, outcome: PhaseOutcome, error: Error): TryResult<T> {
     const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? outcome.stream.rateLimit.value() : null;
-    let classification: CallClassification | null;
-    if (outcome.reason === "aborted") classification = null;
-    else if (outcome.reason === "timeout") classification = { cause: "budget-exhausted", workObserved: true, detail: null };
-    // Activity watchdog (spec 2026-10-21 §2.3): a stalled call is transient; it is retried when no work was seen or the phase is read-only.
-    else if (outcome.reason === "stalled") classification = { cause: "stalled", workObserved: outcome.stream.call.value()?.workObserved ?? true, detail: null };
-    else if (outcome.reason === "spawn-error") classification = { cause: outcome.spawnErrno === "ENOENT" ? "executable-missing" : "unknown", workObserved: false, detail: outcome.spawnErrno ?? null };
-    else if (outcome.reason.startsWith("codex-skills-") || outcome.reason.startsWith("codex-phase-isolation-")) classification = { cause: "unknown", workObserved: false, detail: outcome.refusalDetail === undefined ? outcome.reason : causeDetail(`${outcome.reason}: ${outcome.refusalDetail}`) };
-    else classification = outcome.stream.call.value() ?? { cause: "unknown", workObserved: true, detail: null };
+    const classification = classifyOutcome(outcome);
     // The 429 row keeps exactly the 2026-10-13 predicate; every other retryable cause needs a read-only phase or no work seen.
     const retrySafe = classification?.cause === "rate-limited" ? rateLimited === "before-work"
       : classification !== null && (phase !== "execute" || !classification.workObserved);
@@ -231,7 +238,9 @@ export class CodexAdapter implements RuntimeAdapter {
       const error = outcome.reason === "aborted" ? new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens)
         : Object.assign(new Error(`codex-${outcome.reason}: ${outcome.evidenceDir}`), { observedTokens: outcome.observedTokens },
           // Activity watchdog (spec 2026-10-21 §2.4): a stalled single call names its cause; its caller owns retries.
-          outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {});
+          outcome.reason === "stalled" ? { failureCause: { cause: "stalled", workObserved: false, detail: null, retries: 0 } } : {},
+          // Orca spec 2026-11-06 quota probe §4 step 2: the cause the phase path computes for the same stream, for the record.
+          singleCallCauseOf(classifyOutcome(outcome)));
       throw neverStarted ? Object.assign(error, { neverStarted: true }) : error;
     }
     const result = outcome.stream.singleCall.value(outcome.final, this.config.model, outcome.evidenceDir);

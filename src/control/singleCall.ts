@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { getDescriptor } from "../agents/registry.js";
 import type { MaterializedAgentConfigV1 } from "../agents/types.js";
+import { attachedSingleCallCause, type SingleCallCauseV1 } from "../runtime/failureCause.js";
 import { observedTokensOf, SingleCallOutputInvalid, type AttemptContext, type OwnerRecord } from "../runtime/types.js";
 import { writeEvidence } from "./evidence.js";
 import { candidatePath, identity, type CandidateV1 } from "./handoff.js";
@@ -36,6 +37,12 @@ export interface SingleCallRecordV1 {
    * *** ERRATUM (Orca spec 2026-11-06-soft-mode-loop-run-settlement-design.md §3.2, §6, and its parent 2026-11-03-soft-mode-approximate-usage-design.md §2; Orca session 86352010) -- "never booked" no longer holds in an unlimited group: Orca books this floor (0 when there is none) as the call's approximate work usage. It is still a floor, never an exact figure or `observedTokens`; a finite group still never books it. ***
    */
   usageLowerBound?: { tokens: number };
+  /**
+   * Orca spec 2026-11-06 quota probe §4 step 2: the cause the adapter classified for a call that failed (codex, claude;
+   * attachedSingleCallCause). Absent otherwise -- a complete, aborted or output-invalid call, or an adapter that names
+   * none -- so every such record is byte-identical to before.
+   */
+  failureCause?: SingleCallCauseV1;
 }
 
 export interface SingleCallHooks {
@@ -91,6 +98,7 @@ export async function runSingleCall(
   let usageEvidence: unknown = null;
   let errorCode: string | null = null;
   let usageLowerBound: number | null = null;
+  let failureCause: SingleCallCauseV1 | null = null;
   let completedWithResult = false;
   try {
     const result = await adapter.singleCall({
@@ -133,6 +141,7 @@ export async function runSingleCall(
       tokens = observedTokensOf(error);
       errorCode = errorCodeOf(error);
       usageLowerBound = usageLowerBoundOf(error);
+      failureCause = attachedSingleCallCause(error);
     }
   }
   const elapsedMs = Date.now() - startedAt;
@@ -181,6 +190,7 @@ export async function runSingleCall(
     outputRef,
     errorCode,
     ...(usageLowerBound === null ? {} : { usageLowerBound: { tokens: usageLowerBound } }),
+    ...(failureCause === null ? {} : { failureCause }),
   };
   const handoff = await writeEvidence(sourceDir, Buffer.from(canonicalJson(record)));
 
