@@ -11,6 +11,12 @@ function matches(pattern: string, value: string): boolean {
   return pattern === value;
 }
 
+/** All exact changed paths outside the allowlist; the existing verdict still names only its first miss. */
+export function allowlistMisses(changedFiles: readonly string[], allowlistPaths: readonly string[]): string[] {
+  return allowlistPaths.length === 0 ? []
+    : [...new Set(changedFiles.filter((file) => !allowlistPaths.some((pattern) => matches(pattern, file))))].sort();
+}
+
 export function evaluatePathPolicy(input: {
   changedFiles: string[];
   allowlistPaths: string[];

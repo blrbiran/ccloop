@@ -59,6 +59,19 @@ async function settledRun(executions: Array<Record<string, unknown> | null>, pro
 }
 
 describe("criterion 7: collect answers the candidate attempt's reported decisions", () => {
+  it.each([3, 4] as const)("reports path misses at top level without changing protocol %s's terminal projection", async (protocol) => {
+    const f = await settledRun([core], protocol);
+    const misses = [{ repoKey: null, path: "test/math.test.js" }, { repoKey: "lib", path: "other/regression.test.js" }];
+    await writeFile(join(f.root, "run", "loop-state.json"), JSON.stringify({ ...terminalState(1, protocol),
+      status: "blocked_waiting_human", waitingOnHuman: true, stopReason: "allowlist miss: test/math.test.js", pathPolicyMisses: misses }));
+    const report = await collectExecution(f.envelope, 0);
+    expect(report.pathPolicyMisses).toEqual(misses);
+    expect(Object.hasOwn(report.terminal!, "pathPolicyMisses")).toBe(false);
+    const command = await runControlCommand(["collect", "--agents", join(f.root, "agents.json")], JSON.stringify({ input: f.envelope, afterSeq: 0 }));
+    expect(command.code, command.stderr).toBe(0);
+    expect(JSON.parse(command.stdout).pathPolicyMisses).toEqual(misses);
+  });
+
   it("answers decisions and debug at the top level, as reported", async () => {
     const f = await settledRun([{ ...core, decisions: [major, minor], debug: { reproTests: ["t.test.ts"] } }]);
     const report = await collectExecution(f.envelope, 0) as unknown as Record<string, unknown>;

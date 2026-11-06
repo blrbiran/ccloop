@@ -24,7 +24,7 @@ import {
   writeOwnerRecord,
   writeOwnerTransferArtifacts,
 } from "../persistence/fileStore.js";
-import { evaluatePathPolicy } from "../policy/pathPolicy.js";
+import { allowlistMisses, evaluatePathPolicy } from "../policy/pathPolicy.js";
 import { evaluateRunBoundary, evaluateStopDecision } from "../stop/stopController.js";
 import { isTerminalRunStatus, transitionRunState } from "../state/stateMachine.js";
 import type { LoopContract } from "../contract/schema.js";
@@ -839,10 +839,37 @@ async function observeExtraWorktree(extra: ExtraAttemptWorktree): Promise<{ head
  * extra repository only from ccloop's observation (written to run/attempts/<n>/dirs.json for collect) against its own
  * lists; a moved HEAD or an unobservable worktree is a human gate; maxFilesTouched counts every repository.
  */
-async function judgeAttemptPaths(contract: LoopContract, primaryWorktreePath: string | null, changedFiles: string[]): Promise<ReturnType<typeof evaluatePathPolicy>> {
+type PathPolicyMiss = { repoKey: string | null; path: string };
+type PathVerdict = ReturnType<typeof evaluatePathPolicy> & { pathPolicyMisses?: PathPolicyMiss[] };
+type PathScope = { repoKey: string | null; changedFiles: string[]; allowlistPaths: string[]; denylistPaths: string[] };
+const plainPath = (path: string) => !path.startsWith("/") && !path.includes("*") && path.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+const withPathEvidence = (state: RunState, verdict: PathVerdict): RunState => verdict.pathPolicyMisses === undefined
+  ? state : { ...state, pathPolicyMisses: verdict.pathPolicyMisses };
+
+/** Optional authority evidence, never a truncated or mixed-priority description of changed paths. */
+async function withObservedMisses(verdict: ReturnType<typeof evaluatePathPolicy>, scopes: PathScope[],
+  primaryWorktreePath: string | null, maxFilesTouched: number): Promise<PathVerdict> {
+  if (!verdict.reason?.startsWith("allowlist miss: ") || primaryWorktreePath === null) return verdict;
+  const primaryChanged = await observeChangedPathsBestEffort(primaryWorktreePath);
+  if (primaryChanged === null) return verdict;
+  const observedScopes = [{ ...scopes[0]!, changedFiles: primaryChanged }, ...scopes.slice(1)];
+  if (observedScopes.reduce((count, scope) => count + scope.changedFiles.length, 0) > maxFilesTouched) return verdict;
+  if (observedScopes.some((scope) => evaluatePathPolicy({ changedFiles: scope.changedFiles, allowlistPaths: [],
+    denylistPaths: scope.denylistPaths, maxFilesTouched: Number.MAX_SAFE_INTEGER }).humanGateHit)) return verdict;
+  const misses = observedScopes.flatMap((scope) => allowlistMisses(scope.changedFiles, scope.allowlistPaths)
+    .map((path) => ({ repoKey: scope.repoKey, path })));
+  const first = verdict.reason.slice("allowlist miss: ".length);
+  if (!misses.some(({ repoKey, path }) => (repoKey === null ? path : `${repoKey}:${path}`) === first)) return verdict;
+  if (misses.length === 0 || misses.length > 128 || misses.some(({ repoKey, path }) => !plainPath(path)
+    || Buffer.byteLength(path, "utf8") > 4096 || (repoKey !== null && Buffer.byteLength(repoKey, "utf8") > 128))) return verdict;
+  return { ...verdict, pathPolicyMisses: misses };
+}
+
+async function judgeAttemptPaths(contract: LoopContract, primaryWorktreePath: string | null, changedFiles: string[]): Promise<PathVerdict> {
   const policy = { allowlistPaths: contract.safetyPolicy.allowlistPaths, denylistPaths: contract.safetyPolicy.denylistPaths };
   const entry = primaryWorktreePath === null ? undefined : extraAttemptOf(primaryWorktreePath);
-  if (entry === undefined) return evaluatePathPolicy({ changedFiles, ...policy, maxFilesTouched: contract.safetyPolicy.maxFilesTouched });
+  if (entry === undefined) return withObservedMisses(evaluatePathPolicy({ changedFiles, ...policy, maxFilesTouched: contract.safetyPolicy.maxFilesTouched }),
+    [{ repoKey: null, changedFiles, ...policy }], primaryWorktreePath, contract.safetyPolicy.maxFilesTouched);
   const observed = await Promise.all(entry.extras.map(async (extra) => ({ extra, observation: await observeExtraWorktree(extra) })));
   const attemptDir = join(entry.runDir, "attempts", String(entry.attempt));
   await mkdir(attemptDir, { recursive: true });
@@ -854,11 +881,15 @@ async function judgeAttemptPaths(contract: LoopContract, primaryWorktreePath: st
   }
   const total = changedFiles.length + observed.reduce((sum, { observation }) => sum + observation!.changedPaths.length, 0);
   if (total > contract.safetyPolicy.maxFilesTouched) return gate(`max files exceeded: ${total}`);
+  const scopes: PathScope[] = [{ repoKey: null, changedFiles, ...policy }, ...observed.map(({ extra, observation }) => ({
+    repoKey: extra.key, changedFiles: observation!.changedPaths, allowlistPaths: extra.allowlistPaths, denylistPaths: extra.denylistPaths,
+  }))];
   const primary = evaluatePathPolicy({ changedFiles, ...policy, maxFilesTouched: Number.MAX_SAFE_INTEGER });
-  if (primary.humanGateHit) return primary;
+  if (primary.humanGateHit) return withObservedMisses(primary, scopes, primaryWorktreePath, contract.safetyPolicy.maxFilesTouched);
   for (const { extra, observation } of observed) {
     const result = evaluatePathPolicy({ changedFiles: observation!.changedPaths, allowlistPaths: extra.allowlistPaths, denylistPaths: extra.denylistPaths, maxFilesTouched: Number.MAX_SAFE_INTEGER });
-    if (result.humanGateHit) return gate((result.reason ?? "").replace(/^(allowlist miss|denylist match): /, `$1: ${extra.key}:`));
+    if (result.humanGateHit) return withObservedMisses(gate((result.reason ?? "").replace(/^(allowlist miss|denylist match): /, `$1: ${extra.key}:`)), scopes,
+      primaryWorktreePath, contract.safetyPolicy.maxFilesTouched);
   }
   return primary;
 }
@@ -2089,7 +2120,7 @@ export async function runLoopFromState(
           state = await persistTerminalState(
             runDir,
             writeOwnedRunState,
-            state,
+            withPathEvidence(state, partialPathPolicy),
             "blocked_waiting_human",
             partialPathPolicy.reason ?? completedExecution.failureMessage,
           );
@@ -2141,7 +2172,7 @@ export async function runLoopFromState(
         state = await persistTerminalState(
           runDir,
           writeOwnedRunState,
-          state,
+          withPathEvidence(state, pathPolicy),
           "blocked_waiting_human",
           pathPolicy.reason ?? "human gate or denylist hit",
         );
@@ -2372,13 +2403,13 @@ export async function runLoopFromState(
       const terminalCause = rejectionEnded ? rejectionCause(verification.rejectCategory) : undefined;
       if(recovery){
         await assertSavedResultUnmodified(runDir,worktreePath,recovery,state);
-        const terminal=withFailureCause(transitionRunState(state,decision.kind,decision.reason),terminalCause);
+        const terminal=withFailureCause(transitionRunState(withPathEvidence(state, finalPolicy),decision.kind,decision.reason),terminalCause);
         await persistSavedResultCompletion(runDir,terminal,verification);
         state=terminal;
         await appendTransitionEvent(runDir,state,`loop_${decision.kind}`,decision.reason);
         await writeOwnedRunState(runDir,state);
         await testCrashPoint("saved-result-terminal-fsynced");
-      } else state = await persistTerminalState(runDir, writeOwnedRunState, state, decision.kind, decision.reason, terminalCause);
+      } else state = await persistTerminalState(runDir, writeOwnedRunState, withPathEvidence(state, finalPolicy), decision.kind, decision.reason, terminalCause);
 
       if (decision.kind !== "blocked_waiting_human") {
         await heartbeat.assertHeld();
@@ -2531,7 +2562,7 @@ export async function runLoopFromState(
             state = await persistTerminalState(
               runDir,
               writeOwnedRunState,
-              state,
+              withPathEvidence(state, partialPathPolicy),
               "blocked_waiting_human",
               partialPathPolicy.reason ?? execution.failureMessage,
             );

@@ -44,6 +44,8 @@ export interface CollectionV1 {
    * terminal schemas and the frozen protocol-3 projection stay as they are.
    */
   failureCause?: import("../runtime/failureCause.js").RunFailureCauseV1;
+  /** Exact allowlist misses of a human-blocked terminal, outside either protocol's frozen terminal projection. */
+  pathPolicyMisses?: NonNullable<RunState["pathPolicyMisses"]>;
   /**
    * Per-contract tool rules (spec 2026-10-22 §5): the run's report, present iff the contract has toolRules and
    * run/tool-rules.json exists. Top level, like failureCause; absent otherwise, so no existing caller sees new bytes.
@@ -139,7 +141,7 @@ function progressOf(state: unknown): ProgressV1 {
 function terminalOf(state: unknown, protocol: number): RunState | null {
   const run = state as RunState;
   if (!isTerminalRunStatus(run.status)) return null;
-  if (protocol === 4) { const {savedResult:_private,failureCause:_topLevel,...core}=run;return core; }
+  if (protocol === 4) { const {savedResult:_private,failureCause:_topLevel,pathPolicyMisses:_pathEvidence,...core}=run;return core; }
   // Internal extensions must never change the frozen finite protocol-3 projection.
   return {
     status: run.status, currentAttempt: run.currentAttempt, attemptsUsed: run.attemptsUsed,
@@ -199,6 +201,8 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const loopState = await readLoopStateJson(input.work.sourceDir);
   const terminal = storedCandidate === null || loopState === null ? null : terminalOf(loopState.state, input.protocol);
   const failureCause = terminal === null ? undefined : (loopState!.state as RunState).failureCause;
+  const pathPolicyMisses = terminal?.status === "blocked_waiting_human" && terminal.stopReason?.startsWith("allowlist miss: ")
+    ? (loopState!.state as RunState).pathPolicyMisses : undefined;
   const declared = (input.work as { contract?: { executionPolicy?: { toolRules?: unknown } } }).contract?.executionPolicy?.toolRules;
   const toolRules = declared === undefined ? undefined : await readToolRulesReport(input.work.sourceDir);
   // progressOf validates the loop state (an unknown status is control-terminal-invalid) before its status is read here.
@@ -217,6 +221,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     // Evaluated after progressOf, which has checked the loop state's currentAttempt.
     ...(storedCandidate === null || loopState === null ? {} : await reportedOf(input.work.sourceDir, storedCandidate, loopState.state)),
     ...(failureCause === undefined ? {} : { failureCause }),
+    ...(pathPolicyMisses === undefined ? {} : { pathPolicyMisses }),
     ...(toolRules === undefined ? {} : { toolRules }),
     ...(transcripts.length === 0 ? {} : { transcripts }),
     ...(usageLowerBound === null ? {} : { usageLowerBound: { tokens: usageLowerBound } }),

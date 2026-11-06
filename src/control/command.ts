@@ -216,6 +216,8 @@ export const collectionSchema = z.object({
     cause: z.enum(FAILURE_CAUSES), phase: z.enum(["plan", "execute", "verify", "setup"]).nullable(),
     retries: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), detail: z.string().nullable(),
   }).strict().optional(),
+  pathPolicyMisses: z.array(z.object({ repoKey: z.string().min(1).refine((key) => Buffer.byteLength(key, "utf8") <= 128).nullable(),
+    path: z.string().min(1).refine((path) => Buffer.byteLength(path, "utf8") <= 4096) }).strict()).min(1).max(128).optional(),
   // Per-contract tool rules (spec 2026-10-22 §5): top level, present iff the contract has rules and the report exists.
   toolRules: toolRulesReportSchema.optional(),
   // Live transcript (Orca spec 2026-10-23 §10.2.4): one entry per agent call, present iff there is one; protocols 3 and 4.

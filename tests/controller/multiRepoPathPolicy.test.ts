@@ -34,6 +34,50 @@ const runDirOf = async () => mkdtemp(join(tmpdir(), "ccloop-run-"));
 const observed = async (runDir: string) => JSON.parse(await readFile(join(runDir, "attempts", "1", "dirs.json"), "utf8")) as unknown;
 
 describe("per-repository path policy (C4)", () => {
+  it("reports every exact allowlist miss across the primary and additional repository in one blocked attempt", async () => {
+    const { contract } = await multiRepoWorld([{ key: "lib" }]);
+    const state = await runLoop(contract, await runDirOf(), adapterWriting({
+      primary: ["src/a.txt", "docs/one.txt", "docs/two.txt"], lib: ["other/one.txt", "other/two.txt"],
+    }));
+    expect(state.status).toBe("blocked_waiting_human");
+    expect(state.stopReason).toBe("allowlist miss: docs/one.txt");
+    expect(state.pathPolicyMisses).toEqual([
+      { repoKey: null, path: "docs/one.txt" }, { repoKey: null, path: "docs/two.txt" },
+      { repoKey: "lib", path: "other/one.txt" }, { repoKey: "lib", path: "other/two.txt" },
+    ]);
+  }, 30_000);
+
+  it("does not offer allowlist authorization when another repository has a denylist match", async () => {
+    const { contract } = await multiRepoWorld([{ key: "lib", denylistPaths: ["lib/secret.txt"] }]);
+    const state = await runLoop(contract, await runDirOf(), adapterWriting({ primary: ["docs/missing.txt"], lib: ["lib/secret.txt"] }));
+    expect(state.status).toBe("blocked_waiting_human");
+    expect(state.pathPolicyMisses).toBeUndefined();
+  }, 30_000);
+
+  it("does not offer allowlist authorization when the global file limit wins", async () => {
+    const { contract } = await multiRepoWorld([{ key: "lib" }]);
+    contract.safetyPolicy.maxFilesTouched = 1;
+    const state = await runLoop(contract, await runDirOf(), adapterWriting({ primary: ["docs/missing.txt"], lib: ["other/missing.txt"] }));
+    expect(state.stopReason).toBe("max files exceeded: 2");
+    expect(state.pathPolicyMisses).toBeUndefined();
+  }, 30_000);
+
+  it("omits oversized authorization evidence instead of truncating the missing path list", async () => {
+    const contract = createContract(await createRepo(), ["true"]);
+    contract.safetyPolicy.maxFilesTouched = 200;
+    const reported = Array.from({ length: 129 }, (_, index) => `docs/missing-${index}.txt`);
+    const state = await runLoop(contract, await runDirOf(), adapterWriting({ primary: reported }));
+    expect(state.status).toBe("blocked_waiting_human");
+    expect(state.pathPolicyMisses).toBeUndefined();
+  }, 30_000);
+
+  it("does not authorize a path that only the executor reported and Git did not observe", async () => {
+    const contract = createContract(await createRepo(), ["true"]);
+    const state = await runLoop(contract, await runDirOf(), adapterWriting({ reported: ["docs/fabricated.txt"] }));
+    expect(state.stopReason).toBe("allowlist miss: docs/fabricated.txt");
+    expect(state.pathPolicyMisses).toBeUndefined();
+  }, 30_000);
+
   it("an extra-repo write inside that repo's own allowlist passes and is observed", async () => {
     const { contract } = await multiRepoWorld([{ key: "lib" }]);
     const runDir = await runDirOf();

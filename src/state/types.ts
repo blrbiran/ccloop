@@ -32,6 +32,7 @@ export type RunState = {
   lastTransitionAt: string;
   waitingOnHuman: boolean;
   stopReason: string | null;
+  pathPolicyMisses?: Array<{ repoKey: string | null; path: string }>;
   waitingCause?: "token-allowance";
   allowanceNextPhase?: "plan" | "execute" | "verify";
   budgetSnapshot: BudgetSnapshot;
