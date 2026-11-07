@@ -73,6 +73,42 @@ async function packageOf(f:Awaited<ReturnType<typeof resultFixture>>,capsule:{ar
  await writeFile(join(dir,'package.json'),canon(manifest),{mode:0o600});
  return {dir,hash:hashOf(manifest)};
 }
+async function exhaustedRun(f:Awaited<ReturnType<typeof resultFixture>>){
+ f.contract.executionPolicy.tokenBudget=25;f.input.contractHash=canonicalHash(f.contract);
+ const fake=join(f.root,'completed-execute.mjs');
+ await writeFile(fake,`import {readFileSync,writeFileSync} from 'node:fs';
+if(process.argv.includes('--version')){console.log('9.9.9-fake');process.exit(0)}
+if(!process.argv.includes('exec')){process.stdout.write(process.argv.includes('mcp')?'[]\\n':process.argv.includes('models')?'{"models":[]}\\n':'',()=>process.exit(0));await new Promise(()=>{})}
+for await(const part of process.stdin){}
+const args=process.argv,s=JSON.parse(readFileSync(args[args.indexOf('--output-schema')+1],'utf8'));
+const phase=s.properties?.result?'execute':s.properties?.approved?'verify':'plan';
+if(phase==='verify')throw Error('verification must not enter');
+if(phase==='execute')writeFileSync('answer.txt','complete\\n');
+const value=phase==='plan'?{summary:'write answer',primaryTargetPaths:['answer.txt']}:{result:{changedFiles:['answer.txt'],diffPatch:'',commandOutputs:[],stdoutStderrLog:'done'}};
+writeFileSync(args[args.indexOf('-o')+1],JSON.stringify(value));
+console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:10,output_tokens:5}}));
+`);
+ const sealed=await sealCodex({command:[process.execPath,fake],model:'fixture',sandbox:'workspace-write',budgetMode:'soft',timeoutMs:10000,killGraceMs:50});
+ f.input.claim.agent=sealed.selection;f.input.claim.configHash=sealed.configHash;
+ await atomicReplacePrivateFile(f.sourceDir,join(f.sourceDir,'control/config.json'),Buffer.from(canonicalJson(sealed.config)));
+ await atomicReplacePrivateFile(f.sourceDir,join(f.sourceDir,'control/envelope.json'),Buffer.from(canonicalJson(f.input)));
+ await writeAccepted(f.sourceDir,{protocol:1,envelopeHash:canonicalHash(f.input),executionId:'execution-1',configHash:sealed.configHash,generation:1,acceptedAt:new Date().toISOString(),launch:'intended',worker:null});
+ await runControlWorker(['--source-dir',f.sourceDir,'--execution-id','execution-1','--nonce','nonce-1']);
+ return JSON.parse((await f.rpc('saved-result-evidence',{input:f.input})).stdout);
+}
+it('keeps the published attempt verifiable after the workspace the source envelope names is gone',async()=>{
+ const f=await resultFixture();
+ try{
+  const page=await exhaustedRun(f);
+  expect(page.capsule).not.toBeNull();
+  const pkg=await packageOf(f,page.capsule);
+  // Orca deletes the source run's workspace after settling it; the source envelope still names that path.
+  await rm(f.repo,{recursive:true,force:true});
+  expect(existsSync(f.repo)).toBe(false);
+  const answer=await readSavedResultSourceEligibility({source:f.input,sourceAttempt:1,packagePath:pkg.dir,packageHash:pkg.hash});
+  expect(answer,JSON.stringify(answer)).toMatchObject({status:'eligible',authorityKind:'execution-complete-before-verification-v1',recoveryOf:{sourceRunId:'run-1',sourceAttempt:1}});
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
 it('answers the source eligible for a sealed exhausted completion and refuses a tampered tree binding',async()=>{
  const f=await resultFixture();
  try{

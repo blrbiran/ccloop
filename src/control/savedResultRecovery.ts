@@ -210,7 +210,34 @@ async function validateSnapshot(snapshot:LegacySnapshot,get:(ref:ArtifactRefV1)=
   return (await savedGit(root,"diff","--name-only","-z",base,snapshot.head)).toString().split("\0").filter(Boolean);
  }finally{await rm(root,{recursive:true,force:true});}
 }
+/**
+ * The published attempt commit's bindings, verified without the source workspace (Orca deletes it once the source run is
+ * settled, while its envelope still names that path). `bindExhaustedCandidate` bundles the attempt ref into evidence, so
+ * the sha/tree/parent check and the changed-path diff run against that bundle. Null when the bundle predates the publish
+ * (an older candidate): the caller then falls back to the live repository. A bundle that does carry the ref but disagrees
+ * is a named refusal, never a fallback.
+ */
+async function changedPathsFromAttemptBundle(bundle:Buffer,published:{sha:string;tree:string;ref:string},attemptStartHead:string,base:string):Promise<string[]|null>{
+ const root=await mkdtemp(join(tmpdir(),"saved-result-attempt-"));await chmod(root,0o700);
+ try{
+  await savedGit(root,"init","--bare","-q");const file=join(root,"attempt.bundle");await writeFile(file,bundle,{mode:0o600});
+  await savedGit(root,"bundle","verify",file);
+  const heads=(await savedGit(root,"bundle","list-heads",file)).toString().trim().split("\n");
+  if(!heads.includes(`${published.sha} ${published.ref}`))return null;
+  // A bundle fetch updates FETCH_HEAD only, so name a local ref; the object graph of the whole history comes with it.
+  await savedGit(root,"fetch","-q",file,`${published.ref}:refs/saved-result/attempt`);
+  if((await savedGit(root,"rev-parse",`${published.sha}^{commit}`)).toString().trim()!==published.sha)fail("saved-result-source-stale");
+  if((await savedGit(root,"rev-parse",`${published.sha}^{tree}`)).toString().trim()!==published.tree)fail("saved-result-source-stale");
+  if((await savedGit(root,"rev-parse",`${published.sha}^`)).toString().trim()!==attemptStartHead)fail("saved-result-source-stale");
+  // The run base is a commit in every real envelope; a symbolic base (a fixture's "HEAD") resolves only in the live
+  // workspace, so it falls back to the attempt's own start, which the capsule binds independently.
+  try{return (await savedGit(root,"diff","--name-only","-z",base,published.sha)).toString().split("\0").filter(Boolean);}
+  catch{return (await savedGit(root,"diff","--name-only","-z",attemptStartHead,published.sha)).toString().split("\0").filter(Boolean);}
+ }catch(error){if(error instanceof Error&&error.message.startsWith("saved-result-"))throw error;return null;}
+ finally{await rm(root,{recursive:true,force:true});}
+}
 const stopSchema=z.object({executionId:idSchema,generation:positive,isolated:z.literal(true),source:artifactRefSchema}).strict();
+
 const pair=z.object({work:amount,handoff:amount}).strict();
 const personSettlementSchema=z.object({method:z.literal("remaining-grant"),commandId:idSchema,principal:z.string().regex(/^user:.+/),at:safe,
  groupId:idSchema,taskId:idSchema,workItemId:idSchema,runId:idSchema,generation:positive,highWater:safe,charged:pair,
@@ -295,12 +322,19 @@ async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation
   if(normalized.status!=="available")fail(normalized.reason);
   if(canonicalHash(normalized.execution)!==capsule.normalizedExecutionHash)fail("saved-result-normalization-hash-mismatch");
   const repo=source.work.contract.context.repoPath;
-  if(await savedGit(repo,"rev-parse",capsule.published.ref).then(b=>b.toString().trim())!==capsule.published.sha)fail("saved-result-source-stale");
-  if(await savedGit(repo,"rev-parse",`${capsule.published.sha}^{tree}`).then(b=>b.toString().trim())!==capsule.published.tree)fail("saved-result-source-stale");
-  if(await savedGit(repo,"rev-parse",`${capsule.published.sha}^`).then(b=>b.toString().trim())!==capsule.attemptStartHead)fail("saved-result-source-stale");
+  // Bundle first: it survives Orca deleting the source workspace. An older candidate's bundle predates the publish, so a
+  // null answer falls back to the live repository exactly as before; a bundle that carries the ref but disagrees refuses.
+  const fromBundle=await changedPathsFromAttemptBundle(get(snapshot.bundle),capsule.published,capsule.attemptStartHead,source.work.base);
   const planDoc=JSON.parse(get(capsule.artifacts.plan).toString()) as Record<string,unknown>;
   const {tokenUsage:_pt,usageEvidence:_pu,modelUsage:_pm,...plan}=planDoc;
-  const actualChangedPaths=(await savedGit(repo,"diff","--name-only",source.work.base,capsule.published.sha)).toString().split("\n").filter(Boolean);
+  let actualChangedPaths:string[];
+  if(fromBundle!==null)actualChangedPaths=fromBundle;
+  else{
+   if(await savedGit(repo,"rev-parse",capsule.published.ref).then(b=>b.toString().trim())!==capsule.published.sha)fail("saved-result-source-stale");
+   if(await savedGit(repo,"rev-parse",`${capsule.published.sha}^{tree}`).then(b=>b.toString().trim())!==capsule.published.tree)fail("saved-result-source-stale");
+   if(await savedGit(repo,"rev-parse",`${capsule.published.sha}^`).then(b=>b.toString().trim())!==capsule.attemptStartHead)fail("saved-result-source-stale");
+   actualChangedPaths=(await savedGit(repo,"diff","--name-only",source.work.base,capsule.published.sha)).toString().split("\n").filter(Boolean);
+  }
   const legacySnapshot:LegacySnapshot={version:1,head:capsule.published.sha,bundle:snapshot.bundle,index:[],
     tree:[...snapshot.directories.map(d=>({path:d.path,kind:"directory" as const,mode:d.mode})),...snapshot.files.map(f=>({path:f.path,kind:"file" as const,mode:f.mode,ref:f.ref}))],
     deleted:[],missing:[]};
@@ -387,7 +421,7 @@ export async function loadSavedResultRecovery(input:LoopStartEnvelope,requireFen
  const original=await validateSavedSource(loaded,{runId:admission.source.runId,attempt:r.recoveryOf.sourceAttempt,envelopeHash:admission.source.envelopeHash,contractHash:admission.contractHash,snapshotHash:r.recoveryOf.snapshotHash});
  if(!same(original.identity,admission.source)||!same(semantic(original.source.work.contract),semantic(input.work.contract)))fail("saved-result-source-stale");
  if(canonicalHash(original.execution)!==r.recoveryOf.normalizedExecutionHash)fail("saved-result-normalization-hash-mismatch");
- validateAccounting(admission,original.source,original.ledger,original.logical,loaded.json);
+ validateAccounting(admission,original.source,original.ledger,original.logical,loaded.json,loaded.manifest.authorityKind==="execution-complete-before-verification-v1"?"exhausted":"failed");
  // A missing raw usage number is accepted only with the separate, verified orca-auto approximate receipt.
  if(original.rawExecutionTokens===null&&(admission.accounting.settlement===null||settlementSchema.parse(loaded.json(admission.accounting.settlement)).method!=="approximate-floor"))fail("saved-result-usage-unsettled");
  const inherited=original.source.tokenPolicy?.inheritedUsage??{tokens:0,activeMs:0,attempts:0,sessions:0};

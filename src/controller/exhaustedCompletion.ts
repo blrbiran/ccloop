@@ -2,12 +2,12 @@ import {execFile} from "node:child_process";
 import {promisify} from "node:util";
 import {lstat,mkdir,mkdtemp,readFile,readdir,rm,writeFile} from "node:fs/promises";
 import {createHash} from "node:crypto";
-import {join} from "node:path";
+import {join,dirname} from "node:path";
 import {z} from "zod";
 import {canonicalHash,canonicalJson,isLoopEnvelope,type ArtifactRefV1,type StartEnvelopeV3} from "../control/protocol.js";
 import {readEvidence} from "../control/evidence.js";
 import {parseKnownWorkUsageLedger,readUsageEvents} from "../control/usage.js";
-import {readTaskResultFile} from "../control/taskResultEvidence.js";import {writeSavedBytes,exhaustedCandidatePath,type ExhaustedCandidate} from "../control/savedResultEvidence.js";
+import {readTaskResultFile} from "../control/taskResultEvidence.js";import {readSavedBytes,writeSavedBytes,exhaustedCandidatePath,type ExhaustedCandidate} from "../control/savedResultEvidence.js";
 import {captureWorktreeSnapshot} from "./executionFormatFailure.js";
 import {parseMaterializedAgentConfig,agentConfigHash} from "../agents/materialize.js";
 import type {MaterializedAgentConfigV1} from "../agents/types.js";
@@ -148,13 +148,35 @@ export async function captureExhaustedCompletion(input:ExhaustedCaptureInput):Pr
   }
 }
 
-/** The cleanup has published exactly one attempt commit; bind it to the capture it was made from. */
+/**
+ * The cleanup has published exactly one attempt commit; bind it to the capture it was made from, and keep the commit
+ * verifiable once the workspace is gone. Orca settles the source run and deletes its workspace while the source envelope
+ * still names that path, so the read side cannot re-check `published` against it. Here -- still under the worker's lease,
+ * with the attempt worktree on disk -- the attempt ref is bundled into saved-result evidence and the candidate's snapshot
+ * is re-pointed at a snapshot whose `bundle` is that bundle; the reader then verifies sha/tree/parent/diff offline.
+ */
 export async function bindExhaustedCandidate(runDir:string,published:{sha:string;base:string;ref:string}):Promise<void>{
   const path=exhaustedCandidatePath(runDir);
   let bytes:Buffer;try{bytes=await readFile(path);}catch{return;}
   const candidate=JSON.parse(bytes.toString()) as ExhaustedCandidate;
   if(candidate.published!==null)return;
-  await writeFile(path,Buffer.from(canonicalJson({...candidate,published})),{mode:0o600});
+  let next:ExhaustedCandidate={...candidate,published};
+  try{
+    const source=dirname(runDir),worktree=join(runDir,"worktrees",`attempt-${candidate.attempt}`);
+    const scratch=await mkdtemp(join(runDir,"saved-result","attempt-"));
+    let bundle:Buffer;
+    try{
+      const bundlePath=join(scratch,"attempt.bundle");
+      await exec("/usr/bin/git",["-c","core.hooksPath=/dev/null","bundle","create",bundlePath,published.ref],{cwd:worktree,maxBuffer:16*1024*1024,timeout:30000});
+      bundle=await readFile(bundlePath);
+    }finally{await rm(scratch,{recursive:true,force:true});}
+    // This cleanup holds the lease; the candidate is best-effort and re-derivable, so the writer's own check is a no-op.
+    const hold=async()=>undefined;
+    const attemptBundle=await writeSavedBytes(source,bundle,hold);
+    const snapshot=JSON.parse((await readSavedBytes(source,candidate.snapshot)).toString()) as Record<string,unknown>;
+    next={...next,snapshot:await writeSavedBytes(source,Buffer.from(canonicalJson({...snapshot,bundle:attemptBundle})),hold)};
+  }catch{/* the commit stays bound; only the workspace-independent verification is lost */}
+  await writeFile(path,Buffer.from(canonicalJson(next)),{mode:0o600});
 }
 
 /** A hash of the bytes a caller can re-derive; used only in diagnostics. */
