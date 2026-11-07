@@ -41,9 +41,9 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-07，Claude）—— exhausted 恢复的生产者；**在本地分支，未推**
+### 最新（2026-11-07，Claude）—— exhausted 恢复的生产者；**已在本地 main，未推**
 
-- 分支 `feat/exhausted-attempt-recovery`，一笔 `feat(recovery): a successful execute the budget gate stopped keeps a verified completion source`（工作树 `/private/tmp/orca-20261107-exhausted-ccloop`，基于上文 D2／O19 那节所在 main）。**未 push，Orca 未 repin。**
+- 已在本地 main（`--ff-only` 合入），主题行 `feat(recovery): a successful execute the budget gate stopped keeps a verified completion source`。**未 push，Orca 未 repin。**
 - 做法：post-execute 预算门（`runLoop.ts` 里 `hasBudgetExceeded` 之后、`persistTerminalState` 之前）在 worktree 还在时写 `<runDir>/saved-result/exhausted-candidate.json`：完整正常退出、唯一严格解码且与适配器结果一致、plan 解码一致、用量观测、未进 verify 的证明、以及用**临时 index** 跑 `git add -A; write-tree` 得到的树。清理路径里现有的 `publishAttemptCommit` 之后（移除之前）把 `{sha,base,ref}` 绑回候选——只有那一处发布，不产生第二个提交。读侧 `collectSavedResultEvidence` 在 index 缺失时派生 `ccloop-execution-complete-before-verification-v1` 胶囊：loop-state 必须是 `exhausted`＋预算原因、`proveStopped` 必须成立、ref／tree／parent 与候选逐项对上。**租约结束后不写任何东西**，胶囊字节每次确定性重算，`stop` 只带稳定的 `executionId/generation/isolated`（早期版本嵌入 `proveStopped` 的 ref，`probedAt` 让哈希每次都变——已修）。
 - 消费者：`savedResultRecovery.ts` 新增同名 authority 分支（只认这种来源；旧的 `failed` 分支与 OMP 坏 final 的拒绝一字未改），校验发布提交、树、父提交、严格解码与用量账，然后交回既有的 admission/funding/verify 门。
 - 判据：`tests/control/exhaustedSource.test.ts` 两条（先红后绿；第二条覆盖 source eligibility 的 eligible 与伪造提交拒绝），连同既有 `savedResultEvidence`／`savedResultRecovery`／`partialToVerify`／`verifySavedResult` 共 **99/99** 绿；typecheck／build RC 0。
