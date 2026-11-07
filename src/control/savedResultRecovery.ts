@@ -112,7 +112,7 @@ const archiveSchema=z.object({version:z.literal(1),runId:idSchema,sourceIdentity
 type LegacySnapshot=z.infer<typeof legacySnapshotSchema>;
 export interface LoadedSavedResult {
  input:LoopStartEnvelope; admission:SavedResultAdmission; manifest:SavedResultPackage; source:LoopStartEnvelope;
- plan:AttemptPlan; execution:ExecutionResult; snapshot:LegacySnapshot; bytes:Map<string,Buffer>; originalBase:string; actualChangedPaths:string[];
+ plan:AttemptPlan; execution:ExecutionResult; snapshot:LegacySnapshot; bytes:Map<string,Buffer>; originalBase:string; actualChangedPaths:string[]; bundleRefName?:string;
 }
 export async function savedGit(cwd:string,...args:string[]):Promise<Buffer>{
  const env={...process.env};for(const key of Object.keys(env))if(key.startsWith("GIT_"))delete env[key];
@@ -139,8 +139,12 @@ function semantic(contract:LoopContract):unknown{
  const {tokenBudget:_tokens,maxAttempts:_attempts,totalRuntimeBudgetMs:_time,...executionPolicy}=contract.executionPolicy;
  return {...contract,context,executionPolicy};
 }
-export function boundSavedResultRuntime(source:LoopContract,actual:LoopContract):void{
- if(!same(semantic(source),semantic(actual))||actual.executionPolicy.maxAttempts>source.executionPolicy.maxAttempts
+export function boundSavedResultRuntime(source:LoopContract,actual:LoopContract,fundedWork?:RecoveryFunding["freshGrant"]["work"]):void{
+ if(!same(semantic(source),semantic(actual)))fail("saved-result-runtime-contract-mismatch");
+ if(fundedWork){
+  if(actual.executionPolicy.tokenBudget!==fundedWork.tokens||actual.executionPolicy.maxAttempts!==fundedWork.attempts
+   ||actual.executionPolicy.totalRuntimeBudgetMs!==fundedWork.activeMs)fail("saved-result-runtime-contract-mismatch");
+ }else if(actual.executionPolicy.maxAttempts>source.executionPolicy.maxAttempts
   ||actual.executionPolicy.totalRuntimeBudgetMs>source.executionPolicy.totalRuntimeBudgetMs
   ||(source.executionPolicy.tokenBudget!==null&&(actual.executionPolicy.tokenBudget===null||actual.executionPolicy.tokenBudget>source.executionPolicy.tokenBudget)))fail("saved-result-runtime-contract-mismatch");
 }
@@ -217,7 +221,7 @@ async function validateSnapshot(snapshot:LegacySnapshot,get:(ref:ArtifactRefV1)=
  * (an older candidate): the caller then falls back to the live repository. A bundle that does carry the ref but disagrees
  * is a named refusal, never a fallback.
  */
-async function changedPathsFromAttemptBundle(bundle:Buffer,published:{sha:string;tree:string;ref:string},attemptStartHead:string,base:string):Promise<string[]|null>{
+async function changedPathsFromAttemptBundle(bundle:Buffer,published:{sha:string;tree:string;ref:string},attemptStartHead:string,base:string):Promise<{paths:string[];index:Buffer}|null>{
  const root=await mkdtemp(join(tmpdir(),"saved-result-attempt-"));await chmod(root,0o700);
  try{
   await savedGit(root,"init","--bare","-q");const file=join(root,"attempt.bundle");await writeFile(file,bundle,{mode:0o600});
@@ -231,10 +235,24 @@ async function changedPathsFromAttemptBundle(bundle:Buffer,published:{sha:string
   if((await savedGit(root,"rev-parse",`${published.sha}^`)).toString().trim()!==attemptStartHead)fail("saved-result-source-stale");
   // The run base is a commit in every real envelope; a symbolic base (a fixture's "HEAD") resolves only in the live
   // workspace, so it falls back to the attempt's own start, which the capsule binds independently.
-  try{return (await savedGit(root,"diff","--name-only","-z",base,published.sha)).toString().split("\0").filter(Boolean);}
-  catch{return (await savedGit(root,"diff","--name-only","-z",attemptStartHead,published.sha)).toString().split("\0").filter(Boolean);}
+  const index=await savedGit(root,"ls-tree","-r","-z",published.sha);
+  try{return {paths:(await savedGit(root,"diff","--name-only","-z",base,published.sha)).toString().split("\0").filter(Boolean),index};}
+  catch{return {paths:(await savedGit(root,"diff","--name-only","-z",attemptStartHead,published.sha)).toString().split("\0").filter(Boolean),index};}
  }catch(error){if(error instanceof Error&&error.message.startsWith("saved-result-"))throw error;return null;}
  finally{await rm(root,{recursive:true,force:true});}
+}
+function publishedIndex(entries:Buffer,files:z.infer<typeof executionSnapshotSchema>["files"],get:(ref:ArtifactRefV1)=>Buffer):LegacySnapshot["index"]{
+ const byPath=new Map(files.map(file=>[file.path,file]));
+ return entries.toString().split("\0").filter(Boolean).map(entry=>{
+  const match=/^(100644|100755) blob ([a-f0-9]{40}|[a-f0-9]{64})\t/.exec(entry);
+  const path=match===null?"":entry.slice(match[0].length);
+  if(!match||!safeTaskResultPath(path))fail("saved-result-snapshot-index-mismatch");
+  const [,mode,oid]=match,file=byPath.get(path);
+  if(!file||((file.mode&0o111)!==0)!==(mode==="100755"))fail("saved-result-snapshot-index-mismatch");
+  const bytes=get(file.ref),actual=createHash(oid!.length===64?"sha256":"sha1").update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest("hex");
+  if(actual!==oid)fail("saved-result-snapshot-index-mismatch");
+  return {path:path!,mode:mode as "100644"|"100755",oid:oid!,stage:0 as const,ref:file.ref};
+ });
 }
 const stopSchema=z.object({executionId:idSchema,generation:positive,isolated:z.literal(true),source:artifactRefSchema}).strict();
 
@@ -327,20 +345,21 @@ async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation
   const fromBundle=await changedPathsFromAttemptBundle(get(snapshot.bundle),capsule.published,capsule.attemptStartHead,source.work.base);
   const planDoc=JSON.parse(get(capsule.artifacts.plan).toString()) as Record<string,unknown>;
   const {tokenUsage:_pt,usageEvidence:_pu,modelUsage:_pm,...plan}=planDoc;
-  let actualChangedPaths:string[];
-  if(fromBundle!==null)actualChangedPaths=fromBundle;
+  let actualChangedPaths:string[],publishedTree:Buffer;
+  if(fromBundle!==null){actualChangedPaths=fromBundle.paths;publishedTree=fromBundle.index;}
   else{
    if(await savedGit(repo,"rev-parse",capsule.published.ref).then(b=>b.toString().trim())!==capsule.published.sha)fail("saved-result-source-stale");
    if(await savedGit(repo,"rev-parse",`${capsule.published.sha}^{tree}`).then(b=>b.toString().trim())!==capsule.published.tree)fail("saved-result-source-stale");
    if(await savedGit(repo,"rev-parse",`${capsule.published.sha}^`).then(b=>b.toString().trim())!==capsule.attemptStartHead)fail("saved-result-source-stale");
    actualChangedPaths=(await savedGit(repo,"diff","--name-only",source.work.base,capsule.published.sha)).toString().split("\n").filter(Boolean);
+   publishedTree=await savedGit(repo,"ls-tree","-r","-z",capsule.published.sha);
   }
-  const legacySnapshot:LegacySnapshot={version:1,head:capsule.published.sha,bundle:snapshot.bundle,index:[],
+  const legacySnapshot:LegacySnapshot={version:1,head:capsule.published.sha,bundle:snapshot.bundle,index:publishedIndex(publishedTree,snapshot.files,get),
     tree:[...snapshot.directories.map(d=>({path:d.path,kind:"directory" as const,mode:d.mode})),...snapshot.files.map(f=>({path:f.path,kind:"file" as const,mode:f.mode,ref:f.ref}))],
     deleted:[],missing:[]};
   return {source,identity:capsule.identity,plan:plan as AttemptPlan,execution:normalized.execution as ExecutionResult,snapshot:legacySnapshot,bytes,originalBase:source.work.base,ledger,
     logical:(ref:ArtifactRefV1)=>{const b=bytes.get(ref.artifactId);if(!b||digest(b)!==ref.hash)fail("saved-result-source-hash-mismatch");return b;},
-    registered:[],rawExecutionTokens:capsule.usage.tokenUsage,snapshotHash:capsule.snapshot.hash,actualChangedPaths};
+    registered:[],rawExecutionTokens:capsule.usage.tokenUsage,snapshotHash:capsule.snapshot.hash,actualChangedPaths,bundleRefName:capsule.published.ref};
  }
  if(manifest.authorityKind==="execution-format-failure-v1"){
   const capsule=executionFormatFailureSchema.parse(json(manifest.source));
@@ -443,7 +462,7 @@ export async function readSavedResultEligibility(input:LoopStartEnvelope):Promis
 }
 export async function materializeSavedResult(repo:string,runDir:string,attempt:number,loaded:LoadedSavedResult):Promise<{worktreePath:string}>{
  const {snapshot,bytes}=loaded,bundle=join(runDir,"saved-result.bundle");await writeFile(bundle,bytes.get(snapshot.bundle.artifactId)!,{mode:0o600});
- await savedGit(repo,"fetch","-q",bundle,`refs/ccloop/${loaded.source.claim.runId}/attempts/${loaded.admission.recoveryOf.sourceAttempt}`);
+ await savedGit(repo,"fetch","-q",bundle,loaded.bundleRefName??`refs/ccloop/${loaded.source.claim.runId}/attempts/${loaded.admission.recoveryOf.sourceAttempt}`);
  const existing=join(runDir,"worktrees",`attempt-${attempt}`);
  try{await lstat(existing);await savedGit(repo,"worktree","remove","--force",existing);}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
  const result=await createAttemptWorkspace(repo,runDir,attempt,snapshot.head);

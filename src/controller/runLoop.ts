@@ -1458,7 +1458,7 @@ export async function runLoop(
       totalRuntimeBudgetMs: Math.min(contract.executionPolicy.totalRuntimeBudgetMs, grant.activeMs),
     } };
   }
-  if(recoveryInput) { boundSavedResultRuntime(recoveryInput.work.contract,contract); await loadSavedResultRecovery(recoveryInput); await persistSavedResultMode(runDir,recoveryInput); }
+  if(recoveryInput) { boundSavedResultRuntime(recoveryInput.work.contract,contract,recoveryFunding!.freshGrant.work); await loadSavedResultRecovery(recoveryInput); await persistSavedResultMode(runDir,recoveryInput); }
   else if(await readSavedResultMode(runDir)) throw new Error("saved-result-mode-conflict");
   const state = transitionRunState(initialState(contract), "planning");
   if(recoveryInput)state.savedResult={mode:"verify-saved-result",packageHash:recoveryInput.savedResultRecovery!.packageHash,admissionHash:recoveryInput.savedResultRecovery!.admissionHash,recoveryOf:recoveryInput.savedResultRecovery!.recoveryOf,funding:recoveryFunding!};
@@ -1616,7 +1616,7 @@ export async function runLoopFromState(
     if(!durableMode || canonicalHash(explicitRecovery)!==canonicalHash(durableMode))throw new Error("saved-result-mode-conflict");
   }
   const recovery=durableMode ? await loadSavedResultRecovery(durableMode) : undefined;
-  if(recovery){registerAttemptRefNamespace(runDir,recovery.input.claim.runId);boundSavedResultRuntime(recovery.input.work.contract,contract);if(canonicalHash(state.savedResult?.funding)!==canonicalHash(recovery.admission.funding))throw new Error("saved-result-funding-invalid");}
+  if(recovery){registerAttemptRefNamespace(runDir,recovery.input.claim.runId);boundSavedResultRuntime(recovery.input.work.contract,contract,recovery.admission.funding.freshGrant.work);if(canonicalHash(state.savedResult?.funding)!==canonicalHash(recovery.admission.funding))throw new Error("saved-result-funding-invalid");}
   const inheritedAttempts=recovery?.admission.funding.inheritedUsage.attempts ?? options?.tokenPolicy?.inheritedUsage.attempts ?? 0;
   if((state.savedResult!==undefined)!==(recovery!==undefined)||recovery&&(state.savedResult!.packageHash!==recovery.input.savedResultRecovery!.packageHash||state.savedResult!.admissionHash!==recovery.input.savedResultRecovery!.admissionHash))throw new Error("saved-result-mode-conflict");
   if(recovery && (state.savedResult?.entry || await hasSavedResultEntry(runDir))){

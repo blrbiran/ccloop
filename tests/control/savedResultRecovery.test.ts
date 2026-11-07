@@ -17,7 +17,17 @@ describe("saved result recovery wire",()=>{
  });
 });
 
-import {readSavedResultEligibility} from "../../src/control/savedResultRecovery.js";
+import {readSavedResultEligibility,boundSavedResultRuntime} from "../../src/control/savedResultRecovery.js";
+it('permits only the verified new grant to raise a saved verification runtime limit',async()=>{
+ const f=await resultFixture();try{
+  const source=f.contract,grant={tokens:100_000,activeMs:1_000_000,attempts:2,sessions:2};
+  const actual={...source,executionPolicy:{...source.executionPolicy,tokenBudget:grant.tokens,maxAttempts:grant.attempts,totalRuntimeBudgetMs:grant.activeMs}};
+  source.executionPolicy.tokenBudget=25;
+  expect(()=>boundSavedResultRuntime(source,actual)).toThrow('saved-result-runtime-contract-mismatch');
+  expect(()=>boundSavedResultRuntime(source,actual,grant)).not.toThrow();
+  expect(()=>boundSavedResultRuntime(source,{...actual,executionPolicy:{...actual.executionPolicy,tokenBudget:100_001}},grant)).toThrow('saved-result-runtime-contract-mismatch');
+ }finally{await rm(f.root,{recursive:true,force:true});}
+});
 import {savedRecoveryFixture} from "./savedRecoveryFixture.js";
 it("qualifies a genuine old bare execution only with its complete published archive and accounted admission",async()=>{
  const f=await savedRecoveryFixture();try {

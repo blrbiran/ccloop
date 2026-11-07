@@ -7,6 +7,7 @@ import { readAccepted } from "./store.js";
 import { publishTaskResultIndex, readTaskResultFile, taskResultDigest, TaskResultFileError } from "./taskResultEvidence.js";
 import { taskResultIdentitySchema } from "./taskResults.js";
 import { proveStopped } from "./stopProof.js";
+import { readUsageEvents } from "./usage.js";
 
 const safe=z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), positive=safe.refine(n=>n>0);
 const hash=z.string().regex(/^[a-f0-9]{64}$/), oid=z.string().regex(/^[a-f0-9]{40,64}$/);
@@ -115,6 +116,9 @@ export async function deriveExhaustedCapsule(input:StartEnvelopeV3):Promise<Buff
   if(candidate.normalizedExecutionHash===undefined)return null;
   let state:any;try{state=JSON.parse((await readTaskResultFile(source,join(source,"run","loop-state.json"),16*1024*1024)).toString());}catch{return null;}
   if(state.status!=="exhausted"||state.stopReason!==BUDGET_EXHAUSTED_REASON||state.currentAttempt!==candidate.attempt)return null;
+  // The final handoff event is appended after the post-execute capture. An incomplete finalization grants no source authority.
+  try{const events=await readUsageEvents(source);if(events.length!==candidate.usage.highWater||events.at(-1)?.eventSeq!==candidate.usage.highWater||events.at(-1)?.bucket!=="handoff")return null;}
+  catch{return null;}
   const accepted=await readAccepted(source);
   const proof=await proveStopped({sourceDir:source,accepted});
   if(proof===null)return null;

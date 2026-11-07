@@ -96,6 +96,49 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:10,output_
  await runControlWorker(['--source-dir',f.sourceDir,'--execution-id','execution-1','--nonce','nonce-1']);
  return JSON.parse((await f.rpc('saved-result-evidence',{input:f.input})).stdout);
 }
+it('captures the final mechanical handoff event in an exhausted completion source',async()=>{
+ const f=await resultFixture();
+ try{
+  const page=await exhaustedRun(f);
+  expect(page.capsule).not.toBeNull();
+  const capsule=JSON.parse(Buffer.from(JSON.parse((await f.rpc('read-saved-result-evidence',{input:f.input,capsuleRef:page.capsule,ref:page.capsule})).stdout).base64,'base64').toString());
+  const ledger=JSON.parse((await readFile(savedResultPath(f.sourceDir,capsule.artifacts.usageLedger))).toString());
+  expect(ledger.events).toHaveLength(3);
+  expect(ledger.events[2]).toMatchObject({eventSeq:3,bucket:'handoff'});
+  expect(capsule.usage.highWater).toBe(3);
+  expect(capsule.artifacts.usageObservations).toHaveLength(3);
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
+it('does not turn an unpublished exhausted candidate into a worker failure',async()=>{
+ const f=await resultFixture();try{
+  await exhaustedRun(f);
+  const path=join(f.runDir,'saved-result','exhausted-candidate.json');
+  const candidate=JSON.parse(await readFile(path,'utf8'));
+  await writeFile(path,canonicalJson({...candidate,published:null}));
+  const {finalizeExhaustedCandidate}=await import('../../src/controller/exhaustedCompletion.js');
+  await expect(finalizeExhaustedCandidate(f.runDir,3)).resolves.toBeUndefined();
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
+it('does not publish a capsule whose saved high-water mark predates the final handoff',async()=>{
+ const f=await resultFixture();try{
+  await exhaustedRun(f);
+  const path=join(f.runDir,'saved-result','exhausted-candidate.json');
+  const candidate=JSON.parse(await readFile(path,'utf8'));
+  await writeFile(path,canonicalJson({...candidate,usage:{...candidate.usage,highWater:2}}));
+  const page=JSON.parse((await f.rpc('saved-result-evidence',{input:f.input})).stdout);
+  expect(page.capsule).toBeNull();
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
+it('accepts a published attempt tree with a tracked newline filename',async()=>{
+ const f=await resultFixture();try{
+  await writeFile(join(f.repo,'notes\n2026.txt'),'tracked\n');
+  await git('/usr/bin/git',['add','-A'],{cwd:f.repo});
+  await git('/usr/bin/git',['-c','user.name=fixture','-c','user.email=fixture@invalid','commit','-m','track newline name'],{cwd:f.repo});
+  const page=await exhaustedRun(f),pkg=await packageOf(f,page.capsule);
+  const answer=await readSavedResultSourceEligibility({source:f.input,sourceAttempt:1,packagePath:pkg.dir,packageHash:pkg.hash});
+  expect(answer,JSON.stringify(answer)).toMatchObject({status:'eligible',authorityKind:'execution-complete-before-verification-v1'});
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
 it('keeps the published attempt verifiable after the workspace the source envelope names is gone',async()=>{
  const f=await resultFixture();
  try{

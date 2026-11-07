@@ -7,7 +7,7 @@ import {z} from "zod";
 import {canonicalHash,canonicalJson,isLoopEnvelope,type ArtifactRefV1,type StartEnvelopeV3} from "../control/protocol.js";
 import {readEvidence} from "../control/evidence.js";
 import {parseKnownWorkUsageLedger,readUsageEvents} from "../control/usage.js";
-import {readTaskResultFile} from "../control/taskResultEvidence.js";import {readSavedBytes,writeSavedBytes,exhaustedCandidatePath,type ExhaustedCandidate} from "../control/savedResultEvidence.js";
+import {readTaskResultFile} from "../control/taskResultEvidence.js";import {readSavedBytes,writeSavedBytes,exhaustedCandidatePath,exhaustedCandidateSchema,type ExhaustedCandidate} from "../control/savedResultEvidence.js";
 import {captureWorktreeSnapshot} from "./executionFormatFailure.js";
 import {parseMaterializedAgentConfig,agentConfigHash} from "../agents/materialize.js";
 import type {MaterializedAgentConfigV1} from "../agents/types.js";
@@ -177,6 +177,25 @@ export async function bindExhaustedCandidate(runDir:string,published:{sha:string
     next={...next,snapshot:await writeSavedBytes(source,Buffer.from(canonicalJson({...snapshot,bundle:attemptBundle})),hold)};
   }catch{/* the commit stays bound; only the workspace-independent verification is lost */}
   await writeFile(path,Buffer.from(canonicalJson(next)),{mode:0o600});
+}
+
+/** Complete the pre-cleanup capture with the worker's final, mechanical handoff observation while its lease is held. */
+export async function finalizeExhaustedCandidate(runDir:string,highWater:number):Promise<void>{
+  const path=exhaustedCandidatePath(runDir);
+  let bytes:Buffer;try{bytes=await readFile(path);}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return;throw error;}
+  const candidate=exhaustedCandidateSchema.parse(JSON.parse(bytes.toString()));
+  if(candidate.published===null)return;
+  if(candidate.usage.highWater+1!==highWater)throw new Error("saved-result-usage-unsettled");
+  const source=dirname(runDir),ledger=await read(source,join(source,"control","usage.json"));
+  const events=await readUsageEvents(source),last=events.at(-1);
+  if(events.length!==highWater||last?.eventSeq!==highWater||last.bucket!=="handoff"||last.cumulative===null)throw new Error("saved-result-usage-unsettled");
+  const prior=candidate.artifacts.usageObservations??[];
+  if(prior.length!==highWater-1||prior.some((entry,index)=>entry.source.hash!==events[index]?.source.hash))throw new Error("saved-result-usage-unsettled");
+  // The worker still owns its lease here, just as in bindExhaustedCandidate.
+  const hold=async()=>undefined;
+  const copy=await writeSavedBytes(source,await readEvidence(source,last.source),hold);
+  const usageLedger=await writeSavedBytes(source,ledger,hold);
+  await writeCandidate(runDir,{...candidate,usage:{...candidate.usage,highWater},artifacts:{...candidate.artifacts,usageLedger,usageObservations:[...prior,{source:last.source,copy}]}});
 }
 
 /** A hash of the bytes a caller can re-derive; used only in diagnostics. */

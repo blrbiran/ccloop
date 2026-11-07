@@ -27,6 +27,8 @@ import { testCrashPoint } from "./testCrashPoint.js";
 import { materializeExtraResultRepositories, materializeResultRepository } from "./resultRepository.js";
 import { runSingleCall } from "./singleCall.js";
 import { registerAttemptRefNamespace } from "../workspace/worktreeManager.js";
+import { finalizeExhaustedCandidate } from "../controller/exhaustedCompletion.js";
+import { appendEvent } from "../persistence/fileStore.js";
 import { codexConfigTomlPath, readCodexNetworkAccess } from "../agents/codexNetworkConfig.js";
 import { buildToolRulesReport, writeToolRulesReport } from "./toolRulesReport.js";
 
@@ -380,6 +382,10 @@ export async function runControlWorker(argv: string[]): Promise<void> {
           result,
           usageHighWater: handoffUsage.eventSeq,
         });
+        if(runState.status==="exhausted"&&envelope.work.kind==="loop"){
+          try{await finalizeExhaustedCandidate(join(sourceDir,"run"),handoffUsage.eventSeq);}
+          catch(error){await appendEvent(runDir,{type:"execution_complete_capture_failed",at:new Date().toISOString(),detail:`final usage: ${String(error)}`}).catch(()=>undefined);}
+        }
         await sealAcceptedWorker(sourceDir, executionId, nonce);
         sealed = true;
       },
