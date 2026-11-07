@@ -41,7 +41,15 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-07，Claude）—— exhausted 恢复的生产者；**已推远端，Orca 已 repin**
+### 最新（2026-11-07，Claude，会话 `79d7713b`）—— 已存 exhausted 来源不再依赖被删的工作区；会计口径仍有一处待人定
+
+- 分支 `fix/saved-exhausted-source-repo`（**本地，未推**；Orca 侧配对用的分支是 `feat/verify-only-work-top-up`）。人本轮授权改并测本仓。
+- 两处真缺陷，先红后绿：① 已发布 attempt 的校验原来用**来源 envelope 的 `contract.context.repoPath`** 跑 git；Orca 结清来源 run 会删掉那个 workspace ⇒ `/usr/bin/git ENOENT`、验证 run 卡 `inspect-unknown`。现在 `bindExhaustedCandidate`（清理路径里、`publishAttemptCommit` 之后、删 worktree 之前，仍在租约内）把 `refs/ccloop/<run>/attempts/<n>` 打成 bundle 写进 saved-result evidence，并把候选 `snapshot` 重指到一个 `bundle` 为该 bundle 的快照；读取端 `changedPathsFromAttemptBundle` 从 bundle 校验 sha／tree／parent 与 diff（**胶囊与候选 schema 均未改**），bundle 不含该 ref 的旧候选退回活仓库。② 读取端把来源终态写死 `failed`，exhausted 来源在 `validateAccounting` 被判 `saved-result-accounting-invalid`；现在按 `manifest.authorityKind` 取 `exhausted`。
+- 判据：`tests/control/exhaustedSource.test.ts` 新增「来源 envelope 指名的 workspace 消失后仍 eligible」（改前 `unavailable`，改后 eligible）；恢复类 5 个文件 **123/123**、typecheck 0。
+- **仍未定论（下一个接手人从这里开始）**：配对真跑现在停在 `ledger.events.length(2)!==a.highWater(3)`（同一次里 `nextSeq=3`，即本仓台账自洽为 2 条）。**两种解释都还没被证伪**：(a) Orca 侧 booked 事件比本仓台账多一条（候选怀疑：Orca 的配对夹具 `tests/control/fixtures/savedResultWorld.ts` 的 `loseUsage` 会往 collect 追加一条 `cumulative:null` 的 seq-3 事件）；(b) exhausted 生产者应按台账写 `usage.highWater` 而不是按最后一条事件。**先测量再决定改哪一侧；不要为了过判据放宽该一致性检查。**
+- 未做：全量门、push、Orca 的 repin。日志在 Orca 会话 scratch（`.superpowers/sdd/2026-11-07-verify-only-work-top-up/`，会话结束即失）。
+
+### 上一轮（2026-11-07，Claude）—— exhausted 恢复的生产者；**已推远端，Orca 已 repin**
 
 - 已在 main 并已推远端（`ls-remote` 现核；主题行 `feat(recovery): a successful execute the budget gate stopped keeps a verified completion source` 一族。**Orca 已 repin 到含它的那笔**）。
 - 做法：post-execute 预算门（`runLoop.ts` 里 `hasBudgetExceeded` 之后、`persistTerminalState` 之前）在 worktree 还在时写 `<runDir>/saved-result/exhausted-candidate.json`：完整正常退出、唯一严格解码且与适配器结果一致、plan 解码一致、用量观测、未进 verify 的证明、以及用**临时 index** 跑 `git add -A; write-tree` 得到的树。清理路径里现有的 `publishAttemptCommit` 之后（移除之前）把 `{sha,base,ref}` 绑回候选——只有那一处发布，不产生第二个提交。读侧 `collectSavedResultEvidence` 在 index 缺失时派生 `ccloop-execution-complete-before-verification-v1` 胶囊：loop-state 必须是 `exhausted`＋预算原因、`proveStopped` 必须成立、ref／tree／parent 与候选逐项对上。**租约结束后不写任何东西**，胶囊字节每次确定性重算，`stop` 只带稳定的 `executionId/generation/isolated`（早期版本嵌入 `proveStopped` 的 ref，`probedAt` 让哈希每次都变——已修）。
@@ -236,7 +244,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节；2026-11-07 exhausted 恢复）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。2026-11-07 收尾：Orca 的 `chore/repin-exhausted-source` 已合入并推远端（`ls-remote` 现核），依赖 pin 在含 exhausted completion source 的那笔；Orca 侧同轮只动了 Orca 自己（`group brief` 改走摘要路由、usage scope 用 `groupRepoIdOf`、profile 估算指令升 v3、#174／#179 修复）。**「零 plan/execute、只跑 verify」仍未验成**：authored work allowance 花完时 Orca 以 `saved-result-authored-budget-exhausted` 拒绝，追加额度只有设计稿（Orca 仓 `docs/superpowers/specs/2026-11-07-verify-only-work-top-up-design.md`），**本仓不需改**。本仓最新一套判据与红名单见上「最新」节。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**2026-11-07 第二轮（会话 `79d7713b`）就地更新**：Orca 已实现 verify-only 的追加额度（`verify-saved-result --work`，分支 `feat/verify-only-work-top-up`，本地未推）；本仓配套修了两处（分支 `fix/saved-exhausted-source-repo`，本地未推，见上「最新」节），**配对验收仍未通过**，卡在本仓会计口径 `ledger.events.length` 与 Orca `highWater` 的差（未定论，先测量再改）。本仓契约形状未变。更早一轮的结论（`chore/repin-exhausted-source` 已合入并推远端、profile 指令 v3、#174／#179 修复、`saved-result-authored-budget-exhausted` 边界）仍然成立；本仓最新判据与红名单见上「最新」节。
 - Orca 侧已读：`phase:"setup"`／`setup-failed`；`failureCause.detail`（quota 重置时间）；OMP 的 `execute-format-failure.json`；单次调用的可选 `failureCause`（额度探针读 quota）；`settle-approximate-usage`＋`approximate-floor` 收据；**本轮新边界**：collect 顶层 `pathPolicyMisses`、saved-result source eligibility 的 `rawExecutionTokens:null`。**改这些形状前先同步 Orca**。
 - ⚠️ 真 codex 付费先问人；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（Orca 每轮跑完备份后删）。沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`。codex `workspace-write` 沙箱里开 unix socket 的测试会超时（Orca 自举 F16）——给 agent 的检查别用开 socket 的套件。
 - **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid`；单次调用记录的 `errorCode`／`usageLowerBound`／`failureCause`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`（含 phase `setup`、cause `setup-failed`、`quota` 的 `detail` 文本）、`toolRules`、`transcripts`、`usageLowerBound`、`dirs[]`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`、`work.additionalRepos`；契约 `executionPolicy.toolRules`、`context.setupCommands`；required check evidence 的段格式；codex wire `flow` 的封闭形状与 strict 投影（及可选键 null 折回）；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；`execute-format-failure.json`；agents 表 codex `structuredOutput`；fake 参数约定（Orca 测试的 `ORCA_AGENTS_TABLE` 用 fake-codex `integration` 模式）；`blockRun` 原因串；`isRepeatedFailure`；已存结果恢复收据的 `client`／`personPrincipal` 规则与 `approximate-floor`／`orca-auto` 支。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受。
