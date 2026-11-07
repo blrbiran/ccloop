@@ -2,7 +2,7 @@
 // today from the executor's changedFiles; an extra repository only from ccloop's own observation (HEAD against the start
 // sha, then the diff from the start sha plus untracked paths) against its own lists; maxFilesTouched counts every
 // repository. An agent that commits in an extra worktree is a human gate, and its committed change is still observed.
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -52,8 +52,9 @@ describe("per-repository path policy (C4)", () => {
   }, 30_000);
 
   it("reports an extra-repository-only miss after a blocked run is persisted and collected again", async () => {
+    // Human ruling 2026-11-07: fix this named criterion's setup; keep its persisted collect assertions intact.
     const { primary, contract } = await multiRepoWorld([{ key: "lib" }]);
-    const sourceDir = await runDirOf();
+    const sourceDir = await realpath(await runDirOf());
     try {
       const runDir = join(sourceDir, "run");
       await mkdir(runDir);
