@@ -41,13 +41,13 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-07，本会话）—— exhausted 来源配对验证已通；修复已快进合入本地 main，待人 push 后 Orca 才能 repin
+### 最新（2026-11-07，本会话）—— exhausted 来源的配对恢复已通；修复已进 main、已推、Orca 已 repin
 
-- 分支 `fix/saved-exhausted-source-repo` 配对 Orca `feat/verify-only-work-top-up`。开工 `/usr/bin/git ls-remote origin refs/heads/main` 现核本仓 main 与远端一致；收尾时修复已变基并 `--ff-only` 合入**本地 main**（远端仍停在旧提交，push 归人），分支已删。人要求全量门与付费真跑留到之后。变基后恢复 5 文件 **106/106**、配对 V10 在 main 构建上仍 1 过。
-- **先前未定的 2/3 已量清**：本仓在 execute 后捕获 2 条 work 事件，`control/worker.ts` 在封存来源前又追加第 3 条机械 handoff；Orca highWater=3 正确。`finalizeExhaustedCandidate` 在 worker 租约内把最终 ledger、handoff 原证据副本和 highWater 一起补入 saved candidate；`deriveExhaustedCapsule` 拒绝没补齐最终序号的候选。没有已发布 attempt 时不让补齐失败影响来源结清。读取器会计不变量仍是 `ledger.nextSeq=highWater+1`、事件数等于 highWater，没有放宽。
-- **配对继续暴露的边界**：新 verifier 的已授权工作追加超过旧来源合同上限时，`boundSavedResultRuntime` 原来误按旧来源上限拒；现在只在已校验 `loadSavedResultRecovery` 的资金证明后让新运行 runtime 精确等于 fresh grant；原来源胶囊仍用旧的严格上限校验。来源包中的真实 `published.ref` 在现场是 `refs/ccloop/run/attempts/1`，而 Orca runId 为随机 id；恢复现在取已从 bundle 核验的 ref，不重新造名称。原来的 exhausted `LegacySnapshot.index=[]` 又把真实已发布文件误判修改；现在按验证过的发布树生成索引，核对每个文件的 Git blob／mode／内容。独立审阅抓到含换行文件名被正则拒，已改为按 NUL 与首个 tab 分隔，测试先红后绿。
-- **判据**：新增最终事件（红：2≠3）、授权 fresh grant（红：runtime mismatch）、未发布候选（红：finalizer 抛错）、过期 highWater（红：旧胶囊仍发布）、换行文件名（红：index mismatch），均见红后绿；配对 `TMPDIR=/tmp ORCA_SAVED_RESULT_VERIFY=1 ORCA_SAVED_RESULT_CCLOOP_BIN=<本仓>/dist/cli.js vitest run tests/control/savedResultRecovery.paired.test.ts -t 'V10:'` 在最后一轮本地构建 **1 过／22 跳过**，Orca 来源仍 exhausted、新 run settled 且仅 verify 一次。恢复 3 文件 70/70＋controller 2 文件 34/34 在收尾补丁前通过，收尾后 `exhaustedSource` 8/8、typecheck/build 0。**本地覆盖不等于正式 pin 验收。** 全量、真 provider、push、Orca repin 未做。
-- 历史没有胶囊的 exhausted run、OMP 坏 final 仍不可恢复；资金/会计检查未松。Orca spec `2026-11-07-verify-only-work-top-up-design.md` 的 Correction 2 登记配对四个边界。
+- 修复已变基后 `--ff-only` 合入 main 并**已推远端**（收尾 `ls-remote` 现核本地＝远端），分支已删；Orca 已按 pin 脚本 repin 到含它的提交，并用**该 pin 提交的克隆**跑通配对 `V10:`（1 过／22 跳过：来源仍 `exhausted`，新 run 零 plan/execute、只 verify 一次并 settled）。人要求全量门与付费真跑留到之后。
+- **先前未定的 2 对 3 已量清**：本仓在 execute 后捕获 2 条 work 事件，`control/worker.ts` 在封存来源前追加第 3 条机械 handoff，Orca `highWater=3` 正确。`finalizeExhaustedCandidate` 在 worker 租约内把最终 ledger、handoff 原证据副本和 highWater 补进 saved candidate；`deriveExhaustedCapsule` 拒绝未补齐最终序号的候选；没有已发布 attempt 时补齐失败不影响来源结清。读取器不变量仍是 `ledger.nextSeq=highWater+1` 且事件数＝highWater，**没有放宽**。
+- **配对又暴露的三个边界**：① 追加额度后新 verifier 的 runtime 超出旧来源合同上限——现在只在已校验 `loadSavedResultRecovery` 的资金证明后让新运行 runtime 精确等于 fresh grant，来源胶囊仍按旧上限严格校验；② 恢复原来按 Orca runId 拼 ref，而 bundle 里的真实 ref 是 `refs/ccloop/run/attempts/1`——现在取已从 bundle 核验的 ref；③ exhausted 分支把 `LegacySnapshot.index` 写成 `[]`，真实已发布文件被误判「验证期间被修改」——现在按验证过的发布提交树生成索引，逐文件核对 blob／mode／内容。独立审阅另抓到含换行文件名被 index 正则拒（`.+` 不匹配 `\n`），已改为按 NUL 分隔、首个 tab 断元数据。
+- **判据**：最终事件、fresh grant 边界、未发布候选、过期 highWater、换行文件名五条均**先红后绿**；恢复类 5 文件 **106/106**、typecheck／build 0（`exhaustedSource` 单文件 8/8）。全量门与真 provider 未跑。
+- 历史没有胶囊的 exhausted run、OMP 坏 final 仍不可恢复；资金／会计检查未松。Orca spec `2026-11-07-verify-only-work-top-up-design.md` 的 Correction 2 登记这四个边界。
 
 ### 上一轮（2026-11-07，Claude）—— exhausted 恢复的生产者；**已推远端，Orca 已 repin**
 
@@ -244,7 +244,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节；2026-11-07 exhausted 恢复）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**2026-11-07 本会话**：配对 `V10` 在本地两分支构建上通过（来源 `exhausted`、新 run 只 verify 一次并 settled）；本仓修复已含最终会计事件、真实 bundle ref、发布树索引与换行路径；**尚未 push、Orca 尚未 repin**，本地 `ORCA_CCLOOP_BIN` 覆盖不是正式 pin 证据。Orca 侧下一步 #145/#160 的未估算无限额度保护仍待人定。更早一轮的结论（`chore/repin-exhausted-source` 已合入并推远端、profile 指令 v3、#174／#179 修复）仍成立。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**2026-11-07 近况（就地替换旧述）**：配对 `V10` 已在本仓 main 的克隆构建上通过（来源 `exhausted`、新 run 只 verify 一次并 settled），本仓 main 已推、Orca 已 repin；Orca 侧下一步是 #145/#160 未估算无限额度的保护方式与 #174/#159，**待人定**。更早结论（profile 指令 v3、#174／#179 修复）仍成立，细节在 Orca handoff。
 - Orca 侧已读：`phase:"setup"`／`setup-failed`；`failureCause.detail`（quota 重置时间）；OMP 的 `execute-format-failure.json`；单次调用的可选 `failureCause`（额度探针读 quota）；`settle-approximate-usage`＋`approximate-floor` 收据；**本轮新边界**：collect 顶层 `pathPolicyMisses`、saved-result source eligibility 的 `rawExecutionTokens:null`。**改这些形状前先同步 Orca**。
 - ⚠️ 真 codex 付费先问人；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（Orca 每轮跑完备份后删）。沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`。codex `workspace-write` 沙箱里开 unix socket 的测试会超时（Orca 自举 F16）——给 agent 的检查别用开 socket 的套件。
 - **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid`；单次调用记录的 `errorCode`／`usageLowerBound`／`failureCause`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`（含 phase `setup`、cause `setup-failed`、`quota` 的 `detail` 文本）、`toolRules`、`transcripts`、`usageLowerBound`、`dirs[]`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`、`work.additionalRepos`；契约 `executionPolicy.toolRules`、`context.setupCommands`；required check evidence 的段格式；codex wire `flow` 的封闭形状与 strict 投影（及可选键 null 折回）；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；`execute-format-failure.json`；agents 表 codex `structuredOutput`；fake 参数约定（Orca 测试的 `ORCA_AGENTS_TABLE` 用 fake-codex `integration` 模式）；`blockRun` 原因串；`isRepeatedFailure`；已存结果恢复收据的 `client`／`personPrincipal` 规则与 `approximate-floor`／`orca-auto` 支。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受。
