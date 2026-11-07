@@ -41,13 +41,14 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-07，Claude）—— exhausted 恢复的生产者；**已在本地 main，未推**
+### 最新（2026-11-07，Claude）—— exhausted 恢复的生产者；**已推远端，Orca 已 repin**
 
-- 已在本地 main（`--ff-only` 合入），主题行 `feat(recovery): a successful execute the budget gate stopped keeps a verified completion source`。**未 push，Orca 未 repin。**
+- 已在 main 并已推远端（`ls-remote` 现核；主题行 `feat(recovery): a successful execute the budget gate stopped keeps a verified completion source` 一族。**Orca 已 repin 到含它的那笔**）。
 - 做法：post-execute 预算门（`runLoop.ts` 里 `hasBudgetExceeded` 之后、`persistTerminalState` 之前）在 worktree 还在时写 `<runDir>/saved-result/exhausted-candidate.json`：完整正常退出、唯一严格解码且与适配器结果一致、plan 解码一致、用量观测、未进 verify 的证明、以及用**临时 index** 跑 `git add -A; write-tree` 得到的树。清理路径里现有的 `publishAttemptCommit` 之后（移除之前）把 `{sha,base,ref}` 绑回候选——只有那一处发布，不产生第二个提交。读侧 `collectSavedResultEvidence` 在 index 缺失时派生 `ccloop-execution-complete-before-verification-v1` 胶囊：loop-state 必须是 `exhausted`＋预算原因、`proveStopped` 必须成立、ref／tree／parent 与候选逐项对上。**租约结束后不写任何东西**，胶囊字节每次确定性重算，`stop` 只带稳定的 `executionId/generation/isolated`（早期版本嵌入 `proveStopped` 的 ref，`probedAt` 让哈希每次都变——已修）。
 - 消费者：`savedResultRecovery.ts` 新增同名 authority 分支（只认这种来源；旧的 `failed` 分支与 OMP 坏 final 的拒绝一字未改），校验发布提交、树、父提交、严格解码与用量账，然后交回既有的 admission/funding/verify 门。
 - 判据：`tests/control/exhaustedSource.test.ts` 三条（先红后绿；覆盖 source eligibility 的 eligible、伪造提交拒绝、partial／超时都不产出该来源），连同既有 `savedResultEvidence`／`savedResultRecovery`／`partialToVerify`／`verifySavedResult` **100/100** 绿；typecheck／build RC 0。**全量 2,567 条、2,566 过、1 红**＝`multiRepoPathPolicy`「reports an extra-repository-only miss after a blocked run is persisted and collected again」`control-path-invalid`——**在未改动的 `4cdc1ab` 副本上单跑同样红**（`check-known-reds` 因此 RC 1，名单没有它；本轮没把它加进名单）。
-- **诚实边界**：OMP 成功执行只有代码路径，没有真 OMP 回归；「新 run 零 plan/execute、只跑一次 verify」的 paired 端到端未跑；partial、超时无结果、handoff、allowance parking 都按设计排除但只覆盖了 partial/超时之外的一部分负例。**历史没有胶囊的 exhausted run 仍然不可恢复。**
+- **诚实边界**：OMP 成功执行只有代码路径，没有真 OMP 回归；「新 run 零 plan/execute、只跑一次 verify」的 paired 端到端未跑——它现在只等 Orca 那半（追加额度，设计稿见 Orca 仓 `docs/superpowers/specs/2026-11-07-verify-only-work-top-up-design.md`，**未实现**），本仓不再需要改动；partial、超时无结果、handoff、allowance parking 都按设计排除但只覆盖了 partial/超时之外的一部分负例。**历史没有胶囊的 exhausted run 仍然不可恢复。**
+- **同轮 Orca 侧只动了 Orca 自己**：分支合入并推、profile 估算指令升 v3、#174（判官无上限／父组不可见）与 #179（判定组 completion 读 done）修复。**本仓契约一字未改**，`collect`／features／权威种类都照旧。
 
 ### 上一轮（2026-11-07，Orca D2／O19）
 
@@ -235,7 +236,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节；2026-11-07 exhausted 恢复）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。2026-11-07 的人裁：`multiRepoPathPolicy` 的额外仓 C4 判据**不进 known-reds**，按点名授权修夹具（临时根先 `realpath`）；已在本地 main，未 push。Orca 已把依赖 repin 到远端 `60c554b4`（exhausted completion source），配对测试真实产出该来源并通过 eligibility；但 authored work allowance 花完时 Orca 以 `saved-result-authored-budget-exhausted` 拒绝 verify-only run，所以「零 plan/execute、只跑 verify」仍未验成，属 Orca 资金路径待设计。ccloop 全套重跑 2,567/2,567、`check-known-reds` RC 0。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。2026-11-07 收尾：Orca 的 `chore/repin-exhausted-source` 已合入并推远端（`ls-remote` 现核），依赖 pin 在含 exhausted completion source 的那笔；Orca 侧同轮只动了 Orca 自己（`group brief` 改走摘要路由、usage scope 用 `groupRepoIdOf`、profile 估算指令升 v3、#174／#179 修复）。**「零 plan/execute、只跑 verify」仍未验成**：authored work allowance 花完时 Orca 以 `saved-result-authored-budget-exhausted` 拒绝，追加额度只有设计稿（Orca 仓 `docs/superpowers/specs/2026-11-07-verify-only-work-top-up-design.md`），**本仓不需改**。本仓最新一套判据与红名单见上「最新」节。
 - Orca 侧已读：`phase:"setup"`／`setup-failed`；`failureCause.detail`（quota 重置时间）；OMP 的 `execute-format-failure.json`；单次调用的可选 `failureCause`（额度探针读 quota）；`settle-approximate-usage`＋`approximate-floor` 收据；**本轮新边界**：collect 顶层 `pathPolicyMisses`、saved-result source eligibility 的 `rawExecutionTokens:null`。**改这些形状前先同步 Orca**。
 - ⚠️ 真 codex 付费先问人；真 codex 每跑一次往人的 `~/.codex/config.toml` 追加一条 trust 条目（Orca 每轮跑完备份后删）。沙箱里跑本仓必须 export `CCLOOP_CACHE_DIR`。codex `workspace-write` 沙箱里开 unix socket 的测试会超时（Orca 自举 F16）——给 agent 的检查别用开 socket 的套件。
 - **Orca 依赖本仓、改之前先同步 Orca 的**：`single-call-output-invalid`；单次调用记录的 `errorCode`／`usageLowerBound`／`failureCause`；collect 顶层 `decisions`、`debug`（含 `located`）、`flow`、`failureCause`（含 phase `setup`、cause `setup-failed`、`quota` 的 `detail` 文本）、`toolRules`、`transcripts`、`usageLowerBound`、`dirs[]`；features `transcripts:"v1"`；envelope `work.priorFailures`、`work.operatorNote`、`work.additionalRepos`；契约 `executionPolicy.toolRules`、`context.setupCommands`；required check evidence 的段格式；codex wire `flow` 的封闭形状与 strict 投影（及可选键 null 折回）；`contextWindowSource`；`agent-version-drift` 措辞；`control agent-installation-observe`；`refs/ccloop/*`；`execute-format-failure.json`；agents 表 codex `structuredOutput`；fake 参数约定（Orca 测试的 `ORCA_AGENTS_TABLE` 用 fake-codex `integration` 模式）；`blockRun` 原因串；`isRepeatedFailure`；已存结果恢复收据的 `client`／`personPrincipal` 规则与 `approximate-floor`／`orca-auto` 支。Orca 的 collect/features 解析是 strict——加键先让 Orca 接受。
