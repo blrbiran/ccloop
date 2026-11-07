@@ -114,3 +114,41 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:10,output_
   expect(refused.status).toBe('unavailable');
  }finally{await rm(f.root,{recursive:true,force:true});}
 },30000);
+it('leaves a partial or a timed-out execute without a completion source',async()=>{
+ for(const mode of ['partial','timeout'] as const){
+  const f=await resultFixture();
+  try{
+   f.contract.executionPolicy.tokenBudget=25;f.contract.executionPolicy.perAttemptTimeoutMs=mode==='timeout'?600:10000;
+   f.input.contractHash=canonicalHash(f.contract);
+   const fake=join(f.root,'stopped-execute.mjs');
+   await writeFile(fake,`import {readFileSync,writeFileSync} from 'node:fs';
+if(process.argv.includes('--version')){console.log('9.9.9-fake');process.exit(0)}
+if(!process.argv.includes('exec')){process.stdout.write(process.argv.includes('mcp')?'[]\\n':process.argv.includes('models')?'{"models":[]}\\n':'',()=>process.exit(0));await new Promise(()=>{})}
+for await(const part of process.stdin){}
+const args=process.argv,s=JSON.parse(readFileSync(args[args.indexOf('--output-schema')+1],'utf8'));
+const phase=s.properties?.result?'execute':s.properties?.approved?'verify':'plan';
+if(phase==='verify')throw Error('verification must not enter');
+if(phase==='execute'&&${JSON.stringify(mode)}==='timeout'){console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:10,output_tokens:5}}));await new Promise(r=>setTimeout(r,30000));}
+if(phase==='execute')writeFileSync('answer.txt','partial\\n');
+const value=phase==='plan'?{summary:'write answer',primaryTargetPaths:['answer.txt']}
+ :${JSON.stringify(mode)}==='partial'?{result:{failureType:'error',changedFiles:['answer.txt']}}:{result:{changedFiles:['answer.txt']}};
+writeFileSync(args[args.indexOf('-o')+1],JSON.stringify(value));
+console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:10,output_tokens:5}}));
+`);
+   const sealed=await sealCodex({command:[process.execPath,fake],model:'fixture',sandbox:'workspace-write',budgetMode:'soft',timeoutMs:2000,killGraceMs:50});
+   f.input.claim.agent=sealed.selection;f.input.claim.configHash=sealed.configHash;
+   await atomicReplacePrivateFile(f.sourceDir,join(f.sourceDir,'control/config.json'),Buffer.from(canonicalJson(sealed.config)));
+   await atomicReplacePrivateFile(f.sourceDir,join(f.sourceDir,'control/envelope.json'),Buffer.from(canonicalJson(f.input)));
+   await writeAccepted(f.sourceDir,{protocol:1,envelopeHash:canonicalHash(f.input),executionId:'execution-1',configHash:sealed.configHash,generation:1,acceptedAt:new Date().toISOString(),launch:'intended',worker:null});
+   await runControlWorker(['--source-dir',f.sourceDir,'--execution-id','execution-1','--nonce','nonce-1']);
+   expect(existsSync(join(f.runDir,'saved-result','exhausted-candidate.json')),mode).toBe(false);
+   const page=JSON.parse((await f.rpc('saved-result-evidence',{input:f.input})).stdout);
+   // A partial may still be a format failure's own capsule; what must never appear is the completion source.
+   if(page.capsule!==null){
+    const fetched=await f.rpc('read-saved-result-evidence',{input:f.input,capsuleRef:page.capsule,ref:page.capsule});
+    expect(fetched.code,mode).toBe(0);
+    expect(JSON.parse(Buffer.from(JSON.parse(fetched.stdout).base64,'base64').toString()).schema,mode).not.toBe('ccloop-execution-complete-before-verification-v1');
+   }
+  }finally{await rm(f.root,{recursive:true,force:true});}
+ }
+},60000);
