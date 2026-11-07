@@ -27,7 +27,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f(); });
 
-async function fixture(mode: "ok" | "hang" | "grandchild" | "usage-then-hang" | "start-then-hang" | "write-then-hang" | "write-quiet-then-hang" | "write-ignore-term" | "write-then-fail" | "answer-then-linger" | "answer-then-gated-exit", selection: Partial<MaterializedAgentConfigV1["selection"]> = {}, installation: Partial<MaterializedAgentConfigV1["installation"]> = {}) {
+async function fixture(mode: "ok" | "hang" | "grandchild" | "usage-then-hang" | "start-then-hang" | "write-then-hang" | "write-quiet-then-hang" | "write-ignore-term" | "write-then-fail" | "answer-then-linger" | "answer-then-gated-exit" | "reported", selection: Partial<MaterializedAgentConfigV1["selection"]> = {}, installation: Partial<MaterializedAgentConfigV1["installation"]> = {}) {
   const f = await codexFixture("unused");
   const marker = join(f.dir, "claude-marker.json");
   cleanup.push(async () => {
@@ -468,4 +468,24 @@ describe("ClaudeAgentAdapter, the execute result written after a stop (consolida
     const error = await running.then(() => { throw new Error("resolved"); }, (e: unknown) => e);
     expect(error).toBeInstanceOf(ClaudePhaseAborted);
   }, 20_000);
+});
+
+describe("Claude execute shares the strict result contract", () => {
+  it("rejects a successful process whose execute result has flattened taskResult fields", async () => {
+    const f = await fixture("reported");
+    await writeFile(`${f.marker}.reported.json`, JSON.stringify({ schema: "task-result-v1", goal: "ship", completedWork: ["done"] }));
+    const error = await new ClaudeAgentAdapter(f.config).execute(f.context).then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toMatch(/claude-result-invalid/);
+    expect((error as { observedTokens?: unknown }).observedTokens).toBe(15);
+  });
+
+  it("keeps the runner's usage and an optional nested taskResult on a valid execute", async () => {
+    const f = await fixture("reported");
+    const report = { schema: "task-result-v1", goal: "ship", completedWork: ["done"] };
+    await writeFile(`${f.marker}.reported.json`, JSON.stringify({ taskResult: report }));
+    const result = await new ClaudeAgentAdapter(f.config).execute(f.context);
+    expect(result).toMatchObject({ changedFiles: ["answer.txt"], taskResult: report, tokenUsage: 15 });
+    expect(result!.usageEvidence).toBeDefined();
+  });
 });

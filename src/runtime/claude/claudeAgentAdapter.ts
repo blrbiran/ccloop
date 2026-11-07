@@ -11,6 +11,7 @@ import { observedTokensOf, SingleCallOutputInvalid, type AttemptContext, type At
 import type { ModelUsageV1 } from "../../control/usage.js";
 import { boundedTaskResult } from "../taskResult.js";
 import { dropUnreported } from "../reportedDecisions.js";
+import { normalizeExecutionFinal } from "../executionNormalizer.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./prompts.js";
 import type { ClaudePhaseRequest } from "./types.js";
 import { classifyClaudeCall, isExecutableMissing, parseClaudeSignals, singleCallCauseOf, type CallClassification } from "../failureCause.js";
@@ -73,6 +74,21 @@ export const PARTIAL_FLUSH_MARGIN_MS = 5_000;
 const parseObject = (text: string): object | undefined => {
   try { const v: unknown = JSON.parse(text); return v !== null && typeof v === "object" && !Array.isArray(v) ? v : undefined; } catch { return undefined; }
 };
+
+/** The runner's accounting fields are outside the model's strict execute answer. */
+async function decodeClaudeExecute(value: object, evidenceDir: string): Promise<ExecutionResult> {
+  const { tokenUsage, usageEvidence, modelUsage, partialOrigin, ...answer } = value as Record<string, unknown>;
+  const normalized = normalizeExecutionFinal(JSON.stringify(answer));
+  if (normalized.status !== "available") {
+    await writeFile(join(evidenceDir, "decode-error.txt"), normalized.reason, { mode: 0o600 });
+    throw Object.assign(new Error(`claude-result-invalid: ${evidenceDir}`), {
+      observedTokens: typeof tokenUsage === "number" ? tokenUsage : null,
+    });
+  }
+  return { ...normalized.execution, ...(partialOrigin === undefined ? {} : { partialOrigin }),
+    ...(tokenUsage === undefined ? {} : { tokenUsage }), ...(usageEvidence === undefined ? {} : { usageEvidence }),
+    ...(modelUsage === undefined ? {} : { modelUsage }) } as ExecutionResult;
+}
 
 // Spec §3.2: the runner's dedicated answer when claude never existed in this call. Checked before every other reading of
 // stdout, because the after-stop branch below returns any JSON object printed with exit 0 as the phase's result.
@@ -401,7 +417,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
           const observed = await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE));
           if (observed !== null) (written as { tokenUsage?: number }).tokenUsage = observed;
         }
-        return written as T;
+        return (request.phase === "execute" ? await decodeClaudeExecute(written, outcome.evidenceDir) : written) as T;
       }
     }
     if (outcome.reason === "aborted") throw new ClaudePhaseAborted(outcome.evidenceDir, await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)));
@@ -424,7 +440,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     }
     const usageEvidence = (parsed as { usageEvidence?: unknown }).usageEvidence;
     if (usageEvidence !== undefined) await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(usageEvidence, null, 2), { mode: 0o600 });
-    return parsed as T;
+    return (request.phase === "execute" ? await decodeClaudeExecute(parsed, outcome.evidenceDir) : parsed) as T;
   }
 
   private call(context: AttemptContext): ClaudeCall {
