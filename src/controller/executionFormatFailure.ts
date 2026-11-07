@@ -44,8 +44,12 @@ function supportedMode(mode:number):number {
   if ((mode & 0o7000) !== 0) throw new Error("saved-result-mode-unsupported");
   return mode & 0o777;
 }
-async function snapshot(input:ExecutionFormatCaptureInput):Promise<ArtifactRefV1>{
-  const {worktreePath:tree}=input,source=input.input.work.sourceDir;
+export interface WorktreeSnapshotInput {
+  envelope:StartEnvelopeV3;runDir:string;worktreePath:string;attempt:number;assertHeld:()=>Promise<void>;
+}
+/** The attempt tree as a content-addressed snapshot; exported so an exhausted completion reuses these completeness rules. */
+export async function captureWorktreeSnapshot(input:WorktreeSnapshotInput):Promise<ArtifactRefV1>{
+  const {worktreePath:tree}=input,source=input.envelope.work.sourceDir;
   const write=(bytes:Buffer)=>writeSavedBytes(source,bytes,input.assertHeld);
   if(!await missing(codexSkillsPendingPath(tree)))throw new Error("saved-result-skills-cleanup-incomplete");
   const rootMode=supportedMode((await lstat(tree)).mode);
@@ -86,7 +90,7 @@ async function snapshot(input:ExecutionFormatCaptureInput):Promise<ArtifactRefV1
     await writeFile(join(repo,".git","index"),indexBytes,{mode:0o600});
     const indexTree=await git(repo,"write-tree");
     const indexCommit=await git(repo,"-c","user.name=ccloop","-c","user.email=ccloop@invalid","commit-tree",indexTree,"-p",head,"-m","saved execution index");
-    const bundleRefName=`refs/ccloop/${input.input.claim.runId}/saved-result/${input.attempt}`;
+    const bundleRefName=`refs/ccloop/${input.envelope.claim.runId}/saved-result/${input.attempt}`;
     await git(repo,"update-ref",bundleRefName,indexCommit);
     const bundlePath=join(scratch,"snapshot.bundle");
     await git(repo,"bundle","create",bundlePath,bundleRefName);
@@ -146,7 +150,7 @@ async function capture(input:ExecutionFormatCaptureInput):Promise<ArtifactRefV1>
   const owner=await json(join(input.runDir,"owner-record.json"));
   const proof=await write(Buffer.from(canonicalJson({schema:"ccloop-execution-verifier-not-entered-v1",identity,attempt:input.attempt,entered:false,recordedBy:"controller-before-execution-failure-cleanup"})));
   const artifacts={envelope:await retain(join(source,"control","envelope.json")),config:await retain(join(source,"control","config.json")),acceptedContract:await write(Buffer.from(canonicalJson(envelope.work.contract))),runtimeContract:await retain(join(input.runDir,"loop-contract.json")),final:await retain(join(call,"final.json")),events:await retain(join(call,"events.jsonl")),schema:await retain(join(call,"schema.json")),decodeError:await retain(join(call,"decode-error.txt")),normalization:await retain(join(call,"execution-normalization.json")),outcome:await retain(join(call,"outcome.json")),process:await retain(join(call,"process.json")),plan:await retain(planPath),usage:await retain(join(call,"usage.json")),usageLedger:await write(ledger),usageObservations:observations,owner:await retain(join(input.runDir,"owner-record.json"))};
-  const snapshotRef=await snapshot(input);
+  const snapshotRef=await captureWorktreeSnapshot({envelope:input.input,runDir:input.runDir,worktreePath:input.worktreePath,attempt:input.attempt,assertHeld:input.assertHeld});
   const capsule=executionFormatFailureSchema.parse({schema:"ccloop-execution-format-failure-v1",identity,attempt:input.attempt,executor:{kind:"codex",configHash:envelope.claim.configHash},frozenContractHash:envelope.contractHash,acceptedBase:envelope.work.base,resolvedBase:input.resolvedBase,attemptStartHead:input.attemptStartHead,decoder:EXECUTION_NORMALIZER_VERSION,classification:"execution-format-failure-v1",process:{reason:"completed",code:0,signal:null,isolated:true},usage:{tokenUsage:usage.tokenUsage,highWater:last.eventSeq},verifier:{entered:false,proof},artifacts,snapshot:snapshotRef,completeness:{complete:true,parts:["original-process","original-stream","actual-usage","successful-plan","verifier-not-entered","tree-index-bundle-files"]},capturedAt:new Date().toISOString(),captureOwner:canonicalHash(owner)});
   const capsuleRef=await write(Buffer.from(canonicalJson(capsule)));
   await input.assertHeld();

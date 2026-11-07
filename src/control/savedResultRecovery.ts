@@ -26,7 +26,7 @@ export const savedResultAdmissionSchema=z.object({
 }).strict();
 export type SavedResultAdmission=z.infer<typeof savedResultAdmissionSchema>;
 export const savedResultPackageSchema=z.object({schema:z.literal("ccloop-saved-result-package-v1"),
- authorityKind:z.enum(["execution-format-failure-v1","legacy-published-candidate-v1"]),source:artifactRefSchema,admission:artifactRefSchema,
+ authorityKind:z.enum(["execution-format-failure-v1","legacy-published-candidate-v1","execution-complete-before-verification-v1"]),source:artifactRefSchema,admission:artifactRefSchema,
  artifacts:z.array(z.object({ref:artifactRefSchema,file:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/)}).strict()).max(20000),
 }).strict();
 export type SavedResultPackage=z.infer<typeof savedResultPackageSchema>;
@@ -52,7 +52,7 @@ import {CODEX_PHASE_CONFIG} from "../agents/codexIsolation.js";
 import {codexPhaseConfigArgs} from "../runtime/codex/codexPhaseIsolation.js";
 import {addressableMcpServer} from "../runtime/codex/codexSingleCall.js";
 import {codexToolRuleArgs} from "../runtime/toolRules.js";
-import {executionFormatFailureSchema,executionSnapshotSchema} from "./savedResultEvidence.js";
+import {exhaustedCompletionSchema,executionFormatFailureSchema,executionSnapshotSchema} from "./savedResultEvidence.js";
 import {safeTaskResultPath} from "./taskResultEvidence.js";
 import {createAttemptWorkspace} from "../workspace/worktreeManager.js";
 import type {AttemptPlan,ExecutionResult} from "../runtime/types.js";
@@ -273,6 +273,41 @@ type SourceExpectation={runId:string;attempt:number;envelopeHash:string;contract
 type SourceBytes={manifest:Pick<SavedResultPackage,"authorityKind"|"source">;get:(ref:ArtifactRefV1)=>Buffer;json:(ref:ArtifactRefV1)=>any;bytes:Map<string,Buffer>};
 async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation){
  const {manifest,get,json,bytes}=loaded;
+ if(manifest.authorityKind==="execution-complete-before-verification-v1"){
+  // A successful execute the post-execute budget gate stopped before verification. Its first stage is bound to the
+  // published attempt tree and its second to the controller's own sealed stop proof; neither alone is authority.
+  const capsule=exhaustedCompletionSchema.parse(json(manifest.source));
+  if(capsule.stop.executionId!==capsule.identity.executionId||capsule.stop.generation!==capsule.identity.generation)fail("saved-result-source-stale");
+  if(capsule.identity.runId!==expected.runId||capsule.identity.envelopeHash!==expected.envelopeHash||capsule.attempt!==expected.attempt||(expected.snapshotHash!==undefined&&capsule.snapshot.hash!==expected.snapshotHash))fail("saved-result-source-stale");
+  const snapshot=executionSnapshotSchema.parse(json(capsule.snapshot));
+  const {usageObservations:rawObservations,...artifacts}=capsule.artifacts;
+  const usageObservations=rawObservations??[];
+  for(const ref of [capsule.verifier.proof,...Object.values(artifacts).filter((r):r is ArtifactRefV1=>artifactRefSchema.safeParse(r).success),...usageObservations.map(a=>a.copy),snapshot.index,snapshot.bundle,snapshot.status,...snapshot.files.map(f=>f.ref)])get(ref);
+  const ledger=json(capsule.artifacts.usageLedger);
+  if(!Array.isArray(ledger.events)||ledger.events.length!==usageObservations.length||usageObservations.some((a,i)=>!same(a.source,ledger.events[i].source)||a.source.artifactId!==`evidence-${a.source.hash}`||a.source.hash!==a.copy.hash))fail("saved-result-source-hash-mismatch");
+  const source=startEnvelopeSchema.parse(json(capsule.artifacts.envelope)) as LoopStartEnvelope;
+  if(source.work.kind!=="loop"||source.mode!==undefined||source.claim.runId!==expected.runId||source.contractHash!==expected.contractHash||canonicalHash(source)!==expected.envelopeHash)fail("saved-result-source-stale");
+  if(source.work.contract.context.relevantDocs.some(path=>!safeTaskResultPath(path)))fail("saved-result-protected-input-unavailable");
+  boundSavedResultRuntime(source.work.contract,loopContractSchema.parse(json(capsule.artifacts.runtimeContract)));
+  const config=parseMaterializedAgentConfig(json(capsule.artifacts.config));
+  if(config.kind!==capsule.executor.kind||agentConfigHash(config)!==source.claim.configHash)fail("saved-result-config-mismatch");
+  const normalized=normalizeExecutionFinal(get(capsule.artifacts.final).toString());
+  if(normalized.status!=="available")fail(normalized.reason);
+  if(canonicalHash(normalized.execution)!==capsule.normalizedExecutionHash)fail("saved-result-normalization-hash-mismatch");
+  const repo=source.work.contract.context.repoPath;
+  if(await savedGit(repo,"rev-parse",capsule.published.ref).then(b=>b.toString().trim())!==capsule.published.sha)fail("saved-result-source-stale");
+  if(await savedGit(repo,"rev-parse",`${capsule.published.sha}^{tree}`).then(b=>b.toString().trim())!==capsule.published.tree)fail("saved-result-source-stale");
+  if(await savedGit(repo,"rev-parse",`${capsule.published.sha}^`).then(b=>b.toString().trim())!==capsule.attemptStartHead)fail("saved-result-source-stale");
+  const planDoc=JSON.parse(get(capsule.artifacts.plan).toString()) as Record<string,unknown>;
+  const {tokenUsage:_pt,usageEvidence:_pu,modelUsage:_pm,...plan}=planDoc;
+  const actualChangedPaths=(await savedGit(repo,"diff","--name-only",source.work.base,capsule.published.sha)).toString().split("\n").filter(Boolean);
+  const legacySnapshot:LegacySnapshot={version:1,head:capsule.published.sha,bundle:snapshot.bundle,index:[],
+    tree:[...snapshot.directories.map(d=>({path:d.path,kind:"directory" as const,mode:d.mode})),...snapshot.files.map(f=>({path:f.path,kind:"file" as const,mode:f.mode,ref:f.ref}))],
+    deleted:[],missing:[]};
+  return {source,identity:capsule.identity,plan:plan as AttemptPlan,execution:normalized.execution as ExecutionResult,snapshot:legacySnapshot,bytes,originalBase:source.work.base,ledger,
+    logical:(ref:ArtifactRefV1)=>{const b=bytes.get(ref.artifactId);if(!b||digest(b)!==ref.hash)fail("saved-result-source-hash-mismatch");return b;},
+    registered:[],rawExecutionTokens:capsule.usage.tokenUsage,snapshotHash:capsule.snapshot.hash,actualChangedPaths};
+ }
  if(manifest.authorityKind==="execution-format-failure-v1"){
   const capsule=executionFormatFailureSchema.parse(json(manifest.source));
   if(capsule.identity.runId!==expected.runId||capsule.identity.envelopeHash!==expected.envelopeHash||capsule.attempt!==expected.attempt||(expected.snapshotHash!==undefined&&capsule.snapshot.hash!==expected.snapshotHash))fail("saved-result-source-stale");

@@ -6,6 +6,7 @@ import {loadSavedResultRecovery,materializeSavedResult,boundSavedResultRuntime,a
 import {persistSavedResultMode,readSavedResultMode,hasSavedResultEntry,enterSavedResultVerification,assertSavedResultUnmodified,recoverSavedResultEntry,persistSavedResultCompletion,runSavedResultCheck,prepareSavedResultVerification,hasPreparedSavedResultProof} from "./verifySavedResult.js";
 import type { MaterializedAgentConfigV1 } from "../agents/types.js";
 import { captureExecutionFormatFailure, ExecutionFormatFailure, resolveCheckpointOriginalBase } from "./executionFormatFailure.js";
+import { bindExhaustedCandidate, captureExhaustedCompletion } from "./exhaustedCompletion.js";
 import { remainingTokens, minTokenCeiling, budgetAmountSchema, type BudgetAmount, type TokenPolicy } from "../budget/tokenPolicy.js";
 import { execFile } from "node:child_process";
 import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
@@ -568,6 +569,7 @@ async function cleanupAttemptWorkspaceWithStatus(
   let primaryCommit: AttemptCommit | null = null;
   try {
     primaryCommit = await publishAttemptCommit(worktreePath);
+    if (primaryCommit !== null) await bindExhaustedCandidate(runDir, primaryCommit).catch(() => undefined);
   } catch (error) {
     await appendEvent(runDir, {
       type: "attempt_commit_publish_failed",
@@ -613,6 +615,7 @@ async function cleanupAttemptWorkspaceOrThrow(
   let primaryCommit: AttemptCommit | null = null;
   try {
     primaryCommit = await publishAttemptCommit(worktreePath);
+    if (primaryCommit !== null) await bindExhaustedCandidate(runDir, primaryCommit).catch(() => undefined);
   } catch (error) {
     await appendEvent(runDir, {
       type: "attempt_commit_publish_failed",
@@ -1559,6 +1562,8 @@ export interface RunControlHooks {
   taskResultInput?: StartEnvelopeV3;
   /** Only supported original provider evidence can create a recovery capsule. */
   executionFormatCapture?: {config:MaterializedAgentConfigV1};
+  /** An exhausted completion's pre-cleanup capture; the same providers whose original evidence can be proven. */
+  exhaustedCompletionCapture?: {config:MaterializedAgentConfigV1};
   firstWorkspaceInput?: InputCheckpointV1;
   /** Multi-repo runs (review M8): each extra repository's base from the envelope, compared with its worktree's HEAD. */
   extraRepoBases?: Record<string, string>;
@@ -2183,6 +2188,17 @@ export async function runLoopFromState(
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
         const parked = isPartialExecutionResult(completedExecution) ? null : await parkAllowance("verify");
         if (parked) return parked;
+        // Exhausted-attempt recovery: the only moment the attempt tree and the provider's own call evidence are both
+        // still here and the verifier has provably not entered. A partial result and a missing capture stay ineligible.
+        if (options?.exhaustedCompletionCapture && options.taskResultInput?.work.kind === "loop" && !isPartialExecutionResult(completedExecution)) {
+          await guardedWriteArtifacts(() => captureExhaustedCompletion({
+            input: options.taskResultInput!, runDir, worktreePath: worktreePath!, attempt,
+            attemptStartHead: attemptStartHead!, resolvedBase: resolvedSourceBase,
+            runtimeContract: contract, actualConfig: options.exhaustedCompletionCapture!.config,
+            execution: completedExecution, planPath: join(runDir, "attempts", String(attempt), "plan.json"),
+            assertHeld: () => heartbeat.assertHeld(),
+          }).then(() => undefined));
+        }
         state = await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON);
         await heartbeat.assertHeld();
         await cleanupAttemptWorkspaceBestEffort(

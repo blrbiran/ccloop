@@ -270,6 +270,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       firstWorkspaceInput: envelope.inputCheckpoint ?? undefined,
       taskResultInput: envelope,
       executionFormatCapture: executionFormatCaptureFor(config),
+      exhaustedCompletionCapture: config.kind === "codex" || config.kind === "omp" ? { config } : undefined,
       // Multi-repo runs (review M8): the envelope's base for each extra repository.
       ...(envelope.work.additionalRepos === undefined ? {} : { extraRepoBases: Object.fromEntries(envelope.work.additionalRepos.map((repo) => [repo.key, repo.base])) }),
       stopRequested,
