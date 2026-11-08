@@ -28,6 +28,7 @@ import { materializeExtraResultRepositories, materializeResultRepository } from 
 import { runSingleCall } from "./singleCall.js";
 import { registerAttemptRefNamespace } from "../workspace/worktreeManager.js";
 import { finalizeExhaustedCandidate } from "../controller/exhaustedCompletion.js";
+import {finalizeOmpWithoutFinal} from "../controller/ompWithoutFinal.js";
 import { appendEvent } from "../persistence/fileStore.js";
 import { codexConfigTomlPath, readCodexNetworkAccess } from "../agents/codexNetworkConfig.js";
 import { buildToolRulesReport, writeToolRulesReport } from "./toolRulesReport.js";
@@ -273,6 +274,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
       taskResultInput: envelope,
       executionFormatCapture: executionFormatCaptureFor(config),
       exhaustedCompletionCapture: config.kind === "codex" || config.kind === "omp" ? { config } : undefined,
+      ompWithoutFinalCapture: config.kind === "omp" ? {config} : undefined,
       // Multi-repo runs (review M8): the envelope's base for each extra repository.
       ...(envelope.work.additionalRepos === undefined ? {} : { extraRepoBases: Object.fromEntries(envelope.work.additionalRepos.map((repo) => [repo.key, repo.base])) }),
       stopRequested,
@@ -382,6 +384,9 @@ export async function runControlWorker(argv: string[]): Promise<void> {
           result,
           usageHighWater: handoffUsage.eventSeq,
         });
+        if(runState.status==="failed"&&envelope.work.kind==="loop"){
+          await finalizeOmpWithoutFinal(runDir,handoffUsage.eventSeq,async()=>undefined);
+        }
         if(runState.status==="exhausted"&&envelope.work.kind==="loop"){
           try{await finalizeExhaustedCandidate(join(sourceDir,"run"),handoffUsage.eventSeq);}
           catch(error){await appendEvent(runDir,{type:"execution_complete_capture_failed",at:new Date().toISOString(),detail:`final usage: ${String(error)}`}).catch(()=>undefined);}

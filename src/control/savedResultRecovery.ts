@@ -26,14 +26,14 @@ export const savedResultAdmissionSchema=z.object({
 }).strict();
 export type SavedResultAdmission=z.infer<typeof savedResultAdmissionSchema>;
 export const savedResultPackageSchema=z.object({schema:z.literal("ccloop-saved-result-package-v1"),
- authorityKind:z.enum(["execution-format-failure-v1","legacy-published-candidate-v1","execution-complete-before-verification-v1"]),source:artifactRefSchema,admission:artifactRefSchema,
+ authorityKind:z.enum(["execution-format-failure-v1","legacy-published-candidate-v1","execution-complete-before-verification-v1","execution-without-final-v1"]),source:artifactRefSchema,admission:artifactRefSchema,
  artifacts:z.array(z.object({ref:artifactRefSchema,file:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/)}).strict()).max(20000),
 }).strict();
 export type SavedResultPackage=z.infer<typeof savedResultPackageSchema>;
 export const savedResultFenceSchema=z.object({schema:z.literal("ccloop-saved-result-fence-v1"),
  admissionHash:hash,packageHash:hash,runId:idSchema,generation:positive,revision:safe,currentRunId:idSchema,status:z.literal("admitted")}).strict();
 export type SavedResultFence=z.infer<typeof savedResultFenceSchema>;
-export type SavedResultEligibility={status:"unavailable";reason:string}|{status:"eligible";authorityKind:SavedResultPackage["authorityKind"];normalizedExecutionHash:string};
+export type SavedResultEligibility={status:"unavailable";reason:string}|{status:"eligible";authorityKind:SavedResultPackage["authorityKind"];normalizedExecutionHash:string}|{status:"eligible";authorityKind:"execution-without-final-v1";verificationOnly:true};
 
 
 import {createHash} from "node:crypto";
@@ -52,7 +52,10 @@ import {CODEX_PHASE_CONFIG} from "../agents/codexIsolation.js";
 import {codexPhaseConfigArgs} from "../runtime/codex/codexPhaseIsolation.js";
 import {addressableMcpServer} from "../runtime/codex/codexSingleCall.js";
 import {codexToolRuleArgs} from "../runtime/toolRules.js";
-import {exhaustedCompletionSchema,executionFormatFailureSchema,executionSnapshotSchema} from "./savedResultEvidence.js";
+import {exhaustedCompletionSchema,executionFormatFailureSchema,executionSnapshotSchema,ompWithoutFinalCompletionSchema} from "./savedResultEvidence.js";
+import {foldText} from "../runtime/streamLines.js";
+import {OmpStream} from "../runtime/omp/ompStream.js";
+import {ompPhaseTools} from "../runtime/omp/phasePrompt.js";
 import {safeTaskResultPath} from "./taskResultEvidence.js";
 import {createAttemptWorkspace} from "../workspace/worktreeManager.js";
 import type {AttemptPlan,ExecutionResult} from "../runtime/types.js";
@@ -112,7 +115,7 @@ const archiveSchema=z.object({version:z.literal(1),runId:idSchema,sourceIdentity
 type LegacySnapshot=z.infer<typeof legacySnapshotSchema>;
 export interface LoadedSavedResult {
  input:LoopStartEnvelope; admission:SavedResultAdmission; manifest:SavedResultPackage; source:LoopStartEnvelope;
- plan:AttemptPlan; execution:ExecutionResult; snapshot:LegacySnapshot; bytes:Map<string,Buffer>; originalBase:string; actualChangedPaths:string[]; bundleRefName?:string;
+ plan:AttemptPlan; execution?:ExecutionResult; verificationOnly:boolean; snapshot:LegacySnapshot; bytes:Map<string,Buffer>; originalBase:string; actualChangedPaths:string[]; bundleRefName?:string;
 }
 export async function savedGit(cwd:string,...args:string[]):Promise<Buffer>{
  const env={...process.env};for(const key of Object.keys(env))if(key.startsWith("GIT_"))delete env[key];
@@ -221,10 +224,10 @@ async function validateSnapshot(snapshot:LegacySnapshot,get:(ref:ArtifactRefV1)=
  * (an older candidate): the caller then falls back to the live repository. A bundle that does carry the ref but disagrees
  * is a named refusal, never a fallback.
  */
-async function changedPathsFromAttemptBundle(bundle:Buffer,published:{sha:string;tree:string;ref:string},attemptStartHead:string,base:string):Promise<{paths:string[];index:Buffer}|null>{
+async function changedPathsFromAttemptBundle(bundle:Buffer,published:{sha:string;tree:string;ref:string},attemptStartHead:string,base:string,strictBase=false):Promise<{paths:string[];index:Buffer}|null>{
  const root=await mkdtemp(join(tmpdir(),"saved-result-attempt-"));await chmod(root,0o700);
  try{
-  await savedGit(root,"init","--bare","-q");const file=join(root,"attempt.bundle");await writeFile(file,bundle,{mode:0o600});
+  await savedGit(root,"init","--bare","-q",`--object-format=${published.sha.length===64?'sha256':'sha1'}`);const file=join(root,"attempt.bundle");await writeFile(file,bundle,{mode:0o600});
   await savedGit(root,"bundle","verify",file);
   const heads=(await savedGit(root,"bundle","list-heads",file)).toString().trim().split("\n");
   if(!heads.includes(`${published.sha} ${published.ref}`))return null;
@@ -237,7 +240,7 @@ async function changedPathsFromAttemptBundle(bundle:Buffer,published:{sha:string
   // workspace, so it falls back to the attempt's own start, which the capsule binds independently.
   const index=await savedGit(root,"ls-tree","-r","-z",published.sha);
   try{return {paths:(await savedGit(root,"diff","--name-only","-z",base,published.sha)).toString().split("\0").filter(Boolean),index};}
-  catch{return {paths:(await savedGit(root,"diff","--name-only","-z",attemptStartHead,published.sha)).toString().split("\0").filter(Boolean),index};}
+  catch{if(strictBase)fail('saved-result-original-base-unavailable');return {paths:(await savedGit(root,"diff","--name-only","-z",attemptStartHead,published.sha)).toString().split("\0").filter(Boolean),index};}
  }catch(error){if(error instanceof Error&&error.message.startsWith("saved-result-"))throw error;return null;}
  finally{await rm(root,{recursive:true,force:true});}
 }
@@ -318,6 +321,54 @@ type SourceExpectation={runId:string;attempt:number;envelopeHash:string;contract
 type SourceBytes={manifest:Pick<SavedResultPackage,"authorityKind"|"source">;get:(ref:ArtifactRefV1)=>Buffer;json:(ref:ArtifactRefV1)=>any;bytes:Map<string,Buffer>};
 async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation){
  const {manifest,get,json,bytes}=loaded;
+ if(manifest.authorityKind==='execution-without-final-v1'){
+  const capsule=ompWithoutFinalCompletionSchema.parse(json(manifest.source));
+  if(capsule.identity.runId!==expected.runId||capsule.identity.envelopeHash!==expected.envelopeHash||capsule.attempt!==expected.attempt
+   ||(expected.snapshotHash!==undefined&&capsule.snapshot.hash!==expected.snapshotHash)||capsule.stop.executionId!==capsule.identity.executionId||capsule.stop.generation!==capsule.identity.generation)fail('saved-result-source-stale');
+  const snapshot=executionSnapshotSchema.parse(json(capsule.snapshot));
+  if(snapshot.head!==capsule.attemptStartHead||capsule.published.base!==capsule.attemptStartHead)fail('saved-result-source-stale');
+  const {usageObservations:rawObservations,...artifacts}=capsule.artifacts,usageObservations=rawObservations??[];
+  for(const ref of [capsule.verifier.proof,...Object.values(artifacts).filter((r):r is ArtifactRefV1=>artifactRefSchema.safeParse(r).success),...usageObservations.map(a=>a.copy),snapshot.index,snapshot.bundle,snapshot.status,...snapshot.files.map(f=>f.ref)])get(ref);
+  const ledger=json(capsule.artifacts.usageLedger);
+  if(!Array.isArray(ledger.events)||ledger.events.length!==usageObservations.length||usageObservations.some((a,i)=>!same(a.source,ledger.events[i].source)||a.source.artifactId!==`evidence-${a.source.hash}`||a.source.hash!==a.copy.hash))fail('saved-result-source-hash-mismatch');
+  const source=startEnvelopeSchema.parse(json(capsule.artifacts.envelope)) as LoopStartEnvelope;
+  if(source.work.kind!=='loop'||source.mode!==undefined||source.claim.runId!==expected.runId||source.contractHash!==expected.contractHash||canonicalHash(source)!==expected.envelopeHash
+   ||source.work.additionalRepos!==undefined||source.work.contract.context.additionalRepos!==undefined||source.work.contract.context.setupCommands!==undefined
+   ||source.work.contract.verification.commandChecksDecideGoal!==true||source.work.contract.verification.verifierType!=='command'||!source.work.contract.verification.requiredChecks.length)fail('saved-result-decisive-checks-unavailable');
+  if(source.work.contract.context.relevantDocs.some(path=>!safeTaskResultPath(path)))fail('saved-result-protected-input-unavailable');
+  const runtime=loopContractSchema.parse(json(capsule.artifacts.runtimeContract));boundSavedResultRuntime(source.work.contract,runtime);
+  if(runtime.verification.commandChecksDecideGoal!==true)fail('saved-result-decisive-checks-unavailable');
+  const config=parseMaterializedAgentConfig(json(capsule.artifacts.config));
+  if(config.kind!=='omp'||agentConfigHash(config)!==source.claim.configHash||capsule.executor.configHash!==source.claim.configHash)fail('saved-result-config-mismatch');
+  const final=get(capsule.artifacts.final).toString(),normalized=normalizeExecutionFinal(final);
+  if(normalized.status!=='unavailable'||normalized.reason!==capsule.normalization.reason||!same(normalized.diagnostic,capsule.normalization.diagnostic))fail('saved-result-normalizer-provenance-unavailable');
+  const outcome=json(capsule.artifacts.outcome),proc=json(capsule.artifacts.process);
+  if(outcome.reason!=='completed'||outcome.code!==0||outcome.signal!==null||outcome.stdoutTruncated!==false||outcome.transcriptTruncatedAt!==null||outcome.transcriptError!==undefined
+   ||outcome.neverStarted!==false||outcome.executable!==config.installation.command[0]||proc.phase!=='execute')fail('saved-result-process-incomplete');
+  const call=join(source.work.sourceDir,'run','omp',String(capsule.attempt),'execute');
+  const args=outcome.args;
+  if(!Array.isArray(args)||!args.includes('--tools')||args[args.indexOf('--tools')+1]!==ompPhaseTools('execute').join(',')||args[args.indexOf('--model')+1]!==config.selection.model
+   ||args[args.indexOf('--cwd')+1]!==join(source.work.sourceDir,'run','worktrees',`attempt-${capsule.attempt}`)
+   ||(typeof args[args.indexOf('--system-prompt')+1]!=='string'||!args[args.indexOf('--system-prompt')+1].startsWith(`${call}/call-`)||!args[args.indexOf('--system-prompt')+1].endsWith('/system-prompt.md')))fail('saved-result-config-mismatch');
+  const events=get(capsule.artifacts.events).toString();
+  const stream=foldText(events,new OmpStream({phase:'execute',selector:config.selection.model,...(runtime.executionPolicy.toolRules===undefined?{}:{toolRules:{rules:runtime.executionPolicy.toolRules,requiredChecks:runtime.verification.requiredChecks}})}));
+  if(stream.toolRule?.value()!==null&&stream.toolRule!==null)fail('saved-result-tool-rule-violated');
+  let refused:any;try{stream.phase!.value();fail('saved-result-normalizer-provenance-unavailable');}catch(error){refused=error;}
+  if(refused.message!=='omp-result-invalid'||refused.formatNormalization?.reason!==capsule.normalization.reason||!same(refused.formatNormalization?.diagnostic,capsule.normalization.diagnostic)||refused.observedTokens!==capsule.usage.tokenUsage)fail('saved-result-original-evidence-mismatch');
+  const messages=events.trim().split('\n').map(line=>JSON.parse(line)).filter(row=>row.type==='message_end'&&row.message?.role==='assistant');
+  if(messages.at(-1)?.message?.content?.filter((block:any)=>block.type==='text').map((block:any)=>block.text).join('')!==final)fail('saved-result-original-evidence-mismatch');
+  const fromBundle=await changedPathsFromAttemptBundle(get(snapshot.bundle),capsule.published,capsule.attemptStartHead,source.work.base,true);
+  if(fromBundle===null)fail('saved-result-source-stale');
+  const planDoc=json(capsule.artifacts.plan),{tokenUsage:_pt,usageEvidence:_pu,modelUsage:_pm,...plan}=planDoc;
+  const index=publishedIndex(fromBundle.index,snapshot.files,get);
+  if(index.length!==snapshot.files.length||snapshot.files.some(file=>!index.some(entry=>entry.path===file.path))
+   ||snapshot.directories.some(dir=>!index.some(entry=>entry.path.startsWith(`${dir.path}/`))))fail('saved-result-unpublished-snapshot-entry');
+  const legacySnapshot:LegacySnapshot={version:1,head:capsule.published.sha,bundle:snapshot.bundle,index,
+   tree:[...snapshot.directories.map(d=>({path:d.path,kind:'directory' as const,mode:d.mode})),...snapshot.files.map(f=>({path:f.path,kind:'file' as const,mode:f.mode,ref:f.ref}))],deleted:[],missing:[]};
+  return {verificationOnly:true,source,identity:capsule.identity,plan:plan as AttemptPlan,snapshot:legacySnapshot,bytes,originalBase:source.work.base,ledger,
+   logical:(ref:ArtifactRefV1)=>{const alias=usageObservations.find(a=>same(a.source,ref));const b=bytes.get(alias?.copy.artifactId??ref.artifactId);if(!b||digest(b)!==ref.hash)fail('saved-result-source-hash-mismatch');return b;},
+   registered:[],rawExecutionTokens:capsule.usage.tokenUsage,snapshotHash:capsule.snapshot.hash,actualChangedPaths:fromBundle.paths,bundleRefName:capsule.published.ref};
+ }
  if(manifest.authorityKind==="execution-complete-before-verification-v1"){
   // A successful execute the post-execute budget gate stopped before verification. Its first stage is bound to the
   // published attempt tree and its second to the controller's own sealed stop proof; neither alone is authority.
@@ -357,7 +408,7 @@ async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation
   const legacySnapshot:LegacySnapshot={version:1,head:capsule.published.sha,bundle:snapshot.bundle,index:publishedIndex(publishedTree,snapshot.files,get),
     tree:[...snapshot.directories.map(d=>({path:d.path,kind:"directory" as const,mode:d.mode})),...snapshot.files.map(f=>({path:f.path,kind:"file" as const,mode:f.mode,ref:f.ref}))],
     deleted:[],missing:[]};
-  return {source,identity:capsule.identity,plan:plan as AttemptPlan,execution:normalized.execution as ExecutionResult,snapshot:legacySnapshot,bytes,originalBase:source.work.base,ledger,
+  return {verificationOnly:false,source,identity:capsule.identity,plan:plan as AttemptPlan,execution:normalized.execution as ExecutionResult,snapshot:legacySnapshot,bytes,originalBase:source.work.base,ledger,
     logical:(ref:ArtifactRefV1)=>{const b=bytes.get(ref.artifactId);if(!b||digest(b)!==ref.hash)fail("saved-result-source-hash-mismatch");return b;},
     registered:[],rawExecutionTokens:capsule.usage.tokenUsage,snapshotHash:capsule.snapshot.hash,actualChangedPaths,bundleRefName:capsule.published.ref};
  }
@@ -431,7 +482,7 @@ async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation
  idSchema.parse(source.claim.taskId);
  const {groupId,workItemId,taskId,runId,generation,graphVersion,targetVersion}=source.claim;
  const identity={groupId,workItemId,taskId,runId,generation,graphVersion,targetVersion,executionId:accepted.executionId,envelopeHash:accepted.envelopeHash};
- return {source,identity,plan,execution:normalized.execution,snapshot,bytes,originalBase:source.work.base,ledger,logical,registered,
+ return {verificationOnly:false,source,identity,plan,execution:normalized.execution,snapshot,bytes,originalBase:source.work.base,ledger,logical,registered,
   rawExecutionTokens,snapshotHash:archive.snapshot.hash,actualChangedPaths};
 }
 /** Execution requires both strict source eligibility and the independently fenced controller admission. */
@@ -439,7 +490,8 @@ export async function loadSavedResultRecovery(input:LoopStartEnvelope,requireFen
  const loaded=await loadPackage(input,requireFence),{admission}=loaded,r=input.savedResultRecovery!;
  const original=await validateSavedSource(loaded,{runId:admission.source.runId,attempt:r.recoveryOf.sourceAttempt,envelopeHash:admission.source.envelopeHash,contractHash:admission.contractHash,snapshotHash:r.recoveryOf.snapshotHash});
  if(!same(original.identity,admission.source)||!same(semantic(original.source.work.contract),semantic(input.work.contract)))fail("saved-result-source-stale");
- if(canonicalHash(original.execution)!==r.recoveryOf.normalizedExecutionHash)fail("saved-result-normalization-hash-mismatch");
+ if(original.verificationOnly){if(!('kind' in r.recoveryOf)||r.recoveryOf.kind!=='verification-only-v1'||original.source.work.contract.verification.commandChecksDecideGoal!==true)fail('saved-result-source-stale');}
+ else if(!('normalizedExecutionHash' in r.recoveryOf)||canonicalHash(original.execution)!==r.recoveryOf.normalizedExecutionHash)fail("saved-result-normalization-hash-mismatch");
  validateAccounting(admission,original.source,original.ledger,original.logical,loaded.json,loaded.manifest.authorityKind==="execution-complete-before-verification-v1"?"exhausted":"failed");
  // A missing raw usage number is accepted only with the separate, verified orca-auto approximate receipt.
  if(original.rawExecutionTokens===null&&(admission.accounting.settlement===null||settlementSchema.parse(loaded.json(admission.accounting.settlement)).method!=="approximate-floor"))fail("saved-result-usage-unsettled");
@@ -457,7 +509,10 @@ const SETUP_INELIGIBLE={status:"unavailable" as const,reason:"control-setup-reco
 export async function readSavedResultEligibility(input:LoopStartEnvelope):Promise<SavedResultEligibility>{
  if(input.work.additionalRepos!==undefined)return MULTI_REPO_INELIGIBLE;
  if(input.work.contract.context.setupCommands!==undefined)return SETUP_INELIGIBLE;
- try{const value=await loadSavedResultRecovery(input);return {status:"eligible",authorityKind:value.manifest.authorityKind,normalizedExecutionHash:value.admission.recoveryOf.normalizedExecutionHash};}
+ try{const value=await loadSavedResultRecovery(input);if(value.verificationOnly)return {status:'eligible',authorityKind:'execution-without-final-v1',verificationOnly:true};
+  const normalizedExecutionHash=value.admission.recoveryOf.normalizedExecutionHash;
+  if(normalizedExecutionHash===undefined)fail('saved-result-source-stale');
+  return {status:'eligible',authorityKind:value.manifest.authorityKind,normalizedExecutionHash};}
  catch(error){return {status:"unavailable",reason:error instanceof Error&&(error.message.startsWith("saved-result-")||["execution-format-invalid","execution-format-ambiguous-or-hidden"].includes(error.message))?error.message:"saved-result-evidence-invalid"};}
 }
 export async function materializeSavedResult(repo:string,runDir:string,attempt:number,loaded:LoadedSavedResult):Promise<{worktreePath:string}>{
@@ -489,7 +544,9 @@ export async function readSavedResultSourceEligibility(input:SavedResultSourceIn
   const get=(ref:ArtifactRefV1)=>{const b=bytes.get(ref.artifactId);if(!b||digest(b)!==ref.hash)fail("saved-result-source-hash-mismatch");return b;};
   const original=await validateSavedSource({manifest,bytes,get,json:ref=>JSON.parse(get(ref).toString())},{runId:input.source.claim.runId,attempt:input.sourceAttempt,envelopeHash:canonicalHash(input.source),contractHash:input.source.contractHash});
   return {status:"eligible" as const,authorityKind:manifest.authorityKind,sourceIdentity:original.identity,rawExecutionTokens:original.rawExecutionTokens,
-   recoveryOf:{sourceRunId:original.source.claim.runId,sourceAttempt:input.sourceAttempt,capsuleHash:manifest.source.hash,snapshotHash:original.snapshotHash,normalizedExecutionHash:canonicalHash(original.execution)},
+   recoveryOf:original.verificationOnly?{sourceRunId:original.source.claim.runId,sourceAttempt:input.sourceAttempt,capsuleHash:manifest.source.hash,snapshotHash:original.snapshotHash,kind:'verification-only-v1' as const}
+    :{sourceRunId:original.source.claim.runId,sourceAttempt:input.sourceAttempt,capsuleHash:manifest.source.hash,snapshotHash:original.snapshotHash,normalizedExecutionHash:canonicalHash(original.execution)},
+   ...(original.verificationOnly?{verificationOnly:true as const}:{}),
    limitation:"published-candidate-only; current membership and settled accounting require controller admission"};
  }catch(error){return {status:"unavailable" as const,reason:error instanceof Error&&(error.message.startsWith("saved-result-")||["execution-format-invalid","execution-format-ambiguous-or-hidden"].includes(error.message))?error.message:"saved-result-evidence-invalid"};}
 }
@@ -535,9 +592,14 @@ async function validateInterruptedPredecessor(input:LoopStartEnvelope,loaded:Awa
 }
 
 const unavailableSchema=z.object({status:z.literal("unavailable"),reason:z.string().min(1)}).strict();
-export const savedResultEligibilitySchema=z.union([unavailableSchema,z.object({status:z.literal("eligible"),authorityKind:savedResultPackageSchema.shape.authorityKind,normalizedExecutionHash:hash}).strict()]);
-export const savedResultSourceEligibilitySchema=z.union([unavailableSchema,z.object({status:z.literal("eligible"),authorityKind:savedResultPackageSchema.shape.authorityKind,sourceIdentity:savedResultAdmissionSchema.shape.source,rawExecutionTokens:safe.nullable(),recoveryOf:recoveryOfSchema,
- limitation:z.literal("published-candidate-only; current membership and settled accounting require controller admission")}).strict()]);
+const legacyAuthorityKind=z.enum(['execution-format-failure-v1','legacy-published-candidate-v1','execution-complete-before-verification-v1']);
+const sourceEligibilityFields={status:z.literal('eligible'),sourceIdentity:savedResultAdmissionSchema.shape.source,rawExecutionTokens:safe.nullable(),
+ limitation:z.literal('published-candidate-only; current membership and settled accounting require controller admission')};
+export const savedResultEligibilitySchema=z.union([unavailableSchema,z.object({status:z.literal('eligible'),authorityKind:legacyAuthorityKind,normalizedExecutionHash:hash}).strict(),
+ z.object({status:z.literal('eligible'),authorityKind:z.literal('execution-without-final-v1'),verificationOnly:z.literal(true)}).strict()]);
+export const savedResultSourceEligibilitySchema=z.union([unavailableSchema,z.object({...sourceEligibilityFields,authorityKind:legacyAuthorityKind,recoveryOf:recoveryOfSchema.refine(value=>'normalizedExecutionHash' in value&&value.normalizedExecutionHash!==undefined)}).strict(),
+ z.object({...sourceEligibilityFields,authorityKind:z.literal('execution-without-final-v1'),verificationOnly:z.literal(true),
+  rawExecutionTokens:safe.positive(),recoveryOf:recoveryOfSchema.refine(value=>'kind' in value&&value.kind==='verification-only-v1')}).strict()]);
 
 function addWork(a:z.infer<typeof amount>,b:z.infer<typeof amount>):z.infer<typeof amount>{
  const value={tokens:0,activeMs:0,attempts:0,sessions:0};for(const d of ["tokens","activeMs","attempts","sessions"] as const){value[d]=a[d]+b[d];if(!Number.isSafeInteger(value[d]))fail("saved-result-lineage-invalid");}return value;

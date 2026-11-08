@@ -154,9 +154,10 @@ function terminalOf(state: unknown, protocol: number): RunState | null {
 
 function candidateOf(candidate: CandidateV1, proof: StopProofV1 | null): NonNullable<CollectionV1["candidate"]> {
   const { groupId, workItemId, taskId, runId, generation, graphVersion, targetVersion,
-    checkpointId, usageHighWater, result, artifacts, snapshot, missing, unresolvedRequestIds, terminalOutcome, handoff } = candidate;
+    checkpointId, usageHighWater, result, artifacts, snapshot, missing, unresolvedRequestIds, terminalOutcome, handoff, verificationOnly } = candidate;
   return { groupId, workItemId, taskId, runId, generation, graphVersion, targetVersion,
-    checkpointId, usageHighWater, result, artifacts, snapshot, missing, unresolvedRequestIds, stopProof: proof, terminalOutcome, handoff };
+    checkpointId, usageHighWater, result, artifacts, snapshot, missing, unresolvedRequestIds, stopProof: proof, terminalOutcome, handoff,
+    ...(verificationOnly===true?{verificationOnly:true as const}:{}) };
 }
 
 /**

@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import {mkdtemp,writeFile,rm} from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
@@ -59,6 +60,20 @@ export const exhaustedCandidateSchema=z.object({
   capturedAt:z.string().datetime({offset:true}),
 }).strict();
 export type ExhaustedCandidate=z.infer<typeof exhaustedCandidateSchema>;
+export const ompWithoutFinalCandidatePath=(runDir:string)=>join(runDir,"saved-result","omp-without-final-candidate.json");
+export const ompWithoutFinalCandidateSchema=exhaustedCandidateSchema.omit({schema:true,gate:true,normalizedExecutionHash:true,usage:true}).extend({
+  schema:z.literal("ccloop-execution-without-final-candidate-v1"),
+  gate:z.object({stage:z.literal("execute-format"),decision:z.literal("malformed-final")}).strict(),
+  usage:z.object({tokenUsage:positive,highWater:safe}).strict(),
+  normalization:z.object({reason:z.enum(["execution-format-invalid","execution-format-ambiguous-or-hidden"]),diagnostic:z.object({method:z.enum(["whole","candidate","none"]),candidates:safe,valid:safe,hidden:z.boolean(),originalBytes:safe}).strict()}).strict(),
+}).strict();
+export type OmpWithoutFinalCandidate=z.infer<typeof ompWithoutFinalCandidateSchema>;
+export const ompWithoutFinalCompletionSchema=ompWithoutFinalCandidateSchema.omit({schema:true,runId:true,generation:true,worktreeTree:true,published:true}).extend({
+  schema:z.literal("ccloop-execution-without-final-v1"),identity:taskResultIdentitySchema,
+  published:z.object({sha:oid,base:oid,ref:z.string().startsWith("refs/ccloop/"),tree:oid}).strict(),
+  stop:z.object({executionId:taskResultIdentitySchema.shape.executionId,generation:positive,isolated:z.literal(true)}).strict(),
+}).strict();
+export type OmpWithoutFinalCompletion=z.infer<typeof ompWithoutFinalCompletionSchema>;
 export const exhaustedCompletionSchema=z.object({
   schema:z.literal("ccloop-execution-complete-before-verification-v1"),
   identity:taskResultIdentitySchema,attempt:positive,
@@ -141,13 +156,41 @@ export async function deriveExhaustedCapsule(input:StartEnvelopeV3):Promise<Buff
     capturedAt:candidate.capturedAt,
   })));
 }
+export async function deriveOmpWithoutFinalCapsule(input:StartEnvelopeV3):Promise<Buffer|null>{
+ const source=input.work.sourceDir,identity=await savedResultIdentity(input);
+ let candidate:OmpWithoutFinalCandidate;
+ try{candidate=ompWithoutFinalCandidateSchema.parse(JSON.parse((await readTaskResultFile(source,ompWithoutFinalCandidatePath(join(source,'run')),16*1024*1024)).toString()));}catch{return null;}
+ if(candidate.runId!==identity.runId||candidate.generation!==identity.generation||candidate.frozenContractHash!==input.contractHash
+  ||candidate.executor.configHash!==input.claim.configHash||candidate.published===null)return null;
+ let state:any;try{state=JSON.parse((await readTaskResultFile(source,join(source,'run','loop-state.json'),16*1024*1024)).toString());}catch{return null;}
+ if(state.status!=='failed'||state.currentAttempt!==candidate.attempt||state.attemptsUsed!==candidate.attempt)return null;
+ try{const events=await readUsageEvents(source);if(events.length!==candidate.usage.highWater||events.at(-1)?.eventSeq!==candidate.usage.highWater||events.at(-1)?.bucket!=='handoff')return null;}catch{return null;}
+ const accepted=await readAccepted(source),proof=await proveStopped({sourceDir:source,accepted});if(proof===null||input.work.kind!=='loop')return null;
+ const snapshot=executionSnapshotSchema.parse(JSON.parse((await readSavedBytes(source,candidate.snapshot)).toString()));
+ // A publication bundle is mandatory: a predicted ref, live ref alone or pre-publish snapshot cannot confer authority.
+ const repo=input.work.contract.context.repoPath;
+ try{
+  if(await gitOut(repo,'rev-parse',candidate.published.ref)!==candidate.published.sha
+   ||await gitOut(repo,'rev-parse',`${candidate.published.sha}^{tree}`)!==candidate.worktreeTree
+   ||await gitOut(repo,'rev-parse',`${candidate.published.sha}^`)!==candidate.attemptStartHead)return null;
+  const scratch=await mkdtemp(join(source,'run','saved-result','validate-'));
+  try{const file=join(scratch,'attempt.bundle');await writeFile(file,await readSavedBytes(source,snapshot.bundle),{mode:0o600});
+   const heads=await gitOut(repo,'bundle','list-heads',file);if(!heads.split('\n').includes(`${candidate.published.sha} ${candidate.published.ref}`))return null;
+  }finally{await rm(scratch,{recursive:true,force:true});}
+ }catch{return null;}
+ return Buffer.from(canonicalJson(ompWithoutFinalCompletionSchema.parse({schema:'ccloop-execution-without-final-v1',identity,attempt:candidate.attempt,
+  executor:candidate.executor,frozenContractHash:candidate.frozenContractHash,gate:candidate.gate,published:{...candidate.published,tree:candidate.worktreeTree},
+  decoder:candidate.decoder,normalization:candidate.normalization,attemptStartHead:candidate.attemptStartHead,resolvedBase:candidate.resolvedBase,
+  usage:candidate.usage,process:candidate.process,verifier:candidate.verifier,artifacts:candidate.artifacts,snapshot:candidate.snapshot,
+  stop:{executionId:proof.executionId,generation:proof.generation,isolated:true},capturedAt:candidate.capturedAt})));
+}
 export async function collectSavedResultEvidence(input:StartEnvelopeV3){
   const identity=await savedResultIdentity(input),source=input.work.sourceDir;
   let page:z.infer<typeof savedResultCollectionSchema>;
   try {page=savedResultCollectionSchema.parse(JSON.parse((await readTaskResultFile(source,savedResultIndexPath(source),16*1024*1024)).toString()));}
   catch(error){
     if(!(error instanceof TaskResultFileError&&error.status==="missing"))throw error;
-    const derived=await deriveExhaustedCapsule(input);
+    const derived=await deriveOmpWithoutFinalCapsule(input)??await deriveExhaustedCapsule(input);
     if(derived!==null)return {schema:"ccloop-saved-result-evidence-v1" as const,identity,attempt:(JSON.parse(derived.toString()) as {attempt:number}).attempt,capsule:{artifactId:`saved-result-${taskResultDigest(derived)}`,hash:taskResultDigest(derived)},reason:null};
     let reason="saved-result-original-evidence-unavailable";
     try {
@@ -166,12 +209,12 @@ async function loadClosure(input:StartEnvelopeV3,capsuleRef:ArtifactRefV1,attemp
   try{capsuleBytes=await readSavedBytes(source,capsuleRef);}
   catch(error){
     if(!(error instanceof TaskResultFileError&&error.status==="missing"))throw error;
-    const derived=await deriveExhaustedCapsule(input);
+    const derived=await deriveOmpWithoutFinalCapsule(input)??await deriveExhaustedCapsule(input);
     if(derived===null||taskResultDigest(derived)!==capsuleRef.hash)throw new ControlProtocolError("control-saved-result-authority-invalid");
     capsuleBytes=derived;
   }
   const parsed=JSON.parse(capsuleBytes.toString());
-  const c=parsed.schema==="ccloop-execution-complete-before-verification-v1"?exhaustedCompletionSchema.parse(parsed):executionFormatFailureSchema.parse(parsed);
+  const c=parsed.schema==="ccloop-execution-complete-before-verification-v1"?exhaustedCompletionSchema.parse(parsed):parsed.schema==="ccloop-execution-without-final-v1"?ompWithoutFinalCompletionSchema.parse(parsed):executionFormatFailureSchema.parse(parsed);
   if(canonicalHash(c.identity)!==canonicalHash(identity)||c.attempt!==attempt||c.frozenContractHash!==input.contractHash||c.executor.configHash!==input.claim.configHash)throw new ControlProtocolError("control-saved-result-authority-invalid");
   if("stop" in c&&(c.stop.executionId!==c.identity.executionId||c.stop.generation!==c.identity.generation))throw new ControlProtocolError("control-saved-result-authority-invalid");
   const snapshot=executionSnapshotSchema.parse(JSON.parse((await readSavedBytes(source,c.snapshot)).toString()));

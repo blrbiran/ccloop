@@ -103,6 +103,8 @@ export const loopContractSchema = z
         requiredChecks: z.array(z.string()).min(1),
         rejectOn: z.array(z.string()).min(1),
         evidenceRequired: z.array(z.string()).default([]),
+        // A contract author, not the verifier type alone, attests that the checks decide the goal.
+        commandChecksDecideGoal: z.literal(true).optional(),
       })
       .strict(),
     escalationAndExit: z
@@ -114,6 +116,12 @@ export const loopContractSchema = z
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((contract, issues) => {
+    if (contract.verification.commandChecksDecideGoal !== true) return;
+    if (contract.verification.verifierType !== "command" || contract.context.setupCommands !== undefined || contract.context.additionalRepos !== undefined) {
+      issues.addIssue({ code: z.ZodIssueCode.custom, path: ["verification", "commandChecksDecideGoal"], message: "decisive command checks require a command verifier, one repository and no setup" });
+    }
+  });
 
 export type LoopContract = z.infer<typeof loopContractSchema>;

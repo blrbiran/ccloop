@@ -7,6 +7,7 @@ import {persistSavedResultMode,readSavedResultMode,hasSavedResultEntry,enterSave
 import type { MaterializedAgentConfigV1 } from "../agents/types.js";
 import { captureExecutionFormatFailure, ExecutionFormatFailure, resolveCheckpointOriginalBase } from "./executionFormatFailure.js";
 import { bindExhaustedCandidate, captureExhaustedCompletion } from "./exhaustedCompletion.js";
+import {captureOmpWithoutFinal,bindOmpWithoutFinal} from "./ompWithoutFinal.js";
 import { remainingTokens, minTokenCeiling, budgetAmountSchema, type BudgetAmount, type TokenPolicy } from "../budget/tokenPolicy.js";
 import { execFile } from "node:child_process";
 import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
@@ -130,6 +131,7 @@ class PhaseExecutionError extends Error {
   // (Codex rejected the call with HTTP 429 after turn.started and before any item; human ruling, observedTokensOf). ***
   readonly tokenUsage: number | null;
   readonly formatFailure: ExecutionFormatFailure | null;
+  readonly ompFormatFailure: { observedTokens: number; normalization: {reason:string;diagnostic:unknown} } | null;
   /** Failure causes (spec 2026-10-21 §5 row 3): the cause the adapter attached, if any. */
   readonly attached: ReturnType<typeof attachedCause>;
 
@@ -139,6 +141,9 @@ class PhaseExecutionError extends Error {
     this.elapsedMs = elapsedMs;
     this.tokenUsage = observedTokensOf(error);
     this.formatFailure = error instanceof ExecutionFormatFailure ? error : null;
+    const omp = error as {observedTokens?:unknown;formatNormalization?:{reason?:unknown;diagnostic?:unknown}} | null;
+    this.ompFormatFailure = error instanceof Error && error.message === "omp-result-invalid" && typeof omp?.observedTokens === "number" && omp.formatNormalization !== undefined
+      && typeof omp.formatNormalization.reason === "string" ? {observedTokens:omp.observedTokens,normalization:omp.formatNormalization as {reason:string;diagnostic:unknown}} : null;
     this.attached = attachedCause(error);
   }
 }
@@ -552,6 +557,7 @@ async function cleanupAttemptWorkspaceWithStatus(
   worktreePath: string,
   runDir: string,
   detail: string,
+  assertHeld:()=>Promise<void>=async()=>{throw Error("saved-result-lease-unavailable");},
 ): Promise<ExecutionRecovery["cleanupStatus"]> {
   // Publishing has to happen before removal — after `git worktree remove` the
   // commit has no ref and no worktree, and there is nothing left to publish.
@@ -569,7 +575,10 @@ async function cleanupAttemptWorkspaceWithStatus(
   let primaryCommit: AttemptCommit | null = null;
   try {
     primaryCommit = await publishAttemptCommit(worktreePath);
-    if (primaryCommit !== null) await bindExhaustedCandidate(runDir, primaryCommit).catch(() => undefined);
+    if (primaryCommit !== null) {
+      await bindExhaustedCandidate(runDir, primaryCommit).catch(() => undefined);
+      await bindOmpWithoutFinal(runDir,primaryCommit,assertHeld);
+    }
   } catch (error) {
     await appendEvent(runDir, {
       type: "attempt_commit_publish_failed",
@@ -611,11 +620,15 @@ async function cleanupAttemptWorkspaceOrThrow(
   worktreePath: string,
   runDir: string,
   detail: string,
+  assertHeld:()=>Promise<void>=async()=>{throw Error("saved-result-lease-unavailable");},
 ): Promise<void> {
   let primaryCommit: AttemptCommit | null = null;
   try {
     primaryCommit = await publishAttemptCommit(worktreePath);
-    if (primaryCommit !== null) await bindExhaustedCandidate(runDir, primaryCommit).catch(() => undefined);
+    if (primaryCommit !== null) {
+      await bindExhaustedCandidate(runDir, primaryCommit).catch(() => undefined);
+      await bindOmpWithoutFinal(runDir,primaryCommit,assertHeld);
+    }
   } catch (error) {
     await appendEvent(runDir, {
       type: "attempt_commit_publish_failed",
@@ -634,8 +647,9 @@ export async function cleanupAttemptWorkspaceBestEffort(
   worktreePath: string,
   runDir: string,
   detail: string,
+  assertHeld?:()=>Promise<void>,
 ): Promise<void> {
-  await cleanupAttemptWorkspaceWithStatus(repoPath, worktreePath, runDir, detail);
+  await cleanupAttemptWorkspaceWithStatus(repoPath, worktreePath, runDir, detail,assertHeld);
 }
 
 function getMatchedStopSignal(contract: LoopContract, stopSignals: string[]): string | null {
@@ -1564,6 +1578,7 @@ export interface RunControlHooks {
   executionFormatCapture?: {config:MaterializedAgentConfigV1};
   /** An exhausted completion's pre-cleanup capture; the same providers whose original evidence can be proven. */
   exhaustedCompletionCapture?: {config:MaterializedAgentConfigV1};
+  ompWithoutFinalCapture?: {config:MaterializedAgentConfigV1};
   firstWorkspaceInput?: InputCheckpointV1;
   /** Multi-repo runs (review M8): each extra repository's base from the envelope, compared with its worktree's HEAD. */
   extraRepoBases?: Record<string, string>;
@@ -1650,6 +1665,7 @@ export async function runLoopFromState(
   // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.7, review M4): execution-format capture saves one repository,
   // so it is not entered for a run with extra repositories.
   const formatCapture = contract.context.additionalRepos === undefined ? options?.executionFormatCapture : undefined;
+  const ompCapture=contract.context.additionalRepos===undefined&&contract.context.setupCommands===undefined&&contract.verification.commandChecksDecideGoal===true&&options?.ompWithoutFinalCapture?.config.kind==='omp'?options.ompWithoutFinalCapture:undefined;
   let activeAdapter: RuntimeAdapter | null = typeof adapter === "function" ? null : adapter;
   let activePhase: PhaseName | null = null;
   let observedTokens = 0;
@@ -1800,7 +1816,7 @@ export async function runLoopFromState(
         await heartbeat.assertHeld();
         // Preserve the ordinary fresh-workspace HEAD choice, but freeze the exact commit
         // before creating it. Each retry/attempt gets its own actual initialization fact.
-        if (!(attempt === 1 && options?.firstWorkspaceInput) && formatCapture) {
+        if (!(attempt === 1 && options?.firstWorkspaceInput) && (formatCapture||ompCapture)) {
           initializedBase = (await execFileAsync("/usr/bin/git", ["rev-parse", "HEAD^{commit}"], {cwd:contract.context.repoPath})).stdout.trim();
         }
         worktreePath = (recovery
@@ -1863,7 +1879,7 @@ export async function runLoopFromState(
     let verifierEntered = false;
 
     try {
-      if (formatCapture && options?.taskResultInput?.work.kind === "loop") {
+      if ((formatCapture||ompCapture) && options?.taskResultInput?.work.kind === "loop") {
         attemptStartHead = (await execFileAsync("/usr/bin/git", ["rev-parse", "HEAD"], {cwd:worktreePath})).stdout.trim();
         if (options.firstWorkspaceInput) {
           resolvedSourceBase = await resolveCheckpointOriginalBase(options.taskResultInput.work.base, worktreePath, attemptStartHead);
@@ -1873,10 +1889,53 @@ export async function runLoopFromState(
       await writeOwnedRunState(runDir, state);
       if(recovery){await options?.onRecoveryAttemptEntered?.({attempt});state=await prepareSavedResultVerification(runDir,worktreePath,recovery,state);await writeOwnedRunState(runDir,state);}
 
+      if(recovery?.verificationOnly){
+        const observedPaths=recovery.actualChangedPaths;
+        const pathPolicy=await judgeAttemptPaths(contract,worktreePath,observedPaths);
+        if(pathPolicy.humanGateHit){
+          state=await persistTerminalState(runDir,writeOwnedRunState,withPathEvidence(state,pathPolicy),'blocked_waiting_human',pathPolicy.reason??'human gate or denylist hit');
+          return state;
+        }
+        state=transitionRunState(state,'executing');
+        await appendTransitionEvent(runDir,state,'attempt_started',`verification-only attempt ${attempt}`);
+        state=transitionRunState(state,'verifying');
+        await writeOwnedRunState(runDir,state);
+        await heartbeat.assertHeld();
+        await testCrashPoint('saved-result-before-entry');
+        state=await enterSavedResultVerification(runDir,worktreePath,recovery,state);
+        await writeOwnedRunState(runDir,state);
+        verifierEntered=true;activePhase='verify';
+        const verifyTimeoutMs=getPhaseTimeoutMs(contract,state);
+        const checked=await runPhaseWithTimeout(verifyTimeoutMs,async(signal)=>{
+          const result=await runRequiredChecks(contract.verification.requiredChecks,worktreePath!,observedPaths,signal,
+            (command,index)=>runSavedResultCheck(runDir,worktreePath!,command,index,options?.phaseSignal?AbortSignal.any([signal,options.phaseSignal]):signal,providerOptions?.onProcessRegistered));
+          if(!result.passed)return result.verification;
+          return enforceVerificationContract(contract,{approved:true,rejectCategory:'',primaryTargetPaths:observedPaths,failingCommand:null,safeToRetry:false,evidence:result.evidence,pauseSignals:[],stopSignals:[],tokenUsage:0});
+        },{awaitAbortedResult:true});
+        if(verifyTimeoutMs<=0||checked.timedOut){
+          await settlePhase('verify',attempt,checked.elapsedMs,checked.result,true);
+          state=await persistTerminalState(runDir,writeOwnedRunState,state,'exhausted',getPhaseTimeoutReason('verify',verifyTimeoutMs));
+          return state;
+        }
+        verification=checked.result;
+        await settlePhase('verify',attempt,checked.elapsedMs,verification);
+        await assertSavedResultUnmodified(runDir,worktreePath,recovery,state);
+        await guardedWriteArtifacts(()=>writeCompletedAttemptArtifacts(runDir,attempt,recovery.plan,null,verification!));
+        const decision=verification.approved?'succeeded' as const:'failed' as const;
+        state=withFailureCause(transitionRunState(withPathEvidence(state,pathPolicy),decision,verification.approved?'decisive command checks passed':'saved-result-verification-rejected'),
+          verification.approved?undefined:rejectionCause(verification.rejectCategory));
+        await persistSavedResultCompletion(runDir,state,verification);
+        await appendTransitionEvent(runDir,state,`loop_${decision}`,state.stopReason??'');
+        await writeOwnedRunState(runDir,state);
+        await testCrashPoint('saved-result-terminal-fsynced');
+        await heartbeat.assertHeld();
+        await cleanupAttemptWorkspaceBestEffort(contract.context.repoPath,worktreePath,runDir,`cleanup after terminal decision ${decision}`);
+        return state;
+      }
       const continuation = recovery ? {nextPhase:"verify" as const,plan:recovery.plan,execution:recovery.execution} : attempt === 1 ? options?.allowanceContinuation : undefined;
       if (continuation) {
         plan = continuation.plan;
-        execution = continuation.execution;
+        execution = continuation.execution ?? null;
       }
       // Task setup commands (spec 2026-11-04 §4.4): after the worktree exists (and a continuation's tree is restored into
       // it), before whichever agent phase comes first. A failure ends the run: the attempt stays counted, no agent phase
@@ -2556,6 +2615,10 @@ export async function runLoopFromState(
           try{await assertSavedResultUnmodified(runDir,worktreePath,recovery,state);}catch(refusal){failureReason=String(refusal);recoveryRefusal=true;}
         }
 
+        if (failedPhase === "execute" && error.ompFormatFailure && ompCapture && options?.taskResultInput && worktreePath && attemptStartHead && !handoffAborted() && !handoffRequested()) {
+          await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir,attempt,plan,execution));
+          await heartbeat.runExclusive(() => captureOmpWithoutFinal({input:options.taskResultInput!,runDir,worktreePath:worktreePath!,attempt,attemptStartHead:attemptStartHead!,resolvedBase:resolvedSourceBase,runtimeContract:contract,actualConfig:ompCapture.config,observedTokens:error.ompFormatFailure!.observedTokens,normalization:error.ompFormatFailure!.normalization,verifierEntered,assertHeld:()=>heartbeat.assertHeld()}));
+        }
         if (failedPhase === "execute" && error.formatFailure && formatCapture && options?.taskResultInput && worktreePath && attemptStartHead && !handoffAborted() && !handoffRequested()) {
           await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
           await heartbeat.runExclusive(() => captureExecutionFormatFailure({input:options.taskResultInput!,runDir,worktreePath:worktreePath!,attempt,attemptStartHead:attemptStartHead!,resolvedBase:resolvedSourceBase,runtimeContract:contract,actualConfig:formatCapture!.config,failure:error.formatFailure!,verifierEntered,assertHeld:()=>heartbeat.assertHeld()}));
@@ -2599,6 +2662,7 @@ export async function runLoopFromState(
           worktreePath,
           runDir,
           "cleanup after controller failure",
+          () => heartbeat.assertHeld(),
         );
       }
 

@@ -238,10 +238,13 @@ const claimSchema = z
 
 export interface SavedResultRecoveryInput {
   packagePath: string; packageHash: string; admissionHash: string;
-  recoveryOf: { sourceRunId: string; sourceAttempt: number; capsuleHash: string; snapshotHash: string; normalizedExecutionHash: string };
+  recoveryOf: z.infer<typeof recoveryOfSchema>;
 }
-export const recoveryOfSchema = z.object({ sourceRunId: idSchema, sourceAttempt: positiveSafeInteger,
-  capsuleHash: hashSchema, snapshotHash: hashSchema, normalizedExecutionHash: hashSchema }).strict();
+const recoveryIdentity={sourceRunId: idSchema,sourceAttempt:positiveSafeInteger,capsuleHash:hashSchema,snapshotHash:hashSchema};
+export const recoveryOfSchema=z.union([
+ z.object({...recoveryIdentity,normalizedExecutionHash:hashSchema}).strict(),
+ z.object({...recoveryIdentity,kind:z.literal('verification-only-v1'),normalizedExecutionHash:z.never().optional()}).strict(),
+]);
 export const savedResultRecoveryInputSchema = z.object({ packagePath: z.string().min(1), packageHash: hashSchema,
   admissionHash: hashSchema, recoveryOf: recoveryOfSchema }).strict();
 export const artifactRefSchema = z.object({ artifactId: idSchema, hash: hashSchema }).strict();

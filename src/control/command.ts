@@ -191,7 +191,7 @@ export const collectionSchema = z.object({
     artifacts: z.array(artifactRefSchema), snapshot: artifactRefSchema.nullable(), missing: z.array(z.string()),
     unresolvedRequestIds: z.array(z.string()),
     stopProof: z.object({ executionId: z.string().min(1), generation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), isolated: z.literal(true), source: artifactRefSchema }).strict().nullable(),
-    terminalOutcome: z.string().min(1), handoff: artifactRefSchema,
+    terminalOutcome: z.string().min(1), handoff: artifactRefSchema, verificationOnly:z.literal(true).optional(),
   }).strict().nullable(),
   terminal: terminalSchema.nullable(),
   // Orca labels and progress spec §3.2: ccloop answers progress on every collect (null before any loop state). Strict,

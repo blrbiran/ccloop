@@ -71,6 +71,7 @@ export interface CandidateV1 extends HandoffIdentityV1 {
   unresolvedRequestIds: string[];
   stopProof: null;
   terminalOutcome: string;
+  verificationOnly?: true;
   handoff: ArtifactRefV1;
 }
 
@@ -320,6 +321,8 @@ export async function buildHandoffPacket(
       ? await enteredPhaseFiles(envelope.work.sourceDir, runDir, runState.currentAttempt)
       : null;
     for (const name of ["plan.json", "execution.json", "verify.json"]) {
+      if (name === "execution.json" && envelope.mode === "verify-saved-result" && envelope.savedResultRecovery?.recoveryOf !== undefined
+        && "kind" in envelope.savedResultRecovery.recoveryOf && envelope.savedResultRecovery.recoveryOf.kind === "verification-only-v1") continue;
       if (entered !== null && !entered.has(name)) continue;
       phaseRefs[name] = await retainFile(
         envelope.work.sourceDir,
@@ -383,6 +386,7 @@ export async function persistHandoffCandidate(
     unresolvedRequestIds: [],
     stopProof: null,
     terminalOutcome: runState.status,
+    ...(envelope.mode==='verify-saved-result'&&'kind' in envelope.savedResultRecovery!.recoveryOf?{verificationOnly:true as const}:{}),
     handoff: built.handoff,
   };
   await atomicReplacePrivateFile(
