@@ -41,6 +41,14 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
+### 最新（2026-11-09，Orca 会话 `cf294856`）—— 验证专用恢复来源 #158；本地 main 已提交，**push 被闸门拦下**
+
+- **主题行** `feat(recovery): an omp execute whose final is malformed keeps a verification-only source (#158)`。做法：合同可选 `verification.commandChecksDecideGoal`（缺省不出现，仅 command verifier／单仓／无 setup）是**作者声明**；有这个声明、且 OMP execute 干净退出而严格解码失败时，生产者在租约内取证（完整 stream、HEAD 不变、无工具规则违例、用量已知、verifier 未进入、工作树快照），并在清理前绑定真实的发布 ref／sha／tree／parent，写一个新的候选与胶囊 `ccloop-execution-without-final-v1`。**该胶囊没有 execution、taskResult、decisions、`normalizedExecutionHash`。**
+- **消费端**：`recoveryOf` 有判别符——旧支仍带 `normalizedExecutionHash`，新支是 `{…, kind:"verification-only-v1"}` 且没有 hash；source package 的 `authorityKind` 是 `execution-without-final-v1`。读取时核验 bundle 的 ref／tree／parent、原始 base 与每个投影文件，随后**只跑合同声明的 command checks**（不调 provider verify、不重建答案）。funding／fence／entry／restart 检查与原路径相同；成功候选带 `verificationOnly:true`、`missing:[]`，不因缺席 `execution.json` 被降为 partial。**严格解码器与旧 Codex format-failure 的拒绝路径一字未改。**
+- **判据**：新增 `tests/contract/commandChecksDecideGoal.test.ts`（3）与 `tests/control/ompVerificationOnlyRecovery.test.ts`；连同既有恢复／验证文件 **117/117**，每一条都先见红。负例覆盖未 opt-in、工具规则违例、进程非零退出、HEAD 改动、用量未知、stream 不完整、伪造 tree／parent、Git 未发布的忽略文件、检查失败，以及「重启不重复跑已完成的检查」。
+- **门**：`npm run typecheck`、`npm run build` 均 0；**全量 `vitest run`＋`check-known-reds` RC 0**（名单 7 条、failed 0、unexpected 0）。
+- ⚠️ **未推**：Orca 的 Tier 0 闸门把 agent 的 push 机械拦下（对话授权不解除拦截）。推完才 repin，跨仓验收（只验证来源 → 新 run 零 plan/execute、只跑一次 checks）才能跑。
+
 ### 最新（2026-11-08，Orca 会话 `fe1f3fa6`）—— Claude execute 与另两个适配器共用同一份严格解码；**本地 main 已 ff，未推**
 
 - **主题行** `fix(claude): an execute answer passes the shared strict result decoder`。做法：Claude 的 execute 答案先剥掉 runner 自己的记账键（`tokenUsage` / `usageEvidence` / `modelUsage` / `partialOrigin`），再走 `normalizeExecutionFinal` —— 与 OMP 同一个解码器（Codex 走 wire schema 再 `normalizeExecutionFinal`）。扁平 `taskResult`、多义或隐藏的最终消息现在响亮失败（`claude-result-invalid`，带观测用量），不再被 `parsed as T` 放行；合法的嵌套 `taskResult` 与 runner 用量原样保留（停止后回写的 partial 走同一解码）。
@@ -252,10 +260,13 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节；2026-11-08 反馈复核轮）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**2026-11-08 近况（就地替换旧述）**：本仓**本轮零代码改动，`git status` 空**，本地 main 与远端一致。Orca 已把前一轮四笔合入本地 main（未推），并落地 #186 的 `group depend` 人类提示；设计稿 `docs/superpowers/specs/2026-11-08-omp-verdict-recovery-and-noop-undo-design.md` 追加 **Correction 1**（独立审阅）：#158 不能只加来源枚举，现有恢复读取与验证路径要求严格解码的 `ExecutionResult` 与 normalized hash，需两仓各自的有判别符对象；生产者还须证明格式是唯一失败、干净退出、无工具规则违例、用量已知、执行前后 HEAD 不变，并在租约内绑定真实发布 ref/tree/parent；setup／多仓仍按现拒。**#138 原稿把 pending 决策挡住 verdict 写成事实并不成立**：run 可先结算，verdict 只读 settled＋`landedCommit:null`，须补交叉判据；空 `base..attempt` 只证明净 Git 树无变化。
-  - **#158（OMP 坏 final）**：本仓 `ompAdapter.ts` 的 `execute-format-failure.json` 是**诊断**，`savedResultRecovery.ts` 故意让 `execution-format-failure-v1` 以 `saved-result-normalizer-provenance-unavailable` 收尾——**不能**反过来读成成功。真要能救，只能加一个**只验证**的来源种类；**这条要动本仓生产者**，动手前先同步 Orca，且先等人定「独立 checks 能否单独判完成、哪些 verifier 合同算数」。
-  - **#138（no-op undo）**：Orca 侧的 `undoExecutable`／`decision-undo-not-executable`；本仓账本 schema 若要加结构化字段则两边一起改。先等人定「哪些 no-change 决策可用、Git 净树相等是否足够」。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**2026-11-09 近况（就地替换旧述）**：本仓这一轮**有代码改动**——#158 与合同声明已提交为 `c726a93`（本地 main，`check-known-reds` RC 0；**agent 的 push 被 Orca Tier 0 闸门机械拦下，对话里的临时授权不解除拦截**，等人在自己终端推）。
+  - **#158 已落地（两侧）**：新增判别式来源／胶囊 `ccloop-execution-without-final-v1`——干净退出、完整 stream、HEAD 不变、无工具规则违例、用量已知、verifier 未进入，租约内快照并在清理前绑定真实发布 ref/tree/parent；**不带 execution／taskResult／decisions／normalizedExecutionHash**。消费端只跑合同声明的 command checks，保留 funding/fence/entry/restart 全部门；成功候选带 `verificationOnly:true` 且 `missing:[]`。严格解码器与旧 Codex format-failure 拒绝一字未改。Orca 侧的 wire 镜像同轮完成，**跨仓验收要等推送 + repin**。
+  - **合同新字段 `verification.commandChecksDecideGoal`**：可选、缺省不出现，仅允许 command verifier／单仓／无 setup；它是「独立 checks 能否判完成」的**作者声明**，不是从 `verifierType` 推断来的。
+  - **#138**：Orca 侧已把 no-change undo 做成结构化 Git 证明；本仓账本 schema 未动。
 - **给下一轮的实操警告**：用本仓工作树构建的 `dist/cli.js` 当 `ORCA_CCLOOP_BIN` 跑 Orca 测试；**别指 Orca 的 `node_modules/ccloop`** —— 那个包只有 `dist`、没有 `tests/fixtures/fake-codex.mjs`，会造出一批 spawn 假 codex 的假红，另有 `findCcloopRoot` 回溯不到仓库根的红。
+
+- **付费校准（2026-11-09，Orca 会话 `cf294856`，codex `gpt-6-sol`）顺带量到的本仓事实**：plan 阶段一次约 **43k token**（input 14,840＋cacheRead 28,288＋output 532），约 20 s；三笔 run 的 `loop-contract.json` 都冻结 `tokenBudget:11000, maxAttempts:1`，于是 plan 一结束就 `exhausted`。**Orca 的 `task retry --work` 只加账、不抬合同**，所以 finite 合同的任务无从恢复——方向由 Orca 侧定（见其 §8 待人第 3 条）。
 
 - **#191（OMP 单次调用隐藏前缀）免费探针（2026-11-08，Orca 会话 `6eb5df84`，未付费）**：隔离 HOME／假本地上游，用 Orca 当前 estimate prompt 与当前 ccloop `runOmpSingleCall` 构造真实出站请求；本机 OMP 18.17.0 只发一次 `POST /v1/messages`，**body 7,384 B**（system 2,635／messages 4,579／tools `[]`），可见 prompt 4,066 B，ccloop 的 system-prompt.md 1,636 B。**本机隔离配置复现不出约 232k 隐藏前缀**；要定论需测试者那份 `run/omp/1/single-call/*/{usage.json,events.jsonl}`、OMP 版本／profile／model 与 provider 计量口径。**不要据此改 usage 账本。** 证据 `/private/tmp/omp191-probe.xPvYZ2/{result.log,probe.mts}`（会话结束即失）。上一轮（2026-11-07）的 exhausted 配对 `V10` 与本仓 pin 结论仍成立。
 
