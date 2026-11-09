@@ -266,7 +266,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节；2026-11-09 repin／验收轮）
 
-- **2026-11-09 近况（就地替换旧述）**：本仓本轮改动 `stopProof`／`evidence`／`paths` 与一条判据，**未提交未推**；Orca 的 #213 结算修复依赖本仓不在关键路径上的 #223 改动。Orca 那边已修 #207／#222／#214，并有 #213 的配对判据；#212 按人裁定改为只读 funding-preview 展示（Orca 内部路由，不改本仓契约）；`~/.orca/profile.json` 已由人授权切到 v4。详见 Orca handoff §3 最新一节与 §4.0、§8。
+- **2026-11-09 近况（就地替换旧述）**：本仓本轮改动 `stopProof`／`evidence`／`paths` 与一条判据，**已提交本地 main、未推**（主题行 `fix(control): the same stopped execution set keeps one stop-proof artifact`）；Orca 的 #213 结算修复不依赖这笔，但 #223 的跨仓复验要等它推上去并重新 pin。Orca 那边已修 #207／#222／#214，并有 #213 的配对判据；#212 按人裁定改为只读 funding-preview 展示（Orca 内部路由，不改本仓契约）；`~/.orca/profile.json` 已由人授权切到 v4。详见 Orca handoff §3 最新一节与 §4.0、§8。
   - **#158 已落地（两侧）**：新增判别式来源／胶囊 `ccloop-execution-without-final-v1`——干净退出、完整 stream、HEAD 不变、无工具规则违例、用量已知、verifier 未进入，租约内快照并在清理前绑定真实发布 ref/tree/parent；**不带 execution／taskResult／decisions／normalizedExecutionHash**。消费端只跑合同声明的 command checks，保留 funding/fence/entry/restart 全部门；成功候选带 `verificationOnly:true` 且 `missing:[]`。严格解码器与旧 Codex format-failure 拒绝一字未改。
   - **合同新字段 `verification.commandChecksDecideGoal`**：可选、缺省不出现，仅允许 command verifier／单仓／无 setup；它是「独立 checks 能否判完成」的**作者声明**，不是从 `verifierType` 推断来的。
   - **#138**：Orca 侧已把 no-change undo 做成结构化 Git 证明；本仓账本 schema 未动。
