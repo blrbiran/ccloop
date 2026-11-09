@@ -41,13 +41,13 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-09，Orca 会话 `cf294856`）—— 验证专用恢复来源 #158；本地 main 已提交，**push 被闸门拦下**
+### 最新（2026-11-09，Orca 会话 `cf294856`，本轮已由人 push）—— 验证专用恢复来源 #158
 
 - **主题行** `feat(recovery): an omp execute whose final is malformed keeps a verification-only source (#158)`。做法：合同可选 `verification.commandChecksDecideGoal`（缺省不出现，仅 command verifier／单仓／无 setup）是**作者声明**；有这个声明、且 OMP execute 干净退出而严格解码失败时，生产者在租约内取证（完整 stream、HEAD 不变、无工具规则违例、用量已知、verifier 未进入、工作树快照），并在清理前绑定真实的发布 ref／sha／tree／parent，写一个新的候选与胶囊 `ccloop-execution-without-final-v1`。**该胶囊没有 execution、taskResult、decisions、`normalizedExecutionHash`。**
 - **消费端**：`recoveryOf` 有判别符——旧支仍带 `normalizedExecutionHash`，新支是 `{…, kind:"verification-only-v1"}` 且没有 hash；source package 的 `authorityKind` 是 `execution-without-final-v1`。读取时核验 bundle 的 ref／tree／parent、原始 base 与每个投影文件，随后**只跑合同声明的 command checks**（不调 provider verify、不重建答案）。funding／fence／entry／restart 检查与原路径相同；成功候选带 `verificationOnly:true`、`missing:[]`，不因缺席 `execution.json` 被降为 partial。**严格解码器与旧 Codex format-failure 的拒绝路径一字未改。**
 - **判据**：新增 `tests/contract/commandChecksDecideGoal.test.ts`（3）与 `tests/control/ompVerificationOnlyRecovery.test.ts`；连同既有恢复／验证文件 **117/117**，每一条都先见红。负例覆盖未 opt-in、工具规则违例、进程非零退出、HEAD 改动、用量未知、stream 不完整、伪造 tree／parent、Git 未发布的忽略文件、检查失败，以及「重启不重复跑已完成的检查」。
 - **门**：`npm run typecheck`、`npm run build` 均 0；**全量 `vitest run`＋`check-known-reds` RC 0**（名单 7 条、failed 0、unexpected 0）。
-- ⚠️ **未推**：Orca 的 Tier 0 闸门把 agent 的 push 机械拦下（对话授权不解除拦截）。推完才 repin，跨仓验收（只验证来源 → 新 run 零 plan/execute、只跑一次 checks）才能跑。
+- ✅ **已推**（`ls-remote` 现核）：人已把 main 推到本笔。Orca 已 `pin-ccloop` 到该提交并通过六项检查，跨仓验收 V11（只验证来源 → 新 run 零 plan/execute、只跑一次 checks）已通过；细节见本文 Orca 单节。
 
 ### 最新（2026-11-08，Orca 会话 `fe1f3fa6`）—— Claude execute 与另两个适配器共用同一份严格解码；**本地 main 已 ff，未推**
 
@@ -258,10 +258,10 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节；2026-11-08 反馈复核轮）
+# 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节；2026-11-09 repin／验收轮）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**2026-11-09 近况（就地替换旧述）**：本仓这一轮**有代码改动**——#158 与合同声明已提交为 `c726a93`（本地 main，`check-known-reds` RC 0；**agent 的 push 被 Orca Tier 0 闸门机械拦下，对话里的临时授权不解除拦截**，等人在自己终端推）。
-  - **#158 已落地（两侧）**：新增判别式来源／胶囊 `ccloop-execution-without-final-v1`——干净退出、完整 stream、HEAD 不变、无工具规则违例、用量已知、verifier 未进入，租约内快照并在清理前绑定真实发布 ref/tree/parent；**不带 execution／taskResult／decisions／normalizedExecutionHash**。消费端只跑合同声明的 command checks，保留 funding/fence/entry/restart 全部门；成功候选带 `verificationOnly:true` 且 `missing:[]`。严格解码器与旧 Codex format-failure 拒绝一字未改。Orca 侧的 wire 镜像同轮完成，**跨仓验收要等推送 + repin**。
+- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**2026-11-09 近况（就地替换旧述）**：本仓这一轮**零代码改动**。人已把本仓 main 推到 `407b47e1`（主题行 `docs(handoff): the verification-only source, the paid calibration numbers, and the blocked push`，`ls-remote` 现核）；Orca 随即 `pin-ccloop` 到该提交并通过六项检查（默认解析 E2E 12/12、typecheck 0、克隆 `npm ci` 复现锁），随后用**本仓工作树的 `dist/cli.js`** 跑通 #158 的跨仓验收 V11：来源胶囊 → Orca eligibility → 恢复 run 落地，假 OMP 总调用仍是 `plan,execute`、检查恰好一次。⚠️ npm 包只有 `dist`、没有 `tests/fixtures/*`，配对验收只能用工作树或 pin 提交的克隆。同轮 Orca 还修了「可选策略任务的 top-up 被冻结合同吞掉」并新增估算指令 v4，**两件都不改本仓契约**。待人项在 Orca handoff §8（push 分支、`~/.orca/profile.json` 升 v4、可选付费复跑）。
+  - **#158 已落地（两侧）**：新增判别式来源／胶囊 `ccloop-execution-without-final-v1`——干净退出、完整 stream、HEAD 不变、无工具规则违例、用量已知、verifier 未进入，租约内快照并在清理前绑定真实发布 ref/tree/parent；**不带 execution／taskResult／decisions／normalizedExecutionHash**。消费端只跑合同声明的 command checks，保留 funding/fence/entry/restart 全部门；成功候选带 `verificationOnly:true` 且 `missing:[]`。严格解码器与旧 Codex format-failure 拒绝一字未改。
   - **合同新字段 `verification.commandChecksDecideGoal`**：可选、缺省不出现，仅允许 command verifier／单仓／无 setup；它是「独立 checks 能否判完成」的**作者声明**，不是从 `verifierType` 推断来的。
   - **#138**：Orca 侧已把 no-change undo 做成结构化 Git 证明；本仓账本 schema 未动。
 - **给下一轮的实操警告**：用本仓工作树构建的 `dist/cli.js` 当 `ORCA_CCLOOP_BIN` 跑 Orca 测试；**别指 Orca 的 `node_modules/ccloop`** —— 那个包只有 `dist`、没有 `tests/fixtures/fake-codex.mjs`，会造出一批 spawn 假 codex 的假红，另有 `findCcloopRoot` 回溯不到仓库根的红。
