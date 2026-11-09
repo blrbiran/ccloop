@@ -41,7 +41,11 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-09，测试者反馈 P0 轮）—— 停止证明改为稳定内容寻址，重复 collect 不再增生证据
+### 最新（2026-11-10，测试者反馈 P0／A 轮）—— 零用量正向事实与 prompt-mode exhausted 胶囊
+
+- **零用量事实（#215／#210，人裁选 A）**：终态失败原因新增可选 `usageKnownZero:true`，只在 `observedTokensOf` 证明为 0 时写入（`neverStarted` 与 429 `before-work`；`rate-limit-after-item` 不写）。collect 的严格 schema、`RunFailureCauseV1` 同步。判据 `tests/runtime/codex/usageKnownZero.test.ts` 2 条（正／负各一）。
+- **prompt-mode exhausted（#206）**：`initializedBase` 与 `resolvedSourceBase` 的初始化条件加入 `exhaustedCompletionCapture`；此前 prompt-mode codex 拿 null base，写出 `saved-result-capture-authority-invalid`。判据 `tests/control/exhaustedSource.test.ts` 新增 prompt-mode 用例；回退两处条件即变红。
+- **门（现测）**：见本轮收尾节；全量含既有负载红，未改名单。
 
 - **主题行** `fix(control): the same stopped execution set keeps one stop-proof artifact (#223)`（已在本地 main、**未推**）。做法：`proveStopped` 仍每次做两轮真实进程探测；证据字节去掉 `probedAt`，只含稳定身份（executionId、generation、graceMs、注册进程含 `registeredAt`），因此同一停机状态得到同一内容地址。`writeEvidence` 改为「已存在且哈希已验证则不替换」：先用 `atomicCreatePrivateFile` 的 `link()` 只有创建者成功，并发调用共用同一 inode；目录 mtime 不再因重复写入而变，避免 Orca 并行归档把它判成 `changed:control/evidence`。
 - **判据**：`tests/control/stopProof.test.ts` 新增一条（先红：旧码两秒内产生两个 ref／新码替换 inode）：连续与并发 `proveStopped` 返回同一 ref、证据目录保持 1 份、两次探测次数照增；注册集合变化产生新 ref；进程重新出现返回 null。`phasesCompleted` 8/8；typecheck 0、build 0。
