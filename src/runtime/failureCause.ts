@@ -26,7 +26,9 @@ export const RETRYABLE_CAUSES: ReadonlySet<FailureCauseV1> = new Set(["rate-limi
 export type CallClassification = { cause: FailureCauseV1; workObserved: boolean; detail: string | null };
 
 /** The run-level record (spec §5), persisted on RunState and exposed at collect's top level. */
-export type RunFailureCauseV1 = { cause: FailureCauseV1; phase: "plan" | "execute" | "verify" | "setup" | null; retries: number; detail: string | null };
+export type RunFailureCauseV1 = { cause: FailureCauseV1; phase: "plan" | "execute" | "verify" | "setup" | null; retries: number; detail: string | null;
+  /** Positive proof that this failed run consumed no tokens (a pre-spawn refusal, or a 429 before any work). */
+  usageKnownZero?: true };
 
 const DETAIL_BYTES = 512;
 

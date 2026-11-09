@@ -215,6 +215,8 @@ export const collectionSchema = z.object({
   failureCause: z.object({
     cause: z.enum(FAILURE_CAUSES), phase: z.enum(["plan", "execute", "verify", "setup"]).nullable(),
     retries: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), detail: z.string().nullable(),
+    // Issue #215: ccloop proved this failed run consumed no tokens (a pre-spawn refusal, or a 429 before any work).
+    usageKnownZero: z.literal(true).optional(),
   }).strict().optional(),
   pathPolicyMisses: z.array(z.object({ repoKey: z.string().min(1).refine((key) => Buffer.byteLength(key, "utf8") <= 128).nullable(),
     path: z.string().min(1).refine((path) => Buffer.byteLength(path, "utf8") <= 4096) }).strict()).min(1).max(128).optional(),

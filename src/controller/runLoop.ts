@@ -1816,7 +1816,7 @@ export async function runLoopFromState(
         await heartbeat.assertHeld();
         // Preserve the ordinary fresh-workspace HEAD choice, but freeze the exact commit
         // before creating it. Each retry/attempt gets its own actual initialization fact.
-        if (!(attempt === 1 && options?.firstWorkspaceInput) && (formatCapture||ompCapture)) {
+        if (!(attempt === 1 && options?.firstWorkspaceInput) && (formatCapture||ompCapture||options?.exhaustedCompletionCapture)) {
           initializedBase = (await execFileAsync("/usr/bin/git", ["rev-parse", "HEAD^{commit}"], {cwd:contract.context.repoPath})).stdout.trim();
         }
         worktreePath = (recovery
@@ -1879,7 +1879,7 @@ export async function runLoopFromState(
     let verifierEntered = false;
 
     try {
-      if ((formatCapture||ompCapture) && options?.taskResultInput?.work.kind === "loop") {
+      if ((formatCapture||ompCapture||options?.exhaustedCompletionCapture) && options?.taskResultInput?.work.kind === "loop") {
         attemptStartHead = (await execFileAsync("/usr/bin/git", ["rev-parse", "HEAD"], {cwd:worktreePath})).stdout.trim();
         if (options.firstWorkspaceInput) {
           resolvedSourceBase = await resolveCheckpointOriginalBase(options.taskResultInput.work.base, worktreePath, attemptStartHead);
@@ -2602,7 +2602,9 @@ export async function runLoopFromState(
       // Spec §5 row 3: a phase exception records the adapter's classified cause, else unknown.
       const exceptionCause = error instanceof PhaseExecutionError && error.attached !== undefined
         ? { cause: error.attached.classification.cause, phase: activePhase === "plan" || activePhase === "execute" || activePhase === "verify" ? activePhase : null,
-          retries: error.attached.retries, detail: error.attached.classification.detail } satisfies RunFailureCauseV1
+          retries: error.attached.retries, detail: error.attached.classification.detail,
+          // Issue #215: observedTokensOf answers 0 only when the runner proved nothing could have been spent.
+          ...(error.tokenUsage === 0 ? { usageKnownZero: true as const } : {}) } satisfies RunFailureCauseV1
         : undefined;
 
       if (error instanceof PhaseExecutionError) {
