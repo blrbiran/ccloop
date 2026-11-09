@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import {
   lstat,
+  link,
   mkdir,
   open,
   realpath,
@@ -100,6 +101,32 @@ export async function readPrivateFile(root: string, target: string): Promise<Buf
     throw invalid();
   } finally {
     await handle?.close();
+  }
+}
+
+export async function atomicCreatePrivateFile(root: string, target: string, bytes: Buffer): Promise<boolean> {
+  const parent = resolve(target, "..");
+  await ensurePrivateDirectory(root, parent);
+  await assertExistingAncestors(root, target, false);
+  const temporary = join(parent, `.${randomUUID()}.tmp`);
+  let handle;
+  try {
+    handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    await handle.writeFile(bytes);
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    try { await link(temporary, target); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+    const directory = await open(parent, constants.O_RDONLY | constants.O_DIRECTORY);
+    try { await directory.sync(); } finally { await directory.close(); }
+    return true;
+  } finally {
+    await handle?.close();
+    await unlink(temporary).catch(() => undefined);
   }
 }
 

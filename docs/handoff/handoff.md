@@ -41,7 +41,13 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-09，Orca 会话 `cf294856`，本轮已由人 push）—— 验证专用恢复来源 #158
+### 最新（2026-11-09，测试者反馈 P0 轮）—— 停止证明改为稳定内容寻址，重复 collect 不再增生证据
+
+- **主题行** `fix(control): the same stopped execution set keeps one stop-proof artifact (#223)`（已在本地 main、**未推**）。做法：`proveStopped` 仍每次做两轮真实进程探测；证据字节去掉 `probedAt`，只含稳定身份（executionId、generation、graceMs、注册进程含 `registeredAt`），因此同一停机状态得到同一内容地址。`writeEvidence` 改为「已存在且哈希已验证则不替换」：先用 `atomicCreatePrivateFile` 的 `link()` 只有创建者成功，并发调用共用同一 inode；目录 mtime 不再因重复写入而变，避免 Orca 并行归档把它判成 `changed:control/evidence`。
+- **判据**：`tests/control/stopProof.test.ts` 新增一条（先红：旧码两秒内产生两个 ref／新码替换 inode）：连续与并发 `proveStopped` 返回同一 ref、证据目录保持 1 份、两次探测次数照增；注册集合变化产生新 ref；进程重新出现返回 null。`phasesCompleted` 8/8；typecheck 0、build 0。
+- **门（现测）**：全量 `vitest run` **253 文件、2,591 过／2 红**；`check-known-reds` RC 1 —— 一条是名单内的 `codexAdapter` outer watchdog，另一条`runSetupCommands`「a command over its time limit is killed」**单跑 22/22 绿**（负载 flake，不在名单；本轮未动 setup 路径）。
+- **诚实边界**：已有证据文件的 inode 不变由 `link()` 的「已存在即 EEXIST」保证；不同文件系统上的 hard-link 失败会让 `atomicCreatePrivateFile` 抛错（未改成降级覆盖，因为那会恢复本 bug）。没有在真实 Orca 面板的长期 held run 上重放 #223 的 853 份现场；配对场景由 Orca 侧的 `allowanceHeldSettlement` 覆盖结算路径，证据增长由本仓聚焦判据覆盖。
+- **Orca 依赖不变**：proof 仍是 `{executionId,generation,isolated,source}`；body 去掉 `probedAt`、新增 `registeredAt`，Orca 的读取器不解析这两个字段（现核 `usageSettlement.ts:20` 只校验四个身份键）。
 
 - **主题行** `feat(recovery): an omp execute whose final is malformed keeps a verification-only source (#158)`。做法：合同可选 `verification.commandChecksDecideGoal`（缺省不出现，仅 command verifier／单仓／无 setup）是**作者声明**；有这个声明、且 OMP execute 干净退出而严格解码失败时，生产者在租约内取证（完整 stream、HEAD 不变、无工具规则违例、用量已知、verifier 未进入、工作树快照），并在清理前绑定真实的发布 ref／sha／tree／parent，写一个新的候选与胶囊 `ccloop-execution-without-final-v1`。**该胶囊没有 execution、taskResult、decisions、`normalizedExecutionHash`。**
 - **消费端**：`recoveryOf` 有判别符——旧支仍带 `normalizedExecutionHash`，新支是 `{…, kind:"verification-only-v1"}` 且没有 hash；source package 的 `authorityKind` 是 `execution-without-final-v1`。读取时核验 bundle 的 ref／tree／parent、原始 base 与每个投影文件，随后**只跑合同声明的 command checks**（不调 provider verify、不重建答案）。funding／fence／entry／restart 检查与原路径相同；成功候选带 `verificationOnly:true`、`missing:[]`，不因缺席 `execution.json` 被降为 partial。**严格解码器与旧 Codex format-failure 的拒绝路径一字未改。**
@@ -260,7 +266,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节；2026-11-09 repin／验收轮）
 
-- 详情只看 Orca handoff（`/Users/biran/code/skills/orca/Orca/docs/handoff/handoff.md`）§3 最新一节与 §4、§8。**2026-11-09 近况（就地替换旧述）**：本仓这一轮**零代码改动**。人已把本仓 main 推到 `407b47e1`（主题行 `docs(handoff): the verification-only source, the paid calibration numbers, and the blocked push`，`ls-remote` 现核）；Orca 随即 `pin-ccloop` 到该提交并通过六项检查（默认解析 E2E 12/12、typecheck 0、克隆 `npm ci` 复现锁），随后用**本仓工作树的 `dist/cli.js`** 跑通 #158 的跨仓验收 V11：来源胶囊 → Orca eligibility → 恢复 run 落地，假 OMP 总调用仍是 `plan,execute`、检查恰好一次。⚠️ npm 包只有 `dist`、没有 `tests/fixtures/*`，配对验收只能用工作树或 pin 提交的克隆。同轮 Orca 还修了「可选策略任务的 top-up 被冻结合同吞掉」并新增估算指令 v4，**两件都不改本仓契约**。待人项在 Orca handoff §8（push 分支、`~/.orca/profile.json` 升 v4、可选付费复跑）。
+- **2026-11-09 近况（就地替换旧述）**：本仓本轮改动 `stopProof`／`evidence`／`paths` 与一条判据，**未提交未推**；Orca 的 #213 结算修复依赖本仓不在关键路径上的 #223 改动。Orca 那边已修 #207／#222／#214，并有 #213 的配对判据；#212 按人裁定改为只读 funding-preview 展示（Orca 内部路由，不改本仓契约）；`~/.orca/profile.json` 已由人授权切到 v4。详见 Orca handoff §3 最新一节与 §4.0、§8。
   - **#158 已落地（两侧）**：新增判别式来源／胶囊 `ccloop-execution-without-final-v1`——干净退出、完整 stream、HEAD 不变、无工具规则违例、用量已知、verifier 未进入，租约内快照并在清理前绑定真实发布 ref/tree/parent；**不带 execution／taskResult／decisions／normalizedExecutionHash**。消费端只跑合同声明的 command checks，保留 funding/fence/entry/restart 全部门；成功候选带 `verificationOnly:true` 且 `missing:[]`。严格解码器与旧 Codex format-failure 拒绝一字未改。
   - **合同新字段 `verification.commandChecksDecideGoal`**：可选、缺省不出现，仅允许 command verifier／单仓／无 setup；它是「独立 checks 能否判完成」的**作者声明**，不是从 `verifierType` 推断来的。
   - **#138**：Orca 侧已把 no-change undo 做成结构化 Git 证明；本仓账本 schema 未动。

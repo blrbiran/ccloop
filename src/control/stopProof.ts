@@ -147,13 +147,13 @@ export async function proveStopped(record: StopProofRecord, deps: StopProofDeps 
   const completed = await readCompletedPhases(record.sourceDir);
   if (completed === null || (completed > 0 && second.length === 0)) return null;
 
+  // Each call still probes both times. Stable evidence bytes keep repeated and concurrent collects on one artifact.
   const evidence = {
     executionId: record.accepted.executionId,
     generation: record.accepted.generation,
     isolated: true,
-    probedAt: new Date().toISOString(),
     graceMs: deps.graceMs ?? 100,
-    registered: second.map(({ pid, pgid, startedAt, phase }) => ({ pid, pgid, startedAt, phase })),
+    registered: second.map(({ pid, pgid, startedAt, phase, registeredAt }) => ({ pid, pgid, startedAt, phase, registeredAt })),
     ownerLeaseReleased: true,
     workerSealed: true,
   };

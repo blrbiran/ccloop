@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { open } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
 import { artifactRefSchema, ControlProtocolError, type ArtifactRefV1 } from "./protocol.js";
-import { atomicReplacePrivateFile, ensurePrivateDirectory } from "./paths.js";
+import { atomicCreatePrivateFile, ensurePrivateDirectory } from "./paths.js";
 
 export const MAX_CONTROL_BYTES = 16 * 1024 * 1024;
 
@@ -32,7 +32,13 @@ export async function writeEvidence(sourceDir: string, bytes: Buffer): Promise<A
   const ref = { artifactId: `evidence-${hash}`, hash };
   const directory = join(sourceDir, "control", "evidence");
   await ensurePrivateDirectory(sourceDir, directory);
-  await atomicReplacePrivateFile(sourceDir, evidencePath(sourceDir, ref), bytes);
+  const target = evidencePath(sourceDir, ref);
+  let exists = false;
+  try { await lstat(target); exists = true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  if (!exists && await atomicCreatePrivateFile(sourceDir, target, bytes)) return ref;
+  const existing = await readEvidence(sourceDir, ref);
+  if (!existing.equals(bytes)) throw new ControlProtocolError("control-evidence-hash-mismatch");
   return ref;
 }
 

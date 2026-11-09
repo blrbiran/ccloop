@@ -1,10 +1,11 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { proveStopped, type StopProofRecord } from "../../src/control/stopProof.js";
+import { evidencePath } from "../../src/control/evidence.js";
 
 const execFileAsync = promisify(execFile);
 const fixturePath = resolve("tests/fixtures/process-tree.mjs");
@@ -62,6 +63,40 @@ afterEach(() => {
 });
 
 describe("quiet execution proof", () => {
+  it("re-probes every collect but reuses one proof for the same stopped process set (#223)", async () => {
+    const f = await stoppedFixture();
+    const path = join(f.sourceDir, "control", "processes.json");
+    const registeredAt = new Date().toISOString();
+    const processRecord = { pid: 123, pgid: 123, startedAt: "start", phase: "plan", registeredAt };
+    await writeFile(path, JSON.stringify([processRecord]));
+    let probes = 0;
+    const deps = { graceMs: 0, sleep: async () => {}, probeGroup: async (): Promise<"quiet"> => { probes += 1; return "quiet"; } };
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-11-09T00:00:00.000Z"));
+      const first = await proveStopped(f.record, deps);
+      expect(first).not.toBeNull();
+      const firstInode = (await lstat(evidencePath(f.sourceDir, first!.source))).ino;
+      vi.setSystemTime(new Date("2026-11-09T00:01:00.000Z"));
+      const second = await proveStopped(f.record, deps);
+      expect(second?.source).toEqual(first?.source);
+      expect((await lstat(evidencePath(f.sourceDir, second!.source))).ino).toBe(firstInode);
+      expect(probes).toBe(4);
+      expect(await readdir(join(f.sourceDir, "control", "evidence"))).toHaveLength(1);
+      const concurrent = await Promise.all([proveStopped(f.record, deps), proveStopped(f.record, deps)]);
+      expect(concurrent.map((proof) => proof?.source)).toEqual([first?.source, first?.source]);
+      expect(probes).toBe(8);
+      expect(await readdir(join(f.sourceDir, "control", "evidence"))).toHaveLength(1);
+
+      await writeFile(path, JSON.stringify([{ ...processRecord, phase: "verify" }]));
+      const changed = await proveStopped(f.record, deps);
+      expect(changed?.source).not.toEqual(first?.source);
+      expect(await readdir(join(f.sourceDir, "control", "evidence"))).toHaveLength(2);
+      expect(probes).toBe(10);
+      expect(await proveStopped(f.record, { ...deps, probeGroup: async () => "alive" })).toBeNull();
+      expect(await readdir(join(f.sourceDir, "control", "evidence"))).toHaveLength(2);
+    } finally { vi.useRealTimers(); }
+  });
   // HUMAN RULING 139 (2026-10-07, named this criterion for rewrite under ruling 88): this encodes that a registered
   // group whose leader has exited while its descendants still live is NOT quiet (no proof), and that a proof appears
   // only once the whole group is gone. The rewrite only moves the wait for the leader's exit: the promise is created
