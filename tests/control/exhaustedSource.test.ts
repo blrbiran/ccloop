@@ -96,6 +96,37 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:10,output_
  await runControlWorker(['--source-dir',f.sourceDir,'--execution-id','execution-1','--nonce','nonce-1']);
  return JSON.parse((await f.rpc('saved-result-evidence',{input:f.input})).stdout);
 }
+it('keeps a capsule for a prompt-mode codex installation exhausted before verification (#206)',async()=>{
+ const f=await resultFixture();
+ try{
+  f.contract.executionPolicy.tokenBudget=25;f.input.contractHash=canonicalHash(f.contract);
+  const fake=join(f.root,'prompt-execute.mjs');
+  // No --output-schema in prompt mode: the schema text rides in the prompt, so the phase is read from it.
+  await writeFile(fake,`import {readFileSync,writeFileSync} from 'node:fs';
+if(process.argv.includes('--version')){console.log('9.9.9-fake');process.exit(0)}
+if(!process.argv.includes('exec')){process.stdout.write(process.argv.includes('mcp')?'[]\\n':process.argv.includes('models')?'{"models":[]}\\n':'',()=>process.exit(0));await new Promise(()=>{})}
+let prompt='';for await(const part of process.stdin)prompt+=part;
+const args=process.argv,s=args.includes('--output-schema')?readFileSync(args[args.indexOf('--output-schema')+1],'utf8'):prompt;
+const phase=s.includes('"approved"')?'verify':s.includes('"changedFiles"')?'execute':'plan';
+if(phase==='verify')throw Error('verification must not enter');
+if(phase==='execute')writeFileSync('answer.txt','complete\\n');
+const value=phase==='plan'?{summary:'write answer',primaryTargetPaths:['answer.txt']}:{result:{changedFiles:['answer.txt'],diffPatch:'',commandOutputs:[],stdoutStderrLog:'done'}};
+writeFileSync(args[args.indexOf('-o')+1],JSON.stringify(value));
+console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:10,output_tokens:5}}));
+`);
+  const sealed=await sealCodex({command:[process.execPath,fake],model:'fixture',sandbox:'workspace-write',budgetMode:'soft',timeoutMs:10000,killGraceMs:50});
+  // structuredOutput is not part of agentConfigHash (prompt-schema spec): the worker reads it from this config.
+  (sealed.config.installation as {structuredOutput?:string}).structuredOutput='prompt';
+  f.input.claim.agent=sealed.selection;f.input.claim.configHash=sealed.configHash;
+  await atomicReplacePrivateFile(f.sourceDir,join(f.sourceDir,'control/config.json'),Buffer.from(canonicalJson(sealed.config)));
+  await atomicReplacePrivateFile(f.sourceDir,join(f.sourceDir,'control/envelope.json'),Buffer.from(canonicalJson(f.input)));
+  await writeAccepted(f.sourceDir,{protocol:1,envelopeHash:canonicalHash(f.input),executionId:'execution-1',configHash:sealed.configHash,generation:1,acceptedAt:new Date().toISOString(),launch:'intended',worker:null});
+  await runControlWorker(['--source-dir',f.sourceDir,'--execution-id','execution-1','--nonce','nonce-1']);
+  expect(JSON.parse(await readFile(join(f.runDir,'loop-state.json'),'utf8')).status).toBe('exhausted');
+  if(!existsSync(join(f.runDir,'saved-result','exhausted-candidate.json')))throw new Error(await readFile(join(f.runDir,'saved-result','exhausted-candidate-unavailable.json'),'utf8').catch(()=> 'no candidate and no refusal'));
+  expect(JSON.parse((await f.rpc('saved-result-evidence',{input:f.input})).stdout).capsule).not.toBeNull();
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
 it('captures the final mechanical handoff event in an exhausted completion source',async()=>{
  const f=await resultFixture();
  try{
