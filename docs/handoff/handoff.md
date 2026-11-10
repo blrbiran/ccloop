@@ -45,7 +45,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 - **零用量事实（#215／#210，人裁选 A）**：终态失败原因新增可选 `usageKnownZero:true`，只在 `observedTokensOf` 证明为 0 时写入（`neverStarted` 与 429 `before-work`；`rate-limit-after-item` 不写）。collect 的严格 schema、`RunFailureCauseV1` 同步。判据 `tests/runtime/codex/usageKnownZero.test.ts` 2 条（正／负各一）。
 - **prompt-mode exhausted（#206）**：`initializedBase` 与 `resolvedSourceBase` 的初始化条件加入 `exhaustedCompletionCapture`；此前 prompt-mode codex 拿 null base，写出 `saved-result-capture-authority-invalid`。判据 `tests/control/exhaustedSource.test.ts` 新增 prompt-mode 用例；回退两处条件即变红。
-- **门（现测，负载不可用）**：全量 `vitest run` 时机器 load average 238（27 users），254 文件 **2,560 过／36 红**；36 条全部是 `Test timed out` 或 `ENOTEMPTY`（`savedResultRecovery.native`、`cli`、`taskResultOutcome`、`ompVerificationOnlyRecovery` 等），没有一条是断言失败。聚焦判据在本轮全绿：`usageKnownZero` 2/2、`exhaustedSource` 9/9（含 prompt-mode）、`stopProof`＋`phasesCompleted` 12/12。**低负载下需重跑全量再定论**；名单未改。
+- **门（现测，负载不可用）**：全量 `vitest run` 时机器 load average 238（27 users），254 文件 **2,560 过／36 红**；36 条全部是 `Test timed out` 或 `ENOTEMPTY`（`savedResultRecovery.native`、`cli`、`taskResultOutcome`、`ompVerificationOnlyRecovery` 等），没有一条是断言失败。聚焦判据在本轮全绿：`usageKnownZero` 2/2、`exhaustedSource` 9/9（含 prompt-mode）、`stopProof`＋`phasesCompleted` 12/12。**2026-11-10（Orca 会话 `9179cdad`）低负载重跑**：构建后全量 **668 文件／2,596 条全过**，`check-known-reds` failed 0、unexpected 0 ⇒ 上面 36 红判为负载；名单未改。
 
 - **主题行** `fix(control): the same stopped execution set keeps one stop-proof artifact (#223)`（已在本地 main、**未推**）。做法：`proveStopped` 仍每次做两轮真实进程探测；证据字节去掉 `probedAt`，只含稳定身份（executionId、generation、graceMs、注册进程含 `registeredAt`），因此同一停机状态得到同一内容地址。`writeEvidence` 改为「已存在且哈希已验证则不替换」：先用 `atomicCreatePrivateFile` 的 `link()` 只有创建者成功，并发调用共用同一 inode；目录 mtime 不再因重复写入而变，避免 Orca 并行归档把它判成 `changed:control/evidence`。
 - **判据**：`tests/control/stopProof.test.ts` 新增一条（先红：旧码两秒内产生两个 ref／新码替换 inode）：连续与并发 `proveStopped` 返回同一 ref、证据目录保持 1 份、两次探测次数照增；注册集合变化产生新 ref；进程重新出现返回 null。`phasesCompleted` 8/8；typecheck 0、build 0。
@@ -270,10 +270,8 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节；2026-11-09 repin／验收轮）
 
-- **2026-11-09 近况（就地替换旧述）**：本仓本轮改动 `stopProof`／`evidence`／`paths` 与一条判据，**已提交本地 main、未推**（主题行 `fix(control): the same stopped execution set keeps one stop-proof artifact`）；Orca 的 #213 结算修复不依赖这笔，但 #223 的跨仓复验要等它推上去并重新 pin。Orca 那边已修 #207／#222／#214，并有 #213 的配对判据；#212 按人裁定改为只读 funding-preview 展示（Orca 内部路由，不改本仓契约）；`~/.orca/profile.json` 已由人授权切到 v4。详见 Orca handoff §3 最新一节与 §4.0、§8。
-  - **#158 已落地（两侧）**：新增判别式来源／胶囊 `ccloop-execution-without-final-v1`——干净退出、完整 stream、HEAD 不变、无工具规则违例、用量已知、verifier 未进入，租约内快照并在清理前绑定真实发布 ref/tree/parent；**不带 execution／taskResult／decisions／normalizedExecutionHash**。消费端只跑合同声明的 command checks，保留 funding/fence/entry/restart 全部门；成功候选带 `verificationOnly:true` 且 `missing:[]`。严格解码器与旧 Codex format-failure 拒绝一字未改。
-  - **合同新字段 `verification.commandChecksDecideGoal`**：可选、缺省不出现，仅允许 command verifier／单仓／无 setup；它是「独立 checks 能否判完成」的**作者声明**，不是从 `verifierType` 推断来的。
-  - **#138**：Orca 侧已把 no-change undo 做成结构化 Git 证明；本仓账本 schema 未动。
+- **2026-11-10 近况（就地替换旧述，Orca 会话 `9179cdad`）**：本仓本轮**零代码改动**。人已推 ccloop main；Orca 已 `pin-ccloop` 到该已推提交（六项检查全 ok），所以 #206 prompt-mode exhausted 胶囊与 #215 `usageKnownZero` 现在在正式 pin 上。Orca 配对 `V10:|V11:` 用本仓工作树 `dist/cli.js` 跑 2 过／22 跳过。**付费真跑（真 429 before-work、prompt-mode exhausted）仍未做**。Orca 侧本轮修了 #201／#205／#209／#211 与 UI #216–#218／#220／#221，**都不改本仓契约**；#209 只在 Orca 的 agent preview 加了可选 `warning`。详见 Orca handoff §3 最新一节、§4.0、§8。
+  - 仍成立：#158 两侧落地（`ccloop-execution-without-final-v1`，无 execution／normalized hash；消费端只跑合同声明的 command checks）；合同可选 `verification.commandChecksDecideGoal` 是作者声明；#223 proof 去重；#138 本仓账本 schema 未动。
 - **给下一轮的实操警告**：用本仓工作树构建的 `dist/cli.js` 当 `ORCA_CCLOOP_BIN` 跑 Orca 测试；**别指 Orca 的 `node_modules/ccloop`** —— 那个包只有 `dist`、没有 `tests/fixtures/fake-codex.mjs`，会造出一批 spawn 假 codex 的假红，另有 `findCcloopRoot` 回溯不到仓库根的红。
 
 - **付费校准（2026-11-09，Orca 会话 `cf294856`，codex `gpt-6-sol`）顺带量到的本仓事实**：plan 阶段一次约 **43k token**（input 14,840＋cacheRead 28,288＋output 532），约 20 s；三笔 run 的 `loop-contract.json` 都冻结 `tokenBudget:11000, maxAttempts:1`，于是 plan 一结束就 `exhausted`。**Orca 的 `task retry --work` 只加账、不抬合同**，所以 finite 合同的任务无从恢复——方向由 Orca 侧定（见其 §8 待人第 3 条）。
