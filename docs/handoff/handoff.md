@@ -41,7 +41,17 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-10，测试者反馈 P0／A 轮）—— 零用量正向事实与 prompt-mode exhausted 胶囊
+### 最新（2026-11-10 晚，Orca 会话 `3153bf70`）—— #225 claude／omp 阶段内实时 token 阈值
+
+- **人裁 R4（原话）**：「#224／#225 同意软上限」——不承诺硬上限，但能在阶段中途停的 adapter（claude、omp）就该停。codex 不动：`codex exec --json` 只在 `turn.completed` 报一次用量，实时 `token_count` 只写会话文件，而 ccloop 用 `--ephemeral`。
+- **主题行** `feat(control): stop a claude or omp phase whose live usage passes the remaining token budget (#225)` 与 `docs(spec): live token threshold for claude and omp phases (#225)`；spec `docs/superpowers/specs/2026-11-10-live-token-threshold-design.md`。阶段内观测用量超过 `ceil(阶段前剩余 × 1.2)`（常量 `LIVE_TOKEN_THRESHOLD_FACTOR`，`src/budget/tokenPolicy.ts`，**不是合同字段**，无下限）⇒ 走与超时相同的 abort，run 以既有的 `exhausted`／`budget-exhausted` 收尾，记观测下界。claude 经 runner 的 fd 4 发 `{"observedTokens":n}`；omp 用流里已有的逐消息用量。**无合同／collect／schema 变化** ⇒ Orca 不必先改解析。
+- **两处实现席的决定（可逆，已报人审）**：① 由 `group`／`spend-cap` allowance 约束的 run **不停**（今天它们停放为 `blocked_waiting_human`／`token-allowance` 可续，停了会变 `exhausted`）；② omp 因预算被停时**直接记观测 token、不再写 `usage-lower-bound.json`**，避免和 Orca soft-mode 的下界结算重复计数；其它 omp abort 不变（`ompProtocol.ts` 注释末尾加了具名 ERRATUM）。
+- **判据** `tests/controller/liveTokenThreshold.test.ts` 6 条（真 adapter＋现有 fake，未调 provider）；1、2 先红，3–6 是「不许变」的行为，各由自己的变异打红（10 个变异，表在 spec 里）。
+- **门（现测）**：全量 255 文件 **2,602/2,602**，`check-known-reds` RC 0（名单 7、failed 0、unexpected 0），typecheck／build 0；跑时负载 10.8→49。
+- **诚实边界**：阶段内自带重试会把计数归零，比的是最大单次调用而非累计；停在越线那次观测之后，已在流里的照记；single call 不在范围；没有真 provider 回归。worktree 里 `npm ci` 挂了 1 h 44 min（被杀，RC 143），但 `.package-lock.json` 与主树字节相同，`npm ls`／typecheck／build 都过，便沿用了。
+- **⚠️ 主树 `dist/` 没有重建**（Orca 门当时在用它）：要给 Orca 当 `ORCA_CCLOOP_BIN` 前先 `npm run build`。
+
+### 上一轮（2026-11-10，测试者反馈 P0／A 轮）—— 零用量正向事实与 prompt-mode exhausted 胶囊
 
 - **零用量事实（#215／#210，人裁选 A）**：终态失败原因新增可选 `usageKnownZero:true`，只在 `observedTokensOf` 证明为 0 时写入（`neverStarted` 与 429 `before-work`；`rate-limit-after-item` 不写）。collect 的严格 schema、`RunFailureCauseV1` 同步。判据 `tests/runtime/codex/usageKnownZero.test.ts` 2 条（正／负各一）。
 - **prompt-mode exhausted（#206）**：`initializedBase` 与 `resolvedSourceBase` 的初始化条件加入 `exhaustedCompletionCapture`；此前 prompt-mode codex 拿 null base，写出 `saved-result-capture-authority-invalid`。判据 `tests/control/exhaustedSource.test.ts` 新增 prompt-mode 用例；回退两处条件即变红。
@@ -268,9 +278,9 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ---
 
-# 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节；2026-11-09 repin／验收轮）
+# 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-10 近况（就地替换旧述，Orca 会话 `9179cdad`）**：本仓本轮**零代码改动**。人已推 ccloop main；Orca 已 `pin-ccloop` 到该已推提交（六项检查全 ok），所以 #206 prompt-mode exhausted 胶囊与 #215 `usageKnownZero` 现在在正式 pin 上。Orca 配对 `V10:|V11:` 用本仓工作树 `dist/cli.js` 跑 2 过／22 跳过。**付费真跑（真 429 before-work、prompt-mode exhausted）仍未做**。Orca 侧本轮修了 #201／#205／#209／#211 与 UI #216–#218／#220／#221，**都不改本仓契约**；#209 只在 Orca 的 agent preview 加了可选 `warning`。详见 Orca handoff §3 最新一节、§4.0、§8。
+- **2026-11-10 晚 近况（就地替换旧述，Orca 会话 `3153bf70`）**：本仓本轮新增 #225 实时阈值（见「当前状态」最新节），**在本地 main**；Orca 的正式 pin 仍是 #206／#215 那笔已推提交，要带上 #225 须人推本仓后 Orca `pin-ccloop` + `npm ci`。Orca 本轮（测试者反馈 #202–#241，T1–T10）**不改本仓契约**；复核结论里与本仓有关的：#206 在 pin `73fff1a` 上已修（测试者跑的是旧 pin `407b47e`）；#235 维持 stop 顺序（verifier-sees-checks spec §3/§11），浪费改由 Orca 阶梯的资金下限挡；#236 的 selector 改名来自人的 codex `model_catalog_json`，本仓只是读到；#237 根因未证（provider 报的是 `reasoning_effort` 取值）。**Orca 的 repin 门已精简**：lock 只改 ccloop 时 `npm test` 只选点名 ccloop 的测试（约 433 文件），repin 不再重跑本仓全量。付费真跑仍未做。详见 Orca handoff §3 最新一节、§4.0、§八。
   - 仍成立：#158 两侧落地（`ccloop-execution-without-final-v1`，无 execution／normalized hash；消费端只跑合同声明的 command checks）；合同可选 `verification.commandChecksDecideGoal` 是作者声明；#223 proof 去重；#138 本仓账本 schema 未动。
 - **给下一轮的实操警告**：用本仓工作树构建的 `dist/cli.js` 当 `ORCA_CCLOOP_BIN` 跑 Orca 测试；**别指 Orca 的 `node_modules/ccloop`** —— 那个包只有 `dist`、没有 `tests/fixtures/fake-codex.mjs`，会造出一批 spawn 假 codex 的假红，另有 `findCcloopRoot` 回溯不到仓库根的红。
 
