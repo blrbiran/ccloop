@@ -608,10 +608,12 @@ function createSignalsRecorder(path) {
 // final stdout, so the runner reports activity on fd 4 as `{"openTools":n}` lines -- on every claude stdout chunk, at most
 // one line per second unless the open-tool count changed. A tool_use block opens a tool; a tool_result with its id closes
 // it. Only an adapter-spawned runner gets fd 4 (CCLOOP_CLAUDE_ACTIVITY_FD=4); without it nothing is reported.
+// Live token threshold (ccloop issue #225): the same channel carries the observed usage total as `{"observedTokens":n}`,
+// unthrottled, each time the observation grows, so the adapter can stop the phase on it.
 function createActivityReporter() {
-  if (process.env.CCLOOP_CLAUDE_ACTIVITY_FD !== "4") return { chunk() {}, event() {} };
+  if (process.env.CCLOOP_CLAUDE_ACTIVITY_FD !== "4") return { chunk() {}, event() {}, usage() {} };
   let out;
-  try { out = new Socket({ fd: 4, readable: false, writable: true }); out.on("error", () => {}); out.unref(); } catch { return { chunk() {}, event() {} }; }
+  try { out = new Socket({ fd: 4, readable: false, writable: true }); out.on("error", () => {}); out.unref(); } catch { return { chunk() {}, event() {}, usage() {} }; }
   const open = new Set();
   let lastWrite = 0, lastCount = -1;
   const report = () => {
@@ -631,6 +633,9 @@ function createActivityReporter() {
       }
       // No write here: the chunk that carried this event reports next, and a changed count bypasses the throttle there
       // (mutation W8 showed a forced write here was equivalent).
+    },
+    usage(total) {
+      try { out.write(`${JSON.stringify({ observedTokens: total })}\n`); } catch { /* parent gone */ }
     },
   };
 }
@@ -690,10 +695,13 @@ async function runClaude(request, claudeCommand, extraArgs) {
     if (event && typeof event === "object" && !Array.isArray(event) && Object.prototype.hasOwnProperty.call(event, "structured_output")) {
       fallbackEnvelope = event;
     }
-    if (observer.observe(event) && observationPath) {
+    if (observer.observe(event)) {
       const snapshot = observer.snapshot();
       if (snapshot.total !== null) {
-        try { writeObservation(observationPath, snapshot); } catch (error) { process.stderr.write(`claude-runner: observation not written: ${String(error)}\n`); }
+        if (observationPath) {
+          try { writeObservation(observationPath, snapshot); } catch (error) { process.stderr.write(`claude-runner: observation not written: ${String(error)}\n`); }
+        }
+        activity.usage(snapshot.total);
       }
     }
   }, undefined, (bytes) => transcript.dropped(bytes));

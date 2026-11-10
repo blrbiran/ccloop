@@ -39,6 +39,13 @@ export type AttemptContext = {
    * when the contract has additionalRepos. Agents get them as extra directories; prompts list them.
    */
   extraWorktrees?: ExtraWorktreeContext[];
+  /**
+   * Live token threshold (ccloop issue #225, spec 2026-11-10-live-token-threshold-design.md): an adapter that sees usage
+   * while its call runs (claude, omp) reports the call's running observed total here, a lower bound, each time it grows.
+   * runLoop stops the phase through its abort signal once the total passes the threshold. Codex sees usage only on
+   * turn.completed and never calls it.
+   */
+  onObservedUsage?: (tokens: number) => void;
   onProcessRegistered?: (process: {
     pid: number;
     pgid: number;

@@ -44,6 +44,8 @@ export interface OmpProcessInput {
   onProcessRegistered?: AttemptContext["onProcessRegistered"];
   /** Live transcript: which decoder folds the stdout (the phase's with its tool rules, or the single call's). */
   purpose: OmpStreamPurpose;
+  /** Live token threshold (issue #225): the call's summed message_end usage, reported each time it grows; phases only. */
+  onObservedUsage?: AttemptContext["onObservedUsage"];
 }
 
 export async function runOmpPhase(
@@ -68,7 +70,7 @@ export async function runOmpPhase(
     args, prompt, cwd: context.worktreePath, evidenceDir, phase,
     purpose: { phase, selector: config.selection.model, ...(toolRules === undefined ? {} : { toolRules: { rules: toolRules, requiredChecks: context.contract.verification.requiredChecks } }) },
     timeoutMs: Math.min(config.installation.timeoutMs, context.state.budgetSnapshot.timeRemainingMs),
-    abortSignal: context.abortSignal, onProcessRegistered: context.onProcessRegistered,
+    abortSignal: context.abortSignal, onProcessRegistered: context.onProcessRegistered, onObservedUsage: context.onObservedUsage,
   });
 }
 
@@ -125,7 +127,13 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
     const timer = setTimeout(() => stop("timeout"), timeoutMs);
     // Activity watchdog (spec 2026-10-21 §2.2 omp): stdout/stderr bytes are activity; tool executions suspend the clock.
     const watch = new IdleWatch(effectiveIdleTimeoutMs(config.installation), () => { idle = watch.snapshot(); stop("stalled"); });
-    const splitter = new LineSplitter((line) => { const parsed = jsonLine(line); stream.push(parsed); if (parsed.kind === "row") ompToolRow(parsed.row, watch); });
+    let observed: number | null = null;
+    const splitter = new LineSplitter((line) => {
+      const parsed = jsonLine(line); stream.push(parsed); if (parsed.kind === "row") ompToolRow(parsed.row, watch);
+      // Live token threshold (issue #225): every assistant message_end carries its usage, so the running sum is observed.
+      const total = input.onObservedUsage === undefined ? null : stream.lowerBound.value();
+      if (total !== null && total !== observed) { observed = total; input.onObservedUsage!(total); }
+    });
     watch.start();
     input.abortSignal?.addEventListener("abort", abort, { once: true });
     child.stdout.on("data", (chunk: Buffer) => {

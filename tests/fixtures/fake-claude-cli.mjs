@@ -230,6 +230,25 @@ if (NEW_WRITE_MODES.has(mode)) {
     }
     await emit(envelope);
   };
+  // Live token threshold (ccloop issue #225): mode "usage-stream" answers as "ok" does, except that the phase named in
+  // <marker>.usage-stream.json ({phase, messages, tokens, intervalMs}) first (in execute) sets answer.txt to 42 and, under
+  // stream-json, opens `messages` messages of `tokens` input tokens each, `intervalMs` apart, appending each one's index to
+  // <marker>.usage-stream once printed and "done" after the last; a SIGTERM appends "terminated" there and exits.
+  if (mode === "usage-stream" && stream) {
+    const script = JSON.parse(readFileSync(`${marker}.usage-stream.json`, "utf8"));
+    if (script.phase === phase) {
+      process.on("SIGTERM", () => { appendFileSync(`${marker}.usage-stream`, "terminated\n"); process.exit(143); });
+      if (phase === "execute") writeFileSync("answer.txt", "42\n");
+      await emitInit();
+      openedBeforeDelay = true;
+      for (let index = 0; index < script.messages; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, script.intervalMs));
+        await emit({ type: "stream_event", event: { type: "message_start", message: { id: `msg_stream_${index}`, usage: { input_tokens: script.tokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 } } } });
+        appendFileSync(`${marker}.usage-stream`, `${index}\n`);
+      }
+      appendFileSync(`${marker}.usage-stream`, "done\n");
+    }
+  }
   const delay = entry?.delayMs?.[phase];
   if (!refused) {
     if (delay === undefined) {

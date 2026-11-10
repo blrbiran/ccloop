@@ -8,7 +8,7 @@ import type { MaterializedAgentConfigV1 } from "../agents/types.js";
 import { captureExecutionFormatFailure, ExecutionFormatFailure, resolveCheckpointOriginalBase } from "./executionFormatFailure.js";
 import { bindExhaustedCandidate, captureExhaustedCompletion } from "./exhaustedCompletion.js";
 import {captureOmpWithoutFinal,bindOmpWithoutFinal} from "./ompWithoutFinal.js";
-import { remainingTokens, minTokenCeiling, budgetAmountSchema, type BudgetAmount, type TokenPolicy } from "../budget/tokenPolicy.js";
+import { remainingTokens, minTokenCeiling, budgetAmountSchema, liveTokenThreshold, LIVE_TOKEN_STOP_REASON, type BudgetAmount, type TokenPolicy } from "../budget/tokenPolicy.js";
 import { execFile } from "node:child_process";
 import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -85,6 +85,8 @@ type PhaseOutcome<T> =
       elapsedMs: number;
       result?: T;
       abortedError?: unknown;
+      /** Live token threshold (issue #225): the phase was stopped because its observed total passed the threshold. */
+      budgetStop?: { observedTokens: number };
     };
 
 const execFileAsync = promisify(execFile);
@@ -690,6 +692,17 @@ function hasBudgetExceeded(state: RunState): boolean {
   return state.budgetSnapshot.timeRemainingMs === 0 || state.budgetSnapshot.tokenBudgetRemaining === 0;
 }
 
+/**
+ * Live token threshold (issue #225): what a phase stopped at the threshold books -- the larger of ccloop's live observation
+ * and the adapter's own after the stop, both lower bounds. It passed the threshold, which is above the remainder, so booking
+ * it leaves no token budget and the run ends exhausted (budget) as at a phase boundary. undefined for any other outcome.
+ */
+function budgetStopTokens(outcome: PhaseOutcome<{ tokenUsage?: number } | null>): number | undefined {
+  if (!outcome.timedOut || outcome.budgetStop === undefined) return undefined;
+  const reported = outcome.result?.tokenUsage ?? (outcome.abortedError instanceof PhaseExecutionError ? outcome.abortedError.tokenUsage : null) ?? 0;
+  return Math.max(outcome.budgetStop.observedTokens, reported);
+}
+
 function getPhaseTimeoutReason(phase: PhaseName, timeoutMs: number): string {
   return `${phase} phase exceeded per-attempt timeout of ${timeoutMs}ms`;
 }
@@ -715,8 +728,8 @@ function isToolRuleViolation(error: unknown): boolean {
 
 async function runPhaseWithTimeout<T>(
   timeoutMs: number,
-  operation: (abortSignal: AbortSignal) => Promise<T>,
-  options?: { awaitAbortedResult?: boolean },
+  operation: (abortSignal: AbortSignal, onObservedUsage: (tokens: number) => void) => Promise<T>,
+  options?: { awaitAbortedResult?: boolean; liveTokenThreshold?: number | null },
 ): Promise<PhaseOutcome<T>> {
   const startedAtMs = Date.now();
 
@@ -726,7 +739,21 @@ async function runPhaseWithTimeout<T>(
 
   const abortController = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const operationPromise = operation(abortController.signal).catch((error: unknown) => {
+  // Live token threshold (issue #225, ruling R4): the adapter's running observed total; past the threshold the phase is
+  // stopped through the same abort a timeout uses, with a reason the adapter can recognise.
+  const threshold = options?.liveTokenThreshold ?? null;
+  let observedTokens = 0;
+  let stopForBudget: () => void = () => undefined;
+  const budgetStop = new Promise<{ kind: "budget" }>((resolve) => { stopForBudget = () => resolve({ kind: "budget" }); });
+  const onObservedUsage = (tokens: number): void => {
+    if (!Number.isSafeInteger(tokens) || tokens <= observedTokens) return;
+    observedTokens = tokens;
+    if (threshold !== null && tokens > threshold && !abortController.signal.aborted) {
+      abortController.abort(LIVE_TOKEN_STOP_REASON);
+      stopForBudget();
+    }
+  };
+  const operationPromise = operation(abortController.signal, onObservedUsage).catch((error: unknown) => {
     throw new PhaseExecutionError(Math.max(Date.now() - startedAtMs, 0), error);
   });
 
@@ -739,8 +766,20 @@ async function runPhaseWithTimeout<T>(
           resolve({ kind: "timeout" });
         }, timeoutMs);
       }),
+      budgetStop,
     ]);
     const elapsedMs = Math.max(Date.now() - startedAtMs, 0);
+
+    if (outcome.kind === "budget") {
+      // Awaited, so the agent's process is gone before the worktree is touched and its own observation is read. Charged
+      // the time it actually ran: unlike a timeout, a budget stop did not use up its window.
+      try {
+        const result = await operationPromise;
+        return { timedOut: true, elapsedMs: Math.max(Date.now() - startedAtMs, 0), result, budgetStop: { observedTokens } };
+      } catch (error) {
+        return { timedOut: true, elapsedMs: Math.max(Date.now() - startedAtMs, 0), abortedError: error, budgetStop: { observedTokens } };
+      }
+    }
 
     if (outcome.kind === "timeout") {
       // A phase that reached its timeout consumed at least the window it was granted, so that
@@ -1719,6 +1758,11 @@ export async function runLoopFromState(
     await writeOwnedRunState(runDir, waiting);
     return waiting;
   };
+  // Live token threshold (issue #225): computed from the remainder each phase starts with. A run that can park on its
+  // allowance (group or spend-cap, as parkAllowance reads it) keeps parking with the paid phase's evidence; it is not
+  // stopped mid-phase, which would end it exhausted instead.
+  const phaseTokenThreshold = (): number | null => !recovery && options?.tokenPolicy?.bindingCauses.some((cause) => cause === "group" || cause === "spend-cap") === true
+    ? null : liveTokenThreshold(state.budgetSnapshot.tokenBudgetRemaining);
   const handoffRequested = (): boolean => options?.stopRequested?.requested === true;
   const handoffAborted = (): boolean => options?.phaseSignal?.aborted === true;
 
@@ -2000,9 +2044,9 @@ export async function runLoopFromState(
         // §8.1: launching a Claude call is a side effect.
         await heartbeat.assertHeld();
         activePhase = "plan";
-        const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal) =>
-          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt) }),
-          { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true },
+        const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal, onObservedUsage) =>
+          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt), onObservedUsage }),
+          { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold() },
         );
 
         if (handoffAborted()) {
@@ -2011,7 +2055,8 @@ export async function runLoopFromState(
         }
 
         if (planOutcome.timedOut) {
-          await settlePhase("plan", attempt, planOutcome.elapsedMs);
+          const planStopTokens = budgetStopTokens(planOutcome);
+          await settlePhase("plan", attempt, planOutcome.elapsedMs, planStopTokens === undefined ? undefined : { tokenUsage: planStopTokens }, true);
           state = await persistTerminalState(
             runDir,
             writeOwnedRunState,
@@ -2068,9 +2113,10 @@ export async function runLoopFromState(
         ? { timedOut: false as const, elapsedMs: 0, result: continuation.execution! }
         : await runPhaseWithTimeout(
         executeTimeoutMs,
-        (abortSignal) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext(), ...noteFor(attempt) }),
-        { awaitAbortedResult: true },
+        (abortSignal, onObservedUsage) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext(), ...noteFor(attempt), onObservedUsage }),
+        { awaitAbortedResult: true, liveTokenThreshold: phaseTokenThreshold() },
       );
+      const executeStopTokens = budgetStopTokens(executeOutcome);
 
       if (executeOutcome.timedOut && isToolRuleViolation(executeOutcome.abortedError)) throw executeOutcome.abortedError;
 
@@ -2085,7 +2131,8 @@ export async function runLoopFromState(
       let executeUsageAlreadyApplied = continuation?.nextPhase === "verify";
 
       if (executeOutcome.timedOut) {
-        await settlePhase("execute", attempt, executeOutcome.elapsedMs, executeOutcome.result);
+        await settlePhase("execute", attempt, executeOutcome.elapsedMs,
+          executeStopTokens === undefined ? executeOutcome.result : { ...executeOutcome.result, tokenUsage: executeStopTokens }, executeOutcome.result == null);
         executeUsageAlreadyApplied = true;
         execution = executeOutcome.result ?? null;
         await captureResult(attempt, worktreePath, execution);
@@ -2212,7 +2259,8 @@ export async function runLoopFromState(
             // Activity watchdog (spec 2026-10-21 §2.3): a partial carrying `stalled` is checked before the timeout mapping --
             // a stall is a transient fault, not a spent budget.
             attachedCause(completedExecution)?.classification.cause === "stalled" || completedExecution.failureType !== "timeout" ? "failed" : "exhausted",
-            completedExecution.failureMessage,
+            // Live token threshold (issue #225): the claude runner's partial after a budget stop says SIGTERM; the run says budget.
+            executeStopTokens === undefined ? completedExecution.failureMessage : BUDGET_EXHAUSTED_REASON,
             // Spec §5 row 2: the cause the adapter attached to its runner-built partial.
             attachedCause(completedExecution) === undefined ? undefined : phaseCause(completedExecution, "execute"),
           );
@@ -2292,11 +2340,11 @@ export async function runLoopFromState(
       };
       let verifyOutcome: PhaseOutcome<VerificationResult>;
       try {
-        verifyOutcome = await runPhaseWithTimeout(verifyTimeoutMs, (abortSignal) =>
+        verifyOutcome = await runPhaseWithTimeout(verifyTimeoutMs, (abortSignal, onObservedUsage) =>
           runVerification(
             contract,
             attemptAdapter,
-            {...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution, providerOptions),...(recovery?{savedExecution:{originalBase:recovery.originalBase,candidateHead:recovery.snapshot.head,changedPaths:recovery.actualChangedPaths}}:{})},
+            {...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution, providerOptions),...(recovery?{savedExecution:{originalBase:recovery.originalBase,candidateHead:recovery.snapshot.head,changedPaths:recovery.actualChangedPaths}}:{}),onObservedUsage},
             plan,
             completedExecution,
             options?.taskResultInput === undefined ? undefined : () => {
@@ -2308,7 +2356,7 @@ export async function runLoopFromState(
             recovery ? ()=>assertSavedResultUnmodified(runDir,worktreePath!,recovery,state) : undefined,
             attempt + inheritedAttempts === 1 && recovery === undefined,
           ),
-          { awaitAbortedResult: recovery !== undefined || attemptAdapter.awaitAbortedPhaseCleanup === true },
+          { awaitAbortedResult: recovery !== undefined || attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold() },
         );
       } catch (error) {
         if (error instanceof PhaseExecutionError) {
@@ -2337,7 +2385,8 @@ export async function runLoopFromState(
       }
 
       if (verifyOutcome.timedOut) {
-        const timeoutUsage=recovery ? verifyOutcome.result ?? (verifyOutcome.abortedError instanceof PhaseExecutionError && verifyOutcome.abortedError.tokenUsage!==null ? {tokenUsage:verifyOutcome.abortedError.tokenUsage}:undefined) : undefined;
+        const verifyStopTokens = budgetStopTokens(verifyOutcome);
+        const timeoutUsage=verifyStopTokens !== undefined ? {tokenUsage:verifyStopTokens} : recovery ? verifyOutcome.result ?? (verifyOutcome.abortedError instanceof PhaseExecutionError && verifyOutcome.abortedError.tokenUsage!==null ? {tokenUsage:verifyOutcome.abortedError.tokenUsage}:undefined) : undefined;
         await settlePhase("verify", attempt, verifyOutcome.elapsedMs,timeoutUsage,true);
         await flushStartedCapture();
         if(recovery)await assertSavedResultUnmodified(runDir,worktreePath,recovery,state);

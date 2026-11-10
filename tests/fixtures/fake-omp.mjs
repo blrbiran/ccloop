@@ -89,6 +89,23 @@ if (toolScript !== null && !Array.isArray(toolScript) && toolScript.hang === tru
   setInterval(() => {}, 1000);
   await new Promise(() => {});
 }
-for (const row of [{ type: "session", id: "fake" }, { type: "agent_start" }, ...toolRows, { type: "message_end", message }, { type: "agent_end", isTerminal: true, yielded: true, messages: [message] }]) {
+// Live token threshold (ccloop issue #225): `<marker>.usage-stream.json` ({phase, messages, tokens, intervalMs}), when present,
+// makes that phase first print `messages` intermediate assistant messages (stopReason toolUse) of `tokens` total tokens each,
+// `intervalMs` apart, appending each one's index to `<marker>.usage-stream` once printed and `done` after the last, then
+// answer as usual; a SIGTERM appends `terminated` there and exits. Without the file nothing changes.
+const usageStream = existsSync(`${marker}.usage-stream.json`) ? JSON.parse(readFileSync(`${marker}.usage-stream.json`, "utf8")) : null;
+const opening = [{ type: "session", id: "fake" }, { type: "agent_start" }];
+if (usageStream !== null && usageStream.phase === phase) {
+  process.on("SIGTERM", () => { appendFileSync(`${marker}.usage-stream`, "terminated\n"); process.exit(143); });
+  for (const row of opening.splice(0)) process.stdout.write(`${JSON.stringify(row)}\n`);
+  for (let index = 0; index < usageStream.messages; index += 1) {
+    await new Promise((done) => setTimeout(done, usageStream.intervalMs));
+    const step = { role: "assistant", content: [{ type: "text", text: `step ${index}` }], provider: "gateway", model: "model-a", stopReason: "toolUse", usage: { input: usageStream.tokens, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: usageStream.tokens, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    await new Promise((done) => process.stdout.write(`${JSON.stringify({ type: "message_end", message: step })}\n`, done));
+    appendFileSync(`${marker}.usage-stream`, `${index}\n`);
+  }
+  appendFileSync(`${marker}.usage-stream`, "done\n");
+}
+for (const row of [...opening, ...toolRows, { type: "message_end", message }, { type: "agent_end", isTerminal: true, yielded: true, messages: [message] }]) {
   process.stdout.write(`${JSON.stringify(row)}\n`);
 }

@@ -49,6 +49,9 @@ export function assistantUsage(message: Record<string, unknown>): { input: numbe
 }
 
 /** The diagnostic lower bound never becomes a ccloop usage observation. */
+// *** ERRATUM (live token threshold, ccloop issue #225, 2026-11-10; spec 2026-11-10-live-token-threshold-design.md) -- one
+// case books it: a phase runLoop stops because this sum passed the live token threshold books the sum it observed (the omp
+// adapter's observedTokens, a lower bound) and writes no usage-lower-bound.json. Every other unfinished omp call is unchanged. ***
 export function ompUsageLowerBound(events: string): number | null {
   return foldText(events, new OmpLowerBoundFold()).value();
 }

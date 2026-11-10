@@ -182,6 +182,8 @@ type ClaudeCall = {
   toolRules?: ToolRulesV1;
   /** Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5): the extra worktrees, passed as --add-dir on every phase. */
   addDirs?: readonly string[];
+  /** Live token threshold (issue #225): the runner's running observed total (fd 4 `{"observedTokens":n}`); phases only. */
+  onObservedUsage?: AttemptContext["onObservedUsage"];
 };
 
 export class ClaudeAgentAdapter implements RuntimeAdapter {
@@ -302,7 +304,11 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       const activity = child.stdio[4] as NodeJS.ReadableStream | null;
       activity?.on("data", lineFeeder((line) => {
         watch.activity();
-        try { const open = (JSON.parse(line) as { openTools?: unknown }).openTools; if (typeof open === "number") watch.reportOpenTools(open); } catch { /* activity only */ }
+        try {
+          const report = JSON.parse(line) as { openTools?: unknown; observedTokens?: unknown };
+          if (typeof report.openTools === "number") watch.reportOpenTools(report.openTools);
+          if (typeof report.observedTokens === "number") call.onObservedUsage?.(report.observedTokens);
+        } catch { /* activity only */ }
       }));
       activity?.on("error", () => {});
       watch.start();
@@ -447,7 +453,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     return {
       runDir: context.runDir, attempt: context.attempt, cwd: context.worktreePath,
       timeLimitMs: context.state.budgetSnapshot.timeRemainingMs,
-      abortSignal: context.abortSignal, onProcessRegistered: context.onProcessRegistered,
+      abortSignal: context.abortSignal, onProcessRegistered: context.onProcessRegistered, onObservedUsage: context.onObservedUsage,
       ...(context.extraWorktrees === undefined ? {} : { addDirs: context.extraWorktrees.map((extra) => extra.worktreePath) }),
     };
   }

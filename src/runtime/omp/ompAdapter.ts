@@ -12,6 +12,7 @@ import { attemptRefNames } from "../../workspace/worktreeManager.js";
 import type { CallClassification } from "../failureCause.js";
 import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
 import type { OmpPhaseOutcome } from "./runOmpPhase.js";
+import { LIVE_TOKEN_STOP_REASON } from "../../budget/tokenPolicy.js";
 
 /**
  * Per-contract tool rules (spec 2026-10-22 §4 "omp after-exit check"): an execute call ran a command outside the
@@ -133,6 +134,11 @@ export class OmpAdapter implements RuntimeAdapter {
     }
     if (outcome.reason !== "completed") {
       const lowerBound = outcome.stream.lowerBound.value();
+      // Live token threshold (issue #225): runLoop stopped this call for what it observed, so that observation is booked
+      // (observedTokens) and the call leaves no floor -- usage-lower-bound.json counts only calls whose usage went unbooked.
+      if (outcome.reason === "aborted" && context.abortSignal?.reason === LIVE_TOKEN_STOP_REASON && lowerBound !== null) {
+        throw Object.assign(new Error(`omp-${outcome.reason}: ${outcome.evidenceDir}`), { neverStarted: outcome.neverStarted, observedTokens: lowerBound });
+      }
       if (lowerBound !== null) await writeFile(join(outcome.evidenceDir, "usage-lower-bound.json"), JSON.stringify({ tokens: lowerBound }), { mode: 0o600 });
       throw Object.assign(new Error(`omp-${outcome.reason}: ${outcome.evidenceDir}`), { neverStarted: outcome.neverStarted });
     }
