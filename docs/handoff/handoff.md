@@ -41,15 +41,15 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-10 晚，Orca 会话 `3153bf70`）—— #225 claude／omp 阶段内实时 token 阈值
+### 最新（2026-11-10 晚，Orca 会话 `3153bf70`）—— #225 claude／omp 阶段内实时 token 阈值；**已推，Orca 已 repin**（2026-11-11）
 
+- **2026-11-11（Orca 会话 `29b4e843`）**：人已推本仓 main（`ls-remote` 现核）；Orca 用 `pin-ccloop` 钉到含 #225 的那笔（Orca 主题行 `chore(deps): pin ccloop to the live token threshold for claude and omp phases (#225)`，六项检查全 ok），主树 `dist/` 已重建（含 `LIVE_TOKEN_THRESHOLD_FACTOR`）。人审了两处实现决定：「同意」。本仓本轮零代码改动。
 - **人裁 R4（原话）**：「#224／#225 同意软上限」——不承诺硬上限，但能在阶段中途停的 adapter（claude、omp）就该停。codex 不动：`codex exec --json` 只在 `turn.completed` 报一次用量，实时 `token_count` 只写会话文件，而 ccloop 用 `--ephemeral`。
 - **主题行** `feat(control): stop a claude or omp phase whose live usage passes the remaining token budget (#225)` 与 `docs(spec): live token threshold for claude and omp phases (#225)`；spec `docs/superpowers/specs/2026-11-10-live-token-threshold-design.md`。阶段内观测用量超过 `ceil(阶段前剩余 × 1.2)`（常量 `LIVE_TOKEN_THRESHOLD_FACTOR`，`src/budget/tokenPolicy.ts`，**不是合同字段**，无下限）⇒ 走与超时相同的 abort，run 以既有的 `exhausted`／`budget-exhausted` 收尾，记观测下界。claude 经 runner 的 fd 4 发 `{"observedTokens":n}`；omp 用流里已有的逐消息用量。**无合同／collect／schema 变化** ⇒ Orca 不必先改解析。
-- **两处实现席的决定（可逆，已报人审）**：① 由 `group`／`spend-cap` allowance 约束的 run **不停**（今天它们停放为 `blocked_waiting_human`／`token-allowance` 可续，停了会变 `exhausted`）；② omp 因预算被停时**直接记观测 token、不再写 `usage-lower-bound.json`**，避免和 Orca soft-mode 的下界结算重复计数；其它 omp abort 不变（`ompProtocol.ts` 注释末尾加了具名 ERRATUM）。
+- **两处实现席的决定（人 2026-11-11 审过：「同意」）**：① 由 `group`／`spend-cap` allowance 约束的 run **不停**（今天它们停放为 `blocked_waiting_human`／`token-allowance` 可续，停了会变 `exhausted`）；② omp 因预算被停时**直接记观测 token、不再写 `usage-lower-bound.json`**，避免和 Orca soft-mode 的下界结算重复计数；其它 omp abort 不变（`ompProtocol.ts` 注释末尾加了具名 ERRATUM）。
 - **判据** `tests/controller/liveTokenThreshold.test.ts` 6 条（真 adapter＋现有 fake，未调 provider）；1、2 先红，3–6 是「不许变」的行为，各由自己的变异打红（10 个变异，表在 spec 里）。
 - **门（现测）**：全量 255 文件 **2,602/2,602**，`check-known-reds` RC 0（名单 7、failed 0、unexpected 0），typecheck／build 0；跑时负载 10.8→49。
 - **诚实边界**：阶段内自带重试会把计数归零，比的是最大单次调用而非累计；停在越线那次观测之后，已在流里的照记；single call 不在范围；没有真 provider 回归。worktree 里 `npm ci` 挂了 1 h 44 min（被杀，RC 143），但 `.package-lock.json` 与主树字节相同，`npm ls`／typecheck／build 都过，便沿用了。
-- **⚠️ 主树 `dist/` 没有重建**（Orca 门当时在用它）：要给 Orca 当 `ORCA_CCLOOP_BIN` 前先 `npm run build`。
 
 ### 上一轮（2026-11-10，测试者反馈 P0／A 轮）—— 零用量正向事实与 prompt-mode exhausted 胶囊
 
@@ -280,7 +280,11 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-10 晚 近况（就地替换旧述，Orca 会话 `3153bf70`）**：本仓本轮新增 #225 实时阈值（见「当前状态」最新节），**在本地 main**；Orca 的正式 pin 仍是 #206／#215 那笔已推提交，要带上 #225 须人推本仓后 Orca `pin-ccloop` + `npm ci`。Orca 本轮（测试者反馈 #202–#241，T1–T10）**不改本仓契约**；复核结论里与本仓有关的：#206 在 pin `73fff1a` 上已修（测试者跑的是旧 pin `407b47e`）；#235 维持 stop 顺序（verifier-sees-checks spec §3/§11），浪费改由 Orca 阶梯的资金下限挡；#236 的 selector 改名来自人的 codex `model_catalog_json`，本仓只是读到；#237 根因未证（provider 报的是 `reasoning_effort` 取值）。**Orca 的 repin 门已精简**：lock 只改 ccloop 时 `npm test` 只选点名 ccloop 的测试（约 433 文件），repin 不再重跑本仓全量。付费真跑仍未做。详见 Orca handoff §3 最新一节、§4.0、§八。
+- **2026-11-11 近况（就地替换旧述，Orca 会话 `29b4e843`）**：Orca 已 repin 到含 #225 的本仓 main（见「当前状态」最新节），repin 门选 440 文件、3 红＝1 条 Orca 既有红＋2 条单跑 22/22 过的负载红。本仓本轮**零代码改动**、契约不变。与本仓有关的复核结论：
+  - **#235 不改**（读码坐实）：verify 的 `safeToRetry:false` 是本仓自己写的——必需检查失败只在 lineage 第 1 次 attempt 给 `true`（`runRequiredChecks` 的 `checkFailureRetryable`，人 10-21 选 (b)），之后恒 `false`；所以测试者读成「verifier 说别重试」是误读。重复失败不进阶梯跳过条件仍是 Orca spec `2026-11-04-task-setup-and-check-retry-design.md` §4.7 的明文决定。
+  - **#237 大概率不是本仓问题（推断，未复现）**：测试者机器上 catalog 是 magpie 生成的 `magpie-models.json`，`tokenswitch/…` 是 magpie 的路由 slug、原样传给 `--model` 正确；那两条 400 在 TokenSwitch 里记在 `app_type=openclaw`、同时段 codex 自己的请求都是 200，更像 magpie 往上游转发时映射了 effort（magpie catalog 列 `medium`，TokenSwitch 只收 `low|high|max`）。要定论：测试者在自己的 magpie 开「请求存档」复现一次，看存档请求体的 `reasoning.effort`。
+  - Orca 本轮新增「续跑带 operator note」（#226 ii）走的是本仓已有的 `work.operatorNote`／`operatorNoteGate`，**本仓不用改**。
+  - 详见 Orca handoff §3 最新一节、§4.0、§八。
   - 仍成立：#158 两侧落地（`ccloop-execution-without-final-v1`，无 execution／normalized hash；消费端只跑合同声明的 command checks）；合同可选 `verification.commandChecksDecideGoal` 是作者声明；#223 proof 去重；#138 本仓账本 schema 未动。
 - **给下一轮的实操警告**：用本仓工作树构建的 `dist/cli.js` 当 `ORCA_CCLOOP_BIN` 跑 Orca 测试；**别指 Orca 的 `node_modules/ccloop`** —— 那个包只有 `dist`、没有 `tests/fixtures/fake-codex.mjs`，会造出一批 spawn 假 codex 的假红，另有 `findCcloopRoot` 回溯不到仓库根的红。
 
