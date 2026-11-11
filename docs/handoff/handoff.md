@@ -246,6 +246,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 | **Codex 429** | 5xx 与其他措辞无样本未识别；可用 `gpt-6-luna` 真回归一次（付费，先问人） |
 | **`capabilities` 计算化** | 人裁「分两步」的第二步，未设计。今天三个 kind 的 `requestBoundProof` 都恒 `null`（`src/agents/{claude,codex,omp}.ts`） |
 | **codex 单次调用没有输出上限** | `"v1-soft"`：事后核对、不封顶 |
+| **#252 转录调用的 `startedAt`（Orca 会话 `5abcad7d` 2026-11-12，待人点名）** | 补丁未提交，在 worktree `.claude/worktrees/f-transcript-started`（分支 `f/transcript-started-at`；副本 `/private/tmp/orca-f1112/w6/ccloop-startedAt.patch`）：把 `listTranscripts` 已读的 `process.json` `startedAt` 输出成 ISO 字符串、collect strict schema 加可选字段；typecheck／build 过，其余 4 个转录文件 46/46。它让 `tests/control/collectTranscripts.test.ts` 4 条 `toEqual` 整条比对的既有判据红（只需在期望里加上 `startedAt`）⇒ **按 Rule 15 要人逐条点名**；点名后补新判据与变异、人推、Orca repin。Orca 侧已在 Orca main、无 pin 不生效 |
 | **Linux** | 整套历史上红 5 条；之后只在临时 VM 跑过 `/usr/bin/flock` 两进程串行；**整套未在 Linux 再跑** |
 
 ---
