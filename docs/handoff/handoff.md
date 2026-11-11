@@ -280,7 +280,12 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-11 近况（就地替换旧述，Orca 会话 `29b4e843`）**：Orca 已 repin 到含 #225 的本仓 main（见「当前状态」最新节），repin 门选 440 文件、3 红＝1 条 Orca 既有红＋2 条单跑 22/22 过的负载红。本仓本轮**零代码改动**、契约不变。与本仓有关的复核结论：
+- **2026-11-11 晚 近况（就地替换旧述，Orca 会话 `f958ec3f`）**：本仓本轮**零代码改动**、契约不变、Orca **没有 repin**（pin 仍是含 #225 的那笔）。Orca 侧落地的、会影响本仓收到什么或怎么被读的：
+  - **预算 A 方案**（Orca spec `2026-11-11-budget-defaults-and-reviewed-acceptance-design.md` §7）：不限额组里估算只作「预期」，不再写成任务 `tokenBudget`／`maxAttempts`／活动时间 ⇒ 本仓在这种组里更常收到 `tokenBudget:null`，于是 #225 的阶段内实时停**不再触发**（它只在任务自己的有限上限是 binder 时生效）；花费上限仍由 `parkAllowance` 在阶段边界停放。有限组与人手设的有限 token 字节不变，#225 照旧。
+  - **`orca task accept-attempt`**（人专用，#227）：从 **Orca 自己的归档快照**重建 attempt（不读 `refs/ccloop/run/attempts/N` —— 那是按路径共享、后一个 run 会覆盖的 ref），在合并树上用 Orca 自己的检查跑 setup＋必需检查，过了才落地；**不起 ccloop、不调 agent**，与本仓 verify-only 恢复（只在 `commandChecksDecideGoal` 下重跑检查）是两条路。
+  - Orca 需求调用失败时把本仓 `failureCause.detail`（≤512 B）记进 call record；round 的 `lastInvalidReason` 仍是 `no-output`（Orca spec 2026-10-15 错误码 §4.5 钉着，改它待人裁）。
+  - #237 人 2026-11-11 裁「先忽略，之后实际测试看看」，不再等测试者证物。
+  - 以下为 `29b4e843` 轮的结论，仍成立：
   - **#235 不改**（读码坐实）：verify 的 `safeToRetry:false` 是本仓自己写的——必需检查失败只在 lineage 第 1 次 attempt 给 `true`（`runRequiredChecks` 的 `checkFailureRetryable`，人 10-21 选 (b)），之后恒 `false`；所以测试者读成「verifier 说别重试」是误读。重复失败不进阶梯跳过条件仍是 Orca spec `2026-11-04-task-setup-and-check-retry-design.md` §4.7 的明文决定。
   - **#237 大概率不是本仓问题（推断，未复现）**：测试者机器上 catalog 是 magpie 生成的 `magpie-models.json`，`tokenswitch/…` 是 magpie 的路由 slug、原样传给 `--model` 正确；那两条 400 在 TokenSwitch 里记在 `app_type=openclaw`、同时段 codex 自己的请求都是 200，更像 magpie 往上游转发时映射了 effort（magpie catalog 列 `medium`，TokenSwitch 只收 `low|high|max`）。要定论：测试者在自己的 magpie 开「请求存档」复现一次，看存档请求体的 `reasoning.effort`。
   - Orca 本轮新增「续跑带 operator note」（#226 ii）走的是本仓已有的 `work.operatorNote`／`operatorNoteGate`，**本仓不用改**。
