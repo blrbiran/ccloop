@@ -124,7 +124,9 @@ export class CodexAdapter implements RuntimeAdapter {
       try { usage=outcome.stream.uniqueUsage.value(); }
       catch(error) {
         await writeFile(join(outcome.evidenceDir,"decode-error.txt"),String(error),{mode:0o600});
-        throw new Error(`${String(error)}: ${outcome.evidenceDir}`);
+        // Tester follow-up E §1 (Orca issue #249): as ruling 26 above, the failed phase carries the turn usage its stdout
+        // showed (a mid-stream error row before a completed turn), null when none; the failure itself is unchanged.
+        throw Object.assign(new Error(`${String(error)}: ${outcome.evidenceDir}`),{observedTokens:outcome.stream.turnUsage.value()});
       }
       const modelUsage=outcome.stream.modelUsage.value(this.config.model) ?? undefined;
       await writeFile(join(outcome.evidenceDir,"usage.json"),JSON.stringify(usage.usageEvidence,null,2),{mode:0o600});
@@ -159,7 +161,8 @@ export class CodexAdapter implements RuntimeAdapter {
       return modelUsage === null ? result : { ...result, modelUsage };
     } catch (error) {
       await writeFile(join(outcome.evidenceDir, "decode-error.txt"), String(error), { mode: 0o600 });
-      throw new Error(`${String(error)}: ${outcome.evidenceDir}`);
+      // Tester follow-up E §1 (Orca issue #249): as the execute path above, the turn usage the stdout showed, null when none.
+      throw Object.assign(new Error(`${String(error)}: ${outcome.evidenceDir}`), { observedTokens: outcome.stream.turnUsage.value() });
     }
   }
 

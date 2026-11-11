@@ -238,6 +238,13 @@ process.stdin.on("end",()=>{
     };
     pump();return;
   }
+  // Tester follow-up E §1 (Orca issue #249): mode `error-then-usage` prints a synthetic mid-stream `error` row and then the
+  // default mode's events (an agent message and turn.completed with usage 12 + 3), after the default final answer;
+  // `error-no-usage` prints the same `error` row and agent message but no turn.completed.
+  if(mode==="error-then-usage"||mode==="error-no-usage") {
+    const error=JSON.stringify({type:"error",message:"fixture mid-stream error"})+"\n";
+    process.stdout.write(error+(mode==="error-then-usage"?events:events.split("\n")[0]+"\n"));return;
+  }
   process.stdout.write(mode==="bad-json" ? "not JSON\n" : events);
   if(mode==="nonzero") process.exitCode=7;
   };
