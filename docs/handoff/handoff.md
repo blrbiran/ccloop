@@ -41,7 +41,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-11 深夜，Orca 会话 `e43cd52d`，测试者反馈 E 轮）—— #249 codex 中途 `error` 行不再吞掉已完成回合的用量；**在本地 main、未推（Tier 0 闸门拦了 agent 的 push）、Orca 未 repin**
+### 最新（2026-11-11 深夜，Orca 会话 `e43cd52d`，测试者反馈 E 轮）—— #249 codex 中途 `error` 行不再吞掉已完成回合的用量；**人已推，Orca 已 repin**（Orca 主题行 `chore(deps): pin ccloop to the codex usage kept after a mid-stream error row (#249)`）
 
 - **主题行** `fix(codex): a phase that fails on a mid-stream error row carries its completed turn's usage (#249)`（分支 `e/codex-usage-after-error-row`，`--ff-only` 进本地 main；分支与 worktree `.claude/worktrees/e-codex-usage` 还在，可 `branch -d`／`worktree remove`）。
 - **病因**：`CodexUsageFold.push`（`src/runtime/codex/protocol.ts`）见到流里任一 `error`／`turn.failed` 行就定成 `codex-event-error`；流后面照样有成功的 `turn.completed`＋final 时，`decodePhase` 的 `uniqueUsage.value()` 抛错，重抛的普通 Error 不带 `observedTokens` ⇒ `failure-cause.json` `usageObserved:false`、Orca 记未知（soft 组按下界 null 记 0）。测试者两次丢了 2.58M／4.50M token。
@@ -49,7 +49,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 - **与设计的偏差**（Orca spec `2026-11-11-tester-followup-e-design.md` §1）：① 调用自己的 `outcome.json` 仍 `observedTokens:null`（解码前写、对所有 completed 调用按设计为 null），修复体现在 `failure-cause.json`、错误的观测 token、run 记账；② plan／verify 的 catch 也包住其后的 final 扫描与证据写入 ⇒ 完成回合后因别的原因失败的 plan／verify 也记该回合用量；③ `savedResultRecovery.ts` 的 `rawExecutionTokensOf` 对这种流仍拒 `codex-event-error`（不是同一机制，未改）。
 - **判据**：新增 `tests/runtime/codex/usageAfterErrorRow.test.ts` 5 条（fake-codex 新模式 `error-then-usage`／`error-no-usage`，其余模式与参数约定字节不变）；改前 3 红 2 绿（两条 null 守卫在旧码也绿）。**未改任何既有判据**（实现席拒用经控制器转述的一揽子改判据授权：本仓 Rule 15 要人逐条点名；本轮也不需要）。变异 M0–M3 在 clone 见红、0 字节还原（`/private/tmp/orca-e1111/w1-ccloop/mutations.md`）。
 - **门（现测，负载 34–52）**：typecheck／build 0；全量 2,585 过／15 红／7 pending；`check-known-reds` RC 1——名单内 1 条（claudePhaseRunner「waits for close…」），名单外 14 条全是超时／`ENOTEMPTY`／perf，涉及的 7 个文件单跑全绿（日志 `/private/tmp/orca-e1111/w1-ccloop/rerun-*.log`）。
-- **没做**：真 codex 付费回归。主树 `dist/` 已在 Orca 各实现席跑完门之后重建（含本笔）。**下一步归人**：推本仓 main；之后 Orca 用 `pin-ccloop` repin 到这笔（Orca 不需改码）。
+- **没做**：真 codex 付费回归。主树 `dist/` 已在 Orca 各实现席跑完门之后重建（含本笔）。Orca 已用 `pin-ccloop` repin 到这笔（七项检查 ok，Orca 不需改码）；本仓之后只有 handoff 提交，推没推以 `ls-remote` 现核。
 
 ### 上一轮（2026-11-10 晚，Orca 会话 `3153bf70`）—— #225 claude／omp 阶段内实时 token 阈值；**已推，Orca 已 repin**（2026-11-11）
 
@@ -290,7 +290,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-11 深夜 近况（就地替换旧述，Orca 会话 `e43cd52d`，测试者反馈 E 轮）**：本仓只有 #249 一笔（见「最新」节），**未推、Orca 未 repin**（pin 仍是含 #225 的那笔）；契约、collect、schema 都不变。Orca 本轮落地、会影响本仓收到什么或怎么被读的：
+- **2026-11-11 深夜 近况（就地替换旧述，Orca 会话 `e43cd52d`，测试者反馈 E 轮）**：本仓只有 #249 一笔（见「最新」节），**人已推、Orca 已 repin 到它**；契约、collect、schema 都不变。Orca 本轮落地、会影响本仓收到什么或怎么被读的：
   - **组级验收**（Orca #241）：组内所有任务落地后，Orca 在组分支末端的临时 worktree 里跑各任务 setup 的并集＋必需检查的并集（Orca 自己的 `runAsCheck`，**不起 ccloop**）；红了组不 done。合并后检查（R2）现在通过／无需检查也留记录（`drive.postMergeCheck`、activity `post-merge-check`）。
   - **转录列表顺序**由 Orca 服务端按 attempt → plan／execute／verify → seq 排（本仓 `listTranscripts` 按目录名排的顺序不再被直接展示；要真实开始时间排序需本仓在列表里输出 `startedAt`，**未做**）；codex `turn.completed` 的 cached／reasoning 计数进了 Orca 转录的 `num`。
   - 需求调用失败（record outcome 非 complete）在 Orca 记 `clarify-call-failed`／`split-call-failed`，本仓的 `errorCode` 与 `failureCause.detail` 照旧读，**本仓不用改**。
