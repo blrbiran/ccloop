@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, lstatSync, readFileSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { join } from "node:path";
 const mode=process.argv[2], marker=process.argv[3];
 // Orca agent selection (2026-09-26), spec §4.8: `--version` with no `exec` answers a fixed version and
 // writes nothing; every other call appends what the real codex would receive (from `exec` on) as one
@@ -198,6 +199,8 @@ process.stdin.on("end",()=>{
     const key=prompt.includes(CONTINUATION)&&script[`${task}#continuation`]!==undefined?`${task}#continuation`:script[task]!==undefined?task:undefined;
     entry=key===undefined?undefined:script[key];
     appendFileSync(marker+".tasks",`${phase} ${key??"-"}\n`);
+    // Task handoffs and live notes (Orca follow-up G §10.2, Part 5): every script-mode call's prompt, one JSON line each.
+    appendFileSync(marker+".prompts",JSON.stringify({phase,prompt})+"\n");
     if(phase==="execute" && entry===undefined) {process.stderr.write(`fake-codex script has no entry for task ${task}\n`);process.exitCode=3;return;}
   }
   if(mode==="frames") {
@@ -215,6 +218,10 @@ process.stdin.on("end",()=>{
     for(const [path,content] of Object.entries(entry.files)) writeFileSync(path,content);
     // Integration fixtures may report the paths they actually wrote; the default stays as before for older tests.
     if(Array.isArray(entry.reportedChangedFiles)) body.changedFiles=entry.reportedChangedFiles;
+    // Task handoffs (Orca follow-up G §10.2): an entry's `handoff` ({"handoff.md"?, "summary.md"?}) is written into the
+    // directory the prompt's "Handoff output directory: <dir>" line names; no line, nothing written.
+    const handoffDir=/^Handoff output directory: (.+)$/m.exec(prompt)?.[1];
+    if(entry.handoff!==undefined&&handoffDir!==undefined) for(const [name,content] of Object.entries(entry.handoff)) writeFileSync(join(handoffDir,name),content);
   }
   if(phase==="execute" && ["skill-integration","integration","write-hang","no-usage","false-answer","high-usage","reported","large-stream"].includes(mode)) writeFileSync("answer.txt","42\n");
   // Reported decisions and debug (ccloop spec 2026-10-20 §5): mode `reported` behaves as `integration` and its execute

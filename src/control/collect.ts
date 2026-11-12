@@ -14,6 +14,8 @@ import { readAcceptedOptional } from "./store.js";
 import { readToolRulesReport } from "./toolRulesReport.js";
 import { listTranscripts, type TranscriptEntryV1 } from "./transcripts.js";
 import { observedUsageLowerBound } from "./usageLowerBound.js";
+import { lstat } from "node:fs/promises";
+import { readLiveNoteDeliveries, type LiveNoteDeliveryV1 } from "./liveNotes.js";
 
 /** Orca labels and progress spec §3.2 (2026-09-28): the loop's latest state, as Orca shows a task's step. */
 export interface ProgressV1 {
@@ -61,6 +63,13 @@ export interface CollectionV1 {
    * the terminal state has one. Top level, like failureCause, so the strict terminal schemas stay as they are.
    */
   liveCeilingStop?: NonNullable<RunState["liveCeilingStop"]>;
+  /**
+   * Task handoffs (Orca spec 2026-11-12 tester follow-up G §10.2): present iff the envelope has work.handoff; each file is
+   * present iff it is a regular file in the output directory (a symlink or a missing directory is an absence).
+   */
+  handoffFiles?: { handoff: HandoffFileV1; summary: HandoffFileV1 };
+  /** Live notes (Orca follow-up G Part 5): ccloop's acknowledgements, present iff run/live-notes-delivered.json exists. */
+  liveNotes?: { delivered: LiveNoteDeliveryV1[] };
   /** Orca #116: the floor observedUsageLowerBound found; absent when there is none. For display, never booked. */
   // *** ERRATUM (Orca spec 2026-11-06-soft-mode-loop-run-settlement-design.md §3.2, §6; Orca session 86352010) -- "never booked" no longer holds in an unlimited group: under that design Orca books this floor (0 when there is none) as the run's approximate work usage under its own principal `orca-auto`, and saved-result recovery checks that booking (src/control/savedResultRecovery.ts, `approximate-floor`). It is still a floor, never an exact figure; a finite group still never books it. ***
   // *** ERRATUM (Orca #116, tester follow-up F §2, Orca commit "feat(control): settle a finite run's unknown usage at ccloop's observed floor, explicitly (#116)") -- "a finite group still never books it" no longer holds: a person or socket agent may now explicitly book this floor (it must be positive) for a finite remainder under their own principal, marker `observed-floor`, and saved-result recovery checks that booking as it checks `approximate-floor`. ***
@@ -71,6 +80,27 @@ export interface CollectionV1 {
    * there is one. Top level, like toolRules, so the protocol-3 terminal projection is untouched.
    */
   dirs?: CollectedDirV1[];
+}
+
+export interface HandoffFileV1 { present: boolean; bytes: number | null }
+
+async function handoffFileOf(path: string): Promise<HandoffFileV1> {
+  try {
+    const metadata = await lstat(path);
+    return metadata.isFile() ? { present: true, bytes: metadata.size } : { present: false, bytes: null };
+  } catch {
+    return { present: false, bytes: null };
+  }
+}
+
+/** A malformed acknowledgement file is left out rather than failing the collect. */
+async function liveNotesOf(sourceDir: string): Promise<CollectionV1["liveNotes"]> {
+  try {
+    const delivered = await readLiveNoteDeliveries(sourceDir);
+    return delivered === null ? undefined : { delivered };
+  } catch {
+    return undefined;
+  }
 }
 
 export interface CollectedDirV1 {
@@ -221,6 +251,10 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const extraKeys = input.work.kind === "loop" ? input.work.contract.context.additionalRepos?.map((repo) => repo.key) : undefined;
   // Evaluated after progressOf, which has checked the loop state's currentAttempt.
   const dirs = extraKeys === undefined ? undefined : await dirsOf(input.work.sourceDir, extraKeys, loopState === null ? null : loopState.state);
+  const handoffDirs = input.work.kind === "loop" ? input.work.handoff : undefined;
+  const handoffFiles = handoffDirs === undefined ? undefined
+    : { handoff: await handoffFileOf(join(handoffDirs.outputDir, "handoff.md")), summary: await handoffFileOf(join(handoffDirs.outputDir, "summary.md")) };
+  const liveNotes = await liveNotesOf(input.work.sourceDir);
   return {
     events,
     candidate: storedCandidate === null ? null : candidateOf(storedCandidate, proof),
@@ -235,6 +269,8 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     ...(transcripts.length === 0 ? {} : { transcripts }),
     ...(usageLowerBound === null ? {} : { usageLowerBound: { tokens: usageLowerBound } }),
     ...(dirs === undefined ? {} : { dirs }),
+    ...(handoffFiles === undefined ? {} : { handoffFiles }),
+    ...(liveNotes === undefined ? {} : { liveNotes }),
   };
 }
 

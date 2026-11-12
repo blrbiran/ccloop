@@ -230,6 +230,12 @@ export const collectionSchema = z.object({
     // Orca #252: the call's spawn time, when process.json recorded one.
     startedAt: z.string().datetime().optional(),
   }).strict()).min(1).optional(),
+  // Task handoffs (Orca follow-up G §10.2): present iff the envelope has work.handoff.
+  handoffFiles: z.object({ handoff: z.object({ present: z.boolean(), bytes: safeInteger.nullable() }).strict(),
+    summary: z.object({ present: z.boolean(), bytes: safeInteger.nullable() }).strict() }).strict().optional(),
+  // Live notes (Orca follow-up G Part 5): present iff ccloop acknowledged a note.
+  liveNotes: z.object({ delivered: z.array(z.object({ id: z.string().min(1), phase: z.enum(["plan", "execute", "verify"]),
+    attempt: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), at: z.string().datetime({ offset: true }) }).strict()).max(256) }).strict().optional(),
   // Live token ceiling (Orca tester follow-up G part 2): present iff the run ended at its live ceiling.
   liveCeilingStop: z.object({
     revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), tokens: safeInteger, cause: z.enum(["group", "pause-line", "task-cap"]),
