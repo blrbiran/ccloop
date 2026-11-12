@@ -41,15 +41,24 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-12，Orca 会话 `d1cbbd58`，测试者反馈 G 轮 Part B／C 的 ccloop 席）—— 实时 token 上限、任务交接目录、Live 笔记；**未合 main、未推**
+### 最新（2026-11-12，Orca 会话 `d1cbbd58`，测试者反馈 G 轮）—— #252 startedAt、#116／#122／#262、实时 token 上限、任务交接目录、Live 笔记；**全部 `--ff-only` 在本地 main，未推**（推由人做；推完 Orca 才能 repin）
 
-- **分支** `g/ccloop-budget-handoff`（worktree `.claude/worktrees/g-ccloop-bc`，基于主题行 `fix(runtime): an execute timeout keeps its call's stall cause; codex leaves a usage floor (Orca #262)`）。合并由 Orca 控制器做；**推由人做**，推完 Orca 才能 repin（Orca 侧 Part B O8、Part C O7 等这一步）。
+- **#252**（人逐条点名 `collectTranscripts.test.ts` 4 条「同意」）：主题行 `feat(control): the transcript listing carries each call's startedAt (Orca #252)`——**人已推，Orca 已 repin 到它**（Orca 主题行 `chore(deps): pin ccloop to the transcript listing that carries each call's startedAt (#252)`）。变异 M1–M4 红。以下各笔在它之后，都未推。
+- **G4**：`fix(control): saved-result recovery accepts Orca's explicit observed-floor settlement (Orca #116)`（与 `approximate-floor` 同语义；可由 `agent:` 署名）；`feat(codex): a call whose --output-schema the provider refuses is sent once more in prompt mode (Orca #122)`（只那一次调用、没干活时；旁写 `structured-output-fallback.json`；**未报给 Orca**——Orca 的 collect 是 strict，要 Orca 先收新键）。#193 只量未改：events／transcript 两份都有人读（Orca 读 transcript，ccloop 的已存结果捕获读 events），合并要改既有判据（人点名）。
+- **G7**：`fix(runtime): an execute timeout keeps its call's stall cause; codex leaves a usage floor (Orca #262)`（看门狗 stall 后阶段超时，run 的失败原因保留 `stalled`／`network`，不再被改写成 `budget-exhausted`；codex 有回合用量时写 `usage-lower-bound.json`）；failure-causes spec 追加了更正节。
+- **控制器**：`test(fixtures): the fake claude CLI takes --add-dir as a list option (Orca follow-up G §10.2)`（C2 起每次 handoff 都给 claude 传 `--add-dir`，旧假 CLI 拒未知参数 ⇒ Orca 的 claude 端到端全红；只改夹具，无判据改动）。
+- **门**：G4＋G7 叠起来的全量（负载 36–62）2,627 过／12 红；名单外 11 条：两个已存结果文件单跑 42/42、`extractFinalObject` 性能（3.2 s 对 3 s，负载）。B／C 席全量见下一条。
+- **分支／worktree 还在**：`g/ccloop-small`（`.claude/worktrees/g4-small`）、`g/stalled-cause`（`.claude/worktrees/g7-stalled`）、`g/ccloop-budget-handoff`（`.claude/worktrees/g-ccloop-bc`），都已合进 main，可 `branch -d`／`worktree remove`（后者有未跟踪的 `node_modules` 软链，要 `--force`，归人）。
+
+#### 同一轮 Part B／C 的 ccloop 席（已合进本地 main）
+
+- **分支** `g/ccloop-budget-handoff`（已 `--ff-only` 进本地 main；worktree `.claude/worktrees/g-ccloop-bc`，基于主题行 `fix(runtime): an execute timeout keeps its call's stall cause; codex leaves a usage floor (Orca #262)`）。合并由 Orca 控制器做；**推由人做**，推完 Orca 才能 repin（Orca 侧 Part B O8、Part C O7 等这一步）。
 - **K1／K2（实时上限）**：v4 信封可带 `liveCeiling {protocol:1,revision,tokens,cause:"group"|"pause-line"|"task-cap"}`（须 work 授予 tokens 为 null、无 mode）；新控制方法 `live-ceiling` 写 `control/live-ceiling.json`（0600，revision 必须递增）；worker 每 50 ms 重读，runLoop 每次观测重算（中途抬高能让阶段继续，答了 spec 的开放点），并在每个 attempt／execute／verify 前做边界检查（codex 唯一的停点）。停下：`exhausted`＋`live token ceiling reached`＋`RunState.liveCeilingStop`；collect 只在顶层给 `liveCeilingStop`，v4 `terminal` 不带。设计与变异表：`docs/superpowers/specs/2026-11-12-live-ceiling-design.md`；11-10 阈值 spec 末尾追加了一节。
 - **C1–C4（交接与笔记）**：`work.handoff {inputDir,outputDir}`（accept 时校验：规范目录、互不包含、不在 sourceDir／目标仓／工作仓里；与 mode 互斥）；plan／execute 第 3 行读、execute 末尾写 `handoff.md`／`summary.md`；claude／omp 加两个 `--add-dir`，codex 只在 execute 加 outputDir；changedFiles 里 outputDir 下的条目不进路径策略。Live 笔记：Orca 写 `<sourceDir>/live-notes.json`，ccloop 每个阶段开始取未确认的、写 `run/live-notes-delivered.json`（命令型 verifier 不取，saved-result 恢复无收件箱）。collect 顶层 `handoffFiles`、`liveNotes` 只在触发条件存在时出现。fake-codex script 模式新增 `handoff` 条目与 `<marker>.prompts` 日志。
 - **判据**：只加不改（Rule 15；控制器转述的一揽子授权不算逐条点名，本轮也不需要）。`features` 未动。变异与门的记录在 `/private/tmp/orca-g1112/ccloop-bc/`（`mutations.md`、`full.log`、`known-reds.log`）。
 - **没做**：真付费回归；上限对 spend cap 的联动、单次调用与 reconcile 的上限（Orca 计划 D7 记为缺口）。
 
-### 最新（2026-11-11 深夜，Orca 会话 `e43cd52d`，测试者反馈 E 轮）—— #249 codex 中途 `error` 行不再吞掉已完成回合的用量；**人已推，Orca 已 repin**（Orca 主题行 `chore(deps): pin ccloop to the codex usage kept after a mid-stream error row (#249)`）
+### 上一轮（2026-11-11 深夜，Orca 会话 `e43cd52d`，测试者反馈 E 轮）—— #249 codex 中途 `error` 行不再吞掉已完成回合的用量；**人已推，Orca 已 repin**（Orca 主题行 `chore(deps): pin ccloop to the codex usage kept after a mid-stream error row (#249)`）
 
 - **主题行** `fix(codex): a phase that fails on a mid-stream error row carries its completed turn's usage (#249)`（分支 `e/codex-usage-after-error-row`，`--ff-only` 进本地 main；分支与 worktree `.claude/worktrees/e-codex-usage` 还在，可 `branch -d`／`worktree remove`）。
 - **病因**：`CodexUsageFold.push`（`src/runtime/codex/protocol.ts`）见到流里任一 `error`／`turn.failed` 行就定成 `codex-event-error`；流后面照样有成功的 `turn.completed`＋final 时，`decodePhase` 的 `uniqueUsage.value()` 抛错，重抛的普通 Error 不带 `observedTokens` ⇒ `failure-cause.json` `usageObserved:false`、Orca 记未知（soft 组按下界 null 记 0）。测试者两次丢了 2.58M／4.50M token。
@@ -254,7 +263,9 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 | **Codex 429** | 5xx 与其他措辞无样本未识别；可用 `gpt-6-luna` 真回归一次（付费，先问人） |
 | **`capabilities` 计算化** | 人裁「分两步」的第二步，未设计。今天三个 kind 的 `requestBoundProof` 都恒 `null`（`src/agents/{claude,codex,omp}.ts`） |
 | **codex 单次调用没有输出上限** | `"v1-soft"`：事后核对、不封顶 |
-| **#252 转录调用的 `startedAt`（Orca 会话 `5abcad7d` 2026-11-12，待人点名）** | 补丁未提交，在 worktree `.claude/worktrees/f-transcript-started`（分支 `f/transcript-started-at`；副本 `/private/tmp/orca-f1112/w6/ccloop-startedAt.patch`）：把 `listTranscripts` 已读的 `process.json` `startedAt` 输出成 ISO 字符串、collect strict schema 加可选字段；typecheck／build 过，其余 4 个转录文件 46/46。它让 `tests/control/collectTranscripts.test.ts` 4 条 `toEqual` 整条比对的既有判据红（只需在期望里加上 `startedAt`）⇒ **按 Rule 15 要人逐条点名**；点名后补新判据与变异、人推、Orca repin。Orca 侧已在 Orca main、无 pin 不生效 |
+| **worker 死掉后 run 永远停在 Orca 的 C（Orca 会话 `d1cbbd58` G5 实测）** | Orca 控制 run 的 worker 被 SIGKILL 后，`collect` 一直答非终态、`resume` 拒 Orca 控制 run ⇒ Orca 那边 `recovery retry --run` 只能把 run 放回 C 再等。要 ccloop 定：例如 collect／inspect 对「已认领但 worker 已死」报一个终态。证据 `/private/tmp/orca-g1112/g5/267-e2e-2.log` |
+| **#193 流写两份** | 量过（G4）：两份都被读；合并成一份要改既有判据（io-error 行为），人点名 |
+| **#122 退回 prompt 模式没报给 Orca** | 需要 Orca 的 strict collect 先收一个可选键（提议 `structuredOutputFallback`） |
 | **Linux** | 整套历史上红 5 条；之后只在临时 VM 跑过 `/usr/bin/flock` 两进程串行；**整套未在 Linux 再跑** |
 
 ---
