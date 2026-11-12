@@ -90,6 +90,8 @@ export interface LoopWork {
   operatorNote?: { text: string; scope: "next-attempt" | "remaining-attempts" };
   /** Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.1): each extra repository's target and base, contract order. */
   additionalRepos?: AdditionalRepoWorkV1[];
+  /** Task handoffs (Orca spec 2026-11-12 tester follow-up G §10.2): directories outside every worktree, Orca-owned. */
+  handoff?: import("../runtime/types.js").HandoffDirs;
 }
 
 export interface AdditionalRepoWorkV1 {
@@ -282,6 +284,9 @@ const operatorNoteSchema = z.object({ text: utf8Bounded(4096), scope: z.enum(["n
 // as before; when present its keys are the contract's additionalRepos keys, in the same order.
 const additionalReposWorkSchema = z.array(z.object({ key: repoKeySchema, targetRepo: z.string().min(1), base: z.string().min(1) }).strict())
   .min(1).max(7).optional();
+// Task handoffs (Orca spec 2026-11-12 tester follow-up G §10.2): optional, so an envelope without it parses and hashes exactly
+// as before.
+const handoffDirsSchema = z.object({ inputDir: z.string().min(1), outputDir: z.string().min(1) }).strict().optional();
 function workKeysMatchContract(work: { contract: LoopContract; additionalRepos?: { key: string }[] }): boolean {
   const contractKeys = work.contract.context.additionalRepos?.map((repo) => repo.key);
   const workKeys = work.additionalRepos?.map((repo) => repo.key);
@@ -305,6 +310,7 @@ const loopWorkSchema = z
     priorFailures: priorFailuresSchema,
     operatorNote: operatorNoteSchema,
     additionalRepos: additionalReposWorkSchema,
+    handoff: handoffDirsSchema,
   })
   .strict()
   .refine((work) => atMostOneSkillDirectory(work), {
@@ -335,6 +341,7 @@ const nullableLoopWorkSchema = z.object({
   priorFailures: priorFailuresSchema,
   operatorNote: operatorNoteSchema,
   additionalRepos: additionalReposWorkSchema,
+  handoff: handoffDirsSchema,
 }).strict().refine(work => atMostOneSkillDirectory(work)).refine(work => workKeysMatchContract(work));
 const v4StartEnvelopeSchema = z.object({
   protocol: z.literal(4), contractHash: hashSchema, tokenPolicy: tokenPolicySchema.optional(),
@@ -347,6 +354,8 @@ const v4StartEnvelopeSchema = z.object({
   // Prior-failures spec §2.1: a saved-result recovery builds no prompt, so it takes no prior failures -- nor an operator note
   // (live transcript spec §10.2.6; review minor, Orca session ffec7b28).
   && (e.mode === undefined || (e.work.priorFailures === undefined && e.work.operatorNote === undefined)))
+  // Task handoffs (Orca spec 2026-11-12 tester follow-up G §10.2): a saved-result recovery builds no prompt, so no handoff.
+  .refine(e => e.mode === undefined || e.work.handoff === undefined)
   // Live token ceiling: it bounds the run's tokens in place of a finite work grant, and a saved-result recovery takes none.
   .refine(e => e.liveCeiling === undefined || (e.claim.grant.work.tokens === null && e.mode === undefined));
 export const startEnvelopeSchema = z.union([legacyStartEnvelopeSchema, v4StartEnvelopeSchema]);
@@ -461,6 +470,21 @@ function validateAdditionalRepos(work: LoopWork, method: ControlMethodV1): void 
   disjoint([work.targetRepo, ...(work.additionalRepos ?? []).map((repo) => repo.targetRepo)]);
 }
 
+// Task handoffs (Orca spec 2026-11-12 tester follow-up G §10.2): both directories absolute always; at accept each is a
+// canonical directory, the two are disjoint, and neither lies within the source directory, the target repository or the
+// contract's working repository (Orca may remove them before a later collect, as with the skill directories).
+function validateHandoffDirs(work: LoopWork, sourceDir: string, method: ControlMethodV1): void {
+  const { inputDir, outputDir } = work.handoff!;
+  if (!isAbsolute(inputDir) || !isAbsolute(outputDir)) throw new ControlProtocolError("control-request-invalid");
+  if (method !== "accept") return;
+  const dirs = [validateCanonicalDirectory(inputDir), validateCanonicalDirectory(outputDir)];
+  if (isWithin(dirs[0]!, dirs[1]!) || isWithin(dirs[1]!, dirs[0]!)) throw new ControlProtocolError("control-request-invalid");
+  const real = (path: string): string => { try { return realpathSync(path); } catch { return resolve(path); } };
+  for (const owner of [sourceDir, real(work.targetRepo), real(work.contract.context.repoPath)]) {
+    for (const dir of dirs) if (isWithin(owner, dir)) throw new ControlProtocolError("control-request-invalid");
+  }
+}
+
 function validateEnvelopePaths(envelope: StartEnvelopeV3, method: ControlMethodV1): void {
   const sourceDir = validateCanonicalDirectory(envelope.work.sourceDir);
   // Orca single-call estimate (2026-09-27), spec §5.1: a single call names no repository and takes no input
@@ -490,6 +514,7 @@ function validateEnvelopePaths(envelope: StartEnvelopeV3, method: ControlMethodV
     if (method === "accept" && envelope.mode === "verify-saved-result") throw new ControlProtocolError("control-multi-repo-recovery-unsupported");
     validateAdditionalRepos(envelope.work, method);
   }
+  if (envelope.work.handoff !== undefined) validateHandoffDirs(envelope.work, sourceDir, method);
   if (envelope.inputCheckpoint === null) return;
   const bundle = validateCanonicalDirectory(envelope.inputCheckpoint.bundlePath);
   const inputRoot = resolve(sourceDir, "input");

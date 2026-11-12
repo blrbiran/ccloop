@@ -14,6 +14,10 @@ export type OperatorNote = { text: string; scope: "next-attempt" | "remaining-at
  * it is never rendered). Oldest first, as on the wire. */
 export type PriorFailure = { rejectCategory: string; failingCommand: string | null; evidence: string[] | null; failureCause?: string };
 
+/** Task handoffs (Orca follow-up G §10.2): Orca-owned directories outside the worktree; the agent reads inputDir first and,
+ * in execute, writes handoff.md and summary.md into outputDir. */
+export interface HandoffDirs { inputDir: string; outputDir: string }
+
 export type ExtraWorktreeContext = { key: string; worktreePath: string; targetPaths: string[]; requiredChecks: string[] };
 
 export type AttemptContext = {
