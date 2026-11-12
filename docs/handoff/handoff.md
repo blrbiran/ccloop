@@ -41,6 +41,14 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
+### 最新（2026-11-12，Orca 会话 `d1cbbd58`，测试者反馈 G 轮 Part B／C 的 ccloop 席）—— 实时 token 上限、任务交接目录、Live 笔记；**未合 main、未推**
+
+- **分支** `g/ccloop-budget-handoff`（worktree `.claude/worktrees/g-ccloop-bc`，基于主题行 `fix(runtime): an execute timeout keeps its call's stall cause; codex leaves a usage floor (Orca #262)`）。合并由 Orca 控制器做；**推由人做**，推完 Orca 才能 repin（Orca 侧 Part B O8、Part C O7 等这一步）。
+- **K1／K2（实时上限）**：v4 信封可带 `liveCeiling {protocol:1,revision,tokens,cause:"group"|"pause-line"|"task-cap"}`（须 work 授予 tokens 为 null、无 mode）；新控制方法 `live-ceiling` 写 `control/live-ceiling.json`（0600，revision 必须递增）；worker 每 50 ms 重读，runLoop 每次观测重算（中途抬高能让阶段继续，答了 spec 的开放点），并在每个 attempt／execute／verify 前做边界检查（codex 唯一的停点）。停下：`exhausted`＋`live token ceiling reached`＋`RunState.liveCeilingStop`；collect 只在顶层给 `liveCeilingStop`，v4 `terminal` 不带。设计与变异表：`docs/superpowers/specs/2026-11-12-live-ceiling-design.md`；11-10 阈值 spec 末尾追加了一节。
+- **C1–C4（交接与笔记）**：`work.handoff {inputDir,outputDir}`（accept 时校验：规范目录、互不包含、不在 sourceDir／目标仓／工作仓里；与 mode 互斥）；plan／execute 第 3 行读、execute 末尾写 `handoff.md`／`summary.md`；claude／omp 加两个 `--add-dir`，codex 只在 execute 加 outputDir；changedFiles 里 outputDir 下的条目不进路径策略。Live 笔记：Orca 写 `<sourceDir>/live-notes.json`，ccloop 每个阶段开始取未确认的、写 `run/live-notes-delivered.json`（命令型 verifier 不取，saved-result 恢复无收件箱）。collect 顶层 `handoffFiles`、`liveNotes` 只在触发条件存在时出现。fake-codex script 模式新增 `handoff` 条目与 `<marker>.prompts` 日志。
+- **判据**：只加不改（Rule 15；控制器转述的一揽子授权不算逐条点名，本轮也不需要）。`features` 未动。变异与门的记录在 `/private/tmp/orca-g1112/ccloop-bc/`（`mutations.md`、`full.log`、`known-reds.log`）。
+- **没做**：真付费回归；上限对 spend cap 的联动、单次调用与 reconcile 的上限（Orca 计划 D7 记为缺口）。
+
 ### 最新（2026-11-11 深夜，Orca 会话 `e43cd52d`，测试者反馈 E 轮）—— #249 codex 中途 `error` 行不再吞掉已完成回合的用量；**人已推，Orca 已 repin**（Orca 主题行 `chore(deps): pin ccloop to the codex usage kept after a mid-stream error row (#249)`）
 
 - **主题行** `fix(codex): a phase that fails on a mid-stream error row carries its completed turn's usage (#249)`（分支 `e/codex-usage-after-error-row`，`--ff-only` 进本地 main；分支与 worktree `.claude/worktrees/e-codex-usage` 还在，可 `branch -d`／`worktree remove`）。
