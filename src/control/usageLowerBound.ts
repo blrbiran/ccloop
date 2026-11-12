@@ -8,6 +8,8 @@ import { ATTEMPT, CALL, KINDS, PHASE, realDirectories } from "./transcripts.js";
  * unreadable or malformed file contributes nothing, so collect, which Orca polls for the whole run, does not fail on it.
  *
  * *** ERRATUM (Orca spec 2026-11-06-soft-mode-loop-run-settlement-design.md §3.2, §6; Orca session 86352010) -- "never booked" no longer holds in an unlimited group: under that design Orca books this floor (0 when there is none) as the run's approximate work usage under its own principal `orca-auto`, and saved-result recovery checks that booking (src/control/savedResultRecovery.ts, `approximate-floor`). It is still a floor, never an exact figure; a finite group still never books it. ***
+ *
+ * *** ERRATUM (Orca #116, tester follow-up F §2, Orca commit "feat(control): settle a finite run's unknown usage at ccloop's observed floor, explicitly (#116)") -- "a finite group still never books it" no longer holds: a person or socket agent may now explicitly book this floor (it must be positive) for a finite remainder under their own principal, marker `observed-floor`, and saved-result recovery checks that booking as it checks `approximate-floor`. ***
  */
 export async function observedUsageLowerBound(sourceDir: string): Promise<number | null> {
   let total = 0;

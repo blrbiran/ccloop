@@ -268,10 +268,15 @@ const personSettlementSchema=z.object({method:z.literal("remaining-grant"),comma
 // approximate floor under its own principal and its own panel-class row; it is never a person's settlement, so it is a marker of its own.
 const approximateSettlementSchema=personSettlementSchema.omit({method:true,principal:true}).extend({method:z.literal("approximate-floor"),principal:z.literal("orca-auto"),
  floorTokens:safe.nullable(),reason:z.string().min(1)}).strict();
-const settlementSchema=z.union([personSettlementSchema,approximateSettlementSchema]);
+// Orca #116 (tester follow-up F §2): a person's or socket agent's explicit `charge-observed-floor` books ccloop's observed floor of a
+// finite remainder by the approximate-floor arithmetic, backed by the settler's own `settle-unknown-usage` row. Orca writes it only
+// with a known floor (Orca src/control/usageSettlement.ts), so floorTokens is positive; the principal is a person's or an agent's.
+const observedSettlementSchema=personSettlementSchema.omit({method:true,principal:true}).extend({method:z.literal("observed-floor"),principal:z.string().regex(/^(user|agent):.+/),
+ floorTokens:positive,reason:z.string().min(1)}).strict();
+const settlementSchema=z.union([personSettlementSchema,approximateSettlementSchema,observedSettlementSchema]);
 // A Web row backs the marker by its principal; a socket row (Orca `orca task settle-usage`, 2026-10-29) by the person token's account it records.
 const personReceiptSchema=z.object({principal:z.string(),client:z.string().min(1),personPrincipal:z.string().regex(/^user:.+/).optional(),verb:z.literal("settle-unknown-usage"),commandId:idSchema,
- result:z.object({kind:z.literal("usage-settled"),taskId:idSchema,runId:idSchema,generation:positive,charged:pair,at:safe,method:z.literal("remaining-grant")}).strict()}).strict();
+ result:z.object({kind:z.literal("usage-settled"),taskId:idSchema,runId:idSchema,generation:positive,charged:pair,at:safe,method:z.enum(["remaining-grant","observed-floor"])}).strict()}).strict();
 // The row Orca's own pass applies in-panel (verb `settle-approximate-usage`, principal `orca-auto`); it never carries a person's account.
 const approximateReceiptSchema=z.object({principal:z.literal("orca-auto"),client:z.literal("panel"),verb:z.literal("settle-approximate-usage"),commandId:idSchema,
  result:personReceiptSchema.shape.result.omit({method:true}).extend({method:z.literal("approximate-floor")}).strict()}).strict();
@@ -300,12 +305,15 @@ function validateAccounting(admission:SavedResultAdmission,source:LoopStartEnvel
   for(const key of ["runId","groupId","workItemId","taskId","generation"] as const)if(marker[key]!==identity[key])fail("saved-result-settlement-invalid");
   if(marker.highWater!==a.highWater||!same(marker.report,a.report)||!same(marker.stopProof,stop)||marker.commandId!==receipt.commandId
    ||(marker.method==="approximate-floor"?receipt.verb!=="settle-approximate-usage"||marker.principal!==receipt.principal
-    :receipt.verb!=="settle-unknown-usage"||marker.principal!==(receipt.client==="web"?receipt.principal:receipt.personPrincipal))
+    :receipt.verb!=="settle-unknown-usage"||marker.principal!==(receipt.client==="web"?receipt.principal:receipt.personPrincipal
+     // Orca commandClient.ts settlingPrincipalFor: a socket agent without a person token settles as itself. Only an observed-floor
+     // marker may name an agent (a remaining-grant marker is a user's by its schema), so only it can be backed this way.
+     ??(receipt.principal.startsWith("agent:")?receipt.principal:undefined)))
    ||!same(receipt.result,{kind:"usage-settled",taskId:identity.taskId,runId:identity.runId,generation:identity.generation,charged:marker.charged,at:marker.at,method:marker.method})
    ||(marker.reservationDisposition==="released")!==(marker.handoffResolution!==undefined))fail("saved-result-settlement-invalid");
   // Q6: an approximate floor backs recovery only under a finite work ceiling; an unlimited grant stays refused, as for a person.
   // The floor and the baseline count disjoint calls, so the floor itself is the work charge and nothing else is charged.
-  if(marker.method==="approximate-floor"){
+  if(marker.method==="approximate-floor"||marker.method==="observed-floor"){
    if(source.claim.grant.work.tokens===null)fail("saved-result-settlement-invalid");
    for(const bucket of ["work","handoff"] as const)for(const d of ["tokens","activeMs","attempts","sessions"] as const){
     const charged=marker.charged[bucket][d];
@@ -493,8 +501,8 @@ export async function loadSavedResultRecovery(input:LoopStartEnvelope,requireFen
  if(original.verificationOnly){if(!('kind' in r.recoveryOf)||r.recoveryOf.kind!=='verification-only-v1'||original.source.work.contract.verification.commandChecksDecideGoal!==true)fail('saved-result-source-stale');}
  else if(!('normalizedExecutionHash' in r.recoveryOf)||canonicalHash(original.execution)!==r.recoveryOf.normalizedExecutionHash)fail("saved-result-normalization-hash-mismatch");
  validateAccounting(admission,original.source,original.ledger,original.logical,loaded.json,loaded.manifest.authorityKind==="execution-complete-before-verification-v1"?"exhausted":"failed");
- // A missing raw usage number is accepted only with the separate, verified orca-auto approximate receipt.
- if(original.rawExecutionTokens===null&&(admission.accounting.settlement===null||settlementSchema.parse(loaded.json(admission.accounting.settlement)).method!=="approximate-floor"))fail("saved-result-usage-unsettled");
+ // A missing raw usage number is accepted only with the separate, verified orca-auto approximate receipt (or, Orca #116, an explicit observed-floor one).
+ if(original.rawExecutionTokens===null&&(admission.accounting.settlement===null||!["approximate-floor","observed-floor"].includes(settlementSchema.parse(loaded.json(admission.accounting.settlement)).method)))fail("saved-result-usage-unsettled");
  const inherited=original.source.tokenPolicy?.inheritedUsage??{tokens:0,activeMs:0,attempts:0,sessions:0};
  const baseInherited=addWork(inherited,admission.accounting.work);
  const expectedInherited=await validateInterruptedPredecessor(input,loaded,baseInherited);
