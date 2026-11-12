@@ -16,6 +16,7 @@ import { listTranscripts, type TranscriptEntryV1 } from "./transcripts.js";
 import { observedUsageLowerBound } from "./usageLowerBound.js";
 import { lstat } from "node:fs/promises";
 import { readLiveNoteDeliveries, type LiveNoteDeliveryV1 } from "./liveNotes.js";
+import { workerLiveness, workerReportApplies, type WorkerLivenessV1 } from "./workerLiveness.js";
 
 /** Orca labels and progress spec §3.2 (2026-09-28): the loop's latest state, as Orca shows a task's step. */
 export interface ProgressV1 {
@@ -46,6 +47,13 @@ export interface CollectionV1 {
    * terminal schemas and the frozen protocol-3 projection stay as they are.
    */
   failureCause?: import("../runtime/failureCause.js").RunFailureCauseV1;
+  /**
+   * Orca #273 (spec Orca 2026-11-12-worker-lost-recovery-design.md §4.1): whether the run's worker still exists, present
+   * only when a loop run (not a saved-result recovery) has a claimed launch, no candidate and no terminal -- the situation
+   * in which Orca would otherwise wait forever -- and only when the worker is not alive (`lost` or `undetermined`), so an
+   * in-flight run's answer is unchanged. `lost` is what `settle-lost-worker` acts on.
+   */
+  worker?: WorkerLivenessV1;
   /** Exact allowlist misses of a human-blocked terminal, outside either protocol's frozen terminal projection. */
   pathPolicyMisses?: NonNullable<RunState["pathPolicyMisses"]>;
   /**
@@ -188,7 +196,7 @@ function terminalOf(state: unknown, protocol: number): RunState | null {
   };
 }
 
-function candidateOf(candidate: CandidateV1, proof: StopProofV1 | null): NonNullable<CollectionV1["candidate"]> {
+export function candidateOf(candidate: CandidateV1, proof: StopProofV1 | null): NonNullable<CollectionV1["candidate"]> {
   const { groupId, workItemId, taskId, runId, generation, graphVersion, targetVersion,
     checkpointId, usageHighWater, result, artifacts, snapshot, missing, unresolvedRequestIds, terminalOutcome, handoff, verificationOnly } = candidate;
   return { groupId, workItemId, taskId, runId, generation, graphVersion, targetVersion,
@@ -255,6 +263,10 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const handoffFiles = handoffDirs === undefined ? undefined
     : { handoff: await handoffFileOf(join(handoffDirs.outputDir, "handoff.md")), summary: await handoffFileOf(join(handoffDirs.outputDir, "summary.md")) };
   const liveNotes = await liveNotesOf(input.work.sourceDir);
+  const launch = storedCandidate === null ? await readAcceptedOptional(input.work.sourceDir) : accepted;
+  const liveness = workerReportApplies(input, launch, storedCandidate !== null, terminal !== null) ? await workerLiveness(launch) : undefined;
+  // An alive worker is today's in-flight run: its collect answer stays byte for byte as it was (existing criteria pin it).
+  const worker = liveness?.state === "alive" ? undefined : liveness;
   return {
     events,
     candidate: storedCandidate === null ? null : candidateOf(storedCandidate, proof),
@@ -263,6 +275,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     // Evaluated after progressOf, which has checked the loop state's currentAttempt.
     ...(storedCandidate === null || loopState === null ? {} : await reportedOf(input.work.sourceDir, storedCandidate, loopState.state)),
     ...(failureCause === undefined ? {} : { failureCause }),
+    ...(worker === undefined ? {} : { worker }),
     ...(liveCeilingStop === undefined ? {} : { liveCeilingStop }),
     ...(pathPolicyMisses === undefined ? {} : { pathPolicyMisses }),
     ...(toolRules === undefined ? {} : { toolRules }),

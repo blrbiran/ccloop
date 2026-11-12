@@ -186,6 +186,9 @@ process.stdin.on("end",()=>{
   if(schema.properties?.approved) body={approved:true,rejectCategory:"",primaryTargetPaths:["answer.txt"],failingCommand:null,safeToRetry:false,evidence:[],pauseSignals:[],stopSignals:[]};
   const phase=schema.anyOf?"execute":schema.properties?.approved?"verify":"plan";
   appendFileSync(marker+".calls",phase+"\n");
+  // Orca #273 (worker lost): mode `hang-in-<phase>` answers as the default mode except that that phase's call prints
+  // turn.started, writes <marker>.hanging and hangs, so a test can kill the worker mid-phase. Every other mode is unchanged.
+  if(mode===`hang-in-${phase}`){writeSync(1,JSON.stringify({type:"turn.started"})+"\n");writeFileSync(marker+".hanging",phase);setInterval(()=>{},1000);return;}
   // Orca handoff delivery (2026-09-25), C5 and I-7: a script entry is looked up for the task named in
   // this phase's prompt, `<task>#continuation` first when the prompt carries ccloop's continuation
   // constraint, and may carry `delayMs: {plan?, execute?, verify?}`: that phase then sleeps before it

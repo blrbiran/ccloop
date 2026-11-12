@@ -17,6 +17,10 @@ export const FAILURE_CAUSES = [
   // Task setup commands (spec 2026-11-04 §4.5): a contract setup command failed, timed out or changed the tree. Terminal:
   // never in RETRYABLE_CAUSES; the same command would fail again.
   "setup-failed",
+  // Orca #273 (spec Orca 2026-11-12-worker-lost-recovery-design.md §4.2): the run's worker process died (the machine
+  // restarted or it was killed) and settle-lost-worker ended the run. Terminal: never in RETRYABLE_CAUSES, never classified
+  // from a call; written only by settleLostWorker.ts.
+  "worker-lost",
 ] as const;
 export type FailureCauseV1 = (typeof FAILURE_CAUSES)[number];
 

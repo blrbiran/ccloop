@@ -25,6 +25,7 @@ import { collectExecution, inspectExecution } from "./collect.js";
 import { MAX_CONTROL_BYTES, readEvidence } from "./evidence.js";
 import { requestHandoff } from "./handoff.js";
 import { updateLiveCeiling } from "./liveCeilingFile.js";
+import { settleLostWorker } from "./settleLostWorker.js";
 import { collectTaskResults, readTaskResultEvidence, taskResultCollectionSchema } from "./taskResults.js";
 import { byModelSchema } from "./usage.js";
 
@@ -241,6 +242,8 @@ export const collectionSchema = z.object({
     revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), tokens: safeInteger, cause: z.enum(["group", "pause-line", "task-cap"]),
     observedTokens: safeInteger, phase: z.enum(["plan", "execute", "verify"]), at: z.enum(["mid-call", "boundary"]),
   }).strict().optional(),
+  // Orca #273: a worker that is not alive; present only while a claimed loop run has no candidate and no terminal.
+  worker: z.object({ state: z.enum(["lost", "undetermined"]), reason: z.string() }).strict().optional(),
   // Orca #116: the observed floor of calls that ended without a usage report; present iff there is one. Display only.
   usageLowerBound: z.object({ tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
 }).strict();
@@ -266,6 +269,7 @@ const METHODS = new Set<ControlMethodV1>([
   "saved-result-evidence",
   "read-saved-result-evidence",
   "live-ceiling",
+  "settle-lost-worker",
 ]);
 
 async function parseCommand(argv: string[]): Promise<{ method: ControlMethodV1; agentsTablePath: string }> {
@@ -343,6 +347,7 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
     return { ...request.ref, base64: bytes.toString("base64") };
   }
   if (request.method === "live-ceiling") return await updateLiveCeiling(request.input, request.ceiling);
+  if (request.method === "settle-lost-worker") return await settleLostWorker(request.input);
   if (request.method === "read-evidence") {
     const bytes = await readEvidence(request.input.work.sourceDir, request.ref);
     return { ...request.ref, base64: bytes.toString("base64") };
@@ -372,6 +377,7 @@ function validateResponse(method: ControlMethodV1, value: unknown, protocol = 3)
     if (method === "saved-result-evidence") return savedResultCollectionSchema.parse(value);
     if (method === "task-results") return taskResultCollectionSchema.parse(value);
     if (method === "live-ceiling") return z.object({ revision: safeInteger, tokens: safeInteger }).strict().parse(value);
+    if (method === "settle-lost-worker") return z.object({ candidate: collectionSchema.shape.candidate.unwrap() }).strict().parse(value);
     if (method === "read-saved-result-settlement" || method === "read-evidence" || method === "read-task-result-evidence" || method === "read-saved-result-evidence") return evidenceSchema.parse(value);
     return value;
   } catch {

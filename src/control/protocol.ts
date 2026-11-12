@@ -28,7 +28,8 @@ export type ControlMethodV1 =
   | "saved-result-eligibility"
   | "saved-result-evidence"
   | "read-saved-result-evidence"
-  | "live-ceiling";
+  | "live-ceiling"
+  | "settle-lost-worker";
 
 export interface AmountV1 {
   tokens: number;
@@ -178,7 +179,8 @@ export type ControlRequestV1 =
   | { method: "saved-result-eligibility"; input: LoopStartEnvelope }
   | { method: "saved-result-evidence"; input: StartEnvelopeV3 }
   | { method: "read-saved-result-evidence"; input: StartEnvelopeV3; capsuleRef: ArtifactRefV1; ref: ArtifactRefV1 }
-  | { method: "live-ceiling"; input: StartEnvelopeV3; ceiling: LiveCeiling };
+  | { method: "live-ceiling"; input: StartEnvelopeV3; ceiling: LiveCeiling }
+  | { method: "settle-lost-worker"; input: LoopStartEnvelope };
 
 export type ControlPayloadV1 =
   | { opId: string; requestDigest: string; previewId: string; baseTableHash: string; acceptedChangeIds: string[] }
@@ -392,6 +394,8 @@ const payloadSchemas = {
   "read-task-result-evidence": z.object({ input: startEnvelopeSchema, manifestRef: artifactRefSchema, ref: artifactRefSchema }).strict(),
   "read-evidence": z.object({ input: startEnvelopeSchema, ref: artifactRefSchema }).strict(),
   "live-ceiling": z.object({ input: startEnvelopeSchema, ceiling: liveCeilingSchema }).strict(),
+  // Orca #273: an ordinary loop run (a saved-result recovery has settle-saved-result).
+  "settle-lost-worker": z.object({ input: startEnvelopeSchema.refine((e) => e.work.kind === "loop" && !("mode" in e && e.mode !== undefined)) }).strict(),
 } satisfies Record<ControlMethodV1, z.ZodTypeAny>;
 
 function canonicalize(value: unknown): unknown {
@@ -555,7 +559,7 @@ export function parseControlRequest(method: ControlMethodV1, raw: unknown): Cont
   try {
     const payload = payloadSchemas[method].parse(raw) as ControlPayloadV1;
     if (method === "accept" || method === "inspect") validateEnvelopePaths(payload as StartEnvelopeV3, method);
-    if (method === "settle-saved-result" || method === "read-saved-result-settlement" || method === "saved-result-eligibility" || method === "handoff" || method === "collect" || method === "read-evidence" || method === "task-results" || method === "read-task-result-evidence" || method === "saved-result-evidence" || method === "read-saved-result-evidence" || method === "live-ceiling") {
+    if (method === "settle-saved-result" || method === "read-saved-result-settlement" || method === "saved-result-eligibility" || method === "handoff" || method === "collect" || method === "read-evidence" || method === "task-results" || method === "read-task-result-evidence" || method === "saved-result-evidence" || method === "read-saved-result-evidence" || method === "live-ceiling" || method === "settle-lost-worker") {
       validateEnvelopePaths((payload as { input: StartEnvelopeV3 }).input, method);
     }
     return payload;
