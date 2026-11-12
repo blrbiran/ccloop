@@ -33,12 +33,25 @@ export type RunState = {
   waitingOnHuman: boolean;
   stopReason: string | null;
   pathPolicyMisses?: Array<{ repoKey: string | null; path: string }>;
+  /** Live token ceiling (Orca tester follow-up G part 2): set when the run ended at its live ceiling. */
+  liveCeilingStop?: LiveCeilingStopV1;
   waitingCause?: "token-allowance";
   allowanceNextPhase?: "plan" | "execute" | "verify";
   budgetSnapshot: BudgetSnapshot;
   recentFailures: FailureFingerprint[];
   /** Failure causes (ccloop spec 2026-10-21-failure-causes-and-transient-retries-design.md §5): set with a failed or exhausted terminal. */
   failureCause?: import("../runtime/failureCause.js").RunFailureCauseV1;
+};
+
+export type LiveCeilingStopV1 = {
+  revision: number;
+  tokens: number;
+  cause: import("../budget/liveCeiling.js").LiveCeilingCause;
+  /** The run's whole work tokens when it stopped (earlier invocations included). */
+  observedTokens: number;
+  /** The phase that was stopped (mid-call) or that was not started (boundary). */
+  phase: "plan" | "execute" | "verify";
+  at: "mid-call" | "boundary";
 };
 
 export type RunBoundaryStatus =

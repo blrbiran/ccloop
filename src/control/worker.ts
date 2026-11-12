@@ -10,7 +10,10 @@ import { createStopRequestSignal, runLoop } from "../controller/runLoop.js";
 import { isTerminalRunStatus } from "../state/stateMachine.js";
 import { atomicReplacePrivateFile, readPrivateFile } from "./paths.js";
 import { appendUsageObservation, captureKnownWorkUsageLedger, readUsageEvents, reconciledByModel, type ModelUsageV1 } from "./usage.js";
-import { canonicalJson, isLoopEnvelope, parseControlRequest, type StartEnvelopeV3 } from "./protocol.js";
+import { canonicalJson, ControlProtocolError, isLoopEnvelope, parseControlRequest, type StartEnvelopeV3 } from "./protocol.js";
+import { createLiveCeilingWatch, readLiveCeilingOptional, writeLiveCeiling } from "./liveCeilingFile.js";
+import type { LiveCeiling } from "../budget/liveCeiling.js";
+import { existsSync } from "node:fs";
 import { prepareContinuationContract, readAllowanceContinuation } from "./materialize.js";
 import {
   buildHandoffPacket,
@@ -145,6 +148,21 @@ export function executionFormatCaptureFor(config: MaterializedAgentConfigV1): { 
   return config.kind === "codex" && config.installation.structuredOutput !== "prompt" ? { config } : undefined;
 }
 
+/**
+ * Live token ceiling (Orca tester follow-up G part 2): seeds the run's ceiling file from the envelope unless Orca already
+ * wrote a newer revision, then watches it. A failed read is one run event per streak, once the run's event log exists.
+ */
+async function startLiveCeilingWatch(sourceDir: string, runDir: string, seed: LiveCeiling): Promise<ReturnType<typeof createLiveCeilingWatch>> {
+  try {
+    await writeLiveCeiling(sourceDir, seed);
+  } catch (error) {
+    if (!(error instanceof ControlProtocolError && error.code === "control-live-ceiling-stale")) throw error;
+  }
+  return createLiveCeilingWatch(sourceDir, await readLiveCeilingOptional(sourceDir) ?? seed, async (error) => {
+    if (existsSync(join(runDir, "events.jsonl"))) await appendEvent(runDir, { type: "live_ceiling_read_failed", at: new Date().toISOString(), detail: String(error) });
+  });
+}
+
 export async function runControlWorker(argv: string[]): Promise<void> {
   const sourceDir = flag(argv, "--source-dir");
   const executionId = flag(argv, "--execution-id");
@@ -161,6 +179,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
   await testCrashPoint("worker-claimed");
 
   let sealed = false;
+  let liveCeilingWatch: ReturnType<typeof createLiveCeilingWatch> | undefined;
   try {
     const envelope = parseControlRequest("accept", await readJson(sourceDir, "envelope.json")) as StartEnvelopeV3;
     // Agent selection (2026-09-26), spec §4.6: accept sealed the materialized agent config; re-check it with the
@@ -263,12 +282,17 @@ export async function runControlWorker(argv: string[]): Promise<void> {
         codexNetwork: codexPath === null ? null : await readCodexNetworkAccess(codexPath), env: process.env, savedResult: envelope.mode === "verify-saved-result",
         ...(envelope.work.kind === "loop" && envelope.work.skillPluginDir !== undefined ? { skillPluginDir: envelope.work.skillPluginDir } : {}) }));
     }
+    liveCeilingWatch = envelope.liveCeiling === undefined ? undefined : await startLiveCeilingWatch(sourceDir, runDir, envelope.liveCeiling);
+    // The run's work tokens recorded by earlier invocations (0 for a fresh run), so a resumed worker compares the whole run.
+    const liveCeilingBaseTokens = liveCeilingWatch === undefined ? 0
+      : (await readUsageEvents(sourceDir)).filter((event) => event.bucket === "work").at(-1)?.cumulative?.tokens ?? 0;
     const adapterOptions = envelope.work.kind === "loop" && envelope.work.skillPluginDir !== undefined
       ? { skillPluginDir: envelope.work.skillPluginDir }
       : envelope.work.codexSkillsDir !== undefined ? { codexSkillsDir: envelope.work.codexSkillsDir }
         : envelope.work.ompSkillsDir !== undefined ? { ompSkillsDir: envelope.work.ompSkillsDir } : undefined;
     await runLoop(contract, runDir, () => getDescriptor(config.kind).createAdapter(config, adapterOptions), {
       ...(envelope.protocol === 4 ? { workGrant: envelope.claim.grant.work, tokenPolicy: envelope.tokenPolicy } : {}),
+      ...(liveCeilingWatch === undefined ? {} : { liveCeiling: { current: liveCeilingWatch.current, baseTokens: liveCeilingBaseTokens } }),
       allowanceContinuation,
       firstWorkspaceInput: envelope.inputCheckpoint ?? undefined,
       taskResultInput: envelope,
@@ -324,6 +348,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
         watcherStopped = true;
         clearTimeout(deadlineTimer);
         await watcher;
+        await liveCeilingWatch?.stop();
         if (watcherError !== null) throw watcherError;
         const request = observedRequest ?? await readHandoffRequestOptional(sourceDir);
         if (request === null && !isTerminalRunStatus(runState.status)) {
@@ -399,6 +424,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
     await recordWorkerError(sourceDir, error).catch(() => undefined);
     throw error;
   } finally {
+    await liveCeilingWatch?.stop();
     if (!sealed) await sealAcceptedWorker(sourceDir, executionId, nonce);
   }
 }

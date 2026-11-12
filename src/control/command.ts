@@ -230,6 +230,11 @@ export const collectionSchema = z.object({
     // Orca #252: the call's spawn time, when process.json recorded one.
     startedAt: z.string().datetime().optional(),
   }).strict()).min(1).optional(),
+  // Live token ceiling (Orca tester follow-up G part 2): present iff the run ended at its live ceiling.
+  liveCeilingStop: z.object({
+    revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), tokens: safeInteger, cause: z.enum(["group", "pause-line", "task-cap"]),
+    observedTokens: safeInteger, phase: z.enum(["plan", "execute", "verify"]), at: z.enum(["mid-call", "boundary"]),
+  }).strict().optional(),
   // Orca #116: the observed floor of calls that ended without a usage report; present iff there is one. Display only.
   usageLowerBound: z.object({ tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
 }).strict();

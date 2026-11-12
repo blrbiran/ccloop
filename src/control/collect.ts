@@ -56,6 +56,11 @@ export interface CollectionV1 {
    * there is at least one; absent otherwise, like toolRules. Advertised by `features.transcripts: "v1"`.
    */
   transcripts?: TranscriptEntryV1[];
+  /**
+   * Live token ceiling (Orca tester follow-up G part 2): the stop record of a run that ended at its live ceiling, present iff
+   * the terminal state has one. Top level, like failureCause, so the strict terminal schemas stay as they are.
+   */
+  liveCeilingStop?: NonNullable<RunState["liveCeilingStop"]>;
   /** Orca #116: the floor observedUsageLowerBound found; absent when there is none. For display, never booked. */
   // *** ERRATUM (Orca spec 2026-11-06-soft-mode-loop-run-settlement-design.md §3.2, §6; Orca session 86352010) -- "never booked" no longer holds in an unlimited group: under that design Orca books this floor (0 when there is none) as the run's approximate work usage under its own principal `orca-auto`, and saved-result recovery checks that booking (src/control/savedResultRecovery.ts, `approximate-floor`). It is still a floor, never an exact figure; a finite group still never books it. ***
   // *** ERRATUM (Orca #116, tester follow-up F §2, Orca commit "feat(control): settle a finite run's unknown usage at ccloop's observed floor, explicitly (#116)") -- "a finite group still never books it" no longer holds: a person or socket agent may now explicitly book this floor (it must be positive) for a finite remainder under their own principal, marker `observed-floor`, and saved-result recovery checks that booking as it checks `approximate-floor`. ***
@@ -142,7 +147,7 @@ function progressOf(state: unknown): ProgressV1 {
 function terminalOf(state: unknown, protocol: number): RunState | null {
   const run = state as RunState;
   if (!isTerminalRunStatus(run.status)) return null;
-  if (protocol === 4) { const {savedResult:_private,failureCause:_topLevel,pathPolicyMisses:_pathEvidence,...core}=run;return core; }
+  if (protocol === 4) { const {savedResult:_private,failureCause:_topLevel,pathPolicyMisses:_pathEvidence,liveCeilingStop:_ceilingStop,...core}=run;return core; }
   // Internal extensions must never change the frozen finite protocol-3 projection.
   return {
     status: run.status, currentAttempt: run.currentAttempt, attemptsUsed: run.attemptsUsed,
@@ -203,6 +208,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const loopState = await readLoopStateJson(input.work.sourceDir);
   const terminal = storedCandidate === null || loopState === null ? null : terminalOf(loopState.state, input.protocol);
   const failureCause = terminal === null ? undefined : (loopState!.state as RunState).failureCause;
+  const liveCeilingStop = terminal === null ? undefined : (loopState!.state as RunState).liveCeilingStop;
   const pathPolicyMisses = terminal?.status === "blocked_waiting_human" && terminal.stopReason?.startsWith("allowlist miss: ")
     ? (loopState!.state as RunState).pathPolicyMisses : undefined;
   const declared = (input.work as { contract?: { executionPolicy?: { toolRules?: unknown } } }).contract?.executionPolicy?.toolRules;
@@ -223,6 +229,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     // Evaluated after progressOf, which has checked the loop state's currentAttempt.
     ...(storedCandidate === null || loopState === null ? {} : await reportedOf(input.work.sourceDir, storedCandidate, loopState.state)),
     ...(failureCause === undefined ? {} : { failureCause }),
+    ...(liveCeilingStop === undefined ? {} : { liveCeilingStop }),
     ...(pathPolicyMisses === undefined ? {} : { pathPolicyMisses }),
     ...(toolRules === undefined ? {} : { toolRules }),
     ...(transcripts.length === 0 ? {} : { transcripts }),

@@ -9,6 +9,7 @@ import { captureExecutionFormatFailure, ExecutionFormatFailure, resolveCheckpoin
 import { bindExhaustedCandidate, captureExhaustedCompletion } from "./exhaustedCompletion.js";
 import {captureOmpWithoutFinal,bindOmpWithoutFinal} from "./ompWithoutFinal.js";
 import { remainingTokens, minTokenCeiling, budgetAmountSchema, liveTokenThreshold, LIVE_TOKEN_STOP_REASON, type BudgetAmount, type TokenPolicy } from "../budget/tokenPolicy.js";
+import { ceilingReachedAtBoundary, LIVE_CEILING_STOP_REASON, phaseCeilingThreshold, type LiveCeiling } from "../budget/liveCeiling.js";
 import { execFile } from "node:child_process";
 import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -61,7 +62,7 @@ import type {
 import { isPartialExecutionResult, observedTokensOf } from "../runtime/types.js";
 import { operatorNoteGate } from "../runtime/operatorNote.js";
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
-import type { FailureFingerprint, LastTrustedBoundary, RunState, StopDecision } from "../state/types.js";
+import type { FailureFingerprint, LastTrustedBoundary, LiveCeilingStopV1, RunState, StopDecision } from "../state/types.js";
 import { cleanupAttemptWorkspace, createAttemptWorkspace, createExtraWorktree, extraWorktreePath, publishAttemptCommit, publishExtraAttemptCommit, registerAttemptRefNamespace, removeEmptyExtraDirs, type AttemptCommit } from "../workspace/worktreeManager.js";
 import { materializeFirstWorkspace } from "../control/materialize.js";
 import { captureTaskResult } from "../control/taskResults.js";
@@ -86,7 +87,7 @@ type PhaseOutcome<T> =
       result?: T;
       abortedError?: unknown;
       /** Live token threshold (issue #225): the phase was stopped because its observed total passed the threshold. */
-      budgetStop?: { observedTokens: number };
+      budgetStop?: { observedTokens: number; liveCeiling?: true };
     };
 
 const execFileAsync = promisify(execFile);
@@ -729,7 +730,7 @@ function isToolRuleViolation(error: unknown): boolean {
 async function runPhaseWithTimeout<T>(
   timeoutMs: number,
   operation: (abortSignal: AbortSignal, onObservedUsage: (tokens: number) => void) => Promise<T>,
-  options?: { awaitAbortedResult?: boolean; liveTokenThreshold?: number | null },
+  options?: { awaitAbortedResult?: boolean; liveTokenThreshold?: number | null; liveCeilingThreshold?: () => number | null },
 ): Promise<PhaseOutcome<T>> {
   const startedAtMs = Date.now();
 
@@ -743,12 +744,21 @@ async function runPhaseWithTimeout<T>(
   // stopped through the same abort a timeout uses, with a reason the adapter can recognise.
   const threshold = options?.liveTokenThreshold ?? null;
   let observedTokens = 0;
+  let ceilingStop = false;
   let stopForBudget: () => void = () => undefined;
   const budgetStop = new Promise<{ kind: "budget" }>((resolve) => { stopForBudget = () => resolve({ kind: "budget" }); });
   const onObservedUsage = (tokens: number): void => {
     if (!Number.isSafeInteger(tokens) || tokens <= observedTokens) return;
     observedTokens = tokens;
     if (threshold !== null && tokens > threshold && !abortController.signal.aborted) {
+      abortController.abort(LIVE_TOKEN_STOP_REASON);
+      stopForBudget();
+    }
+    // Live token ceiling (Orca tester follow-up G part 2): re-evaluated on every observation, so a ceiling Orca raised while
+    // the phase streams lets it go on; reaching it stops the phase through the same abort as the threshold above.
+    const ceiling = options?.liveCeilingThreshold?.() ?? null;
+    if (ceiling !== null && tokens >= ceiling && !abortController.signal.aborted) {
+      ceilingStop = true;
       abortController.abort(LIVE_TOKEN_STOP_REASON);
       stopForBudget();
     }
@@ -775,9 +785,9 @@ async function runPhaseWithTimeout<T>(
       // the time it actually ran: unlike a timeout, a budget stop did not use up its window.
       try {
         const result = await operationPromise;
-        return { timedOut: true, elapsedMs: Math.max(Date.now() - startedAtMs, 0), result, budgetStop: { observedTokens } };
+        return { timedOut: true, elapsedMs: Math.max(Date.now() - startedAtMs, 0), result, budgetStop: { observedTokens, ...(ceilingStop ? { liveCeiling: true as const } : {}) } };
       } catch (error) {
-        return { timedOut: true, elapsedMs: Math.max(Date.now() - startedAtMs, 0), abortedError: error, budgetStop: { observedTokens } };
+        return { timedOut: true, elapsedMs: Math.max(Date.now() - startedAtMs, 0), abortedError: error, budgetStop: { observedTokens, ...(ceilingStop ? { liveCeiling: true as const } : {}) } };
       }
     }
 
@@ -1620,6 +1630,11 @@ export interface RunControlHooks {
   onSetupEnded?: (input: { attempt: number; elapsedMs: number; outcome: "ok" | "failed" | "handoff" | "error" }) => Promise<void>;
   workGrant?: BudgetAmount;
   tokenPolicy?: TokenPolicy;
+  /**
+   * Live token ceiling (Orca tester follow-up G part 2): the run's current ceiling (re-read while a phase streams) and the
+   * work tokens earlier invocations of this run already recorded, so the whole run's total is compared.
+   */
+  liveCeiling?: { current(): LiveCeiling; baseTokens: number };
   /** Only the worker supplies this, after validating the checkpoint and reachable artifacts. */
   allowanceContinuation?: { nextPhase: "plan" | "execute" | "verify"; plan: AttemptPlan | null; execution: ExecutionResult | null; recentFailures?: FailureFingerprint[]; lastRejectionEvidence?: string[] };
   /** Trusted accepted control envelope supplied only by the worker. */
@@ -1774,6 +1789,18 @@ export async function runLoopFromState(
   // stopped mid-phase, which would end it exhausted instead.
   const phaseTokenThreshold = (): number | null => !recovery && options?.tokenPolicy?.bindingCauses.some((cause) => cause === "group" || cause === "spend-cap") === true
     ? null : liveTokenThreshold(state.budgetSnapshot.tokenBudgetRemaining);
+  // Live token ceiling (Orca tester follow-up G part 2): the run's whole work tokens (earlier invocations' plus this one's
+  // settled phases) against the ceiling Orca keeps current. Mid-call it is re-evaluated on every observation; before each
+  // phase it is checked at the boundary, which is the only stop for an adapter that reports usage only as a turn ends (codex).
+  const liveCeiling = recovery ? undefined : options?.liveCeiling;
+  const ceilingRunTokens = (): number => (liveCeiling?.baseTokens ?? 0) + observedTokens;
+  const phaseCeilingThresholdOf = liveCeiling === undefined ? undefined : () => phaseCeilingThreshold(ceilingRunTokens(), liveCeiling.current());
+  const liveCeilingStopOf = (phase: PhaseName, at: LiveCeilingStopV1["at"]): LiveCeilingStopV1 => {
+    const ceiling = liveCeiling!.current();
+    return { revision: ceiling.revision, tokens: ceiling.tokens, cause: ceiling.cause, observedTokens: ceilingRunTokens(), phase, at };
+  };
+  const boundaryCeilingStop = (phase: PhaseName): LiveCeilingStopV1 | undefined =>
+    liveCeiling !== undefined && ceilingReachedAtBoundary(ceilingRunTokens(), liveCeiling.current()) ? liveCeilingStopOf(phase, "boundary") : undefined;
   const handoffRequested = (): boolean => options?.stopRequested?.requested === true;
   const handoffAborted = (): boolean => options?.phaseSignal?.aborted === true;
 
@@ -1857,6 +1884,10 @@ export async function runLoopFromState(
       const lastRejection = state.status === "planning" ? state.recentFailures.at(-1) : undefined;
       return await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON,
         lastRejection === undefined ? undefined : rejectionCause(lastRejection.rejectCategory));
+    }
+    const ceilingBeforeAttempt = boundaryCeilingStop(state.attemptsUsed === 0 ? options?.allowanceContinuation?.nextPhase ?? "plan" : "plan");
+    if (ceilingBeforeAttempt !== undefined) {
+      return await persistTerminalState(runDir, writeOwnedRunState, { ...state, liveCeilingStop: ceilingBeforeAttempt }, "exhausted", LIVE_CEILING_STOP_REASON);
     }
     const attempt = recovery ? 1 : state.attemptsUsed + 1;
 
@@ -2057,7 +2088,7 @@ export async function runLoopFromState(
         activePhase = "plan";
         const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal, onObservedUsage) =>
           attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt), onObservedUsage }),
-          { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold() },
+          { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
         );
 
         if (handoffAborted()) {
@@ -2068,12 +2099,13 @@ export async function runLoopFromState(
         if (planOutcome.timedOut) {
           const planStopTokens = budgetStopTokens(planOutcome);
           await settlePhase("plan", attempt, planOutcome.elapsedMs, planStopTokens === undefined ? undefined : { tokenUsage: planStopTokens }, true);
+          const planCeiling = planOutcome.budgetStop?.liveCeiling === true;
           state = await persistTerminalState(
             runDir,
             writeOwnedRunState,
-            state,
+            planCeiling ? { ...state, liveCeilingStop: liveCeilingStopOf("plan", "mid-call") } : state,
             "exhausted",
-            hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("plan", planTimeoutMs),
+            planCeiling ? LIVE_CEILING_STOP_REASON : hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("plan", planTimeoutMs),
           );
           // §8.1: removing the worktree is a side effect on a directory a new owner may already
           // be reading.
@@ -2110,6 +2142,14 @@ export async function runLoopFromState(
           return state;
         }
 
+        const ceilingBeforeExecute = boundaryCeilingStop("execute");
+        if (ceilingBeforeExecute !== undefined) {
+          await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
+          state = await persistTerminalState(runDir, writeOwnedRunState, { ...state, liveCeilingStop: ceilingBeforeExecute }, "exhausted", LIVE_CEILING_STOP_REASON);
+          await heartbeat.assertHeld();
+          await cleanupAttemptWorkspaceBestEffort(contract.context.repoPath, worktreePath, runDir, "cleanup after terminal decision exhausted");
+          return state;
+        }
       }
       state = transitionRunState(state, "executing");
       await appendTransitionEvent(runDir, state, "attempt_started", `attempt ${attempt}`);
@@ -2125,9 +2165,10 @@ export async function runLoopFromState(
         : await runPhaseWithTimeout(
         executeTimeoutMs,
         (abortSignal, onObservedUsage) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext(), ...noteFor(attempt), onObservedUsage }),
-        { awaitAbortedResult: true, liveTokenThreshold: phaseTokenThreshold() },
+        { awaitAbortedResult: true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
       );
       const executeStopTokens = budgetStopTokens(executeOutcome);
+      const executeCeiling = executeOutcome.timedOut && executeOutcome.budgetStop?.liveCeiling === true;
 
       if (executeOutcome.timedOut && isToolRuleViolation(executeOutcome.abortedError)) throw executeOutcome.abortedError;
 
@@ -2164,9 +2205,9 @@ export async function runLoopFromState(
           state = await persistTerminalState(
             runDir,
             writeOwnedRunState,
-            state,
+            executeCeiling ? { ...state, liveCeilingStop: liveCeilingStopOf("execute", "mid-call") } : state,
             "exhausted",
-            hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("execute", executeTimeoutMs),
+            executeCeiling ? LIVE_CEILING_STOP_REASON : hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("execute", executeTimeoutMs),
             timedOutCallCause(executeOutcome.abortedError),
           );
           await heartbeat.assertHeld();
@@ -2267,12 +2308,12 @@ export async function runLoopFromState(
           state = await persistTerminalState(
             runDir,
             writeOwnedRunState,
-            state,
+            executeCeiling ? { ...state, liveCeilingStop: liveCeilingStopOf("execute", "mid-call") } : state,
             // Activity watchdog (spec 2026-10-21 §2.3): a partial carrying `stalled` is checked before the timeout mapping --
             // a stall is a transient fault, not a spent budget.
             attachedCause(completedExecution)?.classification.cause === "stalled" || completedExecution.failureType !== "timeout" ? "failed" : "exhausted",
             // Live token threshold (issue #225): the claude runner's partial after a budget stop says SIGTERM; the run says budget.
-            executeStopTokens === undefined ? completedExecution.failureMessage : BUDGET_EXHAUSTED_REASON,
+            executeCeiling ? LIVE_CEILING_STOP_REASON : executeStopTokens === undefined ? completedExecution.failureMessage : BUDGET_EXHAUSTED_REASON,
             // Spec §5 row 2: the cause the adapter attached to its runner-built partial.
             attachedCause(completedExecution) === undefined ? undefined : phaseCause(completedExecution, "execute"),
           );
@@ -2303,9 +2344,10 @@ export async function runLoopFromState(
         return state;
       }
 
-      if (hasBudgetExceeded(state)) {
+      const ceilingBeforeVerify = executeCeiling ? liveCeilingStopOf("execute", "mid-call") : boundaryCeilingStop("verify");
+      if (hasBudgetExceeded(state) || ceilingBeforeVerify !== undefined) {
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
-        const parked = isPartialExecutionResult(completedExecution) ? null : await parkAllowance("verify");
+        const parked = isPartialExecutionResult(completedExecution) || ceilingBeforeVerify !== undefined ? null : await parkAllowance("verify");
         if (parked) return parked;
         // Exhausted-attempt recovery: the only moment the attempt tree and the provider's own call evidence are both
         // still here and the verifier has provably not entered. A partial result and a missing capture stay ineligible.
@@ -2318,7 +2360,9 @@ export async function runLoopFromState(
             assertHeld: () => heartbeat.assertHeld(),
           }).then(() => undefined));
         }
-        state = await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON);
+        state = ceilingBeforeVerify === undefined
+          ? await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON)
+          : await persistTerminalState(runDir, writeOwnedRunState, { ...state, liveCeilingStop: ceilingBeforeVerify }, "exhausted", LIVE_CEILING_STOP_REASON);
         await heartbeat.assertHeld();
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
@@ -2368,7 +2412,7 @@ export async function runLoopFromState(
             recovery ? ()=>assertSavedResultUnmodified(runDir,worktreePath!,recovery,state) : undefined,
             attempt + inheritedAttempts === 1 && recovery === undefined,
           ),
-          { awaitAbortedResult: recovery !== undefined || attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold() },
+          { awaitAbortedResult: recovery !== undefined || attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
         );
       } catch (error) {
         if (error instanceof PhaseExecutionError) {
@@ -2403,12 +2447,13 @@ export async function runLoopFromState(
         await flushStartedCapture();
         if(recovery)await assertSavedResultUnmodified(runDir,worktreePath,recovery,state);
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
+        const verifyCeiling = verifyOutcome.budgetStop?.liveCeiling === true;
         state = await persistTerminalState(
           runDir,
           writeOwnedRunState,
-          state,
+          verifyCeiling ? { ...state, liveCeilingStop: liveCeilingStopOf("verify", "mid-call") } : state,
           "exhausted",
-          hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("verify", verifyTimeoutMs),
+          verifyCeiling ? LIVE_CEILING_STOP_REASON : hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("verify", verifyTimeoutMs),
         );
         await heartbeat.assertHeld();
         await cleanupAttemptWorkspaceBestEffort(

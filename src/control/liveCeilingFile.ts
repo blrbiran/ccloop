@@ -77,3 +77,36 @@ export async function updateLiveCeiling(envelope: StartEnvelopeV3, ceiling: Live
   await writeLiveCeiling(envelope.work.sourceDir, ceiling);
   return { revision: ceiling.revision, tokens: ceiling.tokens };
 }
+
+/**
+ * The worker's view of the ceiling while the run runs: the highest revision read so far, polled every 50 ms (the handoff
+ * request watcher polls every 20 ms). A read that fails keeps the last good value; the first failure of each streak is
+ * reported through `onReadFailed`, so a run never stops or speeds up on a file it could not read.
+ */
+export function createLiveCeilingWatch(
+  sourceDir: string,
+  initial: LiveCeiling,
+  onReadFailed: (error: unknown) => Promise<void> = async () => undefined,
+): { current(): LiveCeiling; stop(): Promise<void> } {
+  let current = initial;
+  let stopped = false;
+  let failing = false;
+  let wake: () => void = () => undefined;
+  const loop = (async () => {
+    while (!stopped) {
+      try {
+        const read = await readLiveCeilingOptional(sourceDir);
+        if (read !== null && read.revision > current.revision) current = read;
+        failing = false;
+      } catch (error) {
+        if (!failing) await onReadFailed(error).catch(() => undefined);
+        failing = true;
+      }
+      await new Promise<void>((resolve) => { const timer = setTimeout(resolve, 50); timer.unref(); wake = () => { clearTimeout(timer); resolve(); }; });
+    }
+  })();
+  return {
+    current: () => current,
+    stop: async () => { stopped = true; wake(); await loop; },
+  };
+}
