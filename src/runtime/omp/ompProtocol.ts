@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ModelUsageV1 } from "../../control/usage.js";
-import { normalizeExecutionFinal } from "../executionNormalizer.js";
+import { executionShapeIssues, normalizeExecutionFinal } from "../executionNormalizer.js";
 import type { UsageEvidence } from "../types.js";
-import { executionSchema, phaseFinalAccepts, scanFinalMessage, verificationSchema, type PhaseResults } from "../codex/protocol.js";
+import { phaseFinalAccepts, scanFinalMessage, verificationSchema, type PhaseResults } from "../codex/protocol.js";
 import { ompPhaseTools, type OmpPhase } from "./phasePrompt.js";
 import { causeDetail } from "../failureCause.js";
 import { foldText, type JsonLine } from "../streamLines.js";
@@ -19,12 +19,8 @@ const safe = (value: unknown): value is number => typeof value === "number" && N
  */
 export type ExecutionFormatIssue = { path: string; message: string };
 export function executionFormatIssues(final: string): ExecutionFormatIssue[] {
-  let value: unknown;
-  try { value = JSON.parse(final); } catch { return []; }
-  if (record(value) && Object.keys(value).length === 1 && Object.hasOwn(value, "result")) value = value.result;
-  if (executionSchema.safeParse(value).success) return [];
-  const parsed = executionSchema.options[record(value) && Object.hasOwn(value, "completionStatus") ? 1 : 0].safeParse(value);
-  return parsed.success ? [] : parsed.error.issues.slice(0, 8).map((issue) => ({ path: issue.path.join("."), message: issue.message }));
+  // Orca tester issue #274: the shape choice moved to executionShapeIssues, shared with the codex and claude decoders.
+  return executionShapeIssues(final).slice(0, 8).map((issue) => ({ path: issue.path.join("."), message: issue.message }));
 }
 
 // Mirrors omp's isActionableContent (messages.ts:544) for the stop branch: thinking is actionable only when signed.

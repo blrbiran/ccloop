@@ -1,4 +1,4 @@
-import { normalizeExecutionFinal, ExecutionFormatFailure } from "../executionNormalizer.js";
+import { normalizeExecutionFinal, ExecutionFormatFailure, executionFormatFields, executionFormatFieldDetail } from "../executionNormalizer.js";
 import { access, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readAgentCatalog } from "../../agents/agentCatalog.js";
@@ -112,7 +112,10 @@ export class CodexAdapter implements RuntimeAdapter {
   /** Spec §3 codex and §4 retry-safety: the cause of a failed call and whether retrying it could not have changed the worktree. */
   private failedTry<T>(phase: CodexPhase, outcome: PhaseOutcome, error: Error): TryResult<T> {
     const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? outcome.stream.rateLimit.value() : null;
-    const classification = classifyOutcome(outcome);
+    let classification = classifyOutcome(outcome);
+    // Orca tester issue #274 (as omp's, issue 125): an execute answer the strict shape refused names what it refused; cause unchanged.
+    const formatDetail = (error as { formatDetail?: unknown }).formatDetail;
+    if (classification !== null && typeof formatDetail === "string") classification = { ...classification, detail: formatDetail };
     // The 429 row keeps exactly the 2026-10-13 predicate; every other retryable cause needs a read-only phase or no work seen.
     const retrySafe = classification?.cause === "rate-limited" ? rateLimited === "before-work"
       : classification !== null && (phase !== "execute" || !classification.workObserved);
@@ -172,8 +175,14 @@ export class CodexAdapter implements RuntimeAdapter {
         // Preserve historical parse diagnostics while adding an independent typed classification.
         let original:unknown;
         try { JSON.parse(outcome.final); original=new Error("codex-result-invalid"); } catch(error) { original=error; }
-        await writeFile(join(outcome.evidenceDir,"decode-error.txt"),String(original),{mode:0o600});
-        throw new ExecutionFormatFailure(`${String(original)}: ${outcome.evidenceDir}`,outcome.evidenceDir,usage.tokenUsage,usage.usageEvidence,modelUsage,normalization);
+        // Orca tester issue #274: a final that is one JSON object names the field the strict shape refused -- in
+        // execution-format-issues.json (execution-normalization.json keeps its shape: Orca parses it strictly), after the
+        // evidence directory in the error, and as the failure cause's detail. The error code and normalization are unchanged.
+        const fields=executionFormatFields(outcome.final), detail=executionFormatFieldDetail(fields);
+        if (detail!==null) await writeFile(join(outcome.evidenceDir,"execution-format-issues.json"),JSON.stringify({schema:"ccloop-execution-format-issues-v1",issues:fields}),{mode:0o600});
+        await writeFile(join(outcome.evidenceDir,"decode-error.txt"),detail===null?String(original):`${String(original)}: ${detail}`,{mode:0o600});
+        const failure=new ExecutionFormatFailure(`${String(original)}: ${outcome.evidenceDir}${detail===null?"":`: ${detail}`}`,outcome.evidenceDir,usage.tokenUsage,usage.usageEvidence,modelUsage,normalization);
+        throw detail===null?failure:Object.assign(failure,{formatDetail:causeDetail(`${normalization.reason}: ${detail}`)});
       }
       return {...normalization.execution,...usage,...(modelUsage===undefined?{}:{modelUsage})} as PhaseResults[P];
     }

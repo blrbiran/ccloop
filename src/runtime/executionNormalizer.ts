@@ -1,6 +1,8 @@
 import { executionSchema, scanFinalMessage, type PhaseAcceptor } from "./codex/protocol.js";
 import type { ExecutionResult } from "./types.js";
 import { dropUnreported } from "./reportedDecisions.js";
+import { causeDetail } from "./failureCause.js";
+import type { ZodIssue } from "zod";
 export const EXECUTION_NORMALIZER_VERSION = "strict-execution-v1";
 type Diagnostic = { method:"whole"|"candidate"|"none"; candidates:number; valid:number; hidden:boolean; originalBytes:number };
 export type ExecutionNormalization =
@@ -21,6 +23,40 @@ export function normalizeExecutionFinal(final:string):ExecutionNormalization {
     return {status:"available",execution:dropUnreported(executionSchema.parse(unwrap(extraction.value))),diagnostic:{...diagnostic,method:isWhole?"whole":"candidate"}};
   }
   return {status:"unavailable",reason:hidden||diagnostic.valid>0?"execution-format-ambiguous-or-hidden":"execution-format-invalid",diagnostic};
+}
+
+/**
+ * What the strict execute shape refused in a final that is one JSON object, for diagnosis only -- the normalizer alone
+ * decides acceptance. The issues are those of the shape the answer aimed at (partial when it names completionStatus),
+ * parsed alone: zod's union would report whichever branch failed only on unrecognized keys (Orca tester issues 125/158).
+ */
+export function executionShapeIssues(final:string):ZodIssue[] {
+  let value:unknown;
+  try { value=JSON.parse(final); } catch { return []; }
+  value=unwrap(value);
+  if (executionSchema.safeParse(value).success) return [];
+  const parsed=executionSchema.options[record(value)&&Object.hasOwn(value,"completionStatus")?1:0].safeParse(value);
+  return parsed.success?[]:parsed.error.issues;
+}
+
+/**
+ * Orca tester issue #274: the field the strict execute shape refused, with what it expected and what it received when zod
+ * says so (a wrong type, a missing field, a wrong literal). At most 8, for the call's execution-format-issues.json.
+ */
+export type ExecutionFormatField = { path:string; expected?:string; received?:string; message:string };
+export function executionFormatFields(final:string):ExecutionFormatField[] {
+  return executionShapeIssues(final).slice(0,8).map((issue)=>{
+    const path=issue.path.join("."), message=causeDetail(issue.message);
+    if (issue.code==="invalid_type") return {path,expected:issue.expected,received:issue.received,message};
+    if (issue.code==="invalid_literal") return {path,expected:causeDetail(JSON.stringify(issue.expected)??String(issue.expected)),received:causeDetail(JSON.stringify(issue.received)??String(issue.received)),message};
+    return {path,message};
+  });
+}
+/** The first refused field as one bounded line, e.g. `commandOutputs: expected array, received string`; null when none. */
+export function executionFormatFieldDetail(fields:readonly ExecutionFormatField[]):string|null {
+  const first=fields[0];
+  if (first===undefined) return null;
+  return causeDetail(`${first.path===""?"(top level)":first.path}: ${first.expected===undefined?first.message:`expected ${first.expected}, received ${first.received}`}`.replace(/[\r\n]+/g," "));
 }
 
 import type { ModelUsageV1 } from "../control/usage.js";

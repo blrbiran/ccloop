@@ -11,10 +11,10 @@ import { observedTokensOf, SingleCallOutputInvalid, type AttemptContext, type At
 import type { ModelUsageV1 } from "../../control/usage.js";
 import { boundedTaskResult } from "../taskResult.js";
 import { dropUnreported } from "../reportedDecisions.js";
-import { normalizeExecutionFinal } from "../executionNormalizer.js";
+import { executionFormatFieldDetail, executionFormatFields, normalizeExecutionFinal } from "../executionNormalizer.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./prompts.js";
 import type { ClaudePhaseRequest } from "./types.js";
-import { classifyClaudeCall, isExecutableMissing, parseClaudeSignals, singleCallCauseOf, type CallClassification } from "../failureCause.js";
+import { causeDetail, classifyClaudeCall, isExecutableMissing, parseClaudeSignals, singleCallCauseOf, type CallClassification } from "../failureCause.js";
 import { effectiveIdleTimeoutMs, IdleWatch, lineFeeder, type IdleSnapshotV1 } from "../idleWatch.js";
 import { transcriptTruncatedAt as transcriptTruncatedAtOf } from "../streamLines.js";
 import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
@@ -78,11 +78,16 @@ const parseObject = (text: string): object | undefined => {
 /** The runner's accounting fields are outside the model's strict execute answer. */
 async function decodeClaudeExecute(value: object, evidenceDir: string): Promise<ExecutionResult> {
   const { tokenUsage, usageEvidence, modelUsage, partialOrigin, ...answer } = value as Record<string, unknown>;
-  const normalized = normalizeExecutionFinal(JSON.stringify(answer));
+  const text = JSON.stringify(answer), normalized = normalizeExecutionFinal(text);
   if (normalized.status !== "available") {
-    await writeFile(join(evidenceDir, "decode-error.txt"), normalized.reason, { mode: 0o600 });
-    throw Object.assign(new Error(`claude-result-invalid: ${evidenceDir}`), {
+    // Orca tester issue #274 (as codex's): the field the strict shape refused, in execution-format-issues.json, after the
+    // evidence directory in the error, in decode-error.txt and as the failure cause's detail; the error code is unchanged.
+    const fields = executionFormatFields(text), detail = executionFormatFieldDetail(fields);
+    if (detail !== null) await writeFile(join(evidenceDir, "execution-format-issues.json"), JSON.stringify({ schema: "ccloop-execution-format-issues-v1", issues: fields }), { mode: 0o600 });
+    await writeFile(join(evidenceDir, "decode-error.txt"), detail === null ? normalized.reason : `${normalized.reason}: ${detail}`, { mode: 0o600 });
+    throw Object.assign(new Error(`claude-result-invalid: ${evidenceDir}${detail === null ? "" : `: ${detail}`}`), {
       observedTokens: typeof tokenUsage === "number" ? tokenUsage : null,
+      ...(detail === null ? {} : { formatDetail: causeDetail(`${normalized.reason}: ${detail}`) }),
     });
   }
   return { ...normalized.execution, ...(partialOrigin === undefined ? {} : { partialOrigin }),
@@ -387,6 +392,9 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
           else if (outcome.reason === "timeout") classification = { cause: "budget-exhausted", workObserved: true, detail: null };
           else if (outcome.reason === "stalled") classification = { cause: "stalled", workObserved: (await this.classify(outcome)).workObserved, detail: null };
           else classification = await this.classify(outcome);
+          // Orca tester issue #274 (as omp's, issue 125): an execute answer the strict shape refused names what it refused; cause unchanged.
+          const formatDetail = (error as { formatDetail?: unknown }).formatDetail;
+          if (classification !== null && typeof formatDetail === "string") classification = { ...classification, detail: formatDetail };
           const observed = (error as { observedTokens?: unknown }).observedTokens;
           const observation: TryObservation = (error as { neverStarted?: unknown }).neverStarted === true ? { kind: "rule0" }
             : typeof observed === "number" && observed > 0 ? { kind: "tokens", tokens: observed } : { kind: "null" };
