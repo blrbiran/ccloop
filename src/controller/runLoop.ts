@@ -28,6 +28,7 @@ import {
   writeOwnerTransferArtifacts,
 } from "../persistence/fileStore.js";
 import { allowlistMisses, evaluatePathPolicy } from "../policy/pathPolicy.js";
+import { dropHandoffOutput } from "../policy/handoffOutput.js";
 import { evaluateRunBoundary, evaluateStopDecision } from "../stop/stopController.js";
 import { isTerminalRunStatus, transitionRunState } from "../state/stateMachine.js";
 import type { LoopContract } from "../contract/schema.js";
@@ -931,7 +932,9 @@ async function withObservedMisses(verdict: ReturnType<typeof evaluatePathPolicy>
   return { ...verdict, pathPolicyMisses: misses };
 }
 
-async function judgeAttemptPaths(contract: LoopContract, primaryWorktreePath: string | null, changedFiles: string[]): Promise<PathVerdict> {
+async function judgeAttemptPaths(contract: LoopContract, primaryWorktreePath: string | null, reportedChangedFiles: string[], handoffOutputDir?: string): Promise<PathVerdict> {
+  // Task handoffs (Orca follow-up G §10.2): the agent's writes into the handoff output directory are not changed paths.
+  const changedFiles = dropHandoffOutput(reportedChangedFiles, primaryWorktreePath, handoffOutputDir);
   const policy = { allowlistPaths: contract.safetyPolicy.allowlistPaths, denylistPaths: contract.safetyPolicy.denylistPaths };
   const entry = primaryWorktreePath === null ? undefined : extraAttemptOf(primaryWorktreePath);
   if (entry === undefined) return withObservedMisses(evaluatePathPolicy({ changedFiles, ...policy, maxFilesTouched: contract.safetyPolicy.maxFilesTouched }),
@@ -1721,6 +1724,10 @@ export async function runLoopFromState(
     : undefined;
   // Operator note (Orca spec 2026-10-23-live-transcript-design.md §10.2.6): from the accepted envelope, for plan and execute
   // of the attempts its scope names; never for verify.
+  // Task handoffs (Orca spec 2026-11-12 tester follow-up G §10.2): from the accepted envelope, for plan and execute of every
+  // attempt; a saved-result recovery takes none (the envelope refuses it beside mode).
+  const handoffDirs = options?.taskResultInput?.work.kind === "loop" && options.taskResultInput.mode === undefined ? options.taskResultInput.work.handoff : undefined;
+  const handoffFor = (): { handoff?: import("../runtime/types.js").HandoffDirs } => handoffDirs === undefined ? {} : { handoff: handoffDirs };
   const noteFor = operatorNoteGate(options?.taskResultInput?.work.kind === "loop" ? options.taskResultInput.work.operatorNote : undefined);
   const lastFailureContext = (): { lastFailure?: LastFailure; priorFailures?: PriorFailure[] } => {
     const last = state.recentFailures.at(-1);
@@ -1977,7 +1984,7 @@ export async function runLoopFromState(
 
       if(recovery?.verificationOnly){
         const observedPaths=recovery.actualChangedPaths;
-        const pathPolicy=await judgeAttemptPaths(contract,worktreePath,observedPaths);
+        const pathPolicy=await judgeAttemptPaths(contract,worktreePath,observedPaths,handoffDirs?.outputDir);
         if(pathPolicy.humanGateHit){
           state=await persistTerminalState(runDir,writeOwnedRunState,withPathEvidence(state,pathPolicy),'blocked_waiting_human',pathPolicy.reason??'human gate or denylist hit');
           return state;
@@ -2087,7 +2094,7 @@ export async function runLoopFromState(
         await heartbeat.assertHeld();
         activePhase = "plan";
         const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal, onObservedUsage) =>
-          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt), onObservedUsage }),
+          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...handoffFor(), onObservedUsage }),
           { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
         );
 
@@ -2164,7 +2171,7 @@ export async function runLoopFromState(
         ? { timedOut: false as const, elapsedMs: 0, result: continuation.execution! }
         : await runPhaseWithTimeout(
         executeTimeoutMs,
-        (abortSignal, onObservedUsage) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext(), ...noteFor(attempt), onObservedUsage }),
+        (abortSignal, onObservedUsage) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...handoffFor(), onObservedUsage }),
         { awaitAbortedResult: true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
       );
       const executeStopTokens = budgetStopTokens(executeOutcome);
@@ -2278,7 +2285,7 @@ export async function runLoopFromState(
       if (!recovery && isPartialExecutionResult(completedExecution)) {
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
 
-        const partialPathPolicy = await judgeAttemptPaths(contract, worktreePath, completedExecution.changedFiles);
+        const partialPathPolicy = await judgeAttemptPaths(contract, worktreePath, completedExecution.changedFiles, handoffDirs?.outputDir);
 
         if (partialPathPolicy.humanGateHit) {
           state = await persistTerminalState(
@@ -2330,7 +2337,7 @@ export async function runLoopFromState(
       }
 
       const pathPolicy = await judgeAttemptPaths(contract, worktreePath,
-        recovery ? [...new Set([...recovery.actualChangedPaths,...completedExecution.changedFiles])] : completedExecution.changedFiles);
+        recovery ? [...new Set([...recovery.actualChangedPaths,...completedExecution.changedFiles])] : completedExecution.changedFiles, handoffDirs?.outputDir);
 
       if (pathPolicy.humanGateHit) {
         await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, completedExecution));
@@ -2485,7 +2492,7 @@ export async function runLoopFromState(
       // Multi-repo runs (review M3): the extra worktrees are observed again right before they are published, so dirs.json
       // matches what repos/<key> will hold, and a file written after execute (during verify) is judged like any other.
       const finalPolicy = extraAttemptOf(worktreePath) === undefined ? pathPolicy
-        : await judgeAttemptPaths(contract, worktreePath, completedExecution.changedFiles);
+        : await judgeAttemptPaths(contract, worktreePath, completedExecution.changedFiles, handoffDirs?.outputDir);
       const humanGateHit =
         finalPolicy.humanGateHit ||
         verification.pauseSignals.some((signal) => contract.escalationAndExit.pauseOn.includes(signal));
@@ -2743,7 +2750,7 @@ export async function runLoopFromState(
 
         if (!isCodexSkillFailure(error) && execution !== null && isPartialExecutionResult(execution)) {
           await writeCompletedAttemptArtifacts(runDir, attempt, plan, execution);
-          const partialPathPolicy = await judgeAttemptPaths(contract, worktreePath, execution.changedFiles);
+          const partialPathPolicy = await judgeAttemptPaths(contract, worktreePath, execution.changedFiles, handoffDirs?.outputDir);
 
           if (partialPathPolicy.humanGateHit) {
             state = await persistTerminalState(

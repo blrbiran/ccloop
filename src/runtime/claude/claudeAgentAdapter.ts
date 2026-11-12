@@ -454,7 +454,11 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       runDir: context.runDir, attempt: context.attempt, cwd: context.worktreePath,
       timeLimitMs: context.state.budgetSnapshot.timeRemainingMs,
       abortSignal: context.abortSignal, onProcessRegistered: context.onProcessRegistered, onObservedUsage: context.onObservedUsage,
-      ...(context.extraWorktrees === undefined ? {} : { addDirs: context.extraWorktrees.map((extra) => extra.worktreePath) }),
+      ...(context.extraWorktrees === undefined && context.handoff === undefined ? {} : { addDirs: [
+        ...(context.extraWorktrees ?? []).map((extra) => extra.worktreePath),
+        // Task handoffs (Orca follow-up G §10.2): the handoff directories, after the extra worktrees.
+        ...(context.handoff === undefined ? [] : [context.handoff.inputDir, context.handoff.outputDir]),
+      ] }),
     };
   }
 

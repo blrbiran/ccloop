@@ -43,6 +43,8 @@ export type AttemptContext = {
    * when the contract has additionalRepos. Agents get them as extra directories; prompts list them.
    */
   extraWorktrees?: ExtraWorktreeContext[];
+  /** Task handoffs (Orca follow-up G §10.2): set for plan and execute only, when the envelope carries work.handoff. */
+  handoff?: HandoffDirs;
   /**
    * Live token threshold (ccloop issue #225, spec 2026-11-10-live-token-threshold-design.md): an adapter that sees usage
    * while its call runs (claude, omp) reports the call's running observed total here, a lower bound, each time it grows.

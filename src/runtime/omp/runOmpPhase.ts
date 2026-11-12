@@ -64,7 +64,9 @@ export async function runOmpPhase(
     "--no-session", "--no-title", "--no-prewalk", "--model", config.selection.model,
     "--mode", "json", "-p", "--system-prompt", systemPath, "--cwd", context.worktreePath,
     // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5, §19.2 P5): the extra worktrees, on every phase.
-    ...(context.extraWorktrees ?? []).map((extra) => `--add-dir=${extra.worktreePath}`)];
+    ...(context.extraWorktrees ?? []).map((extra) => `--add-dir=${extra.worktreePath}`),
+    // Task handoffs (Orca follow-up G §10.2): the handoff directories, after the extra worktrees.
+    ...(context.handoff === undefined ? [] : [`--add-dir=${context.handoff.inputDir}`, `--add-dir=${context.handoff.outputDir}`])];
   const toolRules = phase === "execute" ? context.contract?.executionPolicy?.toolRules : undefined;
   return runOmpProcess(config, {
     args, prompt, cwd: context.worktreePath, evidenceDir, phase,

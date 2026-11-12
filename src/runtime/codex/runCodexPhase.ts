@@ -73,6 +73,8 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     "--sandbox",phase==="execute"?config.sandbox:"read-only","-C",context.worktreePath,
     // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5, §19.2 P5): the extra worktrees, writable on execute only.
     ...(phase==="execute"?(context.extraWorktrees??[]).flatMap(extra=>["--add-dir",extra.worktreePath]):[]),
+    // Task handoffs (Orca follow-up G §10.2): the output directory is written on execute only; codex reads anywhere.
+    ...(phase==="execute"&&context.handoff!==undefined?["--add-dir",context.handoff.outputDir]:[]),
     ...(promptSchema?[]:["--output-schema",schemaPath]),"-o",finalPath,"-"];
   let isolation:{home:string|null;codexHome:string|null;catalogError:string|null}|undefined;
   let spawnEnv:NodeJS.ProcessEnv={...process.env,...extraEnv};
