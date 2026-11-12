@@ -305,3 +305,20 @@ The sections above are kept verbatim. Two `detail` sources are added; no cause v
   `codex-phase-isolation-no-mcp-list` the detail is now `<reason>: <the MCP probe's own error>` through `causeDetail`,
   the same text is appended to the refusal's message, and `outcome.json` records it as `refusalDetail`. The reason value
   itself is unchanged.
+
+## Correction (2026-11-12, Orca session d1cbbd58, seat G7; Orca tester issue 262)
+
+The sections above are kept verbatim. §5 row 4 gains one exception; no cause value, retry rule or contract key changes.
+
+- **runLoop.** An execute stopped by its phase timeout with no result, whose call had already ended for a cause of its
+  own before the abort reached it, records that cause (`phase: "execute"`, the call's `retries` and `detail`) instead of
+  `budget-exhausted`. Status (`exhausted`) and stop reason stay the timeout's: the timeout is still the trigger. A call
+  cause of `budget-exhausted` or `unknown` says nothing more than row 4 and keeps it.
+- **codex.** An aborted execute answered null whenever the signal had fired, even when the call had already been stopped
+  by the idle watchdog (the tester's run: `stalled` at the idle limit, then the budget timeout while the process was
+  still being killed). It now throws when the error carries a cause other than `budget-exhausted`/`unknown`; a plain
+  abort still answers null.
+- **codex floor.** A call that ended without a final (any reason but `completed`) after codex reported turn usage writes
+  `usage-lower-bound.json` `{"tokens": <turn usage>}`, the shape omp writes (Orca #116), best-effort. Only when that
+  usage is > 0. In the tester's run `observedTokens` was null (no `turn.completed` before the stall), so this would
+  still have written nothing there.

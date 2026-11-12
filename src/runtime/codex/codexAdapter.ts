@@ -11,7 +11,7 @@ import { codexResultOf, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, t
 import { runCodexPhase, type PhaseOutcome } from "./runCodexPhase.js";
 import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
 import { codexToolRuleRows } from "../toolRules.js";
-import { causeDetail, singleCallCauseOf, type CallClassification } from "../failureCause.js";
+import { attachedCause, causeDetail, singleCallCauseOf, type CallClassification } from "../failureCause.js";
 import { phaseLimitMs, runWithTransientRetry, tryContext, type TryObservation, type TryResult } from "../transientRetry.js";
 
 /** Codex rate-limit spec §3.2: waits before each retry of a phase rejected by 429 before any work (three retries). */
@@ -58,6 +58,12 @@ function refusedOutputSchema(classification: CallClassification | null): classif
 async function recordPromptFallback(evidenceDir: string, refused: { evidenceDir: string; detail: string }): Promise<void> {
   await writeFile(join(evidenceDir, "structured-output-fallback.json"), JSON.stringify({ schema: "ccloop-structured-output-fallback-v1",
     refusedEvidenceDir: refused.evidenceDir, detail: refused.detail }), { mode: 0o600 });
+}
+
+/** Orca issue #262: the error carries a classified cause that is neither a timeout nor unknown. */
+function ownCause(error: unknown): boolean {
+  const cause = attachedCause(error)?.classification.cause;
+  return cause !== undefined && cause !== "budget-exhausted" && cause !== "unknown";
 }
 
 export class CodexAdapter implements RuntimeAdapter {
@@ -126,6 +132,10 @@ export class CodexAdapter implements RuntimeAdapter {
   /** One call's outcome as the phase's result, or the error it fails with (unchanged from before the shared loop). */
   private async decodePhase<P extends CodexPhase>(phase: P, outcome: PhaseOutcome): Promise<PhaseResults[P]> {
     const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? outcome.stream.rateLimit.value() : null;
+    // Orca issue #262 (as omp's, Orca #116): a call that ended without a final after codex reported turn usage leaves that
+    // usage as a floor (collect's usageLowerBound). Best-effort: a failed write must not replace the call's own failure.
+    const lowerBound = outcome.reason === "completed" ? null : outcome.stream.turnUsage.value();
+    if (lowerBound !== null && lowerBound > 0) await writeFile(join(outcome.evidenceDir, "usage-lower-bound.json"), JSON.stringify({ tokens: lowerBound }), { mode: 0o600 }).catch(() => undefined);
     if (outcome.reason === "aborted") throw new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens);
     // Spec §3.3: named; a rejection before any work books 0 (rateLimitedBeforeWork, observedTokensOf), any other keeps
     // the usage its stdout showed, or null.
@@ -200,7 +210,9 @@ export class CodexAdapter implements RuntimeAdapter {
       // An aborted execute that was observed spending tokens throws, so runLoop can settle that usage;
       // one that was not keeps answering null exactly as before.
       if (error instanceof Error && error.message.startsWith("codex-skills-")) throw error;
-      if (context.abortSignal?.aborted && !(error instanceof CodexPhaseAborted && error.observedTokens !== null)) return null;
+      // Orca issue #262: a call that had already ended for a cause of its own (stalled, network, ...) before the abort
+      // reached it throws that cause too, so runLoop does not book the timeout as budget-exhausted.
+      if (context.abortSignal?.aborted && !(error instanceof CodexPhaseAborted && error.observedTokens !== null) && !ownCause(error)) return null;
       throw error;
     }
   }

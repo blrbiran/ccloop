@@ -1478,6 +1478,17 @@ function withFailureCause(state: RunState, cause: RunFailureCauseV1 | undefined)
   return state;
 }
 
+/**
+ * Orca issue #262: an execute stopped by its phase timeout with no result, whose call had already ended for a reason of its
+ * own (the idle watchdog's `stalled`, a `network` error, ...), records that cause instead of row 4's `budget-exhausted`; the
+ * status and stop reason stay the timeout's. A call cause of `budget-exhausted` or `unknown` says nothing more than row 4.
+ */
+function timedOutCallCause(abortedError: unknown): RunFailureCauseV1 | undefined {
+  const attached = abortedError instanceof PhaseExecutionError ? abortedError.attached : undefined;
+  if (attached === undefined || attached.classification.cause === "budget-exhausted" || attached.classification.cause === "unknown") return undefined;
+  return { cause: attached.classification.cause, phase: "execute", retries: attached.retries, detail: attached.classification.detail };
+}
+
 /** Spec §5 row 1: a verifier rejection's category. */
 function rejectionCause(rejectCategory: string): RunFailureCauseV1 {
   return { cause: rejectCategory === "required-check-failed" ? "required-check-failed" : "verifier-rejected", phase: "verify", retries: 0, detail: null };
@@ -2156,6 +2167,7 @@ export async function runLoopFromState(
             state,
             "exhausted",
             hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("execute", executeTimeoutMs),
+            timedOutCallCause(executeOutcome.abortedError),
           );
           await heartbeat.assertHeld();
           const cleanupStatus = await cleanupAttemptWorkspaceWithStatus(
