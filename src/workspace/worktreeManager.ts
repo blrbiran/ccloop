@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, lstat, mkdir, rmdir } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, rmdir } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -40,6 +40,31 @@ export async function createAttemptWorkspace(repoPath: string, runDir: string, a
  * (savedResultRecovery.ts and executionFormatFailure.ts already pass the same flag).
  */
 const ATTEMPT_IDENTITY = ["-c", "user.name=ccloop", "-c", "user.email=ccloop@invalid", "-c", "core.hooksPath=/dev/null"];
+
+/** Subject length limit for an attempt commit (git's conventional 72 columns, counted in code points). */
+export const ATTEMPT_SUBJECT_MAX = 72;
+
+/**
+ * Orca tester issue #277: attempt commits end up in the target repository's history, so the subject describes the work --
+ * the run's goal (loop-contract.json objective.goal) on one line, at most 72 characters -- and the ref moves to an
+ * `Attempt-Ref:` trailer in the body. A run without a readable goal keeps the subject it always had. Nothing in ccloop or
+ * Orca reads these messages back (publication is checked by ref, sha, tree and parent).
+ */
+export function attemptCommitMessageArgs(ref: string, goal: string | null): string[] {
+  const line = (goal ?? "").replace(/\s+/g, " ").trim();
+  const chars = Array.from(line);
+  const subject = line === "" ? `ccloop attempt: ${ref}`
+    : chars.length <= ATTEMPT_SUBJECT_MAX ? line : `${chars.slice(0, ATTEMPT_SUBJECT_MAX - 3).join("").trimEnd()}...`;
+  return ["-m", subject, "-m", `Attempt-Ref: ${ref}`];
+}
+
+/** The run's goal from <runDir>/loop-contract.json, or null when it cannot be read (the message then falls back). */
+async function runGoal(runDir: string): Promise<string | null> {
+  try {
+    const goal = (JSON.parse(await readFile(join(runDir, "loop-contract.json"), "utf8")) as { objective?: { goal?: unknown } }).objective?.goal;
+    return typeof goal === "string" ? goal : null;
+  } catch { return null; }
+}
 
 export interface AttemptCommit {
   /** The commit the attempt produced. */
@@ -123,7 +148,7 @@ export async function publishAttemptCommit(worktreePath: string): Promise<Attemp
   await execFileAsync("git", ["add", "-A"], { cwd: worktreePath });
   await execFileAsync(
     "git",
-    [...ATTEMPT_IDENTITY, "commit", "--allow-empty", "-m", `ccloop attempt: ${ref}`],
+    [...ATTEMPT_IDENTITY, "commit", "--allow-empty", ...attemptCommitMessageArgs(ref, await runGoal(dirname(dirname(worktreePath))))],
     { cwd: worktreePath },
   );
 
@@ -173,7 +198,7 @@ export async function publishExtraAttemptCommit(worktreePath: string, runDir: st
   const ref = `refs/ccloop/${basename(runDir)}/attempts/${attempt}`;
   const { stdout: baseOut } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath });
   await execFileAsync("git", ["add", "-A"], { cwd: worktreePath });
-  await execFileAsync("git", [...ATTEMPT_IDENTITY, "commit", "--allow-empty", "-m", `ccloop attempt: ${ref}`], { cwd: worktreePath });
+  await execFileAsync("git", [...ATTEMPT_IDENTITY, "commit", "--allow-empty", ...attemptCommitMessageArgs(ref, await runGoal(runDir))], { cwd: worktreePath });
   const { stdout: shaOut } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath });
   const sha = shaOut.trim();
   await execFileAsync("git", ["update-ref", ref, sha], { cwd: worktreePath });
