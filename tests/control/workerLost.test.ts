@@ -128,6 +128,30 @@ describe("a run whose ccloop worker died (Orca #273)", { timeout: 180_000 }, () 
     expect(await workerLiveness(accepted, { liveness: () => ({ verdict: "dead" }) })).toMatchObject({ state: "lost" });
   });
 
+  // The two liveness guards, each alone: the worker's own identity (a run whose loop wrote no owner record yet), and the
+  // loop's owner record (the worker's identity says its pid was reused, the owner record says the loop was alive later).
+  it("a live worker without an owner record is refused by the worker's own identity", async () => {
+    const { f, worker, agent } = await hung("plan");
+    const owner = join(f.sourceDir, "run", "owner-record.json"), bytes = await readFile(owner);
+    await rm(owner);
+    await expect(settleLostWorker(f.envelope)).rejects.toThrow("control-worker-not-lost");
+    await writeFile(owner, bytes, { mode: 0o600 });
+    expect(alive(worker) && alive(agent)).toBe(true);
+  });
+
+  it("a worker the owner record shows alive later than its pid's holder started is refused", async () => {
+    const { f, worker, agent } = await hung("plan");
+    const holderStart = new Date(Date.now() + 10_000), utc = holderStart.toUTCString().split(" "); // e.g. Thu, 12 Nov 2026 12:48:03 GMT
+    const lstart = `${utc[0]!.slice(0, 3)} ${utc[2]} ${String(holderStart.getUTCDate()).padStart(2, " ")} ${utc[4]} ${utc[3]}`;
+    const reused = { readStart: async () => lstart };
+    expect(await workerLiveness(await readAccepted(f.sourceDir), reused)).toMatchObject({ state: "lost" }); // the worker identity alone says reused
+    const owner = join(f.sourceDir, "run", "owner-record.json"), bytes = await readFile(owner);
+    await writeFile(owner, JSON.stringify({ ...JSON.parse(bytes.toString()), lastAffirmedAt: new Date(Date.now() + 60_000).toISOString() }), { mode: 0o600 });
+    await expect(settleLostWorker(f.envelope, reused)).rejects.toThrow("control-worker-not-lost");
+    await writeFile(owner, bytes, { mode: 0o600 });
+    expect(alive(worker) && alive(agent)).toBe(true);
+  });
+
   it("a run with a candidate never carries worker, and settle-lost-worker answers its candidate", async () => {
     const f = await fixture("integration");
     const accepted = await call(f, "accept", f.envelope); expect(accepted.code, accepted.stderr).toBe(0);
