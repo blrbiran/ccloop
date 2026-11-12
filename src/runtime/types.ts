@@ -18,6 +18,11 @@ export type PriorFailure = { rejectCategory: string; failingCommand: string | nu
  * in execute, writes handoff.md and summary.md into outputDir. */
 export interface HandoffDirs { inputDir: string; outputDir: string }
 
+/** Live notes (Orca follow-up G Part 5): a note the person added while the task ran, delivered at a phase start. */
+export interface LiveNote { id: string; text: string; at: string }
+/** Takes the notes not yet delivered, once, and records their delivery for that phase and attempt. */
+export interface LiveNoteInbox { take(phase: "plan" | "execute" | "verify", attempt: number): Promise<LiveNote[]> }
+
 export type ExtraWorktreeContext = { key: string; worktreePath: string; targetPaths: string[]; requiredChecks: string[] };
 
 export type AttemptContext = {
@@ -45,6 +50,8 @@ export type AttemptContext = {
   extraWorktrees?: ExtraWorktreeContext[];
   /** Task handoffs (Orca follow-up G §10.2): set for plan and execute only, when the envelope carries work.handoff. */
   handoff?: HandoffDirs;
+  /** Live notes (Orca follow-up G Part 5): set only when notes were taken at this phase's start, oldest first. */
+  liveNotes?: LiveNote[];
   /**
    * Live token threshold (ccloop issue #225, spec 2026-11-10-live-token-threshold-design.md): an adapter that sees usage
    * while its call runs (claude, omp) reports the call's running observed total here, a lower bound, each time it grows.

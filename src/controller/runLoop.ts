@@ -306,6 +306,8 @@ async function runVerification(
   checkRunner?:(command:string,index:number)=>Promise<{stdout:string;stderr:string}>,
   beforeVerifier?:()=>Promise<void>,
   checkFailureRetryable = false,
+  // Live notes (Orca follow-up G Part 5): taken only when an agent verifier is about to be called.
+  takeLiveNotes?: () => Promise<{ liveNotes?: import("../runtime/types.js").LiveNote[] }>,
 ): Promise<VerificationResult> {
   onStarted?.();
   const primaryTargetPaths = getVerificationPrimaryTargetPaths(contract, plan, execution);
@@ -349,7 +351,8 @@ async function runVerification(
   }
 
   await beforeVerifier?.();
-  const verification = await adapter.verify({ ...context, requiredCheckResults: requiredChecks.results });
+  const notes = await takeLiveNotes?.() ?? {};
+  const verification = await adapter.verify({ ...context, requiredCheckResults: requiredChecks.results, ...notes });
   return enforceVerificationContract(contract, {
     ...verification,
     evidence: [...requiredChecks.evidence, ...verification.evidence],
@@ -1638,6 +1641,8 @@ export interface RunControlHooks {
    * work tokens earlier invocations of this run already recorded, so the whole run's total is compared.
    */
   liveCeiling?: { current(): LiveCeiling; baseTokens: number };
+  /** Live notes (Orca follow-up G Part 5): the worker's inbox, read once at every phase start; absent for a recovery. */
+  liveNotes?: import("../runtime/types.js").LiveNoteInbox;
   /** Only the worker supplies this, after validating the checkpoint and reachable artifacts. */
   allowanceContinuation?: { nextPhase: "plan" | "execute" | "verify"; plan: AttemptPlan | null; execution: ExecutionResult | null; recentFailures?: FailureFingerprint[]; lastRejectionEvidence?: string[] };
   /** Trusted accepted control envelope supplied only by the worker. */
@@ -1728,6 +1733,13 @@ export async function runLoopFromState(
   // attempt; a saved-result recovery takes none (the envelope refuses it beside mode).
   const handoffDirs = options?.taskResultInput?.work.kind === "loop" && options.taskResultInput.mode === undefined ? options.taskResultInput.work.handoff : undefined;
   const handoffFor = (): { handoff?: import("../runtime/types.js").HandoffDirs } => handoffDirs === undefined ? {} : { handoff: handoffDirs };
+  // Live notes (Orca spec 2026-11-12 tester follow-up G Part 5): taken once per phase start (never per transient retry), and
+  // put into that phase's context only when there are any.
+  const liveNotesAt = async (phase: PhaseName, attempt: number): Promise<{ liveNotes?: import("../runtime/types.js").LiveNote[] }> => {
+    if (options?.liveNotes === undefined) return {};
+    const notes = await options.liveNotes.take(phase, attempt);
+    return notes.length === 0 ? {} : { liveNotes: notes };
+  };
   const noteFor = operatorNoteGate(options?.taskResultInput?.work.kind === "loop" ? options.taskResultInput.work.operatorNote : undefined);
   const lastFailureContext = (): { lastFailure?: LastFailure; priorFailures?: PriorFailure[] } => {
     const last = state.recentFailures.at(-1);
@@ -2093,8 +2105,9 @@ export async function runLoopFromState(
         // §8.1: launching a Claude call is a side effect.
         await heartbeat.assertHeld();
         activePhase = "plan";
+        const planNotes = await liveNotesAt("plan", attempt);
         const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal, onObservedUsage) =>
-          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...handoffFor(), onObservedUsage }),
+          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...handoffFor(), ...planNotes, onObservedUsage }),
           { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
         );
 
@@ -2167,11 +2180,12 @@ export async function runLoopFromState(
       // §8.1: launching a Claude call is a side effect.
       await heartbeat.assertHeld();
       activePhase = continuation?.nextPhase === "verify" ? null : "execute";
+      const executeNotes = continuation?.nextPhase === "verify" ? {} : await liveNotesAt("execute", attempt);
       const executeOutcome = continuation?.nextPhase === "verify"
         ? { timedOut: false as const, elapsedMs: 0, result: continuation.execution! }
         : await runPhaseWithTimeout(
         executeTimeoutMs,
-        (abortSignal, onObservedUsage) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...handoffFor(), onObservedUsage }),
+        (abortSignal, onObservedUsage) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...handoffFor(), ...executeNotes, onObservedUsage }),
         { awaitAbortedResult: true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
       );
       const executeStopTokens = budgetStopTokens(executeOutcome);
@@ -2418,6 +2432,7 @@ export async function runLoopFromState(
             recovery ? (command,index)=>runSavedResultCheck(runDir,worktreePath!,command,index,options?.phaseSignal ? AbortSignal.any([abortSignal,options.phaseSignal]) : abortSignal,providerOptions?.onProcessRegistered) : undefined,
             recovery ? ()=>assertSavedResultUnmodified(runDir,worktreePath!,recovery,state) : undefined,
             attempt + inheritedAttempts === 1 && recovery === undefined,
+            () => liveNotesAt("verify", attempt),
           ),
           { awaitAbortedResult: recovery !== undefined || attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
         );

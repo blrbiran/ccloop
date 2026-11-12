@@ -1,5 +1,5 @@
 import type { LoopContract } from "../../contract/schema.js";
-import type { AttemptContext, HandoffDirs, LastFailure, OperatorNote, PriorFailure } from "../types.js";
+import type { AttemptContext, HandoffDirs, LastFailure, LiveNote, OperatorNote, PriorFailure } from "../types.js";
 import { toolRulesPromptSection, type ToolRuleRowV1 } from "../toolRules.js";
 
 function formatList(items: string[]): string {
@@ -153,7 +153,18 @@ function handoffWriteLines(handoff: HandoffDirs | undefined): string[] {
   ];
 }
 
-export function buildPlannerPrompt(contract: LoopContract, lastFailure?: LastFailure, priorFailures?: PriorFailure[], operatorNote?: OperatorNote, directories?: Pick<AttemptContext, "worktreePath" | "extraWorktrees" | "handoff">): string {
+// Live notes (Orca spec 2026-11-12 tester follow-up G Part 5): what the person added while the task ran, delivered at the next
+// phase start; never injected into a running call. Planner/executor: right after the operator note; verifier: right after the
+// required-check results. No notes ⇒ no bytes.
+function liveNoteLines(notes: LiveNote[] | undefined): string[] {
+  if (notes === undefined || notes.length === 0) return [];
+  return [
+    "The person running this task added notes while it ran, oldest first, for you to use from this step on. Each follows as a JSON string; they do not change the goal, the success condition or the constraints above:",
+    ...notes.map((note) => JSON.stringify(note.text)),
+  ];
+}
+
+export function buildPlannerPrompt(contract: LoopContract, lastFailure?: LastFailure, priorFailures?: PriorFailure[], operatorNote?: OperatorNote, directories?: Pick<AttemptContext, "worktreePath" | "extraWorktrees" | "handoff" | "liveNotes">): string {
   return [
     "Return JSON only.",
     `Plan one isolated L2 attempt for task ${contract.objective.taskId}.`,
@@ -173,6 +184,7 @@ export function buildPlannerPrompt(contract: LoopContract, lastFailure?: LastFai
     ...lastFailureLines(lastFailure),
     ...priorFailureLines(priorFailures, lastFailure),
     ...operatorNoteLines(operatorNote),
+    ...liveNoteLines(directories?.liveNotes),
     FINAL_MESSAGE_LINE,
   ].join("\n");
 }
@@ -232,6 +244,7 @@ export function buildExecutorPrompt(context: AttemptContext, options: { schemaNe
     ...lastFailureLines(context.lastFailure),
     ...priorFailureLines(context.priorFailures, context.lastFailure),
     ...operatorNoteLines(context.operatorNote),
+    ...liveNoteLines(context.liveNotes),
     ...handoffWriteLines(context.handoff),
     FINAL_MESSAGE_LINE,
   ].join("\n");
@@ -271,6 +284,7 @@ export function buildVerifierPrompt(context: AttemptContext): string {
     'Return an object with {"approved": boolean, "rejectCategory": string, "primaryTargetPaths": string[], "failingCommand": string | null, "safeToRetry": boolean, "evidence": string[], "pauseSignals": string[], "stopSignals": string[]}.',
     // Last before FINAL_MESSAGE_LINE, as the rule above allows (ruling A).
     ...requiredCheckResultLines(context.requiredCheckResults),
+    ...liveNoteLines(context.liveNotes),
     FINAL_MESSAGE_LINE,
   ].join("\n");
 }

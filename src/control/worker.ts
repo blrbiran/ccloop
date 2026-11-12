@@ -12,6 +12,7 @@ import { atomicReplacePrivateFile, readPrivateFile } from "./paths.js";
 import { appendUsageObservation, captureKnownWorkUsageLedger, readUsageEvents, reconciledByModel, type ModelUsageV1 } from "./usage.js";
 import { canonicalJson, ControlProtocolError, isLoopEnvelope, parseControlRequest, type StartEnvelopeV3 } from "./protocol.js";
 import { createLiveCeilingWatch, readLiveCeilingOptional, writeLiveCeiling } from "./liveCeilingFile.js";
+import { liveNoteInbox } from "./liveNotes.js";
 import type { LiveCeiling } from "../budget/liveCeiling.js";
 import { existsSync } from "node:fs";
 import { prepareContinuationContract, readAllowanceContinuation } from "./materialize.js";
@@ -163,6 +164,11 @@ async function startLiveCeilingWatch(sourceDir: string, runDir: string, seed: Li
   });
 }
 
+/** Live notes (Orca follow-up G Part 5): the run's inbox; a saved-result recovery builds no prompt, so it takes none. */
+export function liveNotesFor(envelope: StartEnvelopeV3): { liveNotes?: ReturnType<typeof liveNoteInbox> } {
+  return envelope.mode === undefined ? { liveNotes: liveNoteInbox(envelope.work.sourceDir) } : {};
+}
+
 export async function runControlWorker(argv: string[]): Promise<void> {
   const sourceDir = flag(argv, "--source-dir");
   const executionId = flag(argv, "--execution-id");
@@ -293,6 +299,8 @@ export async function runControlWorker(argv: string[]): Promise<void> {
     await runLoop(contract, runDir, () => getDescriptor(config.kind).createAdapter(config, adapterOptions), {
       ...(envelope.protocol === 4 ? { workGrant: envelope.claim.grant.work, tokenPolicy: envelope.tokenPolicy } : {}),
       ...(liveCeilingWatch === undefined ? {} : { liveCeiling: { current: liveCeilingWatch.current, baseTokens: liveCeilingBaseTokens } }),
+      // Live notes (Orca follow-up G Part 5): a saved-result recovery builds no prompt, so it takes none.
+      ...liveNotesFor(envelope),
       allowanceContinuation,
       firstWorkspaceInput: envelope.inputCheckpoint ?? undefined,
       taskResultInput: envelope,
