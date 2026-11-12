@@ -24,6 +24,7 @@ import { acceptStart } from "./accept.js";
 import { collectExecution, inspectExecution } from "./collect.js";
 import { MAX_CONTROL_BYTES, readEvidence } from "./evidence.js";
 import { requestHandoff } from "./handoff.js";
+import { updateLiveCeiling } from "./liveCeilingFile.js";
 import { collectTaskResults, readTaskResultEvidence, taskResultCollectionSchema } from "./taskResults.js";
 import { byModelSchema } from "./usage.js";
 
@@ -253,6 +254,7 @@ const METHODS = new Set<ControlMethodV1>([
   "saved-result-eligibility",
   "saved-result-evidence",
   "read-saved-result-evidence",
+  "live-ceiling",
 ]);
 
 async function parseCommand(argv: string[]): Promise<{ method: ControlMethodV1; agentsTablePath: string }> {
@@ -329,6 +331,7 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
     const bytes = await readTaskResultEvidence(request.input, request.manifestRef, request.ref);
     return { ...request.ref, base64: bytes.toString("base64") };
   }
+  if (request.method === "live-ceiling") return await updateLiveCeiling(request.input, request.ceiling);
   if (request.method === "read-evidence") {
     const bytes = await readEvidence(request.input.work.sourceDir, request.ref);
     return { ...request.ref, base64: bytes.toString("base64") };
@@ -357,6 +360,7 @@ function validateResponse(method: ControlMethodV1, value: unknown, protocol = 3)
     if (method === "saved-result-eligibility") return savedResultEligibilitySchema.parse(value);
     if (method === "saved-result-evidence") return savedResultCollectionSchema.parse(value);
     if (method === "task-results") return taskResultCollectionSchema.parse(value);
+    if (method === "live-ceiling") return z.object({ revision: safeInteger, tokens: safeInteger }).strict().parse(value);
     if (method === "read-saved-result-settlement" || method === "read-evidence" || method === "read-task-result-evidence" || method === "read-saved-result-evidence") return evidenceSchema.parse(value);
     return value;
   } catch {

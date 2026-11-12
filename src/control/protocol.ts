@@ -1,4 +1,5 @@
 import { budgetAmountSchema, tokenPolicySchema, type TokenPolicy, type BudgetAmount } from "../budget/tokenPolicy.js";
+import { liveCeilingSchema, type LiveCeiling } from "../budget/liveCeiling.js";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
@@ -26,7 +27,8 @@ export type ControlMethodV1 =
   | "saved-result-source-eligibility"
   | "saved-result-eligibility"
   | "saved-result-evidence"
-  | "read-saved-result-evidence";
+  | "read-saved-result-evidence"
+  | "live-ceiling";
 
 export interface AmountV1 {
   tokens: number;
@@ -122,6 +124,8 @@ interface StartEnvelopeBaseV3 {
   tokenPolicy?: TokenPolicy;
   mode?: "verify-saved-result";
   savedResultRecovery?: SavedResultRecoveryInput;
+  /** Live token ceiling (Orca tester follow-up G part 2): protocol 4 only, with a null work token grant and no mode. */
+  liveCeiling?: LiveCeiling;
   claim: ClaimV2;
   contractHash: string;
 }
@@ -171,7 +175,8 @@ export type ControlRequestV1 =
   | { method: "saved-result-source-eligibility"; input: SavedResultSourceInput }
   | { method: "saved-result-eligibility"; input: LoopStartEnvelope }
   | { method: "saved-result-evidence"; input: StartEnvelopeV3 }
-  | { method: "read-saved-result-evidence"; input: StartEnvelopeV3; capsuleRef: ArtifactRefV1; ref: ArtifactRefV1 };
+  | { method: "read-saved-result-evidence"; input: StartEnvelopeV3; capsuleRef: ArtifactRefV1; ref: ArtifactRefV1 }
+  | { method: "live-ceiling"; input: StartEnvelopeV3; ceiling: LiveCeiling };
 
 export type ControlPayloadV1 =
   | { opId: string; requestDigest: string; previewId: string; baseTableHash: string; acceptedChangeIds: string[] }
@@ -184,7 +189,8 @@ export type ControlPayloadV1 =
   | { input: StartEnvelopeV3; ref: ArtifactRefV1 }
   | { input: StartEnvelopeV3; afterRevision: number }
   | { input: StartEnvelopeV3; manifestRef: ArtifactRefV1; ref: ArtifactRefV1 }
-  | { input: StartEnvelopeV3; capsuleRef: ArtifactRefV1; ref: ArtifactRefV1 };
+  | { input: StartEnvelopeV3; capsuleRef: ArtifactRefV1; ref: ArtifactRefV1 }
+  | { input: StartEnvelopeV3; ceiling: LiveCeiling };
 
 export class ControlProtocolError extends Error {
   constructor(readonly code: string) {
@@ -335,10 +341,14 @@ const v4StartEnvelopeSchema = z.object({
   mode: z.literal("verify-saved-result").optional(), savedResultRecovery: savedResultRecoveryInputSchema.optional(),
   claim: claimSchema.extend({ grant: z.object({ work: budgetAmountSchema.extend({ sessions: positiveSafeInteger }), handoff: amountSchema }).strict() }),
   inputCheckpoint: inputCheckpointSchema.nullable(), work: nullableLoopWorkSchema,
+  // Live token ceiling (Orca tester follow-up G part 2): optional, so an envelope without it parses and hashes as before.
+  liveCeiling: liveCeilingSchema.optional(),
 }).strict().refine(e => (e.mode === undefined) === (e.savedResultRecovery === undefined) && (e.mode === undefined || e.inputCheckpoint === null)
   // Prior-failures spec §2.1: a saved-result recovery builds no prompt, so it takes no prior failures -- nor an operator note
   // (live transcript spec §10.2.6; review minor, Orca session ffec7b28).
-  && (e.mode === undefined || (e.work.priorFailures === undefined && e.work.operatorNote === undefined)));
+  && (e.mode === undefined || (e.work.priorFailures === undefined && e.work.operatorNote === undefined)))
+  // Live token ceiling: it bounds the run's tokens in place of a finite work grant, and a saved-result recovery takes none.
+  .refine(e => e.liveCeiling === undefined || (e.claim.grant.work.tokens === null && e.mode === undefined));
 export const startEnvelopeSchema = z.union([legacyStartEnvelopeSchema, v4StartEnvelopeSchema]);
 export const handoffRequestSchema = z
   .object({
@@ -372,6 +382,7 @@ const payloadSchemas = {
   "task-results": z.object({ input: startEnvelopeSchema, afterRevision: safeInteger }).strict(),
   "read-task-result-evidence": z.object({ input: startEnvelopeSchema, manifestRef: artifactRefSchema, ref: artifactRefSchema }).strict(),
   "read-evidence": z.object({ input: startEnvelopeSchema, ref: artifactRefSchema }).strict(),
+  "live-ceiling": z.object({ input: startEnvelopeSchema, ceiling: liveCeilingSchema }).strict(),
 } satisfies Record<ControlMethodV1, z.ZodTypeAny>;
 
 function canonicalize(value: unknown): unknown {
@@ -519,7 +530,7 @@ export function parseControlRequest(method: ControlMethodV1, raw: unknown): Cont
   try {
     const payload = payloadSchemas[method].parse(raw) as ControlPayloadV1;
     if (method === "accept" || method === "inspect") validateEnvelopePaths(payload as StartEnvelopeV3, method);
-    if (method === "settle-saved-result" || method === "read-saved-result-settlement" || method === "saved-result-eligibility" || method === "handoff" || method === "collect" || method === "read-evidence" || method === "task-results" || method === "read-task-result-evidence" || method === "saved-result-evidence" || method === "read-saved-result-evidence") {
+    if (method === "settle-saved-result" || method === "read-saved-result-settlement" || method === "saved-result-eligibility" || method === "handoff" || method === "collect" || method === "read-evidence" || method === "task-results" || method === "read-task-result-evidence" || method === "saved-result-evidence" || method === "read-saved-result-evidence" || method === "live-ceiling") {
       validateEnvelopePaths((payload as { input: StartEnvelopeV3 }).input, method);
     }
     return payload;
