@@ -45,7 +45,9 @@ for (let index = 0; index < args.length; index += 1) {
   // Orca session 3d229487 (2026-10-20): execute and verify allow the contract's required checks. Like claude's list option,
   // --allowedTools takes every following argument up to the next option -- a prompt placed after it would be swallowed.
   // Per-contract tool rules (ccloop spec 2026-10-22 §4 claude): --disallowedTools is a list option of the same shape.
-  if (arg === "--allowedTools" || arg === "--disallowedTools") {
+  // Orca follow-up G §10.2 (2026-11-12): the handoff directories (and extra worktrees) reach claude as --add-dir <dir...>, a
+  // list option of the same shape; the fake accepts it and records it in argv.
+  if (arg === "--allowedTools" || arg === "--disallowedTools" || arg === "--add-dir") {
     if (args[index + 1] === undefined || args[index + 1].startsWith("-")) fail(`missing value for ${arg}`);
     while (args[index + 1] !== undefined && !args[index + 1].startsWith("-")) index += 1;
     continue;
