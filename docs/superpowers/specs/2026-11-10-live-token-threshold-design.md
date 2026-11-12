@@ -157,3 +157,11 @@ Run on 2026-11-11 in a `git clone --local` copy of the feature commit, criteria 
 | M8 claude partial keeps its own stop reason | 2 | `Expected: "runtime or token budget exhausted"` / `Received: "claude phase runner interrupted by SIGTERM"` |
 | M9 the claude runner never writes `{"observedTokens":n}` | 2 | `expected [ '0', '1', '2', '3', '4', '5', …(35) ] to include 'terminated'` |
 | M10 omp never reports its running sum | 1 | same |
+
+## Addendum 2026-11-12: an opt-in ceiling Orca updates (Orca G part 2)
+
+Appended by the ccloop implementation seat of Orca session `d1cbbd58`; the text above is unchanged. A protocol-4 envelope
+that carries `liveCeiling` (spec `2026-11-12-live-ceiling-design.md`) has a null work token grant, so this design's 1.2
+factor and its allowance-park exclusion never apply to it: the run is bounded instead by the live ceiling, checked against
+the run's whole total mid-call (claude, omp) and at every phase boundary (all adapters). Envelopes without `liveCeiling`
+keep everything above as it is.
