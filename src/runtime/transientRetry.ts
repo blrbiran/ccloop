@@ -27,6 +27,11 @@ export type TryResult<T> =
     observation: TryObservation;
     /** Called once the loop decided the try's next delay (null: no retry); codex writes rate-limit.json here. */
     onDecided?: (call: number, nextDelayMs: number | null) => Promise<void>;
+    /**
+     * Orca #122: call again at once, whatever the cause, without using a transient delay (the caller changed what the next
+     * call sends and asks this at most once). Still bounded by the phase limit and an abort; booked as any retried try.
+     */
+    immediateRetry?: true;
   };
 
 /** Spec §4 "Time": the phase limit, taken once at phase start. */
@@ -65,7 +70,7 @@ export async function runWithTransientRetry<T>(options: {
   attempt: (tryLimitMs: number, call: number) => Promise<TryResult<T>>;
 }): Promise<T> {
   const startedAt = Date.now();
-  let priorTokens = 0, unobserved = 0, allRule0 = true;
+  let priorTokens = 0, unobserved = 0, allRule0 = true, delaysUsed = 0;
   for (let call = 1; ; call++) {
     const elapsed = Date.now() - startedAt;
     const result = await options.attempt(Math.max(0, options.limitMs - elapsed), call);
@@ -80,8 +85,10 @@ export async function runWithTransientRetry<T>(options: {
     }
     const { classification, observation } = result;
     const retryable = classification !== null && RETRYABLE_CAUSES.has(classification.cause) && result.retrySafe;
-    const delay = options.delaysMs[call - 1];
-    const next = retryable && delay !== undefined && Date.now() - startedAt + delay < options.limitMs && !options.signal?.aborted ? delay : null;
+    const immediate = result.immediateRetry === true;
+    const delay = immediate ? 0 : options.delaysMs[delaysUsed];
+    const next = (immediate || retryable) && delay !== undefined && Date.now() - startedAt + delay < options.limitMs && !options.signal?.aborted ? delay : null;
+    if (next !== null && !immediate) delaysUsed += 1;
     await result.onDecided?.(call, next);
     if (classification !== null) {
       await writeFile(join(result.evidenceDir, "failure-cause.json"), JSON.stringify({

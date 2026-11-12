@@ -44,6 +44,22 @@ function classifyOutcome(outcome: PhaseOutcome): CallClassification | null {
   return outcome.stream.call.value() ?? { cause: "unknown", workObserved: true, detail: null };
 }
 
+/**
+ * Orca #122: a provider that cannot take `--output-schema` answers the call with a 400 about the response format. The text test
+ * is Orca's own (Orca src/control/structuredOutputHint.ts), read from the call's error rows as classified above (never model
+ * text). Such a call that did no work is sent once more in prompt mode (`structuredOutput: "prompt"` for that call only); the
+ * person's agents table is never written, so `structured-output-fallback.json` beside the second call records that it fell back.
+ */
+const FORMAT_FIELD = /text\.format|response_format|output_schema|json_schema/i;
+const BAD_REQUEST = /\b400\b|bad request|invalid_request_error/i;
+function refusedOutputSchema(classification: CallClassification | null): classification is CallClassification & { detail: string } {
+  return classification !== null && !classification.workObserved && classification.detail !== null && FORMAT_FIELD.test(classification.detail) && BAD_REQUEST.test(classification.detail);
+}
+async function recordPromptFallback(evidenceDir: string, refused: { evidenceDir: string; detail: string }): Promise<void> {
+  await writeFile(join(evidenceDir, "structured-output-fallback.json"), JSON.stringify({ schema: "ccloop-structured-output-fallback-v1",
+    refusedEvidenceDir: refused.evidenceDir, detail: refused.detail }), { mode: 0o600 });
+}
+
 export class CodexAdapter implements RuntimeAdapter {
   private readonly config: CodexConfig;
   // Agent selection (2026-09-26): extraEnv carries the installation's config directory (CODEX_HOME) to the CLI.
@@ -67,14 +83,21 @@ export class CodexAdapter implements RuntimeAdapter {
    * elapsed). ***
    */
   private async phase<P extends CodexPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
+    // Orca #122: the call whose --output-schema the provider refused; the phase's next call goes in prompt mode, at once.
+    let refused: { evidenceDir: string; detail: string } | null = null;
     return runWithTransientRetry<PhaseResults[P]>({
       limitMs: phaseLimitMs(this.config.timeoutMs, context), delaysMs: this.rateLimitDelaysMs, signal: context.abortSignal,
       attempt: async (tryLimitMs) => {
-        const outcome = await runCodexPhase(this.config, { phase, prompt, context: tryContext(context, tryLimitMs) }, this.extraEnv, this.codexSkillsDir, this.installation);
+        const outcome = await runCodexPhase(this.config, { phase, prompt, context: tryContext(context, tryLimitMs), ...(refused === null ? {} : { promptSchema: true as const }) },
+          this.extraEnv, this.codexSkillsDir, this.installation);
+        if (refused !== null) await recordPromptFallback(outcome.evidenceDir, refused);
         try {
           return { ok: true, value: await this.decodePhase(phase, outcome), evidenceDir: outcome.evidenceDir };
         } catch (error) {
-          return this.failedTry(phase, outcome, error as Error);
+          const failed = this.failedTry<PhaseResults[P]>(phase, outcome, error as Error);
+          if (failed.ok || refused !== null || this.installation?.structuredOutput === "prompt" || !refusedOutputSchema(failed.classification)) return failed;
+          refused = { evidenceDir: outcome.evidenceDir, detail: failed.classification.detail };
+          return { ...failed, immediateRetry: true };
         }
       },
     });
@@ -228,16 +251,28 @@ export class CodexAdapter implements RuntimeAdapter {
     }
     const context = { runDir: request.runDir, attempt: 1, worktreePath: request.cwd, abortSignal: request.signal, onProcessRegistered: request.onProcessRegistered,
       state: { budgetSnapshot: { timeRemainingMs: Math.max(1, deadline - Date.now()) } } } as unknown as AttemptContext;
-    const promptSchema = this.installation.structuredOutput === "prompt";
-    const outcome = await runCodexPhase(this.config, { phase: "single-call", prompt: request.prompt, context, spawn: {
-      schema: wireSchema, env: { ...process.env, HOME: isolated.home, CODEX_HOME: isolated.codexHome }, promptSchema,
-      args: ({ schemaPath, finalPath }) => codexSingleCallArgs({ model: this.config.model, cwd: request.cwd, schemaPath, finalPath, features, mcpServers, configFileArgs, promptSchema }),
-    } });
+    const call = (promptSchema: boolean, timeRemainingMs: number) => runCodexPhase(this.config, { phase: "single-call", prompt: request.prompt,
+      context: { ...context, state: { budgetSnapshot: { timeRemainingMs } } } as unknown as AttemptContext, spawn: {
+        schema: wireSchema, env: { ...process.env, HOME: isolated.home, CODEX_HOME: isolated.codexHome }, promptSchema,
+        args: ({ schemaPath, finalPath }) => codexSingleCallArgs({ model: this.config.model, cwd: request.cwd, schemaPath, finalPath, features, mcpServers, configFileArgs, promptSchema }),
+      } });
+    let outcome = await call(this.installation.structuredOutput === "prompt", context.state.budgetSnapshot.timeRemainingMs);
+    // Orca #122: a refused --output-schema is sent once more in prompt mode, within the same deadline. A refusal never has a
+    // completed turn (refusedOutputSchema needs an unclassified-as-completed call), so the refused call observed no usage.
+    let fellBack = false;
+    const refusal = outcome.reason === "completed" || this.installation.structuredOutput === "prompt" ? null : classifyOutcome(outcome);
+    if (refusedOutputSchema(refusal) && Date.now() < deadline && !request.signal?.aborted) {
+      const refused = { evidenceDir: outcome.evidenceDir, detail: refusal.detail };
+      outcome = await call(true, Math.max(1, deadline - Date.now()));
+      fellBack = true;
+      await recordPromptFallback(outcome.evidenceDir, refused);
+    }
     if (outcome.reason !== "completed") {
       // Fix round 1 (repo convention, omp "Ruling m4", claude): runCodexPhase writes the prompt only after process.json is
       // saved, so a call that ended without it -- aborted before or at spawn, a spawn error, a deadline hit first -- never
       // sent anything: neverStarted, booked 0. The codex phase path is unchanged.
-      const neverStarted = !(await access(join(outcome.evidenceDir, "process.json")).then(() => true, () => false));
+      // Orca #122: after a fallback the refused call had started, so the pair never books 0 by this rule.
+      const neverStarted = !fellBack && !(await access(join(outcome.evidenceDir, "process.json")).then(() => true, () => false));
       const error = outcome.reason === "aborted" ? new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens)
         : Object.assign(new Error(`codex-${outcome.reason}: ${outcome.evidenceDir}`), { observedTokens: outcome.observedTokens },
           // Activity watchdog (spec 2026-10-21 §2.4): a stalled single call names its cause; its caller owns retries.

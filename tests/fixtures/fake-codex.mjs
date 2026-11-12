@@ -58,6 +58,21 @@ const REPORTED={decisions:[
   {question:"Name the helper?",chose:"retryOnce",alternatives:[{option:"retry",why_not:"too generic"}],because:"says what it does",undo:{how:"rename retryOnce back in src/client.ts",cost:"trivial",blast_radius:"src/client.ts"},scope:"file",kind:"implementation",importance:"minor"}],
   debug:{choseInstead:"fix the parser",reproTests:["tests/parser.test.ts"],reproCommand:"npx vitest run tests/parser.test.ts",reproduction:null,reproductionReason:null}};
 const args=process.argv.slice(process.argv.indexOf("exec")+1);
+// Orca #122: modes `format-refused` and `format-refused-after-item` answer every call (phase or single) that sends
+// --output-schema as a provider without Responses `text.format` does -- codex's error and turn.failed rows carrying the
+// provider's 400, exit 1; the after-item mode prints an item.started first (work observed). A call without the flag behaves
+// as `integration`. FAKE_CODEX_FORMAT_MESSAGE replaces the 400 text; FAKE_CODEX_FORMAT_ALWAYS=1 refuses a call without the
+// flag too; FAKE_CODEX_UNLINK_ON_REFUSAL=<path> removes that file as it refuses (a launcher, so the next call cannot spawn).
+// Every other mode is unchanged.
+const formatRefused=mode.startsWith("format-refused")&&(args.includes("--output-schema")||process.env.FAKE_CODEX_FORMAT_ALWAYS==="1");
+function refuseFormat(){
+  if(process.env.FAKE_CODEX_UNLINK_ON_REFUSAL) unlinkSync(process.env.FAKE_CODEX_UNLINK_ON_REFUSAL);
+  const message=process.env.FAKE_CODEX_FORMAT_MESSAGE??"unexpected status 400 Bad Request: {\"error\":{\"message\":\"Invalid parameter: 'text.format' is not supported by this model.\",\"type\":\"invalid_request_error\",\"param\":\"text.format\"}}";
+  const rows=[{type:"thread.started",thread_id:"01a13431-3db4-73a1-afd1-154f0477282d"},{type:"turn.started"},
+    ...(mode==="format-refused-after-item"?[{type:"item.started",item:{id:"item_0",type:"command_execution",command:"ls",status:"in_progress"}}]:[]),
+    {type:"error",message},{type:"turn.failed",error:{message}}];
+  process.stdout.write(rows.map(row=>JSON.stringify(row)).join("\n")+"\n",()=>{process.exitCode=1;});
+}
 const value=flag=>args[args.indexOf(flag)+1];
 let prompt="";
 process.stdin.setEncoding("utf8");
@@ -79,6 +94,7 @@ process.stdin.on("end",()=>{
     writeFileSync(marker+".single-env.json",JSON.stringify({HOME:process.env.HOME,CODEX_HOME:process.env.CODEX_HOME,authIsLink}));
     // Orca tester issue 122 (session 3cfc2e73): the prompt the call received, verbatim.
     writeFileSync(marker+".single-prompt.txt",prompt);
+    if(formatRefused){refuseFormat();return;}
     const script=existsSync(marker+".single.json")?JSON.parse(readFileSync(marker+".single.json","utf8")):{};
     if(script.hang===true){setInterval(()=>{},1000);return;}
     const rows=script.rows??[{type:"thread.started",thread_id:"t"},...P1_ERROR_ITEMS,{type:"turn.started"},{type:"item.completed",item:{id:"item_0",type:"agent_message",text:"{\"answer\":\"42\"}"}},{type:"turn.completed",usage:{input_tokens:20,cached_input_tokens:5,output_tokens:4}}];
@@ -134,6 +150,7 @@ process.stdin.on("end",()=>{
       process.exitCode=mode.endsWith("exit0")?0:1;return;
     }
   }
+  if(formatRefused){refuseFormat();return;}
   process.stderr.write("fixture stderr 中文\n");
   if(mode==="skill-integration") appendFileSync(marker+".skills",readFileSync(".agents/skills/selected/SKILL.md","utf8")+"\n");
   if(process.env.FAKE_CODEX_SKILL_PATH) {

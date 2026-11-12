@@ -20,7 +20,9 @@ import { codexToolRuleArgs } from "../toolRules.js";
 export type PhaseRequest = {phase:CodexPhase|"single-call";prompt:string;context:AttemptContext;
   spawn?:{args:(paths:{schemaPath:string;finalPath:string})=>string[];env:NodeJS.ProcessEnv;schema:Record<string,unknown>;
     // Orca tester issue 122: the single call's installation asks for the shape in the prompt (its args then omit --output-schema).
-    promptSchema?:boolean}};
+    promptSchema?:boolean};
+  // Orca #122: a phase call sent again in prompt mode after the provider refused its --output-schema (codexAdapter.ts).
+  promptSchema?:true};
 /**
  * Orca tester issue 122 (session 3cfc2e73): an installation with `structuredOutput: "prompt"` sends no `--output-schema`;
  * the schema that would have gone there (schema.json, still written) follows the prompt after this line -- the OMP single
@@ -66,7 +68,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   let transcriptTruncatedAt:number|null=null,transcriptError:string|undefined;
   const save=async(name:string,data:string)=>writeFile(join(evidenceDir,name),data,{mode:0o600});
   const schemaPath=join(evidenceDir,"schema.json"),finalPath=join(evidenceDir,"final.json");
-  const promptSchema=request.spawn!==undefined?request.spawn.promptSchema===true:installation?.structuredOutput==="prompt";
+  const promptSchema=request.spawn!==undefined?request.spawn.promptSchema===true:request.promptSchema===true||installation?.structuredOutput==="prompt";
   const args=request.spawn!==undefined?[...config.command.slice(1),...request.spawn.args({schemaPath,finalPath})]:[...config.command.slice(1),"exec","--json","--ephemeral","--color","never","--model",config.model,
     "--sandbox",phase==="execute"?config.sandbox:"read-only","-C",context.worktreePath,
     // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5, §19.2 P5): the extra worktrees, writable on execute only.
