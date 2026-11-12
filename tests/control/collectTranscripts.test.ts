@@ -60,12 +60,14 @@ describe("collect lists the run's transcripts", () => {
     await call(w.run, "codex", 1, "plan", "call-zzzzzz", { startedAt: "Fri Oct 24 01:00:00 2026", transcript: line, outcome: true });
     await call(w.run, "codex", 1, "execute", "call-bbbbbb", { startedAt: "Fri Oct 24 03:00:00 2026", outcome: true });
     const report = await collectExecution(w.envelope, 0);
+    // Ruling (2026-11-12, Orca session d1cbbd58): the human named this criterion for rewrite to carry #252's per-call
+    // startedAt (ISO-8601 of process.json's ps lstart, UTC) and nothing else.
     expect(report.transcripts).toEqual([
-      { attempt: 1, phase: "execute", seq: 1, path: null, bytes: 0, final: true, truncatedAt: null },
-      { attempt: 1, phase: "plan", seq: 1, path: "codex/1/plan/call-zzzzzz/transcript.jsonl", bytes: line.length, final: true, truncatedAt: null },
-      { attempt: 1, phase: "plan", seq: 2, path: "codex/1/plan/call-mmmmmm/transcript.jsonl", bytes: 2 * line.length, final: true, truncatedAt: null },
+      { attempt: 1, phase: "execute", seq: 1, path: null, bytes: 0, final: true, truncatedAt: null, startedAt: "2026-10-24T03:00:00.000Z" },
+      { attempt: 1, phase: "plan", seq: 1, path: "codex/1/plan/call-zzzzzz/transcript.jsonl", bytes: line.length, final: true, truncatedAt: null, startedAt: "2026-10-24T01:00:00.000Z" },
+      { attempt: 1, phase: "plan", seq: 2, path: "codex/1/plan/call-mmmmmm/transcript.jsonl", bytes: 2 * line.length, final: true, truncatedAt: null, startedAt: "2026-10-24T01:00:05.000Z" },
       // Still running: no outcome.json, and the run is not terminal.
-      { attempt: 1, phase: "plan", seq: 3, path: "codex/1/plan/call-aaaaaa/transcript.jsonl", bytes: 0, final: false, truncatedAt: null },
+      { attempt: 1, phase: "plan", seq: 3, path: "codex/1/plan/call-aaaaaa/transcript.jsonl", bytes: 0, final: false, truncatedAt: null, startedAt: "2026-10-24T02:00:00.000Z" },
     ]);
   });
 
@@ -76,9 +78,12 @@ describe("collect lists the run's transcripts", () => {
     await call(w.run, "omp", 2, "verify", "call-abcdef", { startedAt: "Fri Oct 24 01:00:00 2026", transcript: kept + marker });
     await call(w.run, "omp", 1, "single-call", "call-ghijkl", { transcript: kept, outcome: true });
     const report = await collectExecution(w.envelope, 0);
+    // Ruling (2026-11-12, Orca session d1cbbd58): the human named this criterion for rewrite to carry #252's per-call
+    // startedAt (ISO-8601 of process.json's ps lstart, UTC) and nothing else.
+    // The single call registered no process: its entry has no startedAt key at all.
     expect(report.transcripts).toEqual([
       { attempt: 1, phase: "single-call", seq: 1, path: "omp/1/single-call/call-ghijkl/transcript.jsonl", bytes: kept.length, final: true, truncatedAt: null },
-      { attempt: 2, phase: "verify", seq: 1, path: "omp/2/verify/call-abcdef/transcript.jsonl", bytes: kept.length + marker.length, final: true, truncatedAt: kept.length },
+      { attempt: 2, phase: "verify", seq: 1, path: "omp/2/verify/call-abcdef/transcript.jsonl", bytes: kept.length + marker.length, final: true, truncatedAt: kept.length, startedAt: "2026-10-24T01:00:00.000Z" },
     ]);
   });
 
@@ -88,7 +93,9 @@ describe("collect lists the run's transcripts", () => {
     await call(w.run, "claude", 1, "plan", "call-qwerty", { startedAt: "Fri Oct 24 01:00:00 2026", transcript: "{}\n" });
     const answer = await runControlCommand(["collect", "--agents", join(w.root, "absent-agents.json")], JSON.stringify({ input: w.envelope, afterSeq: 0 }));
     expect(answer.code, answer.stderr).toBe(0);
-    expect((JSON.parse(answer.stdout) as { transcripts?: unknown }).transcripts).toEqual([{ attempt: 1, phase: "plan", seq: 1, path: "claude/1/plan/call-qwerty/transcript.jsonl", bytes: 3, final: false, truncatedAt: null }]);
+    // Ruling (2026-11-12, Orca session d1cbbd58): the human named this criterion for rewrite to carry #252's per-call
+    // startedAt (ISO-8601 of process.json's ps lstart, UTC) and nothing else.
+    expect((JSON.parse(answer.stdout) as { transcripts?: unknown }).transcripts).toEqual([{ attempt: 1, phase: "plan", seq: 1, path: "claude/1/plan/call-qwerty/transcript.jsonl", bytes: 3, final: false, truncatedAt: null, startedAt: "2026-10-24T01:00:00.000Z" }]);
   });
 
   it("leaves out a directory it cannot read and lists the rest (review minor, Orca session ffec7b28)", async () => {
@@ -99,7 +106,9 @@ describe("collect lists the run's transcripts", () => {
     await chmod(join(w.run, "codex", "1"), 0o000);
     try {
       const report = await collectExecution(w.envelope, 0);
-      expect(report.transcripts).toEqual([{ attempt: 2, phase: "plan", seq: 1, path: "codex/2/plan/call-bbbbbb/transcript.jsonl", bytes: 3, final: true, truncatedAt: null }]);
+      // Ruling (2026-11-12, Orca session d1cbbd58): the human named this criterion for rewrite to carry #252's per-call
+      // startedAt (ISO-8601 of process.json's ps lstart, UTC) and nothing else.
+      expect(report.transcripts).toEqual([{ attempt: 2, phase: "plan", seq: 1, path: "codex/2/plan/call-bbbbbb/transcript.jsonl", bytes: 3, final: true, truncatedAt: null, startedAt: "2026-10-24T02:00:00.000Z" }]);
     } finally { await chmod(join(w.run, "codex", "1"), 0o700); }
   });
 });

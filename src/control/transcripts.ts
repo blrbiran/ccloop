@@ -19,6 +19,8 @@ export interface TranscriptEntryV1 {
   bytes: number;
   final: boolean;
   truncatedAt: number | null;
+  /** Orca #252: the call's spawn time (process.json `startedAt`, ps lstart, 1 s resolution) as ISO-8601; absent when unknown. */
+  startedAt?: string;
 }
 
 export const KINDS = ["claude", "codex", "omp"] as const;
@@ -89,6 +91,7 @@ export async function listTranscripts(sourceDir: string, runFinal: boolean): Pro
             bytes: transcript?.size ?? 0,
             final: outcome !== null || runFinal,
             truncatedAt: transcript === null ? null : await transcriptTruncatedAt(join(callDir, "transcript.jsonl")),
+            ...(call.startedAt === null ? {} : { startedAt: new Date(call.startedAt).toISOString() }),
           });
         }
       }
