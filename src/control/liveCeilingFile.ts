@@ -102,6 +102,9 @@ export function createLiveCeilingWatch(
         if (!failing) await onReadFailed(error).catch(() => undefined);
         failing = true;
       }
+      // Orca follow-up H (C3): stop() may have run during the read above, when `wake` still belonged to the last sleep;
+      // sleeping now on an unref'd timer nobody wakes lets a worker holding nothing else exit before it seals.
+      if (stopped) break;
       await new Promise<void>((resolve) => { const timer = setTimeout(resolve, 50); timer.unref(); wake = () => { clearTimeout(timer); resolve(); }; });
     }
   })();
