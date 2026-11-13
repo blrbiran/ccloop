@@ -12,6 +12,7 @@ import {readUsageEvents,parseKnownWorkUsageLedger} from "../control/usage.js";
 import {readEvidence} from "../control/evidence.js";
 import {OmpStream} from "../runtime/omp/ompStream.js";
 import {ompPhaseTools} from "../runtime/omp/phasePrompt.js";
+import {ompHandoffArgs} from "../runtime/omp/runOmpPhase.js";
 import {foldText} from "../runtime/streamLines.js";
 import {normalizeExecutionFinal,EXECUTION_NORMALIZER_VERSION} from "../runtime/executionNormalizer.js";
 import {appendEvent} from "../persistence/fileStore.js";
@@ -44,7 +45,8 @@ export async function captureOmpWithoutFinal(input:OmpWithoutFinalCaptureInput):
   const call=join(runDir,'omp',String(attempt),'execute',calls[0]!);
   const outcome=JSON.parse((await read(source,join(call,'outcome.json'))).toString());
   if(outcome.reason!=='completed'||outcome.code!==0||outcome.signal!==null||outcome.stdoutTruncated!==false||outcome.transcriptTruncatedAt!==null||outcome.transcriptError!==undefined||outcome.neverStarted!==false)throw Error('saved-result-process-incomplete');
-  const expectedArgs=['--profile',config.installation.profile??'default','--no-extensions','--no-skills','--no-tools','--tools',ompPhaseTools('execute').join(','),'--no-session','--no-title','--no-prewalk','--model',config.selection.model,'--mode','json','-p','--system-prompt',join(call,'system-prompt.md'),'--cwd',input.worktreePath];
+  // The handoff --add-dir the envelope named (work.handoff), by the runtime's own builder; none without one.
+  const expectedArgs=['--profile',config.installation.profile??'default','--no-extensions','--no-skills','--no-tools','--tools',ompPhaseTools('execute').join(','),'--no-session','--no-title','--no-prewalk','--model',config.selection.model,'--mode','json','-p','--system-prompt',join(call,'system-prompt.md'),'--cwd',input.worktreePath,...ompHandoffArgs(envelope.work.handoff)];
   if(outcome.executable!==config.installation.command[0]||canonicalHash(outcome.args)!==canonicalHash(expectedArgs))throw Error('saved-result-config-mismatch');
   const record=JSON.parse((await read(source,join(call,'process.json'))).toString());
   const registered=JSON.parse((await read(source,join(source,'control/processes.json'))).toString());

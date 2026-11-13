@@ -8,13 +8,19 @@ import { readAgentCatalog } from "../../agents/agentCatalog.js";
 import type { InstallationV1 } from "../../agents/types.js";
 import { CodexPhaseIsolationRefused, codexPhaseIsolation } from "./codexPhaseIsolation.js";
 import { withCodexSkillLinks } from "./codexSkills.js";
-import type { AttemptContext } from "../types.js";
+import type { AttemptContext, HandoffDirs } from "../types.js";
 import { codexToolRow, effectiveIdleTimeoutMs, IdleWatch, type IdleSnapshotV1 } from "../idleWatch.js";
 import { attachOutcomeStream, CappedLineFile, jsonLine, LineSplitter, STDOUT_HARD_LIMIT, TRANSCRIPT_LIMIT, transcriptMarker } from "../streamLines.js";
 import { CodexStream } from "./codexStream.js";
 import { executeWireJsonSchema, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
 import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
 import { codexToolRuleArgs } from "../toolRules.js";
+
+// Task handoffs (Orca follow-up G §10.2): the output directory is written on execute only; codex reads anywhere.
+// Saved-result recovery expects exactly these arguments from the source envelope's work.handoff (Orca V11/O19 regression).
+export function codexHandoffArgs(phase:CodexPhase|"single-call",handoff:HandoffDirs|undefined):string[] {
+  return phase==="execute"&&handoff!==undefined?["--add-dir",handoff.outputDir]:[];
+}
 
 // Every-agent requirement chain (Orca spec 2026-10-15 §6.1): a single call brings its own argv, environment and schema.
 export type PhaseRequest = {phase:CodexPhase|"single-call";prompt:string;context:AttemptContext;
@@ -73,8 +79,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     "--sandbox",phase==="execute"?config.sandbox:"read-only","-C",context.worktreePath,
     // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5, §19.2 P5): the extra worktrees, writable on execute only.
     ...(phase==="execute"?(context.extraWorktrees??[]).flatMap(extra=>["--add-dir",extra.worktreePath]):[]),
-    // Task handoffs (Orca follow-up G §10.2): the output directory is written on execute only; codex reads anywhere.
-    ...(phase==="execute"&&context.handoff!==undefined?["--add-dir",context.handoff.outputDir]:[]),
+    ...codexHandoffArgs(phase,context.handoff),
     ...(promptSchema?[]:["--output-schema",schemaPath]),"-o",finalPath,"-"];
   let isolation:{home:string|null;codexHome:string|null;catalogError:string|null}|undefined;
   let spawnEnv:NodeJS.ProcessEnv={...process.env,...extraEnv};

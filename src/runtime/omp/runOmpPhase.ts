@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { MaterializedAgentConfigV1 } from "../../agents/types.js";
-import type { AttemptContext } from "../types.js";
+import type { AttemptContext, HandoffDirs } from "../types.js";
 import { effectiveIdleTimeoutMs, IdleWatch, ompToolRow, type IdleSnapshotV1 } from "../idleWatch.js";
 import { attachOutcomeStream, CappedLineFile, jsonLine, LineSplitter, STDOUT_HARD_LIMIT, TRANSCRIPT_LIMIT, transcriptMarker } from "../streamLines.js";
 import { OmpStream, type OmpStreamPurpose } from "./ompStream.js";
@@ -50,6 +50,12 @@ export interface OmpProcessInput {
   idleLedger?: AttemptContext["idleLedger"];
 }
 
+/** Task handoffs (Orca follow-up G §10.2): the handoff directories, after the extra worktrees. Saved-result capture
+ * expects exactly these arguments from the source envelope's work.handoff (Orca V11 regression). */
+export function ompHandoffArgs(handoff: HandoffDirs | undefined): string[] {
+  return handoff === undefined ? [] : [`--add-dir=${handoff.inputDir}`, `--add-dir=${handoff.outputDir}`];
+}
+
 export async function runOmpPhase(
   config: MaterializedAgentConfigV1, phase: OmpPhase, prompt: string, context: AttemptContext, options: { skillsDir?: string } = {},
 ): Promise<OmpPhaseOutcome> {
@@ -67,8 +73,7 @@ export async function runOmpPhase(
     "--mode", "json", "-p", "--system-prompt", systemPath, "--cwd", context.worktreePath,
     // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5, §19.2 P5): the extra worktrees, on every phase.
     ...(context.extraWorktrees ?? []).map((extra) => `--add-dir=${extra.worktreePath}`),
-    // Task handoffs (Orca follow-up G §10.2): the handoff directories, after the extra worktrees.
-    ...(context.handoff === undefined ? [] : [`--add-dir=${context.handoff.inputDir}`, `--add-dir=${context.handoff.outputDir}`])];
+    ...ompHandoffArgs(context.handoff)];
   const toolRules = phase === "execute" ? context.contract?.executionPolicy?.toolRules : undefined;
   return runOmpProcess(config, {
     args, prompt, cwd: context.worktreePath, evidenceDir, phase,

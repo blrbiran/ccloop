@@ -51,6 +51,7 @@ import {decodeCodexResult,decodeCodexUsage,executeWireJsonSchema,phaseJsonSchema
 import {CODEX_PHASE_CONFIG} from "../agents/codexIsolation.js";
 import {codexPhaseConfigArgs} from "../runtime/codex/codexPhaseIsolation.js";
 import {addressableMcpServer} from "../runtime/codex/codexSingleCall.js";
+import {codexHandoffArgs} from "../runtime/codex/runCodexPhase.js";
 import {codexToolRuleArgs} from "../runtime/toolRules.js";
 import {exhaustedCompletionSchema,executionFormatFailureSchema,executionSnapshotSchema,ompWithoutFinalCompletionSchema} from "./savedResultEvidence.js";
 import {foldText} from "../runtime/streamLines.js";
@@ -463,8 +464,9 @@ async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation
   if(process.phase!==phase||!registered.some(p=>p.pid===process.pid&&p.pgid===process.pgid&&p.startedAt===process.startedAt&&p.phase===phase))fail("saved-result-process-authority-invalid");
   // Compare only immutable original path strings. Never resolve or read the historical live paths.
   const evidenceDir=join(source.work.sourceDir,call),worktree=join(source.work.sourceDir,"run/worktrees",`attempt-${attempt}`);
+  // The handoff --add-dir the source envelope named (work.handoff), by the runtime's own builder; none without one.
   const expectedArgs=[...config.installation.command.slice(1),"exec","--json","--ephemeral","--color","never","--model",config.selection.model,
-   "--sandbox",phase==="execute"?config.installation.sandbox:"read-only","-C",worktree,"--output-schema",join(evidenceDir,"schema.json"),"-o",join(evidenceDir,"final.json"),"-"];
+   "--sandbox",phase==="execute"?config.installation.sandbox:"read-only","-C",worktree,...codexHandoffArgs(phase,source.work.handoff),"--output-schema",join(evidenceDir,"schema.json"),"-o",join(evidenceDir,"final.json"),"-"];
   const rules=source.work.contract.executionPolicy.toolRules;
   const sandbox=config.installation.sandbox;
   if(sandbox!=="read-only"&&sandbox!=="workspace-write")fail("saved-result-config-mismatch");
