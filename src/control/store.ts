@@ -114,10 +114,14 @@ async function readLockHolder(path: string): Promise<LockHolder | null> {
   return { pid: 0, startedAt: null, nonce: "" };
 }
 
-/** Only a holder whose recorded identity proves it dead (pid gone, or held by a later-started process) is stale. */
+/**
+ * Only a holder whose recorded identity proves it dead (pid gone, or held by a later-started process) is stale. A holder
+ * without a readable identity or start time gives no `pid:<pid>:<startMs>` id, which the classification answers
+ * undetermined -- kept.
+ */
 async function holderDead(holder: LockHolder): Promise<boolean> {
-  if (holder.nonce === "" || holder.startedAt === null) return false;
-  const verdict = await classifyOwnerProcess({ currentProcessInstanceId: `pid:${holder.pid}:${Date.parse(holder.startedAt)}`, lastAffirmedAt: holder.startedAt });
+  const startMs = holder.startedAt === null ? "unknown" : Date.parse(holder.startedAt);
+  const verdict = await classifyOwnerProcess({ currentProcessInstanceId: `pid:${holder.pid}:${startMs}`, lastAffirmedAt: holder.startedAt ?? "" });
   return verdict.verdict === "dead";
 }
 
