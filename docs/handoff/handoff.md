@@ -294,7 +294,12 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-13 近况（就地替换旧述，Orca 会话 `c8b75eac`，测试者反馈 J 轮）**：本仓 J 轮全部已推、Orca 已 repin 到含原始用量明细的那笔（以 `ls-remote` 与 Orca `package.json` 现核）。Orca 侧已学会读本仓新增的：inspect/accept 的 `launch:"never-claimed"`（Orca 重发 accept ≤2 次，再不行 block 为 `launch-never-claimed`，`recovery list` 新增 `blockedCalls`）；cause `model-unavailable`（Orca 阶梯豁免、不换模型，next 指 `--agent`／`requirement set-agent`）；`dist/build-info.json`（`orca status` 比对 pin）；byModel 子项与 event `phase`（Orca schema 24 的 `usage_ledger` 新列）。I 轮的 `used.activeMs`＝干活时间：Orca 只需改文案（Orca spec 里写成墙钟的地方仍未改，见 Orca §4.0）。下一轮（人定）：用本仓的前言修复付费重跑 dogfood 组 `g-28d9b560` 的 codex 需求复核。 以下为 E 轮（会话 `e43cd52d`）的结论，仍成立：
+- **2026-11-14 近况（就地替换旧述，Orca 会话 `23ce4a7b`，测试者反馈 K 轮）**：本仓本轮**零代码改动**。仍钉 J 轮那一笔（原始用量明细生产者），以 `ls-remote` 与 Orca `package.json` 现核。
+  - 本仓前言修复已经付费验过：Orca 用它重跑 dogfood 组 `g-28d9b560` 的 codex（`gpt-6-sol`）需求复核，单次调用正常完成（结论 `not-met`，细节在 Orca §3.最新）。
+  - 两条读码核实的事实，供以后用：
+    - ① codex 每个阶段都带 `--ephemeral`（`runCodexPhase.ts:78`、`codexSingleCall.ts:28`），所以 codex 跑的过程中拿不到用量。去掉它之后，codex 会话文件里每次请求后都有一条 `token_count`，带累计的 input／cached／cache_write／output／reasoning（本机真文件核过）。这是以后让 codex 中途按上限停下的路子，**人裁本轮不做**（「codex 提示就好」）。
+    - ② 命令检查失败时 `safeToRetry` 默认是 false，只在第 1 次 attempt 为 true（`runLoop.ts:223,309,2445`）⇒ 不能把它当成「验证者判断不可重试」来用（Orca #235 因此维持原裁定）。
+  - Orca K 轮的改动（三席，未合）都只动 Orca，不碰本仓契约。 以下为 E 轮（会话 `e43cd52d`）的结论，仍成立：
   - **组级验收**（Orca #241）：组内所有任务落地后，Orca 在组分支末端的临时 worktree 里跑各任务 setup 的并集＋必需检查的并集（Orca 自己的 `runAsCheck`，**不起 ccloop**）；红了组不 done。合并后检查（R2）现在通过／无需检查也留记录（`drive.postMergeCheck`、activity `post-merge-check`）。
   - **转录列表顺序**由 Orca 服务端按 attempt → plan／execute／verify → seq 排（本仓 `listTranscripts` 按目录名排的顺序不再被直接展示；要真实开始时间排序需本仓在列表里输出 `startedAt`，**未做**）；codex `turn.completed` 的 cached／reasoning 计数进了 Orca 转录的 `num`。
   - 需求调用失败（record outcome 非 complete）在 Orca 记 `clarify-call-failed`／`split-call-failed`，本仓的 `errorCode` 与 `failureCause.detail` 照旧读，**本仓不用改**。
