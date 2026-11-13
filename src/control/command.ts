@@ -27,7 +27,7 @@ import { requestHandoff } from "./handoff.js";
 import { updateLiveCeiling } from "./liveCeilingFile.js";
 import { settleLostWorker } from "./settleLostWorker.js";
 import { collectTaskResults, readTaskResultEvidence, taskResultCollectionSchema } from "./taskResults.js";
-import { byModelSchema } from "./usage.js";
+import { byModelSchema, usagePhaseSchema } from "./usage.js";
 
 export interface ControlCommandResult {
   code: number;
@@ -174,6 +174,7 @@ export const usageEventSchema = z.object({
   cumulative: amountSchema.nullable(),
   source: artifactRefSchema,
   byModel: byModelSchema.optional(),
+  phase: usagePhaseSchema.optional(),
 }).strict();
 const terminalSchema = z.object({
   status: z.enum(["succeeded", "blocked_waiting_human", "exhausted", "cancelled", "failed"]),

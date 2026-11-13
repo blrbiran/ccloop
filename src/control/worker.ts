@@ -52,10 +52,13 @@ interface ManagedProcessV1 {
  * recovered, so no later breakdown is trusted, even one whose totals happen to agree. So does a phase whose breakdown
  * does not add up to its own tokenUsage.
  */
+const CUMULATIVE_DETAIL = ["reasoning", "cacheWrite5m", "cacheWrite1h", "requests"] as const;
+
 export function createByModelAccumulator(): {
   settle(tokenUsage: number, modelUsage: ModelUsageV1[] | undefined, cumulativeTokens: number): ModelUsageV1[] | undefined;
 } {
   let byModel: Map<string, ModelUsageV1> | null = new Map();
+  const absent = new Map<string, Set<(typeof CUMULATIVE_DETAIL)[number]>>();
   return {
     settle(tokenUsage, modelUsage, cumulativeTokens) {
       if (byModel === null) return undefined;
@@ -68,17 +71,33 @@ export function createByModelAccumulator(): {
       } else {
         for (const entry of modelUsage) {
           const prior = byModel.get(entry.model);
-          byModel.set(entry.model, prior === undefined ? { ...entry } : {
+          const next: ModelUsageV1 = {
             model: entry.model,
-            input: prior.input + entry.input,
-            output: prior.output + entry.output,
-            cacheRead: prior.cacheRead + entry.cacheRead,
-            cacheWrite: prior.cacheWrite + entry.cacheWrite,
-          });
+            input: (prior?.input ?? 0) + entry.input,
+            output: (prior?.output ?? 0) + entry.output,
+            cacheRead: (prior?.cacheRead ?? 0) + entry.cacheRead,
+            cacheWrite: (prior?.cacheWrite ?? 0) + entry.cacheWrite,
+          };
+          // Orca raw usage detail §8.4: a cumulative sub-part, once a phase spent on this model without it, stays absent
+          // for the rest of the run (per field, per model): a later sum would look measured while missing that share.
+          let gone = absent.get(entry.model);
+          for (const field of CUMULATIVE_DETAIL) {
+            if (gone?.has(field)) continue;
+            const value = entry[field];
+            if (value === undefined) {
+              if (gone === undefined) absent.set(entry.model, (gone = new Set()));
+              gone.add(field);
+            } else next[field] = (prior?.[field] ?? 0) + value;
+          }
+          byModel.set(entry.model, next);
         }
       }
       if (byModel === null) return undefined;
-      const entries = [...byModel.values()].sort((left, right) => (left.model < right.model ? -1 : left.model > right.model ? 1 : 0));
+      // §8.5: maxRequestInput is this phase's own, never summed: a model this phase did not use has none on its event.
+      const phaseMax = new Map((modelUsage ?? []).flatMap((entry) => entry.maxRequestInput === undefined ? [] : [[entry.model, entry.maxRequestInput] as const]));
+      const entries = [...byModel.values()]
+        .map((entry) => { const max = phaseMax.get(entry.model); return max === undefined ? { ...entry } : { ...entry, maxRequestInput: max }; })
+        .sort((left, right) => (left.model < right.model ? -1 : left.model > right.model ? 1 : 0));
       return reconciledByModel(entries, cumulativeTokens);
     },
   };
@@ -325,7 +344,8 @@ export async function runControlWorker(argv: string[]): Promise<void> {
         // settled phase.
         await appendUsageObservation(sourceDir, { runId: envelope.claim.runId, generation: envelope.claim.generation, bucket: "work", observationId: `attempt-${attempt}-setup`,
           threadTotalTokens: envelope.protocol === 4 && !usageKnown ? null : cumulativeTokens, elapsedMs, attempts: attempt, sessions: 1,
-          evidence: { kind: "setup-ended-attempt-v1", runId: envelope.claim.runId, generation: envelope.claim.generation, attempt, outcome } });
+          evidence: { kind: "setup-ended-attempt-v1", runId: envelope.claim.runId, generation: envelope.claim.generation, attempt, outcome },
+          phase: "setup" });
       },
       onPhaseSettled: async (observation) => {
         if (observation.completedWithResult) await recordCompletedPhase(sourceDir);
@@ -348,6 +368,8 @@ export async function runControlWorker(argv: string[]): Promise<void> {
           sessions: 1,
           evidence: observation,
           ...(byModel === undefined ? {} : { byModel }),
+          // Orca raw usage detail §8.1: the phase this event settles.
+          phase: observation.phase,
         });
         const request = await readHandoffRequestOptional(sourceDir);
         if (request !== null) armRequest(request);

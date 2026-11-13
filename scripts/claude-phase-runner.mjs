@@ -556,8 +556,9 @@ const PROMPT_ARGV_MAX_BYTES = 100 * 1024;
 
 // Orca accounts plan, Part B Task B2 (2026-10-07): an answer carries claude's per-model breakdown only when the envelope
 // has one buildModelUsage can read whole; otherwise the key is absent, so an answer without one is unchanged.
-function withModelUsage(envelope) {
-  const modelUsage = envelope === null ? null : buildModelUsage(envelope);
+// Orca raw usage detail §8.2: `streamed` is the call's per-model stream observation (createUsageObserver's byModel).
+function withModelUsage(envelope, streamed) {
+  const modelUsage = envelope === null ? null : buildModelUsage(envelope, streamed);
   return modelUsage === null ? {} : { modelUsage };
 }
 
@@ -726,7 +727,7 @@ async function runClaude(request, claudeCommand, extraArgs) {
         splitter.end();
         transcript.close();
         if (code !== 0) { reject(new Error(failureMessage(code, { tail: stdoutTail, length: stdoutLength }, stderr))); return; }
-        resolve({ envelope: resultEvent ?? fallbackEnvelope, stderr });
+        resolve({ envelope: resultEvent ?? fallbackEnvelope, stderr, streamed: observer.byModel() });
       });
     });
   } finally {
@@ -781,7 +782,7 @@ async function main() {
         outputError: valid ? null : "single-call-output-invalid",
         usageEvidence,
         tokenUsage: usageEvidence === null ? null : usageEvidence.normalizedTotal,
-        ...withModelUsage(envelope),
+        ...withModelUsage(envelope, result.streamed),
       });
       return;
     }
@@ -804,8 +805,8 @@ async function main() {
     if (request.phase === "execute" && Object.prototype.hasOwnProperty.call(structured, "taskResult")) structured.taskResult = boundedTaskResult(structured.taskResult);
     const usageEvidence = buildUsageEvidence(envelope);
     const response = usageEvidence.normalizedTotal === null
-      ? { ...structured, usageEvidence, ...withModelUsage(envelope) }
-      : { ...structured, usageEvidence, tokenUsage: usageEvidence.normalizedTotal, ...withModelUsage(envelope) };
+      ? { ...structured, usageEvidence, ...withModelUsage(envelope, result.streamed) }
+      : { ...structured, usageEvidence, tokenUsage: usageEvidence.normalizedTotal, ...withModelUsage(envelope, result.streamed) };
     completeAnswerReady = true;
     await writeJsonToStdout(response);
   } catch (error) {

@@ -156,7 +156,9 @@ describe("decode (§3.3.5, criterion 5): one request, no tool, the selected mode
     expect(decodeOmpSingleCall(lines({ type: "agent_start" }, end(message()), { type: "agent_end", isTerminal: true }), "gateway/model-a", "/evidence")).toEqual({
       output: { answer: "42" }, tokenUsage: 14,
       usageEvidence: expect.objectContaining({ usageStatus: "present", normalizedTotal: 14 }),
-      modelUsage: [{ model: "gateway/model-a", input: 8, output: 2, cacheRead: 3, cacheWrite: 1 }],
+      // Ruling: tests/runtime/omp/ompSingleCall.test.ts:159 (at c7db270) rewritten whole under the human's 「这次批准改写所有必要的判据」
+      // (Orca raw usage detail, spec 2026-11-13 §3): the one request's count and its input 8 + 3 + 1 are now on the entry.
+      modelUsage: [{ model: "gateway/model-a", input: 8, output: 2, cacheRead: 3, cacheWrite: 1, requests: 1, maxRequestInput: 12 }],
     });
   });
 
@@ -319,7 +321,9 @@ describe("decode, real omp event shape (§3.3.5, §3.3.7)", () => {
     expect(decodeOmpSingleCall(events, "gateway/model-a", "/evidence")).toEqual({
       output: { answer: "42" }, tokenUsage: 14,
       usageEvidence: expect.objectContaining({ usageStatus: "present", normalizedTotal: 14 }),
-      modelUsage: [{ model: "gateway/model-a", input: 8, output: 2, cacheRead: 3, cacheWrite: 1 }],
+      // Ruling: tests/runtime/omp/ompSingleCall.test.ts:322 (at c7db270) rewritten whole under the human's 「这次批准改写所有必要的判据」
+      // (Orca raw usage detail, spec 2026-11-13 §3): the one request's count and its input 8 + 3 + 1 are now on the entry.
+      modelUsage: [{ model: "gateway/model-a", input: 8, output: 2, cacheRead: 3, cacheWrite: 1, requests: 1, maxRequestInput: 12 }],
     });
   });
 });

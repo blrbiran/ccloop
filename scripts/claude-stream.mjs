@@ -188,6 +188,9 @@ function messageTotal(usage) {
 export function createUsageObserver() {
   const messages = new Map();
   const current = new Map();
+  // Orca raw usage detail §8.2: the model each message_start named, kept apart from `messages` so the observation file
+  // is unchanged.
+  const models = new Map();
   return {
     observe(event) {
       const inner = event && event.type === "stream_event" ? event.event : null;
@@ -196,6 +199,7 @@ export function createUsageObserver() {
       if (inner.type === "message_start" && inner.message && typeof inner.message.id === "string" && inner.message.usage && typeof inner.message.usage === "object") {
         current.set(stream, inner.message.id);
         messages.set(inner.message.id, { id: inner.message.id, state: "open", fields: inner.message.usage });
+        models.set(inner.message.id, inner.message.model);
         return true;
       }
       const open = current.get(stream);
@@ -210,7 +214,41 @@ export function createUsageObserver() {
       const sum = list.reduce((total, message) => total + messageTotal(message.fields), 0);
       return { total: Number.isSafeInteger(sum) && sum > 0 ? sum : null, messages: list, openMessage: list.some((message) => message.state === "open") };
     },
+    /**
+     * Orca raw usage detail §3, §8.2: per model, the streamed messages' four parts (each message by its latest usage, as
+     * snapshot counts it), how many requests they were and the largest one's input + cacheRead + cacheWrite. A model
+     * whose request detail cannot be read whole maps to null: a message whose four counts are not all readable, or one
+     * that reports more than one iteration (several requests behind one message, each unseen). Null for the whole
+     * stream while a message is still open or a message names no model, since its tokens could be any model's.
+     */
+    byModel() {
+      const result = new Map();
+      for (const message of messages.values()) {
+        const model = models.get(message.id);
+        if (message.state !== "closed" || typeof model !== "string") return null;
+        if (result.get(model) === null) continue;
+        const parts = requestParts(message.fields);
+        if (parts === null) { result.set(model, null); continue; }
+        const prior = result.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: 0, maxRequestInput: 0 };
+        result.set(model, {
+          input: prior.input + parts.input,
+          output: prior.output + parts.output,
+          cacheRead: prior.cacheRead + parts.cacheRead,
+          cacheWrite: prior.cacheWrite + parts.cacheWrite,
+          requests: prior.requests + 1,
+          maxRequestInput: Math.max(prior.maxRequestInput, parts.input + parts.cacheRead + parts.cacheWrite),
+        });
+      }
+      return result;
+    },
   };
+}
+
+function requestParts(usage) {
+  if (usage === null || typeof usage !== "object") return null;
+  if (Array.isArray(usage.iterations) && usage.iterations.length > 1) return null;
+  const parts = { input: usage.input_tokens, output: usage.output_tokens, cacheRead: usage.cache_read_input_tokens, cacheWrite: usage.cache_creation_input_tokens };
+  return Object.values(parts).every((count) => Number.isSafeInteger(count) && count >= 0) ? parts : null;
 }
 
 /** Temp file in the same directory, then rename: a reader sees the previous version or this one, never half. */
@@ -218,6 +256,36 @@ export function writeObservation(path, snapshot) {
   const temporary = `${path}.tmp-${process.pid}`;
   writeFileSync(temporary, JSON.stringify({ schema: OBSERVED_USAGE_SCHEMA, total: snapshot.total, messages: snapshot.messages, source: "stream-before-abort", lowerBound: true, openMessage: snapshot.openMessage }), { mode: 0o600 });
   renameSync(temporary, path);
+}
+
+/**
+ * Orca raw usage detail §3: the sub-parts claude's envelope reports for a model beside its four counts, each kept only when
+ * it is a non-negative safe integer no larger than the part it is of (5m and 1h together no larger than cacheWrite);
+ * otherwise that sub-part is absent and the four counts are untouched.
+ */
+function envelopeDetail(value, entry) {
+  const count = (field) => (Number.isSafeInteger(value[field]) && value[field] >= 0 ? value[field] : undefined);
+  const detail = {};
+  const reasoning = count("thinkingTokens");
+  if (reasoning !== undefined && reasoning <= entry.output) detail.reasoning = reasoning;
+  const fiveMinutes = count("cacheCreationEphemeral5mInputTokens"), oneHour = count("cacheCreationEphemeral1hInputTokens");
+  if ((fiveMinutes ?? 0) + (oneHour ?? 0) <= entry.cacheWrite) {
+    if (fiveMinutes !== undefined) detail.cacheWrite5m = fiveMinutes;
+    if (oneHour !== undefined) detail.cacheWrite1h = oneHour;
+  }
+  return detail;
+}
+
+/**
+ * Orca raw usage detail §8.2: requests and the largest request's input for a model come from the stream, and only when
+ * the streamed messages' four parts for that model equal the envelope's: a stream that missed a request would count too
+ * few and too small, and a guessed count is worse than none.
+ */
+function streamedDetail(streamed, entry) {
+  const seen = streamed instanceof Map ? streamed.get(entry.model) : undefined;
+  if (seen === undefined || seen === null) return {};
+  const same = seen.input === entry.input && seen.output === entry.output && seen.cacheRead === entry.cacheRead && seen.cacheWrite === entry.cacheWrite;
+  return same ? { requests: seen.requests, maxRequestInput: seen.maxRequestInput } : {};
 }
 
 const MODEL_USAGE_FIELDS = [
@@ -233,8 +301,12 @@ const MODEL_USAGE_FIELDS = [
  * claude's non-cached input. A breakdown read only in part would under-report some model, so any value that is not an
  * object of four non-negative safe integers, or a model name the usage event cannot carry, makes the whole of it null;
  * so does a map that is absent or empty. Anything else in a value (costUSD, ...) is never copied.
+ * *** ERRATUM (Orca raw usage detail, spec 2026-11-13-raw-usage-detail-design.md §3, Orca follow-up J) -- three more of a
+ * value's counts are now copied, as optional sub-parts: thinkingTokens (reasoning), cacheCreationEphemeral5mInputTokens and
+ * cacheCreationEphemeral1hInputTokens (cacheWrite5m, cacheWrite1h); and, from the stream, requests and maxRequestInput.
+ * An unreadable sub-part is left out and never nulls the breakdown. costUSD and the rest are still never copied. ***
  */
-export function buildModelUsage(envelope) {
+export function buildModelUsage(envelope, streamed = null) {
   const map = envelope && typeof envelope === "object" ? envelope.modelUsage : undefined;
   if (map === null || typeof map !== "object" || Array.isArray(map)) return null;
   const entries = [];
@@ -247,7 +319,7 @@ export function buildModelUsage(envelope) {
       if (!Number.isSafeInteger(count) || count < 0) return null;
       entry[name] = count;
     }
-    entries.push(entry);
+    entries.push({ ...entry, ...envelopeDetail(value, entry), ...streamedDetail(streamed, entry) });
   }
   if (entries.length === 0) return null;
   return entries.sort((left, right) => (left.model < right.model ? -1 : left.model > right.model ? 1 : 0));

@@ -208,9 +208,12 @@ export class ModelUsageFold {
 function modelUsageOf(usage: Record<string, unknown> | undefined, model: string): ModelUsageV1[] | null {
   if (model.length < 1 || model.length > 200) return null;
   if (!usage) return null;
-  const { input_tokens: total, output_tokens: output, cached_input_tokens: cached = 0 } = usage;
+  const { input_tokens: total, output_tokens: output, cached_input_tokens: cached = 0, reasoning_output_tokens: reasoning } = usage;
   if (!integer(total) || !integer(output) || !integer(cached) || cached > total) return null;
-  return [{ model, input: total - cached, output, cacheRead: cached, cacheWrite: 0 }];
+  // Orca raw usage detail §3: the turn's reasoning, a sub-part of output, when codex reported it; codex gives turn totals
+  // only, so requests and maxRequestInput stay absent.
+  const detail = integer(reasoning) && reasoning <= output ? { reasoning } : {};
+  return [{ model, input: total - cached, output, cacheRead: cached, cacheWrite: 0, ...detail }];
 }
 
 /**

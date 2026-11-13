@@ -121,3 +121,22 @@ it("a setup that passes is observed with its time before the plan phase's observ
   expect(work[0].cumulative.activeMs).toBeGreaterThanOrEqual(200);
   expect(await evidence(work[1])).toMatchObject({ phase: "plan", attempt: 1 });
 });
+
+// Orca raw usage detail (Orca spec 2026-11-13-raw-usage-detail-design.md §8.1): each work event names the loop phase it
+// settles -- setup included -- so Orca's ledger can book the phase from the wire, and collect carries it to Orca; the
+// handoff events settle no phase and name none. Codex reported no reasoning here, so no entry carries one.
+it("collect's work events name setup, plan, execute and verify; handoff events name no phase; codex without reasoning has none", { timeout: 60_000 }, async () => {
+  const runtime = await codexFixture("high-usage");
+  dirs.push(runtime.dir);
+  runtime.contract.context.setupCommands = ["true"];
+  runtime.contract.executionPolicy.tokenBudget = null;
+  const { collected, work } = await workAndCollect(runtime, runtime.config);
+  expect(collected.terminal.status).toBe("succeeded");
+  expect(work.map((event: { phase?: string }) => event.phase)).toEqual(["setup", "plan", "execute", "verify"]);
+  const handoff = collected.events.filter((event: { bucket: string }) => event.bucket === "handoff");
+  expect(handoff.length).toBeGreaterThan(0);
+  expect(handoff.every((event: object) => !Object.hasOwn(event, "phase"))).toBe(true);
+  const entries = work.flatMap((event: { byModel?: object[] }) => event.byModel ?? []);
+  expect(entries.length).toBeGreaterThan(0);
+  expect(entries.every((entry: object) => !Object.hasOwn(entry, "reasoning"))).toBe(true);
+});

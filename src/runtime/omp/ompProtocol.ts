@@ -72,11 +72,21 @@ export class OmpLowerBoundFold {
 export class OmpUsageSum {
   private invalid = false;
   private readonly sums = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  // Orca raw usage detail §3: each assistant message is one model request, with its own usage.
+  private requests = 0;
+  private maxRequestInput = 0;
   add(message: Record<string, unknown>): void {
     if (this.invalid) return;
     let usage: ReturnType<typeof assistantUsage>;
     try { usage = assistantUsage(message); } catch { this.invalid = true; return; }
     for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) this.sums[key] += usage[key];
+    this.requests += 1;
+    this.maxRequestInput = Math.max(this.maxRequestInput, usage.input + usage.cacheRead + usage.cacheWrite);
+  }
+  /** The one entry of the selected model: the four summed parts, the request count and the largest request's input. */
+  modelUsage(model: string): ModelUsageV1[] {
+    const { input, output, cacheRead, cacheWrite } = this.checked();
+    return [{ model, input, output, cacheRead, cacheWrite, requests: this.requests, maxRequestInput: this.maxRequestInput }];
   }
   checked(): { input: number; output: number; cacheRead: number; cacheWrite: number; total: number } {
     if (this.invalid || !Object.values(this.sums).every(Number.isSafeInteger) || this.sums.total === 0) throw new Error("omp-usage-invalid");
@@ -172,7 +182,7 @@ export class OmpPhaseFold {
       },
       selectedInputField: "inputTokens", selectedOutputField: "outputTokens", normalizedTotal: totals.total,
     };
-    const modelUsage: ModelUsageV1[] = [{ model: expectedSelector, input: totals.input, output: totals.output, cacheRead: totals.cacheRead, cacheWrite: totals.cacheWrite }];
+    const modelUsage: ModelUsageV1[] = this.usage.modelUsage(expectedSelector);
     if (this.wrongModel) throw Object.assign(new Error("omp-model-mismatch"), { observedTokens: totals.total });
     const final = this.last!;
     if (!this.ended || final.stopReason !== "stop" || !Array.isArray(final.content)) throw Object.assign(new Error("omp-no-completion"), { observedTokens: totals.total });

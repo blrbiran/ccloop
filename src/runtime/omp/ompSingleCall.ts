@@ -101,7 +101,7 @@ function observedUsage(sum: OmpUsageSum, selector: string): { total: number; usa
     },
     selectedInputField: "inputTokens", selectedOutputField: "outputTokens", normalizedTotal: totals.total,
   };
-  return { total: totals.total, usageEvidence, modelUsage: [{ model: selector, input: totals.input, output: totals.output, cacheRead: totals.cacheRead, cacheWrite: totals.cacheWrite }] };
+  return { total: totals.total, usageEvidence, modelUsage: sum.modelUsage(selector) };
 }
 
 /**
