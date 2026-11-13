@@ -152,7 +152,11 @@ describe("a run whose ccloop worker died (Orca #273)", { timeout: 180_000 }, () 
     expect(alive(worker) && alive(agent)).toBe(true);
   });
 
-  it("a run with a candidate never carries worker, and settle-lost-worker answers its candidate", async () => {
+  // Ruling (Orca session c8b75eac, 2026-11-13; asked to decide whether an old title must change, the human answered
+  // 「点名允许改必要的测试」): since tester follow-up I, collect reports `worker` beside a candidate whose stop is NOT proved
+  // (the describe below), so the old title "a run with a candidate never carries worker" claimed more than holds; what
+  // this asserts is the stop-proved case only.
+  it("a run whose candidate carries a stop proof never carries worker, and settle-lost-worker answers its candidate", async () => {
     const f = await fixture("integration");
     const accepted = await call(f, "accept", f.envelope); expect(accepted.code, accepted.stderr).toBe(0);
     let done: any;
