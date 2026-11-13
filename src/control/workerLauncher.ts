@@ -73,6 +73,11 @@ export async function launchWorker(record: AcceptedRecordV1, deps: WorkerLaunchD
       env: { ...process.env, ...deps.workerEnv },
     },
   );
+  // Orca follow-up J (#308): a worker command that cannot be spawned (missing, not executable) is reported as an 'error'
+  // event; unheard, it killed this process and left the launch `intended` -- ambiguous for ever. It is a launch no worker
+  // claimed, recorded as such below.
+  let spawnFailed = false;
+  child.once("error", () => { spawnFailed = true; });
   child.unref();
   const deadline = Date.now() + (deps.receiptTimeoutMs ?? 2_000);
   while (Date.now() < deadline) {
@@ -84,7 +89,7 @@ export async function launchWorker(record: AcceptedRecordV1, deps: WorkerLaunchD
     ) {
       return;
     }
-    if (child.exitCode !== null) break;
+    if (child.exitCode !== null || spawnFailed) break;
     await wait(20);
   }
   await markAcceptedUnknown(deps.sourceDir, record.executionId);

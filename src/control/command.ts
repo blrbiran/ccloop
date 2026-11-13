@@ -118,7 +118,8 @@ const modelsSchema = z.object({
 const executionStatusSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("absent") }).strict(),
   z.object({ kind: z.literal("accepted"), executionId: z.string().min(1), configHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
-  z.object({ kind: z.literal("unknown") }).strict(),
+  // Orca follow-up J (#308): `launch` is optional and additive -- a launch no worker ever claimed.
+  z.object({ kind: z.literal("unknown"), launch: z.literal("never-claimed").optional() }).strict(),
   z.object({
     kind: z.literal("stopped"),
     proof: z.object({

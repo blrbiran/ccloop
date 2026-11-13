@@ -25,7 +25,10 @@ import { testCrashPoint } from "./testCrashPoint.js";
 export type ExecutionStatusV1 =
   | { kind: "absent" }
   | { kind: "accepted"; executionId: string; configHash: string }
-  | { kind: "unknown" }
+  // Orca follow-up J (#308): `launch: "never-claimed"` -- additive and optional -- marks an unknown whose launcher gave up
+  // before any worker claimed it (accepted `launch: "unknown"`, `worker: null`). No worker can claim that execution any
+  // more (a claim needs `intended` and the same execution id), so it never ran; a re-issued accept launches it afresh.
+  | { kind: "unknown"; launch?: "never-claimed" }
   | {
       kind: "stopped";
       proof: {
@@ -43,7 +46,12 @@ export interface AgentBindingV1 {
   receiptTimeoutMs?: number;
 }
 
+function neverClaimed(record: AcceptedRecordV1): boolean {
+  return record.launch === "unknown" && record.worker === null;
+}
+
 async function status(record: AcceptedRecordV1): Promise<ExecutionStatusV1> {
+  if (neverClaimed(record)) return { kind: "unknown", launch: "never-claimed" };
   if (record.launch === "intended" || record.launch === "unknown") return { kind: "unknown" };
   if (record.launch === "claimed" && !(await workerIdentityMatches(record.worker))) return { kind: "unknown" };
   return { kind: "accepted", executionId: record.executionId, configHash: record.configHash };
@@ -69,7 +77,19 @@ export async function acceptStart(
   const existing = await readAcceptedOptional(input.work.sourceDir);
   if (existing !== null) {
     assertEnvelope(existing, input);
-    return await status(existing);
+    if (!neverClaimed(existing)) return await status(existing);
+    // Orca follow-up J (#308): a never-claimed launch is launched again under a fresh execution id, so that a worker of
+    // the old launch, however late, can never claim the new one. The sealed config and envelope are reused (a replayed
+    // accept never reads the table); only the accepted record changes, under the lock, and only while it is still never-claimed.
+    const relaunch = await withAcceptedLock(input.work.sourceDir, async () => {
+      const current = await readAccepted(input.work.sourceDir);
+      if (!neverClaimed(current)) return null;
+      const fresh: AcceptedRecordV1 = { ...current, executionId: `execution-${randomUUID()}`, launch: "intended" };
+      await writeAccepted(input.work.sourceDir, fresh);
+      return fresh;
+    });
+    if (relaunch === null) return await inspectStart(input);
+    return await launch(input, binding, relaunch);
   }
 
   // Agent selection (2026-09-26), spec §4.6: materialize the claimed selection against the table (which also runs
@@ -130,9 +150,11 @@ export async function acceptStart(
     assertEnvelope(prepared.record, input);
     return await status(prepared.record);
   }
-  const record = prepared.record;
   await testCrashPoint("accepted-fsynced");
+  return await launch(input, binding, prepared.record);
+}
 
+async function launch(input: StartEnvelopeV3, binding: AgentBindingV1, record: AcceptedRecordV1): Promise<ExecutionStatusV1> {
   const defaultWorker = [process.execPath, fileURLToPath(new URL("./worker.js", import.meta.url))];
   const launchDeps: WorkerLaunchDeps = {
     sourceDir: input.work.sourceDir,
