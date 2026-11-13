@@ -62,6 +62,7 @@ import type {
 } from "../runtime/types.js";
 import { isPartialExecutionResult, observedTokensOf } from "../runtime/types.js";
 import { operatorNoteGate } from "../runtime/operatorNote.js";
+import { IDLE_CHARGE_LIMIT_MS, IdleLedger } from "../runtime/idleWatch.js";
 import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { FailureFingerprint, LastTrustedBoundary, LiveCeilingStopV1, RunState, StopDecision } from "../state/types.js";
 import { cleanupAttemptWorkspace, createAttemptWorkspace, createExtraWorktree, extraWorktreePath, publishAttemptCommit, publishExtraAttemptCommit, registerAttemptRefNamespace, removeEmptyExtraDirs, type AttemptCommit } from "../workspace/worktreeManager.js";
@@ -731,9 +732,15 @@ function isToolRuleViolation(error: unknown): boolean {
   return error instanceof PhaseExecutionError && error.attached?.classification.cause === "tool-rule-violated";
 }
 
+/**
+ * Every `elapsedMs` this returns, and a PhaseExecutionError's, is the time the phase is charged: its wall clock less the idle
+ * its agent processes recorded in the phase's ledger (Orca issue #262: the time budget counts only the time the agent was
+ * working; IdleLedger in runtime/idleWatch.ts says what is idle). An operation that runs no watched agent process records no
+ * idle and is charged its wall clock, as before.
+ */
 async function runPhaseWithTimeout<T>(
   timeoutMs: number,
-  operation: (abortSignal: AbortSignal, onObservedUsage: (tokens: number) => void) => Promise<T>,
+  operation: (abortSignal: AbortSignal, onObservedUsage: (tokens: number) => void, idleLedger: IdleLedger) => Promise<T>,
   options?: { awaitAbortedResult?: boolean; liveTokenThreshold?: number | null; liveCeilingThreshold?: () => number | null },
 ): Promise<PhaseOutcome<T>> {
   const startedAtMs = Date.now();
@@ -741,6 +748,10 @@ async function runPhaseWithTimeout<T>(
   if (timeoutMs <= 0) {
     return { timedOut: true, elapsedMs: 0 };
   }
+
+  const idleLedger = new IdleLedger(IDLE_CHARGE_LIMIT_MS);
+  // The wall-clock figure a branch below would have charged, less the idle recorded so far.
+  const working = (wallMs: number): number => Math.max(wallMs - idleLedger.idleMs(), 0);
 
   const abortController = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -767,8 +778,8 @@ async function runPhaseWithTimeout<T>(
       stopForBudget();
     }
   };
-  const operationPromise = operation(abortController.signal, onObservedUsage).catch((error: unknown) => {
-    throw new PhaseExecutionError(Math.max(Date.now() - startedAtMs, 0), error);
+  const operationPromise = operation(abortController.signal, onObservedUsage, idleLedger).catch((error: unknown) => {
+    throw new PhaseExecutionError(working(Date.now() - startedAtMs), error);
   });
 
   try {
@@ -789,9 +800,9 @@ async function runPhaseWithTimeout<T>(
       // the time it actually ran: unlike a timeout, a budget stop did not use up its window.
       try {
         const result = await operationPromise;
-        return { timedOut: true, elapsedMs: Math.max(Date.now() - startedAtMs, 0), result, budgetStop: { observedTokens, ...(ceilingStop ? { liveCeiling: true as const } : {}) } };
+        return { timedOut: true, elapsedMs: working(Date.now() - startedAtMs), result, budgetStop: { observedTokens, ...(ceilingStop ? { liveCeiling: true as const } : {}) } };
       } catch (error) {
-        return { timedOut: true, elapsedMs: Math.max(Date.now() - startedAtMs, 0), abortedError: error, budgetStop: { observedTokens, ...(ceilingStop ? { liveCeiling: true as const } : {}) } };
+        return { timedOut: true, elapsedMs: working(Date.now() - startedAtMs), abortedError: error, budgetStop: { observedTokens, ...(ceilingStop ? { liveCeiling: true as const } : {}) } };
       }
     }
 
@@ -822,22 +833,22 @@ async function runPhaseWithTimeout<T>(
       // non-negative clamp it replaces.
       if (!options?.awaitAbortedResult) {
         void operationPromise.catch(() => undefined);
-        return { timedOut: true, elapsedMs: Math.max(elapsedMs, timeoutMs) };
+        return { timedOut: true, elapsedMs: working(Math.max(elapsedMs, timeoutMs)) };
       }
 
       try {
         const result = await operationPromise;
-        const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, timeoutMs);
+        const timedOutElapsedMs = working(Math.max(Date.now() - startedAtMs, timeoutMs));
         return { timedOut: true, elapsedMs: timedOutElapsedMs, result };
       } catch (error) {
         // H6 cleanup/setup failure is a failed phase, even when timeout initiated the abort.
         if (isCodexSkillFailure(error)) throw error;
-        const timedOutElapsedMs = Math.max(Date.now() - startedAtMs, timeoutMs);
+        const timedOutElapsedMs = working(Math.max(Date.now() - startedAtMs, timeoutMs));
         return { timedOut: true, elapsedMs: timedOutElapsedMs, abortedError: error };
       }
     }
 
-    return { timedOut: false, elapsedMs, result: outcome.result };
+    return { timedOut: false, elapsedMs: working(elapsedMs), result: outcome.result };
   } finally {
     if (timer !== undefined) {
       clearTimeout(timer);
@@ -2106,8 +2117,8 @@ export async function runLoopFromState(
         await heartbeat.assertHeld();
         activePhase = "plan";
         const planNotes = await liveNotesAt("plan", attempt);
-        const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal, onObservedUsage) =>
-          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...handoffFor(), ...planNotes, onObservedUsage }),
+        const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal, onObservedUsage, idleLedger) =>
+          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...handoffFor(), ...planNotes, onObservedUsage, idleLedger }),
           { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
         );
 
@@ -2185,7 +2196,7 @@ export async function runLoopFromState(
         ? { timedOut: false as const, elapsedMs: 0, result: continuation.execution! }
         : await runPhaseWithTimeout(
         executeTimeoutMs,
-        (abortSignal, onObservedUsage) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...handoffFor(), ...executeNotes, onObservedUsage }),
+        (abortSignal, onObservedUsage, idleLedger) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...handoffFor(), ...executeNotes, onObservedUsage, idleLedger }),
         { awaitAbortedResult: true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
       );
       const executeStopTokens = budgetStopTokens(executeOutcome);
@@ -2417,11 +2428,11 @@ export async function runLoopFromState(
       };
       let verifyOutcome: PhaseOutcome<VerificationResult>;
       try {
-        verifyOutcome = await runPhaseWithTimeout(verifyTimeoutMs, (abortSignal, onObservedUsage) =>
+        verifyOutcome = await runPhaseWithTimeout(verifyTimeoutMs, (abortSignal, onObservedUsage, idleLedger) =>
           runVerification(
             contract,
             attemptAdapter,
-            {...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution, providerOptions),...(recovery?{savedExecution:{originalBase:recovery.originalBase,candidateHead:recovery.snapshot.head,changedPaths:recovery.actualChangedPaths}}:{}),onObservedUsage},
+            {...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, completedExecution, providerOptions),...(recovery?{savedExecution:{originalBase:recovery.originalBase,candidateHead:recovery.snapshot.head,changedPaths:recovery.actualChangedPaths}}:{}),onObservedUsage,idleLedger},
             plan,
             completedExecution,
             options?.taskResultInput === undefined ? undefined : () => {

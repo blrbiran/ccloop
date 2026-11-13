@@ -1,6 +1,7 @@
 import type { LoopContract } from "../contract/schema.js";
 import type { OwnerStatus, RunState } from "../state/types.js";
 import type { ModelUsageV1 } from "../control/usage.js";
+import type { IdleLedger } from "./idleWatch.js";
 
 export type RequiredCheckResult = { command: string; stdout: string; stderr: string };
 
@@ -59,6 +60,11 @@ export type AttemptContext = {
    * turn.completed and never calls it.
    */
   onObservedUsage?: (tokens: number) => void;
+  /**
+   * Working time (Orca issue #262): the phase's idle ledger. Each adapter hands it to the activity watchdog of the agent
+   * processes it runs for the phase; runLoop leaves the idle it records out of the time the phase is charged.
+   */
+  idleLedger?: IdleLedger;
   onProcessRegistered?: (process: {
     pid: number;
     pgid: number;

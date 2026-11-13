@@ -189,6 +189,8 @@ type ClaudeCall = {
   addDirs?: readonly string[];
   /** Live token threshold (issue #225): the runner's running observed total (fd 4 `{"observedTokens":n}`); phases only. */
   onObservedUsage?: AttemptContext["onObservedUsage"];
+  /** Working time (Orca issue #262): the phase's idle ledger; phases only. */
+  idleLedger?: AttemptContext["idleLedger"];
 };
 
 export class ClaudeAgentAdapter implements RuntimeAdapter {
@@ -305,7 +307,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       };
       const abort = () => stop("aborted");
       const timer = setTimeout(() => stop("timeout"), timeout);
-      const watch = new IdleWatch(effectiveIdleTimeoutMs(installation), () => { idle = watch.snapshot(); stop("stalled"); });
+      const watch = new IdleWatch(effectiveIdleTimeoutMs(installation), () => { idle = watch.snapshot(); stop("stalled"); }, call.idleLedger);
       const activity = child.stdio[4] as NodeJS.ReadableStream | null;
       activity?.on("data", lineFeeder((line) => {
         watch.activity();
@@ -462,6 +464,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       runDir: context.runDir, attempt: context.attempt, cwd: context.worktreePath,
       timeLimitMs: context.state.budgetSnapshot.timeRemainingMs,
       abortSignal: context.abortSignal, onProcessRegistered: context.onProcessRegistered, onObservedUsage: context.onObservedUsage,
+      idleLedger: context.idleLedger,
       ...(context.extraWorktrees === undefined && context.handoff === undefined ? {} : { addDirs: [
         ...(context.extraWorktrees ?? []).map((extra) => extra.worktreePath),
         // Task handoffs (Orca follow-up G §10.2): the handoff directories, after the extra worktrees.

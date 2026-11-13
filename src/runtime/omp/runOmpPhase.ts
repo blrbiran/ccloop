@@ -46,6 +46,8 @@ export interface OmpProcessInput {
   purpose: OmpStreamPurpose;
   /** Live token threshold (issue #225): the call's summed message_end usage, reported each time it grows; phases only. */
   onObservedUsage?: AttemptContext["onObservedUsage"];
+  /** Working time (Orca issue #262): the phase's idle ledger; phases only. */
+  idleLedger?: AttemptContext["idleLedger"];
 }
 
 export async function runOmpPhase(
@@ -73,6 +75,7 @@ export async function runOmpPhase(
     purpose: { phase, selector: config.selection.model, ...(toolRules === undefined ? {} : { toolRules: { rules: toolRules, requiredChecks: context.contract.verification.requiredChecks } }) },
     timeoutMs: Math.min(config.installation.timeoutMs, context.state.budgetSnapshot.timeRemainingMs),
     abortSignal: context.abortSignal, onProcessRegistered: context.onProcessRegistered, onObservedUsage: context.onObservedUsage,
+    idleLedger: context.idleLedger,
   });
 }
 
@@ -128,7 +131,7 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
     const abort = (): void => stop("aborted");
     const timer = setTimeout(() => stop("timeout"), timeoutMs);
     // Activity watchdog (spec 2026-10-21 §2.2 omp): stdout/stderr bytes are activity; tool executions suspend the clock.
-    const watch = new IdleWatch(effectiveIdleTimeoutMs(config.installation), () => { idle = watch.snapshot(); stop("stalled"); });
+    const watch = new IdleWatch(effectiveIdleTimeoutMs(config.installation), () => { idle = watch.snapshot(); stop("stalled"); }, input.idleLedger);
     let observed: number | null = null;
     const splitter = new LineSplitter((line) => {
       const parsed = jsonLine(line); stream.push(parsed); if (parsed.kind === "row") ompToolRow(parsed.row, watch);

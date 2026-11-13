@@ -161,7 +161,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     const abort=()=>stop("aborted");
     const timer=setTimeout(()=>stop("timeout"),childTimeout);
     // Activity watchdog (spec 2026-10-21 §2.2 codex): stdout/stderr bytes are activity; tool items suspend the clock.
-    const watch=new IdleWatch(effectiveIdleTimeoutMs(config),()=>{idle=watch.snapshot();stop("stalled");});
+    const watch=new IdleWatch(effectiveIdleTimeoutMs(config),()=>{idle=watch.snapshot();stop("stalled");},context.idleLedger);
     const splitter=new LineSplitter(line=>{const parsed=jsonLine(line);stream.push(parsed);if(parsed.kind==="row")codexToolRow(parsed.row,watch);});
     watch.start();
     child.on("error",(e:NodeJS.ErrnoException)=>{result.reason="spawn-error";if(typeof e.code==="string")result.spawnErrno=e.code;finish();});

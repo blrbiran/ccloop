@@ -171,3 +171,34 @@ Decisions and deviations (controller's calls, reversible):
 3. Not covered by a per-kind criterion: omp's idle stop (same IdleWatch, fake-omp has no idle script yet); codex/omp
    plan stalled-then-success (the retry loop's own criteria cover retrying a `stalled` cause).
 4. Changed criterion: `tests/agents/detect.test.ts:54,70` draft `timeoutMs` 1 800 000 → 7 200 000.
+
+## Addendum (2026-11-13, Orca session d467cbd2, tester follow-up I seat D): working time — Orca issue #262
+
+Appended; the text above is unchanged. **Human (verbatim, Orca session d467cbd2):** 「#262 后半段（在 ccloop 里） => 时间预算只算真正在干活的时间」.
+The tester saw a ~600 s network stall during execute charged in full against the run's time budget (`applyPhaseUsage`
+subtracted the phase's wall clock). What the watchdog above observes now also decides what a phase is charged.
+
+- **Definition.** A phase is charged its wall clock (as before, including the timeout floor of `runPhaseWithTimeout`) less
+  its *idle time*. Idle time is recorded by an `IdleLedger` (`src/runtime/idleWatch.ts`) that `runPhaseWithTimeout` creates
+  per phase and passes in `AttemptContext.idleLedger`; each adapter (codex `runCodexPhase`, omp `runOmpProcess`, claude
+  `run`) hands it to the `IdleWatch` of every agent process it runs for the phase. Inside a process's window (watch start →
+  watch stop), each gap between consecutive observations — activity as §2.2 defines it, or a change of the open-tool count —
+  during which no tool was open counts as idle by the part that exceeds `IDLE_CHARGE_LIMIT_MS`. Time outside every window
+  (ccloop's own work before, between and after the processes, a transient retry's backoff, setup commands, the verifier's
+  required checks) is never idle and is charged in full. A phase whose adapter runs no watched process (test fakes) records
+  no idle and is charged its wall clock, as before.
+- **Limit: `IDLE_CHARGE_LIMIT_MS = 120 000` (2 min), a named constant**, not the installation's `idleTimeoutMs`: the
+  watchdog's default 10 min would leave the tester's 600 s stall fully charged. 2 min keeps a model turn that streams nothing
+  until it completes (claude stream-json carries no partial messages; codex emits a reasoning item when it ends) as working
+  time, while a 10 min stall is charged 2 min. A reversible choice (seat D's, under 「先按你的建议执行」).
+- **Where it applies.** `runPhaseWithTimeout`'s every `elapsedMs` (and a `PhaseExecutionError`'s) is the charged figure,
+  so `settlePhase` moves `timeRemainingMs` (`applyPhaseUsage`) and reports `onPhaseSettled.elapsedMs` → the usage ledger's
+  `activeMs` by the same amount. The next call's deadline is derived from `timeRemainingMs` as before, so it agrees. A phase
+  already running keeps the deadline it was started with (a silence inside it still runs down its own timer); the deducted
+  idle is returned to the run's remainder at settlement.
+- **Wire.** `used.activeMs` keeps its name and type; its meaning is now "working time" as defined here. No field added.
+- **Consequence.** An execute that timed out with no result, whose window was mostly idle, no longer leaves
+  `timeRemainingMs === 0`, so its stop reason is the per-attempt timeout's and its failure boundary is `timeout`, not
+  `runtime_exhausted` (status stays `exhausted`; the cause stays the call's own, e.g. `stalled`).
+- **Criteria.** `tests/runtime/idleLedger.test.ts`, `tests/controller/workingTime.test.ts`. Not covered by a criterion: omp's
+  hand-off of the ledger (fake-omp has no idle script, as in As-built decision 3).
