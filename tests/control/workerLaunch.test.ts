@@ -7,6 +7,7 @@ import { inspectStart } from "../../src/control/accept.js";
 import { canonicalHash, type LoopStartEnvelope } from "../../src/control/protocol.js";
 import { FIXTURE_SELECTION } from "./agentsFixture.js";
 import { readProcessStartedAt } from "../../src/control/workerLauncher.js";
+import { parseLstartUtc, readProcessStart } from "../../src/ownership/ownerLiveness.js";
 import { writeAccepted } from "../../src/control/store.js";
 
 async function fixture(): Promise<{ root: string; envelope: LoopStartEnvelope }> {
@@ -51,5 +52,29 @@ describe("worker process identity", () => {
       worker: { pid: process.pid, startedAt: "1970-01-01T00:00:00.000Z", nonce: "nonce-1" },
     });
     expect(await inspectStart(f.envelope)).toEqual({ kind: "unknown" });
+  });
+});
+
+// Orca tester follow-up I (Orca session d467cbd2, 2026-11-13; review of #273, finding 3): the worker's recorded start is
+// compared with the start the owner liveness check reads (`ps lstart` under TZ=UTC, parsed as UTC). Recorded from a local
+// reading, it was ambiguous in a DST fall-back hour -- 01:30 happens twice -- and a live worker could be recorded an hour
+// early and so look lost (its pid "started after the owner was last known alive"). The start is now read as UTC whatever
+// the process's own zone.
+describe("worker start identity is read as UTC (Orca tester follow-up I)", () => {
+  it("reads ps lstart as UTC, never in the local zone, and agrees with the liveness check's reading", async () => {
+    const saved = process.env.TZ;
+    process.env.TZ = "America/New_York"; // 2026-11-01 01:00-02:00 local happens twice here
+    try {
+      // 06:30 UTC is the second 01:30 in New York; a local reading of the same text would be 11:30 UTC.
+      // mutation: parse the lstart text as local time (new Date(text)) -> 2026-11-01T11:30:00.000Z, red
+      expect(await readProcessStartedAt(4242, async () => "Sun Nov  1 06:30:00 2026\n")).toBe("2026-11-01T06:30:00.000Z");
+      // The real reading of this process equals the liveness check's own (readProcessStart under TZ=UTC + parseLstartUtc).
+      // mutation: ps run without TZ=UTC (so it prints New York time) -> five hours apart, red
+      const lstart = await readProcessStart(process.pid);
+      expect(lstart).not.toBeNull();
+      expect(await readProcessStartedAt(process.pid)).toBe(new Date(parseLstartUtc(lstart!)! * 1000).toISOString());
+    } finally {
+      if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved;
+    }
   });
 });

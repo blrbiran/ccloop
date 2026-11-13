@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
+import { parseLstartUtc } from "../ownership/ownerLiveness.js";
 import { claimAcceptedWorker, markAcceptedUnknown, readAccepted, sealAcceptedWorker, type AcceptedRecordV1 } from "./store.js";
 
 const execFileAsync = promisify(execFile);
@@ -19,15 +20,25 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function readProcessStartedAt(pid: number): Promise<string | null> {
+async function readLstartUtc(pid: number): Promise<string> {
+  const { stdout } = await execFileAsync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8",
+    env: { ...process.env, TZ: "UTC", LC_ALL: "C" },
+    maxBuffer: 16 * 1024,
+  });
+  return stdout;
+}
+
+/**
+ * The process's start instant as ISO-8601. Orca tester follow-up I (review of #273, finding 3): `ps lstart` is read under
+ * TZ=UTC and parsed as UTC -- as the owner liveness check reads the same pid (ownerLiveness.ts) -- never as local time,
+ * which is ambiguous in a DST fall-back hour and could record a live worker's start an hour early, so that it looked lost.
+ */
+export async function readProcessStartedAt(pid: number, readLstart: (pid: number) => Promise<string> = readLstartUtc): Promise<string | null> {
   if (!Number.isSafeInteger(pid) || pid < 1) return null;
   try {
-    const { stdout } = await execFileAsync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
-      encoding: "utf8",
-      maxBuffer: 16 * 1024,
-    });
-    const parsed = new Date(stdout.trim());
-    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+    const seconds = parseLstartUtc(await readLstart(pid));
+    return seconds === null ? null : new Date(seconds * 1000).toISOString();
   } catch {
     return null;
   }
