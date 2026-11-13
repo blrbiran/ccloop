@@ -41,7 +41,10 @@ const observed = (error: Error, observedTokens: number | null) => Object.assign(
 const notSingle = (what: string, observedTokens: number | null) => Object.assign(observed(new Error(`codex-single-call-not-single:${what}`), observedTokens), { code: `codex-single-call-not-single:${what}` });
 
 /**
- * §6.1, fail closed: no tool or command item, at most one completed agent message, exactly one completed turn, one object.
+ * §6.1, fail closed: no tool or command item, exactly one completed turn, one object. Orca follow-up J (paid run, codex
+ * gpt-6-sol): a turn may open with preamble agent messages ("I'll check each criterion...") before the answer; the `-o`
+ * file (codex writes the turn's LAST agent message there) stays the answer. An earlier message that itself parses as an
+ * object is a second answer -- ambiguous, so it is refused as not-single:messages, as any second message was before.
  * Task 8 fix round 2 (P1, codex-cli 0.160.0): an `error` item is a diagnostic codex emits for config warnings (an
  * unrecognized key in the linked config.toml, an under-development feature) -- allowed and logged on stderr; it stays in
  * events.jsonl. Every other item type that is not agent_message or reasoning, known or not, is a tool.
@@ -62,7 +65,9 @@ const MAX_LOGGED_ERROR_ITEMS = 64;
  */
 export class CodexSingleCallFold {
   private error: string | null = null;
-  private messages = 0; private turns = 0; private tool = false;
+  private turns = 0; private tool = false;
+  /** An agent message before the last parsed as an object (a second answer); whether the latest one did. */
+  private earlierAnswer = false; private latestAnswer = false;
   private readonly errorItems: string[] = []; private unloggedErrorItems = 0;
   private readonly observed = new TurnUsageFold();
   private readonly usage = new CodexUsageFold(true);
@@ -78,7 +83,10 @@ export class CodexSingleCallFold {
       const text = `ccloop-codex-single-call: codex error item ${JSON.stringify(typeof row.item.message === "string" ? row.item.message : null)}\n`;
       if (this.errorItems.length < MAX_LOGGED_ERROR_ITEMS) this.errorItems.push(text); else this.unloggedErrorItems += 1;
     } else if (row.type.startsWith("item.") && record(row.item) && row.item.type !== "agent_message" && row.item.type !== "reasoning") this.tool = true;
-    if (row.type === "item.completed" && record(row.item) && row.item.type === "agent_message") this.messages += 1;
+    if (row.type === "item.completed" && record(row.item) && row.item.type === "agent_message") {
+      if (this.latestAnswer) this.earlierAnswer = true;
+      this.latestAnswer = typeof row.item.text === "string" && parseSingleCallObject(row.item.text) !== undefined;
+    }
     if (row.type === "turn.completed") this.turns += 1;
   }
   /** observedTurnUsage over every line of the call. */
@@ -89,7 +97,7 @@ export class CodexSingleCallFold {
     const observedTokens = this.observed.value();
     if (this.error !== null) throw observed(new Error(this.error), observedTokens);
     if (this.tool) throw notSingle("tool", observedTokens);
-    if (this.messages > 1) throw notSingle("messages", observedTokens);
+    if (this.earlierAnswer) throw notSingle("messages", observedTokens);
     if (this.turns > 1) throw notSingle("turns", observedTokens);
     let usage: ReturnType<typeof decodeCodexUsage>;
     try { usage = this.usage.value(); } catch (error) { throw observed(error as Error, observedTokens); }

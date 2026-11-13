@@ -230,8 +230,36 @@ describe("codex single call (spec §6.1)", { timeout: 30_000 }, () => {
     expect(observedTokensOf(error)).toBe(booked);
   });
 
+  // Orca follow-up J (paid run, codex gpt-6-sol answering Orca's requirement review): one turn carries a one-line preamble
+  // agent message and then the answer. The -o file (the turn's last message) is the answer; a preamble that is not itself
+  // an object is no second answer, so the call is single. An earlier message that IS an object is a second answer, so
+  // C8.5 "messages" (two objects) stays refused as ambiguous.
+  const agentMessage = (text: string) => ({ type: "item.completed", item: { type: "agent_message", text } });
+  const turn36 = { type: "turn.completed", usage: { input_tokens: 30, output_tokens: 6 } };
+  it("C8.5c: answers a single turn whose answer follows preamble messages, from the -o file", async () => {
+    const w = await world({ final: "{\"answer\":\"7\"}", rows: [agentMessage("I'll check each criterion against the diff."), agentMessage("Checking criterion 2."), agentMessage("{\"answer\":\"7\"}"), turn36] });
+    expect(await w.adapter.singleCall!(w.request)).toMatchObject({ output: { answer: "7" }, tokenUsage: 36 });
+  });
+
+  it("C8.5d: a preamble never rescues a call whose -o answer is no object", async () => {
+    const w = await world({ final: "Done.", rows: [agentMessage("I'll check."), agentMessage("Done."), turn36] });
+    expect(await failure(w.adapter.singleCall!(w.request))).toBeInstanceOf(SingleCallOutputInvalid);
+  });
+
   it.each([
-    ["codex-event-error", [{ type: "item.completed", item: { type: "agent_message", text: "{\"answer\":\"42\"}" } }, { type: "error", message: "boom" }, { type: "turn.completed", usage: { input_tokens: 30, output_tokens: 6 } }]],
+    ["tool", "a tool between preamble and answer", [agentMessage("I'll check."), { type: "item.started", item: { id: "i", type: "command_execution", command: "ls" } }, agentMessage("{\"answer\":\"42\"}"), turn36]],
+    ["turns", "a preamble in its own turn", [agentMessage("I'll check."), { type: "turn.completed", usage: { input_tokens: 10, output_tokens: 1 } }, agentMessage("{\"answer\":\"42\"}"), turn36]],
+    ["messages", "a fenced object between preamble and answer", [agentMessage("I'll check."), agentMessage("```json\n{\"answer\":\"1\"}\n```"), agentMessage("{\"answer\":\"42\"}"), turn36]],
+    ["messages", "an object followed by a closing remark", [agentMessage("{\"answer\":\"42\"}"), agentMessage("Done."), turn36]],
+  ] as const)("C8.5e: a preamble does not excuse any other not-single reason (%s: %s)", async (what, _case, rows) => {
+    const w = await world({ rows });
+    const error = await failure(w.adapter.singleCall!(w.request));
+    expect(error).toMatchObject({ code: `codex-single-call-not-single:${what}` });
+    expect(observedTokensOf(error)).toBe(36);
+  });
+
+  it.each([
+    ["codex-event-error",[{ type: "item.completed", item: { type: "agent_message", text: "{\"answer\":\"42\"}" } }, { type: "error", message: "boom" }, { type: "turn.completed", usage: { input_tokens: 30, output_tokens: 6 } }]],
     ["codex-events-invalid", [{ type: "item.completed", item: { type: "agent_message", text: "{\"answer\":\"42\"}" } }, "not an event", { type: "turn.completed", usage: { input_tokens: 30, output_tokens: 6 } }]],
   ] as const)("C8.5b: refuses unreadable events (%s) and books the usage it saw, never 0", async (code, rows) => {
     const w = await world({ rows });
