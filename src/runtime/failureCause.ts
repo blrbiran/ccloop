@@ -21,6 +21,9 @@ export const FAILURE_CAUSES = [
   // restarted or it was killed) and settle-lost-worker ended the run. Terminal: never in RETRYABLE_CAUSES, never classified
   // from a call; written only by settleLostWorker.ts.
   "worker-lost",
+  // Orca follow-up J (#299): the provider does not serve the selected model (HTTP 404 naming a model). Terminal: never in
+  // RETRYABLE_CAUSES -- the same model would be refused again; another agent or model is the way on.
+  "model-unavailable",
 ] as const;
 export type FailureCauseV1 = (typeof FAILURE_CAUSES)[number];
 
@@ -58,6 +61,11 @@ const CODEX_ROWS: ReadonlyArray<[RegExp, FailureCauseV1]> = [
   [/stream disconnected before completion/, "network"],
   [/^Connection failed: /, "network"],
   [/Error while reading the server response/, "network"],
+  // Orca follow-up J (#299): codex's own format `unexpected status <status>: <body>` (static string, codex-cli 0.167.0) with a
+  // 404 whose body names a model. Real sample (tester ledger issue-20261023, Issue 299, through a proxy):
+  // `unexpected status 404 Not Found: "gpt-6-sol" is one of Codex's own models, ... No ChatGPT account in magpie serves it`.
+  // A 404 that names no model (a wrong endpoint) stays unknown.
+  [/\bunexpected status 404\b[\s\S]*\bmodel/i, "model-unavailable"],
 ];
 
 function codexRowCause(message: string): FailureCauseV1 {
@@ -111,6 +119,8 @@ export function claudeErrorCause(assistantError: string | null, errorText: strin
   if (assistantError === "billing_error") return "quota";
   if (assistantError === "rate_limit") return CLAUDE_QUOTA_PHRASES.some((phrase) => text.includes(phrase)) ? "quota" : "rate-limited";
   if (assistantError === "overloaded" || assistantError === "server_error") return "provider-5xx";
+  // Orca follow-up J (#299): claude's typed `model_not_found` (the assistant error enum, spec §3, read from claude 2.1.304).
+  if (assistantError === "model_not_found") return "model-unavailable";
   if (assistantError === "invalid_request" && CLAUDE_OVERFLOW_PHRASES.some((phrase) => text.includes(phrase))) return "context-overflow";
   return "unknown";
 }

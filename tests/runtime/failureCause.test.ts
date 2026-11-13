@@ -226,3 +226,42 @@ describe("setup-failed (task setup commands, plan 2026-11-04 Task 1)", () => {
     expect(parsed.failureCause).toEqual(failureCause);
   });
 });
+
+// Orca follow-up J (#299, tester ledger issue-20261023 "Issue 299"; human, Orca session c8b75eac: 「本会话建议的顺序 => 同意」):
+// a provider that does not serve the selected model answered 404, was classified unknown, and Orca's ladder retried the
+// same frozen model -- which can only fail again. It is now `model-unavailable`: terminal, with the provider text as detail.
+describe("model-unavailable (Orca follow-up J, #299)", () => {
+  // The real sample, verbatim from the ledger (codex through a proxy).
+  const sample = "unexpected status 404 Not Found: \"gpt-6-sol\" is one of Codex's own models, and this Codex thread\nwas started while magpie was Codex's model provider, so it is still sent to magpie whatever Codex is\nset to now. No ChatGPT account in magpie serves it, and magpie can't send it on Codex's own ChatGPT\nsign-in: Codex is signed out; run codex login.";
+
+  it("codex: a 404 that names a model is model-unavailable, with the provider text as detail", () => {
+    // mutation: drop the codex 404 row -> unknown, red
+    expect(classifyCodexCall(codexRows(sample))).toEqual({ cause: "model-unavailable", workObserved: false, detail: sample });
+    // OpenAI's documented model_not_found body, in codex's format.
+    expect(classifyCodexCall(codexRows("unexpected status 404 Not Found: {\"error\":{\"message\":\"The model `gpt-x` does not exist or you do not have access to it.\",\"code\":\"model_not_found\"}}"))?.cause).toBe("model-unavailable");
+    // A detail longer than the cap is cut as every cause's is.
+    expect(Buffer.byteLength(classifyCodexCall(codexRows(`${sample} ${"x".repeat(1_000)}`))!.detail!, "utf8")).toBe(512);
+  });
+
+  it("codex must-not-match: a 404 naming no model, another status naming a model, the wording in model text", () => {
+    expect(classifyCodexCall(codexRows("unexpected status 404 Not Found: 404 page not found"))?.cause).toBe("unknown");
+    expect(classifyCodexCall(codexRows("unexpected status 400 Bad Request: model is required"))?.cause).toBe("unknown");
+    const inMessage = [{ type: "turn.started" }, { type: "item.completed", item: { type: "agent_message", text: sample } }, { type: "turn.failed", error: { message: "something else" } }]
+      .map(row => JSON.stringify(row)).join("\n");
+    expect(classifyCodexCall(inMessage)?.cause).toBe("unknown");
+  });
+
+  it("claude: the typed model_not_found is model-unavailable", () => {
+    // mutation: drop the claude model_not_found branch -> unknown, red
+    expect(claudeErrorCause("model_not_found", "There's an issue with the selected model")).toBe("model-unavailable");
+    expect(classifyClaudeCall(signals({ assistantError: "model_not_found", errorText: "selected model" }))).toEqual({ cause: "model-unavailable", workObserved: false, detail: "selected model" });
+  });
+
+  it("is a cause, never retried in a phase, and collect carries it", () => {
+    expect(FAILURE_CAUSES).toContain("model-unavailable");
+    // mutation: add model-unavailable to RETRYABLE_CAUSES -> red
+    expect(RETRYABLE_CAUSES.has("model-unavailable")).toBe(false);
+    const failureCause = { cause: "model-unavailable", phase: "plan", retries: 0, detail: sample };
+    expect(collectionSchema.parse({ events: [], candidate: null, terminal: null, progress: null, failureCause }).failureCause).toEqual(failureCause);
+  });
+});
