@@ -1,4 +1,4 @@
-# ccloop Handoff — 路径证据与近似收据恢复已推；Orca 关联见文末单节
+# ccloop Handoff — Orca 会话驱动的各轮在「当前状态」里滚动（最新一节在前，旧轮压成结论）
 
 > ⚠️ **一律自查，别信本文。** 只有两个门锚点 `e42e062`（GATE-PKG3）与 `86d3bd6`（GATE-PKG2）是固定历史值。
 > *** **本文不写任何当前哈希** —— 指代某一笔引**提交主题行**（`git log --grep`），指代材料引**路径**。 ***
@@ -41,42 +41,22 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-12，Orca 会话 `d1cbbd58`，测试者反馈 G 轮）—— #252 startedAt、#116／#122／#262、实时 token 上限、任务交接目录、Live 笔记；**全部 `--ff-only` 在本地 main，未推**（推由人做；推完 Orca 才能 repin）
+### 最新（2026-11-12→13，Orca 会话 `7e164691`，测试者反馈 H 轮）—— #274 字段级格式错误、#277 attempt 提交主题、#273 worker 丢失、live-ceiling 轮询停止竞态；**全部在 main 并已由人推到 `26b3127`**（`ls-remote` 现核；Orca 已 repin 到它）
 
-- **#252**（人逐条点名 `collectTranscripts.test.ts` 4 条「同意」）：主题行 `feat(control): the transcript listing carries each call's startedAt (Orca #252)`——**人已推，Orca 已 repin 到它**（Orca 主题行 `chore(deps): pin ccloop to the transcript listing that carries each call's startedAt (#252)`）。变异 M1–M4 红。以下各笔在它之后，都未推。
-- **G4**：`fix(control): saved-result recovery accepts Orca's explicit observed-floor settlement (Orca #116)`（与 `approximate-floor` 同语义；可由 `agent:` 署名）；`feat(codex): a call whose --output-schema the provider refuses is sent once more in prompt mode (Orca #122)`（只那一次调用、没干活时；旁写 `structured-output-fallback.json`；**未报给 Orca**——Orca 的 collect 是 strict，要 Orca 先收新键）。#193 只量未改：events／transcript 两份都有人读（Orca 读 transcript，ccloop 的已存结果捕获读 events），合并要改既有判据（人点名）。
-- **G7**：`fix(runtime): an execute timeout keeps its call's stall cause; codex leaves a usage floor (Orca #262)`（看门狗 stall 后阶段超时，run 的失败原因保留 `stalled`／`network`，不再被改写成 `budget-exhausted`；codex 有回合用量时写 `usage-lower-bound.json`）；failure-causes spec 追加了更正节。
-- **控制器**：`test(fixtures): the fake claude CLI takes --add-dir as a list option (Orca follow-up G §10.2)`（C2 起每次 handoff 都给 claude 传 `--add-dir`，旧假 CLI 拒未知参数 ⇒ Orca 的 claude 端到端全红；只改夹具，无判据改动）。
-- **门**：G4＋G7 叠起来的全量（负载 36–62）2,627 过／12 红；名单外 11 条：两个已存结果文件单跑 42/42、`extractFinalObject` 性能（3.2 s 对 3 s，负载）。B／C 席全量见下一条。
-- **分支／worktree 还在**：`g/ccloop-small`（`.claude/worktrees/g4-small`）、`g/stalled-cause`（`.claude/worktrees/g7-stalled`）、`g/ccloop-budget-handoff`（`.claude/worktrees/g-ccloop-bc`），都已合进 main，可 `branch -d`／`worktree remove`（后者有未跟踪的 `node_modules` 软链，要 `--force`，归人）。
+- **主题行**（`git log --grep` 取）：
+  - `fix(runtime): an execute answer the strict shape refuses names the field, expected and received (Orca #274)`：codex／claude 失败文本带首个被拒字段（`codex-result-invalid: <dir>: commandOutputs: expected array, received string`，错误码前缀不变，≤512 B 一行），旁写 `execution-format-issues.json`（≤8 条）；**不加进 `execution-normalization.json`**（Orca 的 `runDiagnosis` 严格解析它，且已存结果捕获比字节）；严格 schema 不放宽；omp 原本就点名字段（只抽出共用 helper）。
+  - `feat(workspace): an attempt commit's subject is the run's goal, its ref an Attempt-Ref trailer (Orca #277)`：主题＝`loop-contract.json` 的 `objective.goal`（一行、≤72）；无 goal 时**仍是** `ccloop attempt: <ref>`（`worktreeManager.test.ts` 钉着 `%s`，改要人点名）。仓内与 Orca 都不读这条主题。
+  - `feat(control): collect reports a lost worker; settle-lost-worker ends its run as worker-lost (Orca #273)`＋`test(control): settle-lost-worker's two liveness guards, each alone (Orca #273)`：collect 的 `worker:{state:"lost"|"undetermined",reason}` **只在**非 saved-result 的 loop run、launch `claimed`、无 candidate 无 terminal 时出现（活着的 worker 不报，collect 字节不变——`agentsControl.test.ts` 钉着）；新方法 `settle-lost-worker`（`METHODS` 已列，`features` 不变）：确认 worker 与 owner 都死 ⇒ 收割、状态改 failed、失败原因 `worker-lost`（不可重试）、补一条未知总量的 work 观测、发布并移除 attempt worktree、写结果仓与失败 candidate、释放租约、封存、证明停止；幂等。拒绝码 `control-worker-not-lost`、`control-worker-lost-state-unavailable`、`control-worker-processes-not-reaped: <reason>`、`control-worker-not-stopped`。已终态的 loop 状态不改写。设计与两半 as-built：Orca `docs/superpowers/specs/2026-11-12-worker-lost-recovery-design.md`。
+  - `fix(control): the live ceiling watch stops when stop() lands mid-read (Orca follow-up H)`：`stop()` 只叫醒它碰到的那次睡眠；若落在读文件中途，循环再挂一个没人叫醒的 unref 50 ms 定时器 ⇒ worker 收尾时（`onRunSettledBeforeLeaseRelease`）没有别的句柄撑着，**进程无声退出、candidate 没写、没封存**，Orca 那边 run 停在 `accepted`、交接请求停在 `collecting`。Orca 预算新模型给每个 run 带 live ceiling 后由 `agentSelectionE2E` C3 暴露（Orca Part B 席用加慢读取的副本复现 2/2、加修复 2/2 绿）。修法 `if (stopped) break;`；判据 `tests/control/liveCeilingWatchStop.test.ts`（必须在子进程里跑，vitest 自己的句柄会让进程不退出）。
+- **判据**：只加不改（Rule 15；人的一揽子授权经控制器转述，不算逐条点名）。#274／#277／#273 席 26 个变异全红（`/private/tmp/orca-h1112/ccloop/mutations.md`）；watch-stop 去掉修复即红（`unsettled top-level await`）。
+- **门（现测，负载 25–144）**：席位分支全量 2,722 条、46 红，逐文件对照 main 克隆单跑：`updates` 6、`cli` 1、`endToEnd` 1、`ompVerificationOnlyRecovery` 4、`phasesCompleted` 1、`setupRunLoop` 2、`extractFinalObject` 性能 2、`taskResultOutcome`、`savedResultRecovery.native`（超时／`ENOTEMPTY`）**在 main 上同样红**；watch-stop 分支全量 `check-known-reds` 名单外 6 条（`updates` 1、"refuses cleaned success…" 3、`extractFinalObject` 性能 2），同属上列。**这批在 main 上也红的需要有人低负载复核或进名单（未做）。**
+- **没做**：真付费回归；#193（合并两份流文件要改既有判据，人点名）；#122「退回过 prompt 模式」报给 Orca（要 Orca 先收新字段）。分支／worktree 还在：`h/ccloop-diagnostics-commits`、`h/ccloop-watch-stop`（`.claude/worktrees/h-ccloop`，都已合进 main），G 轮的 `g4-small`、`g7-stalled`、`g-ccloop-bc` 也还在——都可 `branch -d`／`worktree remove --force`（归人）。
 
-#### 同一轮 Part B／C 的 ccloop 席（已合进本地 main）
+### G、E 轮与 #225 轮的结论（2026-11-10→12，Orca 会话 `3153bf70`／`e43cd52d`／`d1cbbd58`；2026-11-13 Orca 会话 `7e164691` 压成结论：都已由人推、Orca 已 repin；过程原文按文首的 `git show <那一笔>^:docs/handoff/handoff.md` 取回）
 
-- **分支** `g/ccloop-budget-handoff`（已 `--ff-only` 进本地 main；worktree `.claude/worktrees/g-ccloop-bc`，基于主题行 `fix(runtime): an execute timeout keeps its call's stall cause; codex leaves a usage floor (Orca #262)`）。合并由 Orca 控制器做；**推由人做**，推完 Orca 才能 repin（Orca 侧 Part B O8、Part C O7 等这一步）。
-- **K1／K2（实时上限）**：v4 信封可带 `liveCeiling {protocol:1,revision,tokens,cause:"group"|"pause-line"|"task-cap"}`（须 work 授予 tokens 为 null、无 mode）；新控制方法 `live-ceiling` 写 `control/live-ceiling.json`（0600，revision 必须递增）；worker 每 50 ms 重读，runLoop 每次观测重算（中途抬高能让阶段继续，答了 spec 的开放点），并在每个 attempt／execute／verify 前做边界检查（codex 唯一的停点）。停下：`exhausted`＋`live token ceiling reached`＋`RunState.liveCeilingStop`；collect 只在顶层给 `liveCeilingStop`，v4 `terminal` 不带。设计与变异表：`docs/superpowers/specs/2026-11-12-live-ceiling-design.md`；11-10 阈值 spec 末尾追加了一节。
-- **C1–C4（交接与笔记）**：`work.handoff {inputDir,outputDir}`（accept 时校验：规范目录、互不包含、不在 sourceDir／目标仓／工作仓里；与 mode 互斥）；plan／execute 第 3 行读、execute 末尾写 `handoff.md`／`summary.md`；claude／omp 加两个 `--add-dir`，codex 只在 execute 加 outputDir；changedFiles 里 outputDir 下的条目不进路径策略。Live 笔记：Orca 写 `<sourceDir>/live-notes.json`，ccloop 每个阶段开始取未确认的、写 `run/live-notes-delivered.json`（命令型 verifier 不取，saved-result 恢复无收件箱）。collect 顶层 `handoffFiles`、`liveNotes` 只在触发条件存在时出现。fake-codex script 模式新增 `handoff` 条目与 `<marker>.prompts` 日志。
-- **判据**：只加不改（Rule 15；控制器转述的一揽子授权不算逐条点名，本轮也不需要）。`features` 未动。变异与门的记录在 `/private/tmp/orca-g1112/ccloop-bc/`（`mutations.md`、`full.log`、`known-reds.log`）。
-- **没做**：真付费回归；上限对 spend cap 的联动、单次调用与 reconcile 的上限（Orca 计划 D7 记为缺口）。
-
-### 上一轮（2026-11-11 深夜，Orca 会话 `e43cd52d`，测试者反馈 E 轮）—— #249 codex 中途 `error` 行不再吞掉已完成回合的用量；**人已推，Orca 已 repin**（Orca 主题行 `chore(deps): pin ccloop to the codex usage kept after a mid-stream error row (#249)`）
-
-- **主题行** `fix(codex): a phase that fails on a mid-stream error row carries its completed turn's usage (#249)`（分支 `e/codex-usage-after-error-row`，`--ff-only` 进本地 main；分支与 worktree `.claude/worktrees/e-codex-usage` 还在，可 `branch -d`／`worktree remove`）。
-- **病因**：`CodexUsageFold.push`（`src/runtime/codex/protocol.ts`）见到流里任一 `error`／`turn.failed` 行就定成 `codex-event-error`；流后面照样有成功的 `turn.completed`＋final 时，`decodePhase` 的 `uniqueUsage.value()` 抛错，重抛的普通 Error 不带 `observedTokens` ⇒ `failure-cause.json` `usageObserved:false`、Orca 记未知（soft 组按下界 null 记 0）。测试者两次丢了 2.58M／4.50M token。
-- **做法**：`decodePhase` 两个 catch（execute；plan／verify）都抛 `Object.assign(new Error(<原消息>), {observedTokens: outcome.stream.turnUsage.value()})`——与上方 ruling 26 路径、`codexSingleCall.ts` 同一机制。阶段仍失败、错误文本与 `decode-error.txt` 不变、分类不变（`unknown`／`workObserved:true`／不重试）、严格解码不动；没有 `turn.completed` 的流仍是 null。
-- **与设计的偏差**（Orca spec `2026-11-11-tester-followup-e-design.md` §1）：① 调用自己的 `outcome.json` 仍 `observedTokens:null`（解码前写、对所有 completed 调用按设计为 null），修复体现在 `failure-cause.json`、错误的观测 token、run 记账；② plan／verify 的 catch 也包住其后的 final 扫描与证据写入 ⇒ 完成回合后因别的原因失败的 plan／verify 也记该回合用量；③ `savedResultRecovery.ts` 的 `rawExecutionTokensOf` 对这种流仍拒 `codex-event-error`（不是同一机制，未改）。
-- **判据**：新增 `tests/runtime/codex/usageAfterErrorRow.test.ts` 5 条（fake-codex 新模式 `error-then-usage`／`error-no-usage`，其余模式与参数约定字节不变）；改前 3 红 2 绿（两条 null 守卫在旧码也绿）。**未改任何既有判据**（实现席拒用经控制器转述的一揽子改判据授权：本仓 Rule 15 要人逐条点名；本轮也不需要）。变异 M0–M3 在 clone 见红、0 字节还原（`/private/tmp/orca-e1111/w1-ccloop/mutations.md`）。
-- **门（现测，负载 34–52）**：typecheck／build 0；全量 2,585 过／15 红／7 pending；`check-known-reds` RC 1——名单内 1 条（claudePhaseRunner「waits for close…」），名单外 14 条全是超时／`ENOTEMPTY`／perf，涉及的 7 个文件单跑全绿（日志 `/private/tmp/orca-e1111/w1-ccloop/rerun-*.log`）。
-- **没做**：真 codex 付费回归。主树 `dist/` 已在 Orca 各实现席跑完门之后重建（含本笔）。Orca 已用 `pin-ccloop` repin 到这笔（七项检查 ok，Orca 不需改码）；本仓之后只有 handoff 提交，推没推以 `ls-remote` 现核。
-
-### 上一轮（2026-11-10 晚，Orca 会话 `3153bf70`）—— #225 claude／omp 阶段内实时 token 阈值；**已推，Orca 已 repin**（2026-11-11）
-
-- **2026-11-11（Orca 会话 `29b4e843`）**：人已推本仓 main（`ls-remote` 现核）；Orca 用 `pin-ccloop` 钉到含 #225 的那笔（Orca 主题行 `chore(deps): pin ccloop to the live token threshold for claude and omp phases (#225)`，六项检查全 ok），主树 `dist/` 已重建（含 `LIVE_TOKEN_THRESHOLD_FACTOR`）。人审了两处实现决定：「同意」。本仓本轮零代码改动。
-- **人裁 R4（原话）**：「#224／#225 同意软上限」——不承诺硬上限，但能在阶段中途停的 adapter（claude、omp）就该停。codex 不动：`codex exec --json` 只在 `turn.completed` 报一次用量，实时 `token_count` 只写会话文件，而 ccloop 用 `--ephemeral`。
-- **主题行** `feat(control): stop a claude or omp phase whose live usage passes the remaining token budget (#225)` 与 `docs(spec): live token threshold for claude and omp phases (#225)`；spec `docs/superpowers/specs/2026-11-10-live-token-threshold-design.md`。阶段内观测用量超过 `ceil(阶段前剩余 × 1.2)`（常量 `LIVE_TOKEN_THRESHOLD_FACTOR`，`src/budget/tokenPolicy.ts`，**不是合同字段**，无下限）⇒ 走与超时相同的 abort，run 以既有的 `exhausted`／`budget-exhausted` 收尾，记观测下界。claude 经 runner 的 fd 4 发 `{"observedTokens":n}`；omp 用流里已有的逐消息用量。**无合同／collect／schema 变化** ⇒ Orca 不必先改解析。
-- **两处实现席的决定（人 2026-11-11 审过：「同意」）**：① 由 `group`／`spend-cap` allowance 约束的 run **不停**（今天它们停放为 `blocked_waiting_human`／`token-allowance` 可续，停了会变 `exhausted`）；② omp 因预算被停时**直接记观测 token、不再写 `usage-lower-bound.json`**，避免和 Orca soft-mode 的下界结算重复计数；其它 omp abort 不变（`ompProtocol.ts` 注释末尾加了具名 ERRATUM）。
-- **判据** `tests/controller/liveTokenThreshold.test.ts` 6 条（真 adapter＋现有 fake，未调 provider）；1、2 先红，3–6 是「不许变」的行为，各由自己的变异打红（10 个变异，表在 spec 里）。
-- **门（现测）**：全量 255 文件 **2,602/2,602**，`check-known-reds` RC 0（名单 7、failed 0、unexpected 0），typecheck／build 0；跑时负载 10.8→49。
-- **诚实边界**：阶段内自带重试会把计数归零，比的是最大单次调用而非累计；停在越线那次观测之后，已在流里的照记；single call 不在范围；没有真 provider 回归。worktree 里 `npm ci` 挂了 1 h 44 min（被杀，RC 143），但 `.package-lock.json` 与主树字节相同，`npm ls`／typecheck／build 都过，便沿用了。
+- **G 轮**：#252 转录列表带每次调用的 `startedAt`；#116 已存结果恢复接受 Orca 显式的 observed-floor 结算；#122 provider 拒 `--output-schema` 时那次调用以 prompt 模式再发一次（旁写 `structured-output-fallback.json`，**未报给 Orca**）；#262 execute 超时保留 stall 原因、codex 有回合用量时写 `usage-lower-bound.json`；**实时上限**：v4 信封可带 `liveCeiling {protocol:1,revision,tokens,cause}`（work 授予 tokens 为 null、无 mode），控制方法 `live-ceiling` 写 `control/live-ceiling.json`（0600、revision 递增），worker 每 50 ms 重读，claude／omp 调用中途停、codex 在回合之间停，停下 `exhausted`＋`RunState.liveCeilingStop`，collect 顶层给 `liveCeilingStop`（spec `docs/superpowers/specs/2026-11-12-live-ceiling-design.md`）；**handoff 与 Live 笔记**：`work.handoff {inputDir,outputDir}`（accept 校验、与 mode 互斥），plan／execute 读、execute 末写 `handoff.md`／`summary.md`，claude／omp 两个 `--add-dir`、codex 只在 execute 加 outputDir；Live 笔记由 Orca 写 `<sourceDir>/live-notes.json`、阶段开始取未确认的、写 `run/live-notes-delivered.json`；collect 顶层 `handoffFiles`、`liveNotes` 只在触发条件存在时出现；假 claude 认 `--add-dir`。#193 只量未改（events／transcript 两份都有人读）。没做：上限对 spend cap 的联动、单次调用与 reconcile 的上限。
+- **E 轮 #249**：`decodePhase` 两个 catch 抛出带 `observedTokens: outcome.stream.turnUsage.value()` 的错误 ⇒ 流里有 `error` 行但后面有成功 `turn.completed` 的阶段仍记已完成回合的用量（阶段照样失败、分类不变）；调用自己的 `outcome.json` 仍 `observedTokens:null`；`savedResultRecovery.ts` 对这种流仍拒 `codex-event-error`。判据 `tests/runtime/codex/usageAfterErrorRow.test.ts`。
+- **#225（人裁 R4「同意软上限」）**：claude／omp 阶段内观测用量超过 `ceil(阶段前剩余 × 1.2)`（`LIVE_TOKEN_THRESHOLD_FACTOR`，非合同字段）⇒ 走与超时相同的 abort，以 `exhausted`／`budget-exhausted` 收尾、记观测下界；codex 不动（只在 `turn.completed` 报用量）。人 2026-11-11 审过两处实现决定「同意」：受 `group`／`spend-cap` allowance 约束的 run 不停；omp 因预算被停时直接记观测 token、不再写 `usage-lower-bound.json`。spec `docs/superpowers/specs/2026-11-10-live-token-threshold-design.md`。诚实边界：阶段内自带重试会把计数归零；single call 不在范围。
 
 ### 上一轮（2026-11-10，测试者反馈 P0／A 轮）—— 零用量正向事实与 prompt-mode exhausted 胶囊
 
@@ -96,7 +76,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 - **门**：`npm run typecheck`、`npm run build` 均 0；**全量 `vitest run`＋`check-known-reds` RC 0**（名单 7 条、failed 0、unexpected 0）。
 - ✅ **已推**（`ls-remote` 现核）：人已把 main 推到本笔。Orca 已 `pin-ccloop` 到该提交并通过六项检查，跨仓验收 V11（只验证来源 → 新 run 零 plan/execute、只跑一次 checks）已通过；细节见本文 Orca 单节。
 
-### 最新（2026-11-08，Orca 会话 `fe1f3fa6`）—— Claude execute 与另两个适配器共用同一份严格解码；**本地 main 已 ff，未推**
+### 上一轮（2026-11-08，Orca 会话 `fe1f3fa6`）—— Claude execute 与另两个适配器共用同一份严格解码；已推、Orca 已 repin（见本节末条；2026-11-13 改标题，原标题「最新…未推」已过期）
 
 - **主题行** `fix(claude): an execute answer passes the shared strict result decoder`。做法：Claude 的 execute 答案先剥掉 runner 自己的记账键（`tokenUsage` / `usageEvidence` / `modelUsage` / `partialOrigin`），再走 `normalizeExecutionFinal` —— 与 OMP 同一个解码器（Codex 走 wire schema 再 `normalizeExecutionFinal`）。扁平 `taskResult`、多义或隐藏的最终消息现在响亮失败（`claude-result-invalid`，带观测用量），不再被 `parsed as T` 放行；合法的嵌套 `taskResult` 与 runner 用量原样保留（停止后回写的 partial 走同一解码）。
 - **判据**：`tests/runtime/claude/claudeAgentAdapter.test.ts` 新增 2 条（改前第一条红：execute 接受了扁平形状）。该文件 28/28；typecheck、build RC 0。
