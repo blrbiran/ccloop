@@ -5,6 +5,7 @@
 // terminal (cause `worker-lost`) with a stop proof Orca's terminal-closure checks accept. A live or undetermined worker
 // is never settled. Driven through the built CLI over fake codex, whose `hang-in-<phase>` mode hangs mid-phase.
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -267,9 +268,11 @@ describe("a settle-lost-worker interrupted after writing the failed state (Orca 
     const interrupted = JSON.parse(await readFile(join(f.sourceDir, "run", "loop-state.json"), "utf8"));
     expect(interrupted).toMatchObject({ status: "failed", failureCause: { cause: "worker-lost", phase: "execute" } });
     expect((await collect(f)).candidate).toBeNull();
-    // The killed process held accepted.lock; ccloop has no stale-lock recovery for it (reported, not changed here), so the
-    // lock file it left is removed by hand, standing in for that recovery.
-    await rm(join(f.sourceDir, "control", "accepted.lock"), { force: true });
+    // Ruling (Orca session c8b75eac, 2026-11-13; the human answered 「点名允许改必要的测试」): the killed process held
+    // accepted.lock and left it; it is no longer removed by hand here -- the next settle-lost-worker finds its holder dead
+    // (pid + process start recorded in the lock) and recovers it.
+    // mutation: no stale-lock recovery -> the re-run answers control-accepted-busy, red
+    expect(existsSync(join(f.sourceDir, "control", "accepted.lock"))).toBe(true);
 
     const settled = await call(f, "settle-lost-worker", { input: f.envelope });
     expect(settled.code, settled.stderr).toBe(0);
