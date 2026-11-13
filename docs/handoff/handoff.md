@@ -41,16 +41,16 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-12→13，Orca 会话 `7e164691`，测试者反馈 H 轮）—— #274 字段级格式错误、#277 attempt 提交主题、#273 worker 丢失、live-ceiling 轮询停止竞态；**全部在 main 并已由人推到 `26b3127`**（`ls-remote` 现核；Orca 已 repin 到它）
+### 最新（2026-11-13，Orca 会话 `d467cbd2`，测试者反馈 I 轮）—— #262 只算干活时间、#273 复审修复、saved-result 校验认 handoff 目录；**三笔都在本地 main、未推**（推被 Orca 的 Tier 0 闸门拦：人没在消息开头敲 `allow-push`）
 
 - **主题行**（`git log --grep` 取）：
-  - `fix(runtime): an execute answer the strict shape refuses names the field, expected and received (Orca #274)`：codex／claude 失败文本带首个被拒字段（`codex-result-invalid: <dir>: commandOutputs: expected array, received string`，错误码前缀不变，≤512 B 一行），旁写 `execution-format-issues.json`（≤8 条）；**不加进 `execution-normalization.json`**（Orca 的 `runDiagnosis` 严格解析它，且已存结果捕获比字节）；严格 schema 不放宽；omp 原本就点名字段（只抽出共用 helper）。
-  - `feat(workspace): an attempt commit's subject is the run's goal, its ref an Attempt-Ref trailer (Orca #277)`：主题＝`loop-contract.json` 的 `objective.goal`（一行、≤72）；无 goal 时**仍是** `ccloop attempt: <ref>`（`worktreeManager.test.ts` 钉着 `%s`，改要人点名）。仓内与 Orca 都不读这条主题。
-  - `feat(control): collect reports a lost worker; settle-lost-worker ends its run as worker-lost (Orca #273)`＋`test(control): settle-lost-worker's two liveness guards, each alone (Orca #273)`：collect 的 `worker:{state:"lost"|"undetermined",reason}` **只在**非 saved-result 的 loop run、launch `claimed`、无 candidate 无 terminal 时出现（活着的 worker 不报，collect 字节不变——`agentsControl.test.ts` 钉着）；新方法 `settle-lost-worker`（`METHODS` 已列，`features` 不变）：确认 worker 与 owner 都死 ⇒ 收割、状态改 failed、失败原因 `worker-lost`（不可重试）、补一条未知总量的 work 观测、发布并移除 attempt worktree、写结果仓与失败 candidate、释放租约、封存、证明停止；幂等。拒绝码 `control-worker-not-lost`、`control-worker-lost-state-unavailable`、`control-worker-processes-not-reaped: <reason>`、`control-worker-not-stopped`。已终态的 loop 状态不改写。设计与两半 as-built：Orca `docs/superpowers/specs/2026-11-12-worker-lost-recovery-design.md`。
-  - `fix(control): the live ceiling watch stops when stop() lands mid-read (Orca follow-up H)`：`stop()` 只叫醒它碰到的那次睡眠；若落在读文件中途，循环再挂一个没人叫醒的 unref 50 ms 定时器 ⇒ worker 收尾时（`onRunSettledBeforeLeaseRelease`）没有别的句柄撑着，**进程无声退出、candidate 没写、没封存**，Orca 那边 run 停在 `accepted`、交接请求停在 `collecting`。Orca 预算新模型给每个 run 带 live ceiling 后由 `agentSelectionE2E` C3 暴露（Orca Part B 席用加慢读取的副本复现 2/2、加修复 2/2 绿）。修法 `if (stopped) break;`；判据 `tests/control/liveCeilingWatchStop.test.ts`（必须在子进程里跑，vitest 自己的句柄会让进程不退出）。
-- **判据**：只加不改（Rule 15；人的一揽子授权经控制器转述，不算逐条点名）。#274／#277／#273 席 26 个变异全红（`/private/tmp/orca-h1112/ccloop/mutations.md`）；watch-stop 去掉修复即红（`unsettled top-level await`）。
-- **门（现测，负载 25–144）**：席位分支全量 2,722 条、46 红，逐文件对照 main 克隆单跑：`updates` 6、`cli` 1、`endToEnd` 1、`ompVerificationOnlyRecovery` 4、`phasesCompleted` 1、`setupRunLoop` 2、`extractFinalObject` 性能 2、`taskResultOutcome`、`savedResultRecovery.native`（超时／`ENOTEMPTY`）**在 main 上同样红**；watch-stop 分支全量 `check-known-reds` 名单外 6 条（`updates` 1、"refuses cleaned success…" 3、`extractFinalObject` 性能 2），同属上列。**这批在 main 上也红的需要有人低负载复核或进名单（未做）。**
-- **没做**：真付费回归；#193（合并两份流文件要改既有判据，人点名）；#122「退回过 prompt 模式」报给 Orca（要 Orca 先收新字段）。分支／worktree 还在：`h/ccloop-diagnostics-commits`、`h/ccloop-watch-stop`（`.claude/worktrees/h-ccloop`，都已合进 main），G 轮的 `g4-small`、`g7-stalled`、`g-ccloop-bc` 也还在——都可 `branch -d`／`worktree remove --force`（归人）。
+  - `fix(runtime): the time budget charges only the time the agent was working (Orca #262)`＋一笔 test：人裁「时间预算只算真正在干活的时间」。agent 进程窗口内，无观测（codex／omp 的 stdout／stderr 字节、claude 的 fd-4 行、开着的工具数变化）且无工具开着的空档，超过 `IDLE_CHARGE_LIMIT_MS = 120 s` 的部分不计；setup、verifier 的检查、ccloop 自己的工作照旧全计。`used.activeMs`／`timeRemainingMs` 同步按干活时间走；**协议不变**，只是含义变了（Orca 不用改码）。120 s 是实现席的可逆选择（看门狗默认 600 s 会照样把测试者那次 600 s 卡顿全计；30 s 会砍掉真实的长静默回合）。副作用：大半空闲而超时的 execute 停止原因从「budget exhausted」变成每次 attempt 超时（状态仍 `exhausted`、cause 仍 `stalled`）。spec `docs/superpowers/specs/2026-10-21-activity-watchdog-design.md` 文末追加。
+  - `fix(control): a worker that died after its candidate is reported and settled; settle-lost-worker re-run books the unknown usage (Orca #273, tester follow-up I)`、`fix(control): record the worker's start from ps lstart read as UTC, not local time (…)`：独立复审（Orca 会话 `d467cbd2`）的发现——worker 写完 candidate、封存或释放租约前死掉 ⇒ collect 现在也报 `worker`，`settle-lost-worker` 处理「已封存但停止未证明」（收割、释放死 owner 的租约、证明停止）；**worker 写下的 candidate 永远保留为结果**（成功仍是成功）；settle 重跑现在补记未知用量观测（原来漏记）；`ps lstart` 按 UTC 读（DST 回拨时活 worker 会被看成丢失）。
+  - `fix(recovery): saved-result validators expect the handoff directories the source envelope named (Orca V11/O19 regression)`：**真回归**——G 轮 `afb9a51`（handoff 目录进 argv）之后，saved-result 校验（`ompWithoutFinal.ts` expectedArgs 哈希、`savedResultRecovery.ts` `savedPhaseArgsMatch`）仍要求旧 argv ⇒ 生产上凡带 handoff 目录的 run，OMP 坏 final 与 codex 未知用量的已存结果恢复一律 `saved-result-config-mismatch`。现在 runtime 与校验共用 `codexHandoffArgs`／`ompHandoffArgs`；无 handoff 字节不变；envelope 没点名的 `--add-dir` 仍拒。Orca 配对 V10／V11／O19 在 repin 到它的 Orca 克隆上全过。
+- **判据**：只加不改（Rule 15）。变异 15＋6＋6 全红。
+- **门（现测）**：seat J 分支全量 2,751 条 2,750 过，唯一红 `stalledCauseAndFloor`「throws the stall instead of answering null」——控制器在 `a0901e4`／`2151aeb`／`b43e29b`（本轮之前）各跑两次：过过／过红／红过 ⇒ **既有负载 flake，不在 `check-known-reds` 名单**（进不进名单归人）。日志 `/private/tmp/orca-i1113/`（seatD／seatE／seatJ、`stalled-ab/`）。
+- **挂账（本轮新）**：被杀的 `settle-lost-worker` 留下 `control/accepted.lock`，`withAcceptedLock` 无陈旧锁回收 ⇒ 之后一直 `control-accepted-busy`（claim／seal 共用这把锁，改法要人定）；旧判据标题「a run with a candidate never carries worker」现在说多了（改标题要人点名）；`savedResultRecovery.ts` ~358 处 omp 胶囊复核是松的 `indexOf`。
+- **H 轮（已推到 `26b3127`、Orca 已 repin）结论**：#274 字段级格式错误（不进 `execution-normalization.json`）；#277 attempt 主题＝goal（无 goal 仍 `ccloop attempt: <ref>`）；#273 collect `worker:{lost|undetermined}`＋`settle-lost-worker`；live-ceiling 轮询在读文件中途被 `stop()` 时进程无声退出（`if (stopped) break;`）。
 
 ### G、E 轮与 #225 轮的结论（2026-11-10→12，Orca 会话 `3153bf70`／`e43cd52d`／`d1cbbd58`；2026-11-13 Orca 会话 `7e164691` 压成结论：都已由人推、Orca 已 repin；过程原文按文首的 `git show <那一笔>^:docs/handoff/handoff.md` 取回）
 
@@ -243,7 +243,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 | **Codex 429** | 5xx 与其他措辞无样本未识别；可用 `gpt-6-luna` 真回归一次（付费，先问人） |
 | **`capabilities` 计算化** | 人裁「分两步」的第二步，未设计。今天三个 kind 的 `requestBoundProof` 都恒 `null`（`src/agents/{claude,codex,omp}.ts`） |
 | **codex 单次调用没有输出上限** | `"v1-soft"`：事后核对、不封顶 |
-| **worker 死掉后 run 永远停在 Orca 的 C（Orca 会话 `d1cbbd58` G5 实测）** | Orca 控制 run 的 worker 被 SIGKILL 后，`collect` 一直答非终态、`resume` 拒 Orca 控制 run ⇒ Orca 那边 `recovery retry --run` 只能把 run 放回 C 再等。要 ccloop 定：例如 collect／inspect 对「已认领但 worker 已死」报一个终态。证据 `/private/tmp/orca-g1112/g5/267-e2e-2.log` |
+| **`settle-lost-worker` 被杀后留下的 `control/accepted.lock`**（I 轮复审，Orca 会话 `d467cbd2`） | `withAcceptedLock` 没有陈旧锁回收 ⇒ 之后一直 `control-accepted-busy`；claim／seal 共用这把锁，改法要人定。（原「worker 死掉后 run 永远停在 Orca 的 C」已由 H 轮 #273 与 I 轮复审修复解决；2026-11-13 付费 dogfood 实测：杀 worker 后约 10 s 判 `worker-lost`） |
 | **#193 流写两份** | 量过（G4）：两份都被读；合并成一份要改既有判据（io-error 行为），人点名 |
 | **#122 退回 prompt 模式没报给 Orca** | 需要 Orca 的 strict collect 先收一个可选键（提议 `structuredOutputFallback`） |
 | **Linux** | 整套历史上红 5 条；之后只在临时 VM 跑过 `/usr/bin/flock` 两进程串行；**整套未在 Linux 再跑** |
@@ -290,7 +290,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-11 深夜 近况（就地替换旧述，Orca 会话 `e43cd52d`，测试者反馈 E 轮）**：本仓只有 #249 一笔（见「最新」节），**人已推、Orca 已 repin 到它**；契约、collect、schema 都不变。Orca 本轮落地、会影响本仓收到什么或怎么被读的：
+- **2026-11-13 近况（就地替换旧述，Orca 会话 `d467cbd2`，测试者反馈 I 轮）**：本仓三笔（见「最新」节）在本地 main、**未推、Orca 未 repin**（Orca 仍钉 `26b3127`）。下个会话：人在消息开头敲 `allow-push` ⇒ 推本仓 main ⇒ Orca `node scripts/pin-ccloop.mjs <main>`＋`npm ci`＋合 Orca 分支 `i/worker-lost-fixes`（stepC 认「有 candidate 无停止证明」的 `worker:lost`，其 E2E 只在新 pin 下过）＋配对 V10／V11／O19。Orca 本轮新事实：Tier 0 闸门可经 `allow-push` 放行普通 push（Orca Rule 15、闸门 spec §12；**本仓 CLAUDE.md 的「push 由人做」未改**）；`test-affected` 只改 pin 时只选读 `ORCA_CCLOOP_BIN` 的测试（503 → 102 个文件）；`used.activeMs` 改成干活时间后 Orca 只需改文案。以下为 E 轮（会话 `e43cd52d`）的结论，仍成立：
   - **组级验收**（Orca #241）：组内所有任务落地后，Orca 在组分支末端的临时 worktree 里跑各任务 setup 的并集＋必需检查的并集（Orca 自己的 `runAsCheck`，**不起 ccloop**）；红了组不 done。合并后检查（R2）现在通过／无需检查也留记录（`drive.postMergeCheck`、activity `post-merge-check`）。
   - **转录列表顺序**由 Orca 服务端按 attempt → plan／execute／verify → seq 排（本仓 `listTranscripts` 按目录名排的顺序不再被直接展示；要真实开始时间排序需本仓在列表里输出 `startedAt`，**未做**）；codex `turn.completed` 的 cached／reasoning 计数进了 Orca 转录的 `num`。
   - 需求调用失败（record outcome 非 complete）在 Orca 记 `clarify-call-failed`／`split-call-failed`，本仓的 `errorCode` 与 `failureCause.detail` 照旧读，**本仓不用改**。
