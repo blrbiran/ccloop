@@ -13,7 +13,7 @@ import type { LoopContract } from "../../src/contract/schema.js";
 import { resolveAgent } from "../../src/agents/materialize.js";
 import { canonicalHash, type LoopStartEnvelope } from "../../src/control/protocol.js";
 import { settleLostWorker } from "../../src/control/settleLostWorker.js";
-import { readAccepted } from "../../src/control/store.js";
+import { readAccepted, writeAccepted } from "../../src/control/store.js";
 import { workerLiveness } from "../../src/control/workerLiveness.js";
 import { codexInstallation, writeAgentsTable } from "./agentsFixture.js";
 
@@ -162,5 +162,118 @@ describe("a run whose ccloop worker died (Orca #273)", { timeout: 180_000 }, () 
     const answer = await call(f, "settle-lost-worker", { input: f.envelope });
     expect(answer.code, answer.stderr).toBe(0);
     expect(JSON.parse(answer.stdout).candidate).toEqual(done.candidate);
+  });
+});
+
+// Orca tester follow-up I (Orca session d467cbd2, 2026-11-13; independent review of #273, findings 2 and 4). The worker's end
+// is candidate -> seal -> lease release (worker.ts onRunSettledBeforeLeaseRelease, then runLoop's heartbeat.stop). A worker
+// that died inside that sequence left a candidate whose stop could never be proved: collect said nothing about the worker,
+// so Orca waited forever (the #273 symptom again). Now collect reports the dead worker beside such a candidate, and
+// settle-lost-worker finishes what the worker did not -- seal, lease release, stop proof -- keeping the worker's own result.
+describe("a worker that died after writing its candidate (Orca tester follow-up I)", { timeout: 180_000 }, () => {
+  /** A run that succeeds, whose worker is stopped right after its candidate is fsynced (before seal and lease release). */
+  async function stoppedAfterCandidate() {
+    const f = await fixture("integration");
+    const crash = join(f.root, "crash-candidate");
+    const saved = { point: process.env.CCLOOP_CONTROL_TEST_CRASH_POINT, marker: process.env.CCLOOP_CONTROL_TEST_CRASH_MARKER };
+    process.env.CCLOOP_CONTROL_TEST_CRASH_POINT = "candidate-fsynced"; process.env.CCLOOP_CONTROL_TEST_CRASH_MARKER = crash;
+    try { const accepted = await call(f, "accept", f.envelope); expect(accepted.code, accepted.stderr).toBe(0); }
+    finally {
+      if (saved.point === undefined) delete process.env.CCLOOP_CONTROL_TEST_CRASH_POINT; else process.env.CCLOOP_CONTROL_TEST_CRASH_POINT = saved.point;
+      if (saved.marker === undefined) delete process.env.CCLOOP_CONTROL_TEST_CRASH_MARKER; else process.env.CCLOOP_CONTROL_TEST_CRASH_MARKER = saved.marker;
+    }
+    await waitFor("the worker to stop after its candidate", () => readFile(crash, "utf8").then(() => true, () => false));
+    const worker = (await readAccepted(f.sourceDir)).worker!.pid; pids.push(worker);
+    return { f, worker };
+  }
+  async function settledKeepsTheWorkersResult(f: F) {
+    const settled = await call(f, "settle-lost-worker", { input: f.envelope });
+    expect(settled.code, settled.stderr).toBe(0);
+    const { candidate } = JSON.parse(settled.stdout);
+    // The worker's own outcome is kept: the run succeeded, it is not rewritten to worker-lost.
+    expect(candidate).toMatchObject({ runId: "run-1", result: "complete", terminalOutcome: "succeeded", stopProof: { isolated: true } });
+    const done = await collect(f);
+    expect(done).not.toHaveProperty("worker");
+    expect(done).not.toHaveProperty("failureCause");
+    expect(done.terminal).toMatchObject({ status: "succeeded" });
+    expect(done.candidate).toEqual(candidate);
+    const evidence = await call(f, "read-evidence", { input: f.envelope, ref: candidate.stopProof.source });
+    expect(evidence.code, evidence.stderr).toBe(0);
+    expect(JSON.parse(Buffer.from(JSON.parse(evidence.stdout).base64, "base64").toString("utf8"))).toMatchObject({ ownerLeaseReleased: true, workerSealed: true });
+    expect((await readAccepted(f.sourceDir)).launch).toBe("sealed");
+    const again = await call(f, "settle-lost-worker", { input: f.envelope });
+    expect(again.code, again.stderr).toBe(0);
+    expect(JSON.parse(again.stdout).candidate).toEqual(candidate);
+  }
+
+  it("died before sealing: collect reports lost beside the unproved candidate; settling seals it and keeps the success", async () => {
+    const { f, worker } = await stoppedAfterCandidate();
+    // Alive (stopped at the crash point): the in-flight answer is unchanged, and it is never settled.
+    const running = await collect(f);
+    expect(running.candidate).toMatchObject({ result: "complete", stopProof: null });
+    expect(running).not.toHaveProperty("worker");
+    const refused = await call(f, "settle-lost-worker", { input: f.envelope });
+    expect(refused.code).not.toBe(0); expect(refused.stderr).toContain("control-worker-not-lost");
+    expect(alive(worker)).toBe(true);
+
+    await killWorker(worker);
+    const lost = await collect(f);
+    // mutation: workerReportApplies ignores a candidate (the #273 trigger only) -> no `worker`, red
+    expect(lost).toMatchObject({ candidate: { result: "complete", stopProof: null }, worker: { state: "lost" } });
+    expect((await readAccepted(f.sourceDir)).launch).toBe("claimed");
+    await settledKeepsTheWorkersResult(f);
+  });
+
+  it("died after sealing, before releasing its lease: collect reports lost; settling releases the lease and keeps the success", async () => {
+    const { f, worker } = await stoppedAfterCandidate();
+    await killWorker(worker);
+    // The seal had been written: the state a worker leaves when it dies between sealAcceptedWorker and heartbeat.stop.
+    await writeAccepted(f.sourceDir, { ...(await readAccepted(f.sourceDir)), launch: "sealed" });
+    const lost = await collect(f);
+    expect(lost).toMatchObject({ candidate: { result: "complete", stopProof: null }, worker: { state: "lost" } });
+    // mutation: settle-lost-worker answers a sealed run only through proveStopped (no lease release) -> control-worker-not-stopped, red
+    await settledKeepsTheWorkersResult(f);
+  });
+
+  it("a sealed run whose stop is proved is answered as it is, whatever its worker's liveness reads", async () => {
+    const f = await fixture("integration");
+    const accepted = await call(f, "accept", f.envelope); expect(accepted.code, accepted.stderr).toBe(0);
+    let done: any;
+    await waitFor("the run's terminal", async () => { done = await collect(f); return done.candidate?.stopProof != null && done.terminal !== null; });
+    // The worker may outlive its lease release by a moment; an answer that read its liveness would refuse that moment.
+    // mutation: no early answer for a proved sealed run -> the liveness check reads undetermined and refuses, red
+    const answer = await settleLostWorker(f.envelope, { readStart: async () => null, liveness: () => ({ verdict: "alive" }) });
+    expect(answer.candidate).toEqual(done.candidate);
+  });
+});
+
+// Orca tester follow-up I (review of #273, missing test): settle-lost-worker stopped right after it wrote the worker-lost
+// failed state, before the rest of its settlement. Run again, it completes the settlement, and the killed call's usage is
+// still booked unknown -- the second call finds the state already terminal and must not take it for a run that ended by itself.
+describe("a settle-lost-worker interrupted after writing the failed state (Orca tester follow-up I)", { timeout: 180_000 }, () => {
+  it("is completed by running it again, the killed call's usage still unknown", async () => {
+    const { f, worker } = await hung("execute");
+    await killWorker(worker);
+    const crash = join(f.root, "crash-settle");
+    const child = spawn(binary, ["control", "settle-lost-worker", "--agents", f.tablePath], { stdio: ["pipe", "ignore", "ignore"],
+      env: { ...process.env, NODE_ENV: "test", CCLOOP_CONTROL_TEST_CRASH_POINT: "worker-lost-state-written", CCLOOP_CONTROL_TEST_CRASH_MARKER: crash } });
+    pids.push(child.pid!); child.stdin.end(JSON.stringify({ input: f.envelope }));
+    await waitFor("the settlement to stop after the failed state", () => readFile(crash, "utf8").then(() => true, () => false));
+    child.kill("SIGKILL"); await waitFor("the settlement to exit", () => !alive(child.pid!));
+    const interrupted = JSON.parse(await readFile(join(f.sourceDir, "run", "loop-state.json"), "utf8"));
+    expect(interrupted).toMatchObject({ status: "failed", failureCause: { cause: "worker-lost", phase: "execute" } });
+    expect((await collect(f)).candidate).toBeNull();
+    // The killed process held accepted.lock; ccloop has no stale-lock recovery for it (reported, not changed here), so the
+    // lock file it left is removed by hand, standing in for that recovery.
+    await rm(join(f.sourceDir, "control", "accepted.lock"), { force: true });
+
+    const settled = await call(f, "settle-lost-worker", { input: f.envelope });
+    expect(settled.code, settled.stderr).toBe(0);
+    expect(JSON.parse(settled.stdout).candidate).toMatchObject({ result: "failed", terminalOutcome: "failed", stopProof: { isolated: true } });
+    const done = await collect(f);
+    expect(done.failureCause).toMatchObject({ cause: "worker-lost", phase: "execute" });
+    // mutation: the worker-lost observation appended only when the state is moved -> the re-run books none and the last
+    // work event carries the earlier call's known total, red
+    expect(done.events.filter((e: { bucket: string }) => e.bucket === "work").at(-1).cumulative).toBeNull();
   });
 });

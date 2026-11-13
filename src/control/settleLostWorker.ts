@@ -16,6 +16,7 @@ import { candidateOf, type CollectionV1 } from "./collect.js";
 import { workerLiveness } from "./workerLiveness.js";
 import { materializeExtraResultRepositories, materializeResultRepository } from "./resultRepository.js";
 import { proveStopped } from "./stopProof.js";
+import { testCrashPoint } from "./testCrashPoint.js";
 import { readAccepted, writeAccepted, withAcceptedLock } from "./store.js";
 import { appendUsageObservation } from "./usage.js";
 
@@ -43,13 +44,22 @@ export async function settleLostWorker(input: LoopStartEnvelope, deps: OwnerLive
       throw new ControlProtocolError("control-envelope-conflict");
     }
     let candidate = await readHandoffCandidate(source);
-    if (accepted.launch === "claimed") {
+    // Orca tester follow-up I (review of #273, finding 2): a worker that sealed after writing its candidate and died before
+    // releasing its lease leaves a `sealed` run whose stop cannot be proved. It is settled like a claimed one (its seal
+    // rewritten unchanged). A sealed run whose stop is provable (the ordinary end) is answered as before, with no liveness check.
+    if (accepted.launch === "sealed" && candidate !== null) {
+      const proved = await proveStopped({ sourceDir: source, accepted });
+      if (proved !== null) return { candidate: candidateOf(candidate, proved) };
+    }
+    if (accepted.launch === "claimed" || (accepted.launch === "sealed" && candidate !== null)) {
       const worker = await workerLiveness(accepted, deps);
       if (worker.state !== "lost") throw new ControlProtocolError("control-worker-not-lost");
       const owner = await ownerOptional(runDir);
       if (owner !== null && !(await confirmOwnerDead(owner, { classify: (record) => classifyOwnerProcess(record, deps) })).ok) throw new ControlProtocolError("control-worker-not-lost");
       const reaped = await reapRunProcesses(runDir);
       if (!reaped.ok) throw new Error(`control-worker-processes-not-reaped: ${reaped.reason}`);
+      // A candidate the worker wrote is its own outcome (complete, partial or failed) and is kept as it is -- never
+      // rewritten to worker-lost: only a run that has none is moved to the worker-lost failure.
       if (candidate === null) candidate = await settleState(input, runDir, worker.reason);
       if (owner !== null && owner.leaseAffirmedAt !== null) await releaseOwnerLease(runDir, owner);
       await writeAccepted(source, { ...accepted, launch: "sealed" });
@@ -75,8 +85,14 @@ async function settleState(input: LoopStartEnvelope, runDir: string, reason: str
     state = { ...state, status: "failed", waitingOnHuman: false, stopReason: `worker-lost: ${reason}`, lastTransitionAt: at,
       failureCause: { cause: "worker-lost", phase, retries: 0, detail: causeDetail(reason) } };
     await writeRunState(runDir, state);
+    await testCrashPoint("worker-lost-state-written");
     await appendEvent(runDir, { type: "worker_lost", at, detail: reason });
-    // §4.2 step 4: the killed call left no usage record, so the run's work usage becomes unknown (its observed floor stays).
+  }
+  // §4.2 step 4: the killed call left no usage record, so the run's work usage becomes unknown (its observed floor stays).
+  // Orca tester follow-up I: appended for a state this method moved to worker-lost, also when an earlier call of it stopped
+  // after writing that state -- the observation is idempotent by id and its bytes come from the stored failure cause.
+  if (state.failureCause?.cause === "worker-lost") {
+    const phase = state.failureCause.phase;
     await appendUsageObservation(source, { runId: input.claim.runId, generation: input.claim.generation, bucket: "work", observationId: "worker-lost",
       threadTotalTokens: null, elapsedMs: 0, attempts: state.attemptsUsed, sessions: 1,
       evidence: { kind: "worker-lost-v1", runId: input.claim.runId, generation: input.claim.generation, attempt: state.currentAttempt, phase, tokenUsage: null, interrupted: true } });

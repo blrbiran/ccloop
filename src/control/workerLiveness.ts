@@ -14,7 +14,14 @@ export async function workerLiveness(accepted: AcceptedRecordV1, deps: OwnerLive
   return { state: verdict.verdict === "dead" ? "lost" : verdict.verdict, reason: verdict.reason };
 }
 
-/** §4.1 trigger: a loop run (not a saved-result recovery) whose worker was claimed and has neither a candidate nor a terminal. */
-export function workerReportApplies(input: StartEnvelopeV3, accepted: AcceptedRecordV1 | null, hasCandidate: boolean, terminal: boolean): accepted is AcceptedRecordV1 {
-  return input.work.kind === "loop" && !("mode" in input && input.mode !== undefined) && accepted !== null && accepted.launch === "claimed" && !hasCandidate && !terminal;
+/**
+ * §4.1 trigger: a loop run (not a saved-result recovery) whose worker was claimed and has neither a candidate nor a terminal.
+ * Orca tester follow-up I (review of #273, finding 2): also a loop run whose candidate exists but whose stop cannot be proved
+ * (`stopProved` false) while the launch is `claimed` or `sealed` -- the worker died after writing its candidate and before
+ * sealing it or releasing its lease, so no proof would ever come.
+ */
+export function workerReportApplies(input: StartEnvelopeV3, accepted: AcceptedRecordV1 | null, hasCandidate: boolean, terminal: boolean, stopProved = false): accepted is AcceptedRecordV1 {
+  if (input.work.kind !== "loop" || ("mode" in input && input.mode !== undefined) || accepted === null) return false;
+  if (!hasCandidate) return accepted.launch === "claimed" && !terminal;
+  return !stopProved && (accepted.launch === "claimed" || accepted.launch === "sealed");
 }

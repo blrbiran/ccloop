@@ -52,6 +52,8 @@ export interface CollectionV1 {
    * only when a loop run (not a saved-result recovery) has a claimed launch, no candidate and no terminal -- the situation
    * in which Orca would otherwise wait forever -- and only when the worker is not alive (`lost` or `undetermined`), so an
    * in-flight run's answer is unchanged. `lost` is what `settle-lost-worker` acts on.
+   * Orca tester follow-up I: also present for a loop run whose candidate has no stop proof (launch `claimed` or `sealed`)
+   * when that worker is not alive -- it died between writing its candidate and releasing its lease.
    */
   worker?: WorkerLivenessV1;
   /** Exact allowlist misses of a human-blocked terminal, outside either protocol's frozen terminal projection. */
@@ -264,7 +266,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     : { handoff: await handoffFileOf(join(handoffDirs.outputDir, "handoff.md")), summary: await handoffFileOf(join(handoffDirs.outputDir, "summary.md")) };
   const liveNotes = await liveNotesOf(input.work.sourceDir);
   const launch = storedCandidate === null ? await readAcceptedOptional(input.work.sourceDir) : accepted;
-  const liveness = workerReportApplies(input, launch, storedCandidate !== null, terminal !== null) ? await workerLiveness(launch) : undefined;
+  const liveness = workerReportApplies(input, launch, storedCandidate !== null, terminal !== null, proof !== null) ? await workerLiveness(launch) : undefined;
   // An alive worker is today's in-flight run: its collect answer stays byte for byte as it was (existing criteria pin it).
   const worker = liveness?.state === "alive" ? undefined : liveness;
   return {
