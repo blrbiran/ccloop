@@ -78,11 +78,13 @@ describe("IdleLedger: what is idle", () => {
     const ledger = new IdleLedger(1_000);
     advance(10_000);
     ledger.mark(0);
+    advance(10_000);
     expect(ledger.idleMs()).toBe(0);
     ledger.start();
     ledger.stop();
     advance(10_000);
     ledger.mark(0);
+    advance(10_000);
     expect(ledger.idleMs()).toBe(0);
   });
 
