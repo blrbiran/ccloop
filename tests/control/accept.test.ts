@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { LoopContract } from "../../src/contract/schema.js";
 import { resolveAgent } from "../../src/agents/materialize.js";
 import { acceptStart, inspectStart } from "../../src/control/accept.js";
+import { runControlCommand } from "../../src/control/command.js";
 import { canonicalHash, canonicalJson, ControlProtocolError, type LoopStartEnvelope } from "../../src/control/protocol.js";
 import { claimAcceptedWorker, readAccepted, withAcceptedLock, writeAccepted, type AcceptedRecordV1 } from "../../src/control/store.js";
 import { readProcessStartedAt } from "../../src/control/workerLauncher.js";
@@ -252,6 +253,15 @@ describe("a launch no worker ever claimed (Orca follow-up J, #308)", () => {
     expect(await accept).toEqual({ kind: "accepted", executionId: "execution-1", configHash: f.envelope.claim.configHash });
     expect(await readAccepted(f.root)).toEqual(claimed);
     expect(await launchRows(f.launchFile)).toEqual([]);
+  });
+
+  it("prints never-claimed on the wire (`ccloop control inspect`)", async () => {
+    const f = await fixture();
+    await writeAccepted(f.root, neverClaimed(f));
+    // mutation: the response schema without the optional `launch` key -> control-response-invalid, exit 1, red
+    expect(await runControlCommand(["inspect", "--agents", f.tablePath], JSON.stringify(f.envelope))).toEqual({
+      code: 0, stdout: `${JSON.stringify({ kind: "unknown", launch: "never-claimed" })}\n`, stderr: "",
+    });
   });
 
   it("records a worker command that cannot be spawned as never-claimed, and recovers it", async () => {
