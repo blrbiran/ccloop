@@ -294,7 +294,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-14 近况（就地替换旧述，Orca 会话 `20ff3baa`；前一条见同日会话 `3ffce7ec` 的结论）**：本仓本轮**零代码改动**，Orca 钉的仍是 J 轮那一笔（以 `ls-remote` 与 Orca `package.json` 现核）。
+- **2026-11-14 近况（就地替换旧述，Orca 会话 `20ff3baa`；前一条见同日会话 `3ffce7ec` 的结论）**：本仓本轮**零代码改动**，只有一笔 handoff 文档提交在本地 main、**未推**（本会话 `allow-push` 未到达闸门）；Orca 钉的仍是 J 轮那一笔（以 `ls-remote` 与 Orca `package.json` 现核）。
   - **去 `--ephemeral` 的副作用已补测**（隔离 HOME／CODEX_HOME＋本地假 Responses 端点，codex 0.167.0，零成本）：**失败的调用也会落盘**——端点不可用时 rollout 仍写入 34,352 B 的 base instructions 与用户 prompt，随后才是重试与 `turn.failed`；成功调用额外留下 `thread_history_1.sqlite*`、`logs_2.sqlite*`、`state_5.sqlite*`、`queue_1.sqlite*`、`memories_1.sqlite*`、`goals_1.sqlite*`、`thread-writer-locks/`；rollout 的 `token_count`（total／last＋`model_context_window`）与 stdout `turn.completed` 的同名字段一致。`--ephemeral` 的对照运行没有 `sessions/`。
   - **改这一项前必须处理的两处**（读码，未改）：`savedResultRecovery.ts` 的旧证据校验会重建含 `--ephemeral` 的 argv，直接删参数会让新结果 `saved-result-config-mismatch`，需要版本化并保留旧结果可验；0.167.0 的 `codex exec` 没有删除线程的命令（上游 source 有内部 `delete_threads_strict`，未证与已装版一致）⇒ 保留策略要么找到受支持删除路径，要么由人接受残留。设计与待裁项在 Orca 仓 `docs/superpowers/specs/2026-11-14-codex-live-usage-design.md` §3–§4、§8。
   - 仍成立、本轮又撞到：ccloop 的 live ceiling 在 codex 只能在边界停，Orca 的付费 review-fix 一次 execute 用了 572,147 后被组上限停成 `exhausted`；产物本身完整（Orca 侧导出验证 22/22）。
