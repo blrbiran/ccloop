@@ -722,7 +722,7 @@ function isCodexSkillFailure(error: unknown): boolean {
   // PhaseExecutionError retains String(originalError), including its "Error: " prefix.
   // Codex phase isolation spec 2026-10-18 §3.5: a phase refused before spawn (codex-phase-isolation-*) is final the same way.
   // ERRATUM (#225/#297): a private Codex session cleanup failure also overrides a timeout or budget stop.
-  return error instanceof Error && /^(?:Error: )?codex-(?:skills|phase-isolation|session-delete)-/.test(error.message);
+  return error instanceof Error && /^(?:Error: )*codex-(?:skills|phase-isolation|session-delete)-/.test(error.message);
 }
 
 /**

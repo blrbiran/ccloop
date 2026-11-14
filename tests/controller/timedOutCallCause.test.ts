@@ -61,6 +61,23 @@ async function run(adapter: RuntimeAdapter) {
   return { state, persisted };
 }
 
+describe("a Codex timeout cannot hide failed thread cleanup", () => {
+  it("propagates the wrapped cleanup failure after the phase abort", async () => {
+    const adapter: RuntimeAdapter = {
+      awaitAbortedPhaseCleanup: true,
+      plan: async (c: AttemptContext) => {
+        await new Promise<void>(resolve => c.abortSignal?.addEventListener("abort", () => resolve(), {once:true}));
+        throw new Error("Error: codex-session-delete-failed: private thread remains");
+      },
+      execute: async () => { throw new Error("execute must not run"); },
+      verify: async () => { throw new Error("verify must not run"); },
+    };
+    const {state}=await run(adapter);
+    expect(state.status).toBe("failed");
+    expect(state.stopReason).toContain("codex-session-delete-failed");
+  },30_000);
+});
+
 describe("Orca #262: an execute timeout keeps the cause its call recorded", () => {
   it.each(["stalled", "network"])("a call that ended %s before the timeout reached it records that cause, not budget-exhausted", async (cause) => {
     const { state, persisted } = await run(new TimedOut(cause));
