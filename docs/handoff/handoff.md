@@ -294,12 +294,12 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-14 近况（就地替换旧述，Orca 会话 `6b727312`，测试者反馈 L 轮）**：本仓本轮**零代码改动**，Orca 仍钉 J 轮那一笔（原始用量明细生产者），以 `ls-remote` 与 Orca `package.json` 现核。
-  - Orca 的 K、L 两轮已合、已推、已装，都只动 Orca、不碰本仓契约。L 轮修了一个 Orca 侧真缺陷：新组任务 work grant 的 tokens 为 null 时修复任务开不出来（与本仓无关）。
-  - 登记未修（L 轮看过、人同意只登记）：`savedResultRecovery.ts:359-361` 的 omp 胶囊复核用 `args[args.indexOf(flag)+1]`，缺旗标时比的是 `args[0]`、重复旗标只看第一个；伪造需先能写 run 目录，不值一次 repin。
-  - 两条读码核实的事实，供以后用：
-    - ① codex 每个阶段都带 `--ephemeral`（`runCodexPhase.ts:78`、`codexSingleCall.ts:28`），所以 codex 跑的过程中拿不到用量。去掉它之后，codex 会话文件里每次请求后都有一条 `token_count`，带累计的 input／cached／cache_write／output／reasoning（本机真文件核过）。这是以后让 codex 中途按上限停下的路子，**人裁本轮不做**（「codex 提示就好」）。
-    - ② 命令检查失败时 `safeToRetry` 默认是 false，只在第 1 次 attempt 为 true（`runLoop.ts:223,309,2445`）⇒ 不能把它当成「验证者判断不可重试」来用（Orca #235 因此维持原裁定）。
+- **2026-11-14 近况（就地替换旧述，Orca 会话 `3ffce7ec`）**：本仓本轮**零代码改动**，Orca 仍钉 J 轮那一笔（`9c83b38`，以 `ls-remote` 与 Orca `package.json` 现核）。
+  - **codex 去 `--ephemeral` 的免费探针已做**（隔离 HOME／CODEX_HOME＋本地假 Responses 端点，codex-cli 0.167.0）：非 ephemeral 下会话文件在 `CODEX_HOME/sessions/**/rollout-*-<thread_id>.jsonl`，**每个响应后、下一请求前**追加 `token_count`（total／last＋`model_context_window`）；8 个并发 exec 共用一个私有 CODEX_HOME 全成功、thread 各异、数值与各自 `turn.completed` 一致。代价：会话文件保留整段对话、多出 `thread_history` SQLite 行、取文件必须按 thread_id。**设计与待裁项**在 Orca 仓 `docs/superpowers/specs/2026-11-14-codex-live-usage-design.md` §7；人裁之前不要动 `--ephemeral`。
+  - 登记未修、下轮顺手修：`savedResultRecovery.ts:359-361` 的松 `indexOf`（只影响 `execution-without-final-v1` 分支：缺旗标时比的是 `args[0]`、重复旗标只看第一个；判据要用 `ompVerificationOnlyRecovery` 的夹具，本轮试过在 codex 夹具上加，测不到该分支）。
+  - 以下为 L 轮（会话 `6b727312`）的结论，仍成立：
+  - L 轮：Orca K／L 两轮只动 Orca；登记未修的两条（上面）。更早：Orca 仍钉 J 轮那一笔（原始用量明细生产者）。
+  - 仍成立、修前别忘：命令检查失败时 `safeToRetry` 默认 false，只在第 1 次 attempt 为 true（`runLoop.ts`）⇒ 不能当成「验证者判断不可重试」（Orca #235 的原裁定靠它）。
   - 以下为 E 轮（会话 `e43cd52d`）的结论，仍成立：
   - **组级验收**（Orca #241）：组内所有任务落地后，Orca 在组分支末端的临时 worktree 里跑各任务 setup 的并集＋必需检查的并集（Orca 自己的 `runAsCheck`，**不起 ccloop**）；红了组不 done。合并后检查（R2）现在通过／无需检查也留记录（`drive.postMergeCheck`、activity `post-merge-check`）。
   - **转录列表顺序**由 Orca 服务端按 attempt → plan／execute／verify → seq 排（本仓 `listTranscripts` 按目录名排的顺序不再被直接展示；要真实开始时间排序需本仓在列表里输出 `startedAt`，**未做**）；codex `turn.completed` 的 cached／reasoning 计数进了 Orca 转录的 `num`。
