@@ -65,10 +65,10 @@ function fail(reason:string):never{throw new Error(reason);}
 const same=(a:unknown,b:unknown)=>canonicalHash(a)===canonicalHash(b);
 
 /** A later Codex phase carries only ccloop's fixed isolation flags, optional MCP disables and a resolved catalog path. */
-function savedPhaseArgsMatch(outcome:{args?:unknown;isolation?:unknown},legacyArgs:unknown[],toolArgsVariants:readonly string[][]):boolean {
+function savedPhaseArgsMatch(outcome:{args?:unknown;isolation?:unknown},legacyArgs:unknown[],toolArgsVariants:readonly string[][],allowUnisolated=true):boolean {
  const args=outcome.args;
  if(!Array.isArray(args)||!args.every((value):value is string=>typeof value==="string")||!legacyArgs.every((value):value is string=>typeof value==="string"))return false;
- if(same(args,legacyArgs))return outcome.isolation===undefined;
+ if(same(args,legacyArgs))return allowUnisolated&&outcome.isolation===undefined;
  const prefix=legacyArgs.slice(0,-1);
  if(args.at(-1)!=="-"||!same(args.slice(0,prefix.length),prefix))return false;
  const extra=args.slice(prefix.length,-1);
@@ -472,7 +472,10 @@ async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation
   if(sandbox!=="read-only"&&sandbox!=="workspace-write")fail("saved-result-config-mismatch");
   const enforced=codexToolRuleArgs(rules,phase,sandbox,{kind:"absent"});
   const variants=rules?.network===true&&phase==="execute"&&enforced.length>0?[[],enforced]:[enforced];
-  if(outcome.executable!==config.installation.command[0]||!savedPhaseArgsMatch(outcome,expectedArgs,variants)||outcome.evidenceDir!==evidenceDir)fail("saved-result-config-mismatch");
+  // Archived v1 argv keep --ephemeral; v2 requires the private phase isolation and omits only that flag.
+  const currentArgs=[...expectedArgs];currentArgs.splice(config.installation.command.length+1,1);
+  if(outcome.executable!==config.installation.command[0]||
+   !(savedPhaseArgsMatch(outcome,expectedArgs,variants)||savedPhaseArgsMatch(outcome,currentArgs,variants,false))||outcome.evidenceDir!==evidenceDir)fail("saved-result-config-mismatch");
  };
  const execute=executeCalls[0]!.path,planCall=planCalls[0]!.path;validateCall(execute,"execute");validateCall(planCall,"plan");
  const executeSchema=obj(`${execute}/schema.json`),envelope=(result:unknown)=>({type:"object",properties:{result},required:["result"],additionalProperties:false});

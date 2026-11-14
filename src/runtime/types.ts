@@ -31,6 +31,8 @@ export type AttemptContext = {
   state: RunState;
   runDir: string;
   attempt: number;
+  /** Source envelope run identity, when a control loop supplies it. */
+  runId?: string;
   worktreePath: string;
   abortSignal?: AbortSignal;
   plan?: AttemptPlan;

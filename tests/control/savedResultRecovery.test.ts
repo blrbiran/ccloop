@@ -131,6 +131,27 @@ it.each(['snapshot','task','total','generic-policy'] as const)('refuses a change
  }finally{await rm(f.root,{recursive:true,force:true});}
 },30000);
 
+it('keeps old --ephemeral archive valid and admits the new argv only with exact private isolation',async()=>{
+ const f=await savedRecoveryFixture();try{
+  expect((await readSavedResultEligibility(f.input)).status).toBe('eligible');
+  const outcomes=f.archive.logs.filter((e:any)=>/\/(execute|plan)\/call-[^/]+\/outcome.json$/.test(e.path));
+  const originals=outcomes.map((entry:any)=>JSON.parse(f.bytes.get(entry.ref.artifactId)!.toString()));
+  for(const [index,entry] of outcomes.entries()){
+   const old=originals[index],args=[...old.args];args.splice(args.indexOf('--ephemeral'),1);
+   const home=join(f.root,'private','home'),codexHome=join(f.root,'private','codex-home');
+   const {CODEX_PHASE_CONFIG}=await import('../../src/agents/codexIsolation.js');
+   const isolated={...old,args:[...args.slice(0,-1),...CODEX_PHASE_CONFIG.flatMap(v=>['-c',v]),'-c',`shell_environment_policy.set.HOME=${JSON.stringify(home)}`,'-'],
+    isolation:{home,codexHome,catalogError:null}};
+   entry.ref=await f.put(isolated);
+  }
+  await rewriteArchive(f);
+  expect((await readSavedResultEligibility(f.input)).status).toBe('eligible');
+  const entry=outcomes[0],value=JSON.parse(f.bytes.get(entry.ref.artifactId)!.toString());
+  delete value.isolation;entry.ref=await f.put(value);await rewriteArchive(f);
+  expect(await readSavedResultEligibility(f.input)).toEqual({status:'unavailable',reason:'saved-result-config-mismatch'});
+ }finally{await rm(f.root,{recursive:true,force:true});}
+},30000);
+
 it.each(['--model','--sandbox','-C','--output-schema','-o','evidenceDir'])('refuses hash-valid actual legacy argv drift at %s',async field=>{
  const f=await savedRecoveryFixture();try{
   const entry=f.archive.logs.find((e:any)=>/\/execute\/call-[^/]+\/outcome.json$/.test(e.path));

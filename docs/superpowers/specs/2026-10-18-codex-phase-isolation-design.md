@@ -220,3 +220,23 @@ as `codex-phase-isolation-config-file-missing:<absolute path>` (final, booked 0,
 missing MCP list it also causes. A config without the key, or with an absolute value, keeps byte-identical argv.
 Other relative keys a `config.toml` may name are not handled; they fail as before, now with the probe's reason in
 the refusal (issue 125).
+
+## ERRATUM (2026-11-14, #225/#297, Codex 0.167.0)
+
+The historical §3.3 default `--ephemeral` argv is superseded for **isolated loop phases only**. The single-call and
+legacy/unisolated paths retain it. With the private `CODEX_HOME`, `thread.started.thread_id` names the only rollout read:
+`sessions/<year>/<month>/<day>/rollout-*-<UUID>.jsonl`. Complete `event_msg` / `token_count` rows expose the cumulative
+`info.total_token_usage.total_tokens` after a completed model response. They feed the existing mid-call observation
+callback and an optional, provisional collect `liveUsage` field; final accounting remains the stdout `turn.completed`.
+The stop is soft: observation may arrive after the next request started. The cumulative token count is **not** the
+precise input size of the next request, so `contextObservation` remains `unavailable` (#195).
+
+Installed `codex-cli 0.167.0` supports `codex delete --force <UUID>`. Isolated private-home probes with concurrent
+successful threads and a failed thread show that exact-UUID deletion removes the target rollout and visible SQLite
+thread rows without removing a different thread. Measurement: `/private/tmp/codex-delete-probe.ehMn7pls/finalize-results.json`
+(2026-11-14, installed CLI 0.167.0); physical erasure of free SQLite pages and WAL was not established. This replaces
+the earlier Orca proposal's assertion that this installed CLI exposes no deletion verb. A phase deletes its UUID after
+process exit; a crash/worker-loss sweep deletes recorded UUIDs after process reaping. Failure to delete is reported as
+an error, never recorded as successful cleanup. A crash before the UUID was written cannot be swept by exact identity.
+Old archived `--ephemeral` argv remains valid under the saved-result versioned matcher; current argv without it requires
+private phase isolation. No claim here changes the published text above.

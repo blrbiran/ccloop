@@ -63,7 +63,8 @@ describe("single-call capability and its accept gate (Orca single-call estimate)
     // Rewritten for the every-agent requirement chain (Orca spec 2026-10-15 §6.1, ruling R2; human named E1 on 2026-10-15):
     // codex's window is its fake catalog row's context_window (gpt-6-sol: 272000); the claude half is Task 7.
     // Ruling: human named E1 in Orca session a852f96a, 2026-10-15.
-    expect(codexResolution.capabilities).toEqual({ ...SEVEN, contextWindowTokens: 272000 });
+    // Ruling #225/#297: capability describes the isolated loop phase; this single-call response remains v1-soft.
+    expect(codexResolution.capabilities).toEqual({ ...SEVEN, usageObservation: "realtime", contextWindowTokens: 272000 });
     // Ruling: human named E2 in Orca session a852f96a, 2026-10-15.
     expect(JSON.parse(codex.stdout)).toEqual({ protocol: 3, ...codexResolution, singleCallExecution: "v1-soft" });
   });

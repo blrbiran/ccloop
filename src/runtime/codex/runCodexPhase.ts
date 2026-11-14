@@ -15,6 +15,7 @@ import { CodexStream } from "./codexStream.js";
 import { executeWireJsonSchema, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
 import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
 import { codexToolRuleArgs } from "../toolRules.js";
+import { CodexLiveObserver } from "./liveUsage.js";
 
 // Task handoffs (Orca follow-up G §10.2): the output directory is written on execute only; codex reads anywhere.
 // Saved-result recovery expects exactly these arguments from the source envelope's work.handoff (Orca V11/O19 regression).
@@ -55,6 +56,7 @@ export type PhaseOutcome = {
   spawnErrno?:string;
   // Orca tester issue 125 (session 3cfc2e73): a no-MCP-list refusal carries the MCP probe's own reason (outcome.json too).
   refusalDetail?:string;
+  cleanupError?:string;
 };
 // The cap on events.jsonl, stderr and final.json. stdout itself is stopped only at STDOUT_HARD_LIMIT (live transcript §11.1).
 const LIMIT=16*1024*1024;
@@ -75,7 +77,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   const save=async(name:string,data:string)=>writeFile(join(evidenceDir,name),data,{mode:0o600});
   const schemaPath=join(evidenceDir,"schema.json"),finalPath=join(evidenceDir,"final.json");
   const promptSchema=request.spawn!==undefined?request.spawn.promptSchema===true:request.promptSchema===true||installation?.structuredOutput==="prompt";
-  const args=request.spawn!==undefined?[...config.command.slice(1),...request.spawn.args({schemaPath,finalPath})]:[...config.command.slice(1),"exec","--json","--ephemeral","--color","never","--model",config.model,
+  const args=request.spawn!==undefined?[...config.command.slice(1),...request.spawn.args({schemaPath,finalPath})]:[...config.command.slice(1),"exec","--json",...(installation===undefined?["--ephemeral"]:[]),"--color","never","--model",config.model,
     "--sandbox",phase==="execute"?config.sandbox:"read-only","-C",context.worktreePath,
     // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5, §19.2 P5): the extra worktrees, writable on execute only.
     ...(phase==="execute"?(context.extraWorktrees??[]).flatMap(extra=>["--add-dir",extra.worktreePath]):[]),
@@ -83,6 +85,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     ...(promptSchema?[]:["--output-schema",schemaPath]),"-o",finalPath,"-"];
   let isolation:{home:string|null;codexHome:string|null;catalogError:string|null}|undefined;
   let spawnEnv:NodeJS.ProcessEnv={...process.env,...extraEnv};
+  let live:CodexLiveObserver|undefined;
   let stderr="", logsCreated=false;
   let ioError:string|undefined;
   let stdoutTruncated=false,stderrTruncated=false,finalTruncated=false;
@@ -110,6 +113,8 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       isolation={home:isolated.home,codexHome:isolated.codexHome,catalogError:catalog.catalogError};
       args.splice(args.length-1,0,...isolated.args);
       spawnEnv={...spawnEnv,HOME:isolated.home,CODEX_HOME:isolated.codexHome};
+      live=new CodexLiveObserver(isolated.codexHome,config.command,spawnEnv,evidenceDir,
+        {runId:context.runId??context.contract?.objective.taskId??"",attempt:context.attempt,phase:phase as CodexPhase},context.onObservedUsage);
     } catch(error) {
       if(!(error instanceof CodexPhaseIsolationRefused))throw error;
       // Spec §3.5: refused before spawn and before any skill link (plan Review Focus 3); final, booked 0 by the adapter.
@@ -167,7 +172,10 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     const timer=setTimeout(()=>stop("timeout"),childTimeout);
     // Activity watchdog (spec 2026-10-21 §2.2 codex): stdout/stderr bytes are activity; tool items suspend the clock.
     const watch=new IdleWatch(effectiveIdleTimeoutMs(config),()=>{idle=watch.snapshot();stop("stalled");},context.idleLedger);
-    const splitter=new LineSplitter(line=>{const parsed=jsonLine(line);stream.push(parsed);if(parsed.kind==="row")codexToolRow(parsed.row,watch);});
+    const splitter=new LineSplitter(line=>{const parsed=jsonLine(line);stream.push(parsed);if(parsed.kind==="row"){
+      try { live?.started(parsed.row); } catch(error) { ioError=String(error);stop("io-error"); }
+      codexToolRow(parsed.row,watch);
+    }});
     watch.start();
     child.on("error",(e:NodeJS.ErrnoException)=>{result.reason="spawn-error";if(typeof e.code==="string")result.spawnErrno=e.code;finish();});
     child.stdin.on("error",(e)=>{ioError=String(e);if(!exited)stop("io-error");});
@@ -236,5 +244,8 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     }catch{result.reason="io-error";}
   }
   if(result.reason!=="completed")result.observedTokens=stream.turnUsage.value();
+  // Delete only after the process and its pipes have closed; a failed deletion remains visible and blocks completion.
+  try { await live?.finish(); }
+  catch(error){ioError=String(error);result.cleanupError=ioError;result.observedTokens=stream.turnUsage.value();result.reason="io-error";}
   return persist();
 }

@@ -112,12 +112,13 @@ export class CodexAdapter implements RuntimeAdapter {
   /** Spec §3 codex and §4 retry-safety: the cause of a failed call and whether retrying it could not have changed the worktree. */
   private failedTry<T>(phase: CodexPhase, outcome: PhaseOutcome, error: Error): TryResult<T> {
     const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? outcome.stream.rateLimit.value() : null;
-    let classification = classifyOutcome(outcome);
+    let classification = outcome.cleanupError === undefined ? classifyOutcome(outcome)
+      : { cause: "unknown" as const, workObserved: true, detail: causeDetail(outcome.cleanupError) };
     // Orca tester issue #274 (as omp's, issue 125): an execute answer the strict shape refused names what it refused; cause unchanged.
     const formatDetail = (error as { formatDetail?: unknown }).formatDetail;
     if (classification !== null && typeof formatDetail === "string") classification = { ...classification, detail: formatDetail };
     // The 429 row keeps exactly the 2026-10-13 predicate; every other retryable cause needs a read-only phase or no work seen.
-    const retrySafe = classification?.cause === "rate-limited" ? rateLimited === "before-work"
+    const retrySafe = outcome.cleanupError !== undefined ? false : classification?.cause === "rate-limited" ? rateLimited === "before-work"
       : classification !== null && (phase !== "execute" || !classification.workObserved);
     const observedTokens = (error as { observedTokens?: unknown }).observedTokens;
     const observation: TryObservation = (error as { rateLimitedBeforeWork?: unknown }).rateLimitedBeforeWork === true || (error as { neverStarted?: unknown }).neverStarted === true ? { kind: "rule0" }
@@ -130,10 +131,11 @@ export class CodexAdapter implements RuntimeAdapter {
     };
   }
 
-  get awaitAbortedPhaseCleanup(): boolean { return this.codexSkillsDir !== undefined; }
+  get awaitAbortedPhaseCleanup(): boolean { return this.codexSkillsDir !== undefined || this.installation !== undefined; }
 
   /** One call's outcome as the phase's result, or the error it fails with (unchanged from before the shared loop). */
   private async decodePhase<P extends CodexPhase>(phase: P, outcome: PhaseOutcome): Promise<PhaseResults[P]> {
+    if (outcome.cleanupError !== undefined) throw Object.assign(new Error(outcome.cleanupError), { observedTokens: outcome.observedTokens });
     const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? outcome.stream.rateLimit.value() : null;
     // Orca issue #262 (as omp's, Orca #116): a call that ended without a final after codex reported turn usage leaves that
     // usage as a floor (collect's usageLowerBound). Best-effort: a failed write must not replace the call's own failure.
@@ -218,7 +220,7 @@ export class CodexAdapter implements RuntimeAdapter {
     catch (error) {
       // An aborted execute that was observed spending tokens throws, so runLoop can settle that usage;
       // one that was not keeps answering null exactly as before.
-      if (error instanceof Error && error.message.startsWith("codex-skills-")) throw error;
+      if (error instanceof Error && (error.message.startsWith("codex-skills-") || error.message.startsWith("Error: codex-session-"))) throw error;
       // Orca issue #262: a call that had already ended for a cause of its own (stalled, network, ...) before the abort
       // reached it throws that cause too, so runLoop does not book the timeout as budget-exhausted.
       if (context.abortSignal?.aborted && !(error instanceof CodexPhaseAborted && error.observedTokens !== null) && !ownCause(error)) return null;

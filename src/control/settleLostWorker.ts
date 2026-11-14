@@ -4,6 +4,7 @@ import { cleanupAttemptWorkspaceBestEffort, cleanupResidualExtraWorktrees } from
 import { confirmOwnerDead } from "../controller/adoptCrashedRun.js";
 import { classifyOwnerProcess, type OwnerLivenessDeps } from "../ownership/ownerLiveness.js";
 import { reapRunProcesses } from "../ownership/reapRunProcesses.js";
+import { sweepCodexSessions } from "../runtime/codex/liveUsage.js";
 import { appendEvent, readOwnerRecord, readRunState, releaseOwnerLease, writeRunState } from "../persistence/fileStore.js";
 import { causeDetail } from "../runtime/failureCause.js";
 import type { OwnerRecord } from "../runtime/types.js";
@@ -58,6 +59,7 @@ export async function settleLostWorker(input: LoopStartEnvelope, deps: OwnerLive
       if (owner !== null && !(await confirmOwnerDead(owner, { classify: (record) => classifyOwnerProcess(record, deps) })).ok) throw new ControlProtocolError("control-worker-not-lost");
       const reaped = await reapRunProcesses(runDir);
       if (!reaped.ok) throw new Error(`control-worker-processes-not-reaped: ${reaped.reason}`);
+      await sweepCodexSessions(runDir);
       // A candidate the worker wrote is its own outcome (complete, partial or failed) and is kept as it is -- never
       // rewritten to worker-lost: only a run that has none is moved to the worker-lost failure.
       if (candidate === null) candidate = await settleState(input, runDir, worker.reason);

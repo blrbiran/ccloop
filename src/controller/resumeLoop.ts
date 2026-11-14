@@ -18,6 +18,7 @@ import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { RunState, RunStatus } from "../state/types.js";
 import type { RunLeaseLostError } from "../ownership/lease.js";
 import { reapRunProcesses } from "../ownership/reapRunProcesses.js";
+import { sweepCodexSessions } from "../runtime/codex/liveUsage.js";
 import { adoptCrashedRun, confirmOwnerDead, isOrcaControlRunDir } from "./adoptCrashedRun.js";
 import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
@@ -293,6 +294,7 @@ export async function resumeLoop(
     // doubt refuses.
     const reap = await reapRunProcesses(runDir).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
     if (!reap.ok) throw new CrashAdoptionRefused(`orphan process groups not reaped: ${reap.reason}`);
+    await sweepCodexSessions(runDir);
 
     // Step 6, adoption write.
     if (adoption !== null) {

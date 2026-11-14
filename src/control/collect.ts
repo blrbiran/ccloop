@@ -14,7 +14,8 @@ import { readAcceptedOptional } from "./store.js";
 import { readToolRulesReport } from "./toolRulesReport.js";
 import { listTranscripts, type TranscriptEntryV1 } from "./transcripts.js";
 import { observedUsageLowerBound } from "./usageLowerBound.js";
-import { lstat } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
+import type { LiveUsage } from "../runtime/codex/liveUsage.js";
 import { readLiveNoteDeliveries, type LiveNoteDeliveryV1 } from "./liveNotes.js";
 import { workerLiveness, workerReportApplies, type WorkerLivenessV1 } from "./workerLiveness.js";
 
@@ -84,6 +85,8 @@ export interface CollectionV1 {
   // *** ERRATUM (Orca spec 2026-11-06-soft-mode-loop-run-settlement-design.md §3.2, §6; Orca session 86352010) -- "never booked" no longer holds in an unlimited group: under that design Orca books this floor (0 when there is none) as the run's approximate work usage under its own principal `orca-auto`, and saved-result recovery checks that booking (src/control/savedResultRecovery.ts, `approximate-floor`). It is still a floor, never an exact figure; a finite group still never books it. ***
   // *** ERRATUM (Orca #116, tester follow-up F §2, Orca commit "feat(control): settle a finite run's unknown usage at ccloop's observed floor, explicitly (#116)") -- "a finite group still never books it" no longer holds: a person or socket agent may now explicitly book this floor (it must be positive) for a finite remainder under their own principal, marker `observed-floor`, and saved-result recovery checks that booking as it checks `approximate-floor`. ***
   usageLowerBound?: { tokens: number };
+  /** Current Codex response observation only; never a ledger event or settled usage. */
+  liveUsage?: LiveUsage;
   /**
    * Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.6): one entry per extra repository, contract order, present
    * iff the contract has additionalRepos. changedPaths is ccloop's own observation of the current attempt (§11.3), [] before
@@ -237,6 +240,29 @@ async function reportedOf(sourceDir: string, candidate: CandidateV1, state: unkn
     ...(Object.hasOwn(fields, "flow") ? { flow: fields.flow } : {}) };
 }
 
+async function currentCodexUsage(input: StartEnvelopeV3, progress: ProgressV1 | null): Promise<LiveUsage | undefined> {
+  if (input.work.kind !== "loop" || progress === null || progress.currentAttempt < 1) return undefined;
+  const phase = progress.status === "planning" ? "plan" : progress.status === "executing" ? "execute" : progress.status === "verifying" ? "verify" : null;
+  if (phase === null) return undefined;
+  const root = join(input.work.sourceDir,"run","codex",String(progress.currentAttempt),phase);
+  let calls: string[];
+  try { calls=await readdir(root); } catch(error) { if (["ENOENT","EACCES"].includes((error as NodeJS.ErrnoException).code??"")) return undefined; throw error; }
+  for (const call of calls) {
+    if (!call.startsWith("call-")) continue;
+    const dir=join(root,call);
+    try { await lstat(join(dir,"outcome.json")); continue; }
+    catch(error) { if ((error as NodeJS.ErrnoException).code!=="ENOENT") throw error; }
+    try {
+      const value:unknown=JSON.parse((await readPrivateFile(input.work.sourceDir,join(dir,"live-usage.json"))).toString("utf8"));
+      if (value!==null && typeof value==="object" && !Array.isArray(value)) {
+        const usage=value as LiveUsage;
+        if (usage.schema==="ccloop-live-usage-v1" && usage.runId===input.claim.runId && usage.attempt===progress.currentAttempt && usage.phase===phase && usage.callId===call) return usage;
+      }
+    } catch(error) { if ((error as NodeJS.ErrnoException).code!=="ENOENT") throw error; }
+  }
+  return undefined;
+}
+
 export async function collectExecution(input: StartEnvelopeV3, afterSeq: number): Promise<CollectionV1> {
   if (!safe.safeParse(afterSeq).success) throw new ControlProtocolError("control-collect-invalid");
   const events = (await readUsageEvents(input.work.sourceDir)).filter((event) => event.eventSeq > afterSeq);
@@ -258,6 +284,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const runFinal = proof !== null || (progress !== null && isTerminalRunStatus(progress.status));
   const transcripts = await listTranscripts(input.work.sourceDir, runFinal);
   const usageLowerBound = await observedUsageLowerBound(input.work.sourceDir);
+  const liveUsage = await currentCodexUsage(input, progress);
   const extraKeys = input.work.kind === "loop" ? input.work.contract.context.additionalRepos?.map((repo) => repo.key) : undefined;
   // Evaluated after progressOf, which has checked the loop state's currentAttempt.
   const dirs = extraKeys === undefined ? undefined : await dirsOf(input.work.sourceDir, extraKeys, loopState === null ? null : loopState.state);
@@ -283,6 +310,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     ...(toolRules === undefined ? {} : { toolRules }),
     ...(transcripts.length === 0 ? {} : { transcripts }),
     ...(usageLowerBound === null ? {} : { usageLowerBound: { tokens: usageLowerBound } }),
+    ...(liveUsage === undefined ? {} : { liveUsage }),
     ...(dirs === undefined ? {} : { dirs }),
     ...(handoffFiles === undefined ? {} : { handoffFiles }),
     ...(liveNotes === undefined ? {} : { liveNotes }),

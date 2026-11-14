@@ -47,7 +47,7 @@ export const codexDescriptor: AgentDescriptor = {
   },
   capabilities(_config, row, declaredWindow) {
     return {
-      usageObservation: "phase-end",
+      usageObservation: "realtime",
       budgetEnforcement: "soft",
       contextObservation: "unavailable",
       handoffControl: "durable",

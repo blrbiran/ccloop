@@ -83,8 +83,9 @@ describe("agent descriptors", () => {
   it("reports claude's contextWindowTokens as 200000 for agent-default and 1M for its verified mapping, and codex's as null without a catalog row (omp reads its own from its catalog row)", () => {
     expect(claudeDescriptor.capabilities(config("claude", { contextWindow: 1_000_000 })).contextWindowTokens).toBe(1_000_000);
     expect(claudeDescriptor.capabilities(config("claude")).contextWindowTokens).toBe(200_000);
+    // Ruling #225/#297: isolated loop phases observe responses while running; context input remains unavailable.
     expect(codexDescriptor.capabilities(config("codex"))).toEqual({
-      usageObservation: "phase-end",
+      usageObservation: "realtime",
       budgetEnforcement: "soft",
       contextObservation: "unavailable",
       handoffControl: "durable",

@@ -8,6 +8,8 @@ import { CODEX_PHASE_CONFIG } from "../../../src/agents/codexIsolation.js";
 import type { InstallationV1 } from "../../../src/agents/types.js";
 import { parseCodexConfig } from "../../../src/runtime/codex/protocol.js";
 import { runCodexPhase, type PhaseOutcome } from "../../../src/runtime/codex/runCodexPhase.js";
+import { sweepCodexSessions } from "../../../src/runtime/codex/liveUsage.js";
+import { CodexAdapter } from "../../../src/runtime/codex/codexAdapter.js";
 import { codexFixture } from "./fixture.js";
 
 // Codex phase isolation (ccloop spec 2026-10-18 §3.3, §3.5, §5): with an installation, a codex loop phase runs in the
@@ -68,12 +70,56 @@ describe("an isolated codex phase (spec 2026-10-18 §3.3)", { timeout: 30_000 },
     for (const dropped of ["project_doc_max_bytes=0", "include_environment_context=false", "include_permissions_instructions=false"]) expect(values).not.toContain(dropped);
     expect(values.filter((value) => /^features\.(?!plugins=|hooks=)/.test(value))).toEqual([]);
     expect(argv.at(-1)).toBe("-");
-    expect(argv.slice(0, argv.indexOf("-c"))).toEqual(["--json", "--ephemeral", "--color", "never", "--model", "fixture", "--sandbox", "read-only",
+    // Ruling: this round authorizes rewriting necessary criteria; isolated loop phases persist only until exact UUID deletion.
+    expect(argv.slice(0, argv.indexOf("-c"))).toEqual(["--json", "--color", "never", "--model", "fixture", "--sandbox", "read-only",
       "-C", w.repo, "--output-schema", join(outcome.evidenceDir, "schema.json"), "-o", join(outcome.evidenceDir, "final.json")]);
   });
 
   it("outcome.json records the isolation paths", () => {
     expect(outcomeJson(outcome).isolation).toEqual({ home: join(w.base, "home"), codexHome: join(w.base, "codex-home"), catalogError: null });
+  });
+});
+
+describe("isolated Codex live response usage and retention", { timeout: 30_000 }, () => {
+  it("observes only this UUID before completion and deletes its session after a budget stop", async () => {
+    const w = await world("rollout-usage");
+    const controller = new AbortController();
+    const observations: number[] = [];
+    const result = await w.run("plan", { context: { ...w.context, abortSignal: controller.signal,
+      onObservedUsage: (tokens: number) => { observations.push(tokens); if (tokens >= 125) controller.abort(); } } });
+    expect(result.reason).toBe("aborted");
+    expect(observations).toEqual([125]);
+    expect(readFileSync(`${w.marker}.deleted`, "utf8").trim()).toBe("01a13431-3db4-73a1-afd1-154f0477282d");
+    expect(existsSync(join(phaseEnv(w).CODEX_HOME!, "sessions", "2026", "11", "14", "rollout-2026-11-14T00-00-00-01a13431-3db4-73a1-afd1-154f0477282d.jsonl"))).toBe(false);
+    expect(existsSync(join(phaseEnv(w).CODEX_HOME!, "sessions", "2026", "11", "14", "rollout-2026-11-14T00-00-00-01a13431-3db4-73a1-afd1-154f0477282e.jsonl"))).toBe(true);
+  });
+  it("a crash sweep deletes a recorded thread without an outcome and preserves another UUID", async () => {
+    const w=await world();
+    // The fake's first phase records the private home; the orphan's outcome has not been written by a crashed worker.
+    await w.run("plan");
+    const home=phaseEnv(w),id="01a13431-3db4-73a1-afd1-154f0477282d",other="01a13431-3db4-73a1-afd1-154f0477282e";
+    const dir=join(w.context.runDir,"codex","2","execute","call-orphan"),sessions=join(home.CODEX_HOME!,"sessions","2026","11","14");
+    await mkdir(dir,{recursive:true});await mkdir(sessions,{recursive:true});
+    await writeFile(join(dir,"thread.json"),JSON.stringify({threadId:id,codexHome:home.CODEX_HOME,home:home.HOME,command:w.codexConfig.command}));
+    for (const thread of [id,other]) await writeFile(join(sessions,`rollout-2026-11-14T00-00-00-${thread}.jsonl`),"session content");
+    await sweepCodexSessions(w.context.runDir);
+    expect(existsSync(join(sessions,`rollout-2026-11-14T00-00-00-${id}.jsonl`))).toBe(false);
+    expect(existsSync(join(sessions,`rollout-2026-11-14T00-00-00-${other}.jsonl`))).toBe(true);
+    expect(existsSync(join(dir,"session-cleaned.json"))).toBe(true);
+  });
+  it("a completed response keeps its authoritative tokens when exact deletion fails", async () => {
+    const w=await world("rollout-usage-complete");vi.stubEnv("FAKE_CODEX_DELETE_FAIL","1");
+    const adapter=new CodexAdapter(w.codexConfig,{CODEX_HOME:w.source},undefined,{installation:w.installation});
+    await expect(adapter.plan(w.context)).rejects.toMatchObject({observedTokens:125,message:expect.stringContaining("codex-session-delete-failed")});
+    expect(adapter.awaitAbortedPhaseCleanup).toBe(true);
+  });
+  it("does not claim a failed deletion cleaned the session", async () => {
+    const w=await world("rollout-usage");vi.stubEnv("FAKE_CODEX_DELETE_FAIL","1");
+    const controller=new AbortController();
+    const result=await w.run("plan",{context:{...w.context,abortSignal:controller.signal,onObservedUsage:()=>controller.abort()}});
+    expect(result.reason).toBe("io-error");
+    expect(outcomeJson(result).ioError).toContain("codex-session-delete-failed");
+    expect(existsSync(join(result.evidenceDir,"session-cleaned.json"))).toBe(false);
   });
 });
 

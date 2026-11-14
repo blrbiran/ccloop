@@ -248,6 +248,9 @@ export const collectionSchema = z.object({
   worker: z.object({ state: z.enum(["lost", "undetermined"]), reason: z.string() }).strict().optional(),
   // Orca #116: the observed floor of calls that ended without a usage report; present iff there is one. Display only.
   usageLowerBound: z.object({ tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
+  liveUsage: z.object({ schema: z.literal("ccloop-live-usage-v1"), runId: z.string().min(1), attempt: safeInteger.positive(),
+    phase: z.enum(["plan","execute","verify"]), callId: z.string().regex(/^call-[^/]+$/),
+    threadId: z.string().uuid(), tokens: safeInteger.positive(), observedAt: z.string().datetime(), revision: safeInteger.positive() }).strict().optional(),
 }).strict();
 
 const METHODS = new Set<ControlMethodV1>([

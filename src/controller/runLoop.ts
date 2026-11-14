@@ -407,7 +407,7 @@ function buildAttemptContext(
   abortSignal?: AbortSignal,
   plan?: AttemptPlan | null,
   execution?: ExecutionResult | null,
-  hooks?: Pick<RunControlHooks, "phaseSignal" | "onProcessRegistered">,
+  hooks?: Pick<RunControlHooks, "phaseSignal" | "onProcessRegistered" | "taskResultInput">,
 ): AttemptContext {
   const combinedSignal =
     abortSignal === undefined
@@ -421,6 +421,7 @@ function buildAttemptContext(
     runDir,
     attempt,
     worktreePath,
+    ...(hooks?.taskResultInput === undefined ? {} : { runId: hooks.taskResultInput.claim.runId }),
     abortSignal: combinedSignal,
     onProcessRegistered: hooks?.onProcessRegistered,
     ...(plan === undefined || plan === null ? {} : { plan }),
@@ -720,7 +721,8 @@ function getPhaseTimeoutMs(contract: LoopContract, state: RunState): number {
 function isCodexSkillFailure(error: unknown): boolean {
   // PhaseExecutionError retains String(originalError), including its "Error: " prefix.
   // Codex phase isolation spec 2026-10-18 §3.5: a phase refused before spawn (codex-phase-isolation-*) is final the same way.
-  return error instanceof Error && /^(?:Error: )?codex-(?:skills|phase-isolation)-/.test(error.message);
+  // ERRATUM (#225/#297): a private Codex session cleanup failure also overrides a timeout or budget stop.
+  return error instanceof Error && /^(?:Error: )?codex-(?:skills|phase-isolation|session-delete)-/.test(error.message);
 }
 
 /**
@@ -802,6 +804,7 @@ async function runPhaseWithTimeout<T>(
         const result = await operationPromise;
         return { timedOut: true, elapsedMs: working(Date.now() - startedAtMs), result, budgetStop: { observedTokens, ...(ceilingStop ? { liveCeiling: true as const } : {}) } };
       } catch (error) {
+        if (isCodexSkillFailure(error)) throw error;
         return { timedOut: true, elapsedMs: working(Date.now() - startedAtMs), abortedError: error, budgetStop: { observedTokens, ...(ceilingStop ? { liveCeiling: true as const } : {}) } };
       }
     }

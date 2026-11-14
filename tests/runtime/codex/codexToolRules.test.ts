@@ -23,7 +23,11 @@ async function argsOf(phase: Phase, isolated: boolean, toolRules?: ToolRulesV1, 
   const w = await world(m, toolRules === undefined ? RAW_CONTRACT : withRules(toolRules)); worlds.push(w);
   return (await captureCodex(m, phase, w, isolated, options)).args;
 }
-const golden = async (phase: Phase) => JSON.parse(await readFile(new URL(`../../fixtures/toolRules/golden-2a2ae53/codex-${phase}.json`, import.meta.url), "utf8")) as { legacy: string[]; isolated: string[] };
+const golden = async (phase: Phase) => {
+  const archived=JSON.parse(await readFile(new URL(`../../fixtures/toolRules/golden-2a2ae53/codex-${phase}.json`, import.meta.url), "utf8")) as { legacy: string[]; isolated: string[] };
+  // Ruling #225/#297: historical golden remains immutable; current isolated argv loses only --ephemeral.
+  return {legacy:archived.legacy,isolated:archived.isolated.filter(arg=>arg!=="--ephemeral")};
+};
 /** The golden argv with `pairs` inserted right before the trailing `-` (the prompt on stdin). */
 const plus = (args: string[], pairs: string[]) => [...args.slice(0, -1), ...pairs, "-"];
 const NET_TRUE = ["-c", "sandbox_workspace_write.network_access=true"];
@@ -35,7 +39,7 @@ const closed: ToolRulesV1 = { commands: [{ kind: "prefix", value: "npm run" }], 
 describe("codex without toolRules (T1, codex part)", () => {
   for (const phase of PHASES) {
     for (const isolated of [false, true]) {
-      it(`${phase} (${isolated ? "isolated" : "legacy"}): args equal the 2a2ae53 golden`, async () => {
+      it(`${phase} (${isolated ? "isolated" : "legacy"}): args equal the archived golden with only the isolated persistence flag updated`, async () => {
         expect(await argsOf(phase, isolated)).toEqual((await golden(phase))[isolated ? "isolated" : "legacy"]);
       }, 30_000);
     }

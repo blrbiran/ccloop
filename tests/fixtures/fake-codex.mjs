@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, lstatSync, readFileSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 const mode=process.argv[2], marker=process.argv[3];
@@ -23,6 +23,14 @@ const mode=process.argv[2], marker=process.argv[3];
 // `mcp` does not define fails as the real codex-cli 0.160.0 does: stderr "invalid transport in `mcp_servers.<name>`", exit 1.
 // Codex phase isolation (ccloop spec 2026-10-18, Orca session 3d229487, 2026-10-20): a phase call also writes
 // {HOME, CODEX_HOME} it ran with to <marker>.phase-env.json, right after <marker>.
+if(process.argv.includes("delete")) {
+  if(process.env.FAKE_CODEX_DELETE_FAIL==="1") process.exit(3);
+  const id=process.argv.at(-1);
+  appendFileSync(marker+".deleted",id+"\n");
+  const path=join(process.env.CODEX_HOME,"sessions","2026","11","14",`rollout-2026-11-14T00-00-00-${id}.jsonl`);
+  if(existsSync(path)) unlinkSync(path);
+  process.exit(0);
+}
 if(process.argv.at(-1)==="--version"&&!process.argv.includes("exec")) {appendFileSync(marker+".version-calls","version\n");await new Promise(resolve=>process.stdout.write("9.9.9-fake\n",resolve));process.exit(0);}
 const catalogCall=process.argv.includes("debug")&&process.argv.includes("models")?"debug-models":process.argv.includes("features")&&process.argv.includes("list")?"features-list":process.argv.includes("mcp")&&process.argv.includes("list")?"mcp-list":null;
 if(catalogCall!==null&&!process.argv.includes("exec")) {
@@ -159,6 +167,19 @@ process.stdin.on("end",()=>{
     if(process.env.FAKE_CODEX_REPLACE_SKILL==="1") {
       const leaf=process.env.FAKE_CODEX_SKILL_PATH.replace(/\/SKILL\.md$/,"");unlinkSync(leaf);writeFileSync(leaf,"foreign");
     }
+  }
+  if(mode==="rollout-usage" || mode==="rollout-usage-complete") {
+    const path=join(process.env.CODEX_HOME,"sessions","2026","11","14");mkdirSync(path,{recursive:true});
+    const id="01a13431-3db4-73a1-afd1-154f0477282d";
+    writeFileSync(join(path,`rollout-2026-11-14T00-00-00-${id}.jsonl`),JSON.stringify({type:"event_msg",payload:{type:"token_count",info:{total_token_usage:{input_tokens:120,output_tokens:5,total_tokens:125}}}})+"\n");
+    writeFileSync(join(path,"rollout-2026-11-14T00-00-00-01a13431-3db4-73a1-afd1-154f0477282e.jsonl"),"other thread");
+    writeSync(1,JSON.stringify({type:"thread.started",thread_id:id})+"\n");
+    if(mode==="rollout-usage-complete") {
+      writeFileSync(value("-o"),JSON.stringify({summary:"done",primaryTargetPaths:[]}));
+      writeSync(1,JSON.stringify({type:"turn.completed",usage:{input_tokens:120,output_tokens:5}})+"\n");
+      return;
+    }
+    setInterval(()=>{},1000);return;
   }
   if(mode==="hang" || mode==="ignore-term") {
     if(mode==="ignore-term") process.on("SIGTERM",()=>appendFileSync(marker+".term","TERM\n"));

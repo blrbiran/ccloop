@@ -35,6 +35,24 @@ async function world() {
   return { root, envelope, floor };
 }
 
+describe("collect reads only the active Codex call's provisional usage", () => {
+  it("checks source run, phase, call and omits an ended observation from the ledger", async () => {
+    const w=await world();
+    const dir=join(w.root,"run","codex","1","execute","call-abcdef");
+    await mkdir(dir,{recursive:true,mode:0o700});
+    const usage={schema:"ccloop-live-usage-v1",runId:w.envelope.claim.runId,attempt:1,phase:"execute",callId:"call-abcdef",
+      threadId:"01a13431-3db4-73a1-afd1-154f0477282d",tokens:125,observedAt:"2026-11-14T00:00:00.000Z",revision:1};
+    await writeFile(join(dir,"live-usage.json"),JSON.stringify(usage),{mode:0o600});
+    expect((await collectExecution(w.envelope,0)).liveUsage).toEqual(usage);
+    const answer=await runControlCommand(["collect","--agents",join(w.root,"absent-agents.json")],JSON.stringify({input:w.envelope,afterSeq:0}));
+    expect(answer.code,answer.stderr).toBe(0);
+    expect(JSON.parse(answer.stdout).liveUsage).toEqual(usage);
+    expect((await collectExecution(w.envelope,0)).events).toEqual([]);
+    await writeFile(join(dir,"outcome.json"),"{}",{mode:0o600});
+    expect((await collectExecution(w.envelope,0)).liveUsage).toBeUndefined();
+  });
+});
+
 describe("collect carries the run's observed usage floor", () => {
   it("is absent when no call left one", async () => {
     const w = await world();
