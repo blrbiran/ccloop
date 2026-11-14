@@ -294,12 +294,13 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-14 近况（就地替换旧述，Orca 会话 `20ff3baa`；前一条见同日会话 `3ffce7ec` 的结论）**：本仓本轮**零代码改动**，只有一笔 handoff 文档提交在本地 main、**未推**（本会话 `allow-push` 未到达闸门）；Orca 钉的仍是 J 轮那一笔（以 `ls-remote` 与 Orca `package.json` 现核）。
-  - **去 `--ephemeral` 的副作用已补测**（隔离 HOME／CODEX_HOME＋本地假 Responses 端点，codex 0.167.0，零成本）：**失败的调用也会落盘**——端点不可用时 rollout 仍写入 34,352 B 的 base instructions 与用户 prompt，随后才是重试与 `turn.failed`；成功调用额外留下 `thread_history_1.sqlite*`、`logs_2.sqlite*`、`state_5.sqlite*`、`queue_1.sqlite*`、`memories_1.sqlite*`、`goals_1.sqlite*`、`thread-writer-locks/`；rollout 的 `token_count`（total／last＋`model_context_window`）与 stdout `turn.completed` 的同名字段一致。`--ephemeral` 的对照运行没有 `sessions/`。
-  - **改这一项前必须处理的两处**（读码，未改）：`savedResultRecovery.ts` 的旧证据校验会重建含 `--ephemeral` 的 argv，直接删参数会让新结果 `saved-result-config-mismatch`，需要版本化并保留旧结果可验；0.167.0 的 `codex exec` 没有删除线程的命令（上游 source 有内部 `delete_threads_strict`，未证与已装版一致）⇒ 保留策略要么找到受支持删除路径，要么由人接受残留。设计与待裁项在 Orca 仓 `docs/superpowers/specs/2026-11-14-codex-live-usage-design.md` §3–§4、§8。
-  - 仍成立、本轮又撞到：ccloop 的 live ceiling 在 codex 只能在边界停，Orca 的付费 review-fix 一次 execute 用了 572,147 后被组上限停成 `exhausted`；产物本身完整（Orca 侧导出验证 22/22）。
-  - 更早一次探针（同日会话 `3ffce7ec`）的结论仍成立：会话文件在 `CODEX_HOME/sessions/**/rollout-*-<thread_id>.jsonl`，**每个响应后、下一请求前**追加 `token_count`；8 个并发 exec 共用一个私有 CODEX_HOME 全成功、thread 各异、数值与各自 `turn.completed` 一致 ⇒ 取文件必须按 thread_id。**人裁之前不要动 `--ephemeral`**。
-  - 登记未修、下轮顺手修：`savedResultRecovery.ts:359-361` 的松 `indexOf`（只影响 `execution-without-final-v1` 分支：缺旗标时比的是 `args[0]`、重复旗标只看第一个；判据要用 `ompVerificationOnlyRecovery` 的夹具，本轮试过在 codex 夹具上加，测不到该分支）。
+- **2026-11-15 近况（就地替换旧述，Orca 会话 `6a54a072`；上一轮见 Orca 会话 `20ff3baa` 的结论）**：本仓本地 main 已合入 **`73149bb`（Codex loop 阶段实时观测＋按线程删除）与 `debc1d3`（超时中断后仍传播删除失败）**，工作树 clean、领先 origin/main 2 笔；**未 push，Orca pin 未动**。
+  - 只有带私有 `CODEX_HOME` 的 Codex loop phase 去掉了 `--ephemeral`；single-call 与 legacy 路径保持。`thread.started` 的 `thread_id` 精确绑定 `sessions/**/rollout-*-<thread_id>.jsonl`，每个完成的响应后读 `token_count` 累计值并触发原有软停；终局记账仍只认 stdout `turn.completed`。阶段结束及崩溃/worker-lost 进程回收后按本 run 的 `thread.json` 用已装 `codex delete --force <UUID>` 删除该线程，失败响亮报错；旧 `--ephemeral` archive 仍可验，新 argv 要求私有隔离。
+  - collect 可选只读 `liveUsage`（`ccloop-live-usage-v1`，run/attempt/phase/callId/threadId/tokens/observedAt/revision）只在活跃调用有完整观测时出现，outcome 后消失，不写账本；descriptor 的 `usageObservation` 已是 `realtime`，`contextObservation` 仍 `unavailable`（累计响应用量不是下一请求的精确上下文）。
+  - **保留边界（提交前必须知道）**：Codex 在 `thread.started` 写入证据前已落盘而 worker 崩溃时，无法按 UUID 安全清扫，不能按最新文件/目录时间删共享 home；SQLite 空闲页/WAL 的物理擦除未证。受支持的删除路径已由隔离 HOME＋假端点实测（并发与失败线程各自删除互不影响），证据在 Orca 会话 scratch（会话结束即失）。
+  - 验证：最终 tip typecheck/build RC0，聚焦 99/99 与 73/73；全量 2796/2797，`check-known-reds` RC1 的唯一名单外红 `stalledCauseAndFloor` 同 tip 单跑先红后 4/4 绿、未改 main 对照 4/4 绿，按负载竞态上报、不宣称全量通过。Orca 侧用本仓 `debc1d3` 的独立 clone build 跑 `sleepBlockedResumeE2E`＋`workerLostE2E` **9/9**。
+  - 以下为更早（Orca 会话 `20ff3baa`）仍成立的结论：失败的 Codex 调用也落盘（隔离端点不可用时 rollout 含完整 prompt 后再 `turn.failed`）；成功调用额外写多个 SQLite 与 lock 目录；rollout 的 `token_count` 与 stdout `turn.completed` 同字段一致；8 个并发 exec 共用一个私有 home 时 thread 各异，取文件必须按 thread_id。设计在 Orca 仓 `docs/superpowers/specs/2026-11-14-codex-live-usage-design.md`（本轮已在 §9 追加更正）。
+  - 登记未修：`savedResultRecovery.ts` 的松 `indexOf`（只影响 `execution-without-final-v1` 分支；缺旗标时比 `args[0]`、重复旗标只看第一个；判据需用 `ompVerificationOnlyRecovery` 夹具）。
   - 以下为 L 轮（会话 `6b727312`）的结论，仍成立：
   - L 轮：Orca K／L 两轮只动 Orca；登记未修的两条（上面）。更早：Orca 仍钉 J 轮那一笔（原始用量明细生产者）。
   - 仍成立、修前别忘：命令检查失败时 `safeToRetry` 默认 false，只在第 1 次 attempt 为 true（`runLoop.ts`）⇒ 不能当成「验证者判断不可重试」（Orca #235 的原裁定靠它）。
