@@ -41,7 +41,14 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-13，Orca 会话 `c8b75eac`，测试者反馈 J 轮）—— 单次调用容许前言、陈旧锁回收、never-claimed、build-info、`model-unavailable`、原始用量明细；**全部已推、Orca 已 repin**（以 `git ls-remote` 现核）
+### 最新（2026-11-16，Orca 会话 `365ff5f9`）—— #316 Codex 的数组日志不再废掉已完成执行；本地 main 已合，push 被 Tier 0 拒
+
+- **主题行** `fix(codex): preserve execute work when only the output log is an array (#316)` 与 `fix(recovery): replay Codex array-log execution through its own decoder (#316)`。只在 Codex execute 解码边界接受 `stdoutStderrLog:string[]`，按顺序以换行拼成既有字符串；空数组得空字符串。原始 `final.json` 保留；共享 `executionSchema`、Claude／OMP、Codex wire schema、其它字段的严格拒绝均未放松。结果包只有“execute 已完成、verify 未开始”的成功来源走同一 Codex 解码，旧 `execution-format-failure-v1` 仍按原失败证据拒绝。设计与计划在 `docs/superpowers/{specs,plans}/2026-11-16-codex-log-array-compatibility*`。
+- **证据**：新增判据先红于 `stdoutStderrLog: expected string, received array`；`vitest run tests/runtime/executionNormalizer.test.ts tests/runtime/executionFormatFields.test.ts tests/runtime/codex/logArrayCompatibility.test.ts` **43/43**；`vitest run tests/control/savedResultEvidence.test.ts tests/control/exhaustedSource.test.ts tests/control/codexLogArrayRecovery.test.ts` **35/35**；`npm run typecheck` 与 `npm run build` 均 RC0。只在 `git clone --local` 副本删掉 Codex 投影时 12 条新判据中的 10 条红于该行为，复原后 `/usr/bin/git diff` 与 `diff --cached` 各 0 B；日志在本仓忽略的 `.superpowers/sdd/2026-11-16-codex-log-array-compatibility/` 与会话 scratch。
+- **门的诚实边界**：第一次全套 JSON 门与 Orca 日常门并跑，19 红／18 名单外（超时、`ENOTEMPTY`、setup 进程身份）。第二次单独全套 2 红：一条名单内 Codex watchdog，另一条 `stalledCauseAndFloor` 的预条件 `io-error` 非 `stalled`，`check-known-reds.mjs` RC1。后者在**未改动 main 的独立 clone** 上用同一 `vitest run tests/runtime/codex/stalledCauseAndFloor.test.ts` 单跑同形失败；本轮不把它加名单。其它受影响文件单跑：`savedResultRecovery.native` 28/28、`ompVerificationOnlyRecovery` 14/14、setup 两文件 37/37。没有真 provider 付费验收；严格 provider 仍要求 string，数组兼容只处理实际送达解码器的输出。
+- **发布边界**：Orca 尚钉上一笔 ccloop；本仓 `--ff-only` 已合 main，但本会话已授权的普通 `git push origin main` 仍被 Orca Tier 0 钩子按“push is Tier 0”拒绝，明令不可重试；未绕行。需等人的下一次放行或人手推，之后 Orca 才能用 npm GitHub 依赖 repin。文中不记会移动的 HEAD。
+
+### 上一轮（2026-11-13，Orca 会话 `c8b75eac`，测试者反馈 J 轮）—— 单次调用容许前言、陈旧锁回收、never-claimed、build-info、`model-unavailable`、原始用量明细；**全部已推、Orca 已 repin**（以 `git ls-remote` 现核）
 
 - **人的话**：点名判据「点名允许改必要的测试」（对 `codexSingleCall.test.ts:229` 的多条消息规则、旧标题、`accepted.lock`）；「这次批准改写所有必要的判据」；cacheRead「选3，都要记录原始token…有就记录，没有就留空」。
 - **主题行**（`git log --grep` 取，都以 `(Orca follow-up J)` 结尾）：
@@ -294,7 +301,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-16 近况（就地滚动，Orca 会话 `5f974912`；上一轮 `60e715bf`，更早 `1b8535c8`／`6a54a072`）**：本仓本轮**零生产代码改动，只更新此 handoff**。Orca 已 repin 到本仓当前 main `1453fc5`（J 轮 Codex 会话观测/删线程），面板 build/restart 后运行该 pin；`orca status` 现测 pin=installed=`1453fc5`。保留风险（`thread.started` 留证前崩溃残留、SQLite/WAL 物理擦除未证）仍在，本会话按人授权接受了它。`g-28d9b560` 用 Orca 新的 completed-attempt accept 路径落地 `review-fix-4`，组 done 7/7，无付费重跑；没有真 ccloop 旧现场重放（旧组已 `id-not-found`）。开工/收尾都用 `/usr/bin/git ls-remote origin refs/heads/main` 现核。
+- **2026-11-16 近况（就地滚动，Orca 会话 `365ff5f9`；上一轮 `5f974912`）**：本仓 #316 的 Codex 数组日志兼容与成功来源恢复已合本地 main，但普通 push 被 Tier 0 钩子拒、不得重试，Orca 因此仍钉上轮的 `1453fc5`，面板仍运行上一轮 build/restart 的 pin；**不得把本轮修复说成已装**。Orca 本轮独立修 #315 测试守卫、#296 顺序与 #291 资金预览（以 Orca handoff 最新节和最终门为准），ccmem 没改代码。上轮 `g-28d9b560/review-fix-4` 已用 completed-attempt accept 落地，组 done 7/7、无付费重跑；旧 dogfood 组已 `id-not-found`。Codex 残留风险见本节下条；本轮 Git 远端开工／被拒后都用 `/usr/bin/git ls-remote origin refs/heads/main` 现核。
   - 只有带私有 `CODEX_HOME` 的 Codex loop phase 去掉了 `--ephemeral`；single-call 与 legacy 路径保持。`thread.started` 的 `thread_id` 精确绑定 `sessions/**/rollout-*-<thread_id>.jsonl`，每个完成的响应后读 `token_count` 累计值并触发原有软停；终局记账仍只认 stdout `turn.completed`。阶段结束及崩溃/worker-lost 进程回收后按本 run 的 `thread.json` 用已装 `codex delete --force <UUID>` 删除该线程，失败响亮报错；旧 `--ephemeral` archive 仍可验，新 argv 要求私有隔离。
   - collect 可选只读 `liveUsage`（`ccloop-live-usage-v1`，run/attempt/phase/callId/threadId/tokens/observedAt/revision）只在活跃调用有完整观测时出现，outcome 后消失，不写账本；descriptor 的 `usageObservation` 已是 `realtime`，`contextObservation` 仍 `unavailable`（累计响应用量不是下一请求的精确上下文）。
   - **保留边界（提交前必须知道）**：Codex 在 `thread.started` 写入证据前已落盘而 worker 崩溃时，无法按 UUID 安全清扫，不能按最新文件/目录时间删共享 home；SQLite 空闲页/WAL 的物理擦除未证。受支持的删除路径已由隔离 HOME＋假端点实测（并发与失败线程各自删除互不影响），证据在 Orca 会话 scratch（会话结束即失）。
