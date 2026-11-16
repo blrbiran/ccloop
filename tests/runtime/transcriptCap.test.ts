@@ -1,7 +1,9 @@
+import { spawn } from "node:child_process";
 import { open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ObservedTranscriptFile } from "../../src/runtime/streamLines.js";
+import { ObservedTranscriptFile, transcriptMarker } from "../../src/runtime/streamLines.js";
 import type { MaterializedAgentConfigV1 } from "../../src/agents/types.js";
 import { runCodexPhase } from "../../src/runtime/codex/runCodexPhase.js";
 import { runOmpPhase } from "../../src/runtime/omp/runOmpPhase.js";
@@ -54,6 +56,26 @@ async function expectCapped(evidenceDir: string): Promise<void> {
 }
 
 describe("per-row transcript observation", () => {
+  it("keeps partial stdout bytes on disk when the writer process dies before a newline or close", async () => {
+    const f = await codexFixture(); roots.push(f.dir);
+    const path = join(f.dir, "interrupted.jsonl");
+    await writeFile(path, "", { mode: 0o600 });
+    const source = fileURLToPath(new URL("../../src/runtime/streamLines.ts", import.meta.url));
+    const raw = Buffer.from('{"type":"unfinished","text":"中');
+    const code = `import { ObservedTranscriptFile } from ${JSON.stringify(source)};\nconst file = new ObservedTranscriptFile(${JSON.stringify(path)});\nfile.write(Buffer.from(${JSON.stringify([...raw])}));\nprocess.stdout.write("received");\nsetInterval(() => {}, 1000);`;
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.stdout.once("data", () => resolve());
+        child.once("error", reject);
+        child.once("exit", (status) => reject(new Error(`writer exited before receipt: ${status}`)));
+      });
+      expect(await readFile(path)).toEqual(raw);
+      child.kill("SIGKILL");
+      await new Promise<void>((resolve) => child.once("close", () => resolve()));
+      expect(await readFile(path)).toEqual(raw);
+    } finally { if (child.exitCode === null) child.kill("SIGKILL"); }
+  });
   it("timestamps each complete object at receipt, preserving raw lines, split UTF-8, and final no-newline flush", async () => {
     const f = await codexFixture(); roots.push(f.dir);
     const path = join(f.dir, "observed.jsonl");
@@ -65,7 +87,7 @@ describe("per-row transcript observation", () => {
       const first = Buffer.from('{"type":"a","text":"中文"}\n');
       const split = first.indexOf(Buffer.from("中")) + 1;
       file.write(first.subarray(0, split));
-      expect(await readFile(path, "utf8")).toBe("");
+      expect(await readFile(path)).toEqual(first.subarray(0, split));
       clock.mockReturnValueOnce(101).mockReturnValue(999);
       file.write(Buffer.concat([first.subarray(split), Buffer.from('not json\n{"type":"same-chunk"}\n[1,2]\n')]));
       clock.mockReturnValue(202);
@@ -73,6 +95,20 @@ describe("per-row transcript observation", () => {
       file.close();
       expect(await readFile(path, "utf8")).toBe('{"type":"a","text":"中文","ccloopObservedAt":101}\nnot json\n{"type":"same-chunk","ccloopObservedAt":101}\n[1,2]\n{"type":"b","ccloopObservedAt":202}\n');
     } finally { clock.mockRestore(); }
+  });
+
+  it("cuts at the preceding complete row when timestamp bytes push a raw row past the cap", async () => {
+    const f = await codexFixture(); roots.push(f.dir);
+    const path = join(f.dir, "timestamp-cap.jsonl");
+    await writeFile(path, "", { mode: 0o600 });
+    const file = new ObservedTranscriptFile(path, 60);
+    file.write(Buffer.from('{"id":1}\n'));
+    const first = await readFile(path, "utf8");
+    expect(JSON.parse(first)).toMatchObject({ id: 1, ccloopObservedAt: expect.any(Number) });
+    file.write(Buffer.from('{"id":2}\n'));
+    expect(file.truncatedAt).toBe(Buffer.byteLength(first));
+    file.close();
+    expect(await readFile(path, "utf8")).toBe(first + transcriptMarker(Buffer.byteLength(first)));
   });
 
   it("leaves malformed UTF-8 untouched rather than turning replacement characters into valid JSON", async () => {

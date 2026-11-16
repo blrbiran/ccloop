@@ -120,6 +120,28 @@ export class CappedLineFile {
     closeSync(this.fd);
   }
 
+  /** Replace only the trailing raw line, after its bytes were recorded on receipt. */
+  replaceTrailing(originalLength: number, replacement: Buffer): void {
+    if (this.stopped || this.closed) return;
+    if (originalLength < 1 || originalLength > this.size) throw new Error("transcript trailing line length invalid");
+    const start = this.size - originalLength;
+    try {
+      if (start + replacement.length > this.cap) {
+        this.stopped = true;
+        this.truncatedAt = start;
+        const marker = this.marker === undefined ? Buffer.alloc(0) : Buffer.from(this.marker(start), "utf8");
+        if (marker.length > 0) this.writeAt(marker, start);
+        ftruncateSync(this.fd, start + marker.length);
+        this.size = start + marker.length;
+        return;
+      }
+      this.writeAt(replacement, start);
+      ftruncateSync(this.fd, start + replacement.length);
+      this.size = start + replacement.length;
+      this.lastLineEnd = this.size;
+    } catch (error) { this.stopped = true; throw error; }
+  }
+
   private writeAt(bytes: Buffer, position: number): void {
     let offset = 0;
     while (offset < bytes.length) offset += writeSync(this.fd, bytes, offset, bytes.length - offset, position + offset);
@@ -146,8 +168,8 @@ export class ObservedTranscriptFile {
       const newline = chunk.indexOf(10, start);
       if (newline < 0) break;
       this.add(chunk.subarray(start, newline));
-      if (this.oversized) this.file.write(Buffer.from("\n"));
-      else this.emit(receivedAt);
+      this.file.write(Buffer.from("\n"));
+      if (!this.oversized) this.emit(receivedAt, true);
       this.parts = []; this.pending = 0; this.oversized = false;
       start = newline + 1;
     }
@@ -156,34 +178,28 @@ export class ObservedTranscriptFile {
 
   close(): void {
     try {
-      if (this.oversized) this.file.write(Buffer.from("\n"));
-      else if (this.pending > 0) this.emit(Date.now());
+      if (!this.oversized && this.pending > 0) this.emit(Date.now(), false);
     } finally { this.file.close(); }
   }
 
   private add(bytes: Buffer): void {
     if (bytes.length === 0) return;
-    if (this.oversized) { this.file.write(bytes); return; }
+    this.file.write(bytes);
+    if (this.oversized) return;
     this.parts.push(bytes);
     this.pending += bytes.length;
-    if (this.pending > MAX_LINE_BYTES) {
-      this.oversized = true;
-      for (const part of this.parts) this.file.write(part);
-      this.parts = [];
-    }
+    if (this.pending > MAX_LINE_BYTES) { this.oversized = true; this.parts = []; }
   }
 
-  private emit(receivedAt: number): void {
+  private emit(receivedAt: number, terminated: boolean): void {
     const bytes = this.parts.length === 1 ? this.parts[0]! : Buffer.concat(this.parts, this.pending);
-    let recorded = bytes;
-    try {
-      const row: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-      if (row !== null && typeof row === "object" && !Array.isArray(row)) {
-        recorded = Buffer.from(JSON.stringify({ ...row, ccloopObservedAt: receivedAt }), "utf8");
-      }
-    } catch { /* Preserve invalid input as received. */ }
-    this.file.write(recorded);
-    this.file.write(Buffer.from("\n"));
+    let row: unknown;
+    try { row = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+    catch { return; /* Preserve invalid input as received. */ }
+    if (row !== null && typeof row === "object" && !Array.isArray(row)) {
+      const recorded = Buffer.from(`${JSON.stringify({ ...row, ccloopObservedAt: receivedAt })}\n`, "utf8");
+      this.file.replaceTrailing(this.pending + (terminated ? 1 : 0), recorded);
+    }
   }
 }
 
