@@ -41,12 +41,10 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-16～17，实现会话 `365ff5f9`，发布／repin 会话 `aee3cc87`）—— #316 数组日志兼容已在远端，Orca 已 repin；面板未装本轮代码
+### 最新（2026-11-17，Orca 会话 `9982cf01`）—— 转录行接收时间标记已合入本地 main；未推送
 
-- **主题行** `fix(codex): preserve execute work when only the output log is an array (#316)` 与 `fix(recovery): replay Codex array-log execution through its own decoder (#316)`。只在 Codex execute 解码边界接受 `stdoutStderrLog:string[]`，按顺序以换行拼成既有字符串；空数组得空字符串。原始 `final.json` 保留；共享 `executionSchema`、Claude／OMP、Codex wire schema、其它字段的严格拒绝均未放松。结果包只有“execute 已完成、verify 未开始”的成功来源走同一 Codex 解码，旧 `execution-format-failure-v1` 仍按原失败证据拒绝。设计与计划在 `docs/superpowers/{specs,plans}/2026-11-16-codex-log-array-compatibility*`。
-- **证据**：新增判据先红于 `stdoutStderrLog: expected string, received array`；`vitest run tests/runtime/executionNormalizer.test.ts tests/runtime/executionFormatFields.test.ts tests/runtime/codex/logArrayCompatibility.test.ts` **43/43**；`vitest run tests/control/savedResultEvidence.test.ts tests/control/exhaustedSource.test.ts tests/control/codexLogArrayRecovery.test.ts` **35/35**；`npm run typecheck` 与 `npm run build` 均 RC0。只在 `git clone --local` 副本删掉 Codex 投影时 12 条新判据中的 10 条红于该行为，复原后 `/usr/bin/git diff` 与 `diff --cached` 各 0 B；日志在本仓忽略的 `.superpowers/sdd/2026-11-16-codex-log-array-compatibility/` 与会话 scratch。
-- **门的诚实边界**：第一次全套 JSON 门与 Orca 日常门并跑，19 红／18 名单外（超时、`ENOTEMPTY`、setup 进程身份）。第二次单独全套 2 红：一条名单内 Codex watchdog，另一条 `stalledCauseAndFloor` 的预条件 `io-error` 非 `stalled`，`check-known-reds.mjs` RC1。后者在**未改动 main 的独立 clone** 上用同一 `vitest run tests/runtime/codex/stalledCauseAndFloor.test.ts` 单跑同形失败；本轮不把它加名单。其它受影响文件单跑：`savedResultRecovery.native` 28/28、`ompVerificationOnlyRecovery` 14/14、setup 两文件 37/37。没有真 provider 付费验收；严格 provider 仍要求 string，数组兼容只处理实际送达解码器的输出。
-- **发布与消费（2026-11-17 现核）**：原实现会话的 push 确被 Tier 0 拒且没有重试；之后人的独立 push 已把 #316 送上 `origin/main`（以 `/usr/bin/git ls-remote` 现核）。Orca 会话 `aee3cc87` 在独立 npm 安装树按正式脚本 repin 到含 #316 的已发布提交，装包 `dist/build-info.json` 与独立 ccloop clone 均对上该 pin，脚本的锁文件／`npm ci`／typecheck／默认 E2E RC0；本仓该 clone 的 `logArrayCompatibility`＋`codexLogArrayRecovery` **12/12**，Orca 的 V10/V11 配对 **2 过／22 按筛选跳过**。Orca 两批代码已普通推 main，**主仓 node_modules 与运行面板本会话未 npm ci／build／restart**，不称服务已装 #316；也没有真 Codex provider 付费验收。严格 wire 仍要求 string，历史无成功来源的格式失败不追认。文中不写会移动的 HEAD。
+- 主题行 `feat(runtime): stamp transcript rows at receipt (#320)` 至 `fix(runtime): keep a full final raw transcript line at close (#320)`。每一条保留的 provider 原始行先按原字节写入 `transcript.jsonl`，随后追加 `{"type":"ccloop.line-observed","atBytes":<该原始行在 transcript 的物理起始字节>,"ccloopObservedAt":<接收 epoch ms>}`；原始 `events.jsonl`、decoder、16 MiB 行帽和 128 MiB transcript 帽不变。半行在 SIGKILL 前已落盘；末行无换行且帽不足以容纳完整标记时保留原始字节、时间缺席。
+- 证据：聚焦 7 文件／76 条通过，typecheck/build RC0；独立审阅复核 cap 边界与崩溃路径无剩余缺陷。没有全量 known-reds 门、没有真 provider 付费验收、没有变异矩阵。文档提交后本地 main 领先 `origin/main`，**push 被 Orca Tier 0 拒，待人推**；Orca 因此还不能按 GitHub pin 消费该 producer。
 
 ### 上一轮（2026-11-13，Orca 会话 `c8b75eac`，测试者反馈 J 轮）—— 单次调用容许前言、陈旧锁回收、never-claimed、build-info、`model-unavailable`、原始用量明细；**全部已推、Orca 已 repin**（以 `git ls-remote` 现核）
 
