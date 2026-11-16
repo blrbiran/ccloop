@@ -60,10 +60,17 @@ describe("OMP runtime phase", () => {
     const outcome = await runOmpPhase(f.config, "plan", "prompt", f.context); const after = Date.now();
     expect(outcome.reason).toBe("completed");
     expect(outcome.stream.phase!.value()).toMatchObject({ summary: "Edit answer.txt once" });
-    const raw = (await readFile(join(outcome.evidenceDir, "events.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
-    const observed = (await readFile(join(outcome.evidenceDir, "transcript.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
-    expect(observed.map(({ ccloopObservedAt, ...row }: { ccloopObservedAt: number } & Record<string, unknown>) => row)).toEqual(raw);
-    expect(observed.every((row: { ccloopObservedAt: number }) => Number.isSafeInteger(row.ccloopObservedAt) && row.ccloopObservedAt >= before && row.ccloopObservedAt <= after)).toBe(true);
+    const raw = (await readFile(join(outcome.evidenceDir, "events.jsonl"), "utf8")).trim().split("\n");
+    const observed = (await readFile(join(outcome.evidenceDir, "transcript.jsonl"), "utf8")).trim().split("\n");
+    expect(observed).toHaveLength(raw.length * 2);
+    let atBytes = 0;
+    for (let i = 0; i < raw.length; i++) {
+      expect(observed[2 * i]).toBe(raw[i]);
+      const marker = JSON.parse(observed[2 * i + 1]!) as { type: string; atBytes: number; ccloopObservedAt: number };
+      expect(marker).toMatchObject({ type: "ccloop.line-observed", atBytes });
+      expect(Number.isSafeInteger(marker.ccloopObservedAt) && marker.ccloopObservedAt >= before && marker.ccloopObservedAt <= after).toBe(true);
+      atBytes += Buffer.byteLength(raw[i] + "\n") + Buffer.byteLength(observed[2 * i + 1] + "\n");
+    }
   });
   it("plans one attempt with a frozen model, scoped tools, private system prompt and observed usage", async () => {
     const f = await fixture();
@@ -378,7 +385,7 @@ setInterval(()=>{},1000);
   // Ruling O5 (Orca session 0e13a9b7): 「同意。但是我们这里可能要定一下最大能支持多大的输出。作为一个hard limit ，比如1G」, Orca spec
   // 2026-10-23-live-transcript-design.md §11.2 (a): a call printing past 16 MiB and under 1 GiB completes; events.jsonl stays
   // capped at 16 MiB (cut at a line end, labelled stdoutTruncated) and transcript.jsonl (cap 128 MiB) holds the whole stream.
-  // User request #320 (2026-11-17): raw events keep their bytes; transcript objects carry observation time.
+  // User request #320 (2026-11-17): raw events keep their bytes; transcript objects get adjacent receipt markers.
   it("completes an event stream past 16 MiB and under 1 GiB, its evidence capped and its transcript whole", async () => {
     const f = await fixture();
     await writeFile(f.binary, `#!/usr/bin/env node
@@ -397,7 +404,7 @@ process.stdout.write([{type:"message_end",message},{type:"agent_end",isTerminal:
     const events = await readFile(join(outcome.evidenceDir, "events.jsonl")), transcript = await readFile(join(outcome.evidenceDir, "transcript.jsonl"));
     expect(transcript.length).toBeGreaterThan(17 * 1024 * 1024); expect(transcript.at(-1)).toBe(10);
     expect(events.length).toBeLessThanOrEqual(16 * 1024 * 1024); expect(events.length).toBeGreaterThan(15 * 1024 * 1024); expect(events.at(-1)).toBe(10);
-    expect(JSON.parse(transcript.toString("utf8").split("\n")[0]!).ccloopObservedAt).toEqual(expect.any(Number));
+    expect(transcript.toString("utf8").split("\n")[0]).toBe(events.toString("utf8").split("\n")[0]); expect(JSON.parse(transcript.toString("utf8").split("\n")[1]!).type).toBe("ccloop.line-observed");
     expect(JSON.parse(await readFile(join(outcome.evidenceDir, "outcome.json"), "utf8"))).toMatchObject({ reason: "completed", stdoutTruncated: true, transcriptTruncatedAt: null });
   }, 90_000);
 

@@ -3,7 +3,7 @@ import { open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ObservedTranscriptFile, transcriptMarker } from "../../src/runtime/streamLines.js";
+import { CappedLineFile, ObservedTranscriptFile, transcriptMarker } from "../../src/runtime/streamLines.js";
 import type { MaterializedAgentConfigV1 } from "../../src/agents/types.js";
 import { runCodexPhase } from "../../src/runtime/codex/runCodexPhase.js";
 import { runOmpPhase } from "../../src/runtime/omp/runOmpPhase.js";
@@ -76,6 +76,31 @@ describe("per-row transcript observation", () => {
       expect(await readFile(path)).toEqual(raw);
     } finally { if (child.exitCode === null) child.kill("SIGKILL"); }
   });
+  it("keeps raw source intact and stops after an incomplete observation marker", async () => {
+    const f = await codexFixture(); roots.push(f.dir);
+    const path = join(f.dir, "marker-failure.jsonl");
+    await writeFile(path, "", { mode: 0o600 });
+    const write = CappedLineFile.prototype.write;
+    const spy = vi.spyOn(CappedLineFile.prototype, "write").mockImplementation(function (this: CappedLineFile, chunk: Buffer) {
+      if (chunk.includes(Buffer.from('"type":"ccloop.line-observed"'))) {
+        write.call(this, chunk.subarray(0, 14));
+        throw new Error("ENOSPC: observation marker interrupted");
+      }
+      return write.call(this, chunk);
+    });
+    const file = new ObservedTranscriptFile(path, 1024);
+    try {
+      const raw = Buffer.from('{"type":"first"}\n');
+      expect(() => file.write(raw)).toThrow("ENOSPC: observation marker interrupted");
+      const interrupted = await readFile(path);
+      expect(interrupted.subarray(0, raw.length)).toEqual(raw);
+      expect(interrupted.subarray(raw.length).toString()).toBe('{"type":"ccloop.line-observed"'.slice(0, 14));
+      file.write(Buffer.from('{"type":"second"}\n'));
+      file.close();
+      expect(await readFile(path)).toEqual(interrupted);
+    } finally { spy.mockRestore(); }
+  });
+
   it("timestamps each complete object at receipt, preserving raw lines, split UTF-8, and final no-newline flush", async () => {
     const f = await codexFixture(); roots.push(f.dir);
     const path = join(f.dir, "observed.jsonl");
@@ -92,23 +117,29 @@ describe("per-row transcript observation", () => {
       file.write(Buffer.concat([first.subarray(split), Buffer.from('not json\n{"type":"same-chunk"}\n[1,2]\n')]));
       clock.mockReturnValue(202);
       file.write(Buffer.from('{"type":"b"}'));
+      expect((await readFile(path, "utf8")).endsWith('{"type":"b"}')).toBe(true);
       file.close();
-      expect(await readFile(path, "utf8")).toBe('{"type":"a","text":"中文","ccloopObservedAt":101}\nnot json\n{"type":"same-chunk","ccloopObservedAt":101}\n[1,2]\n{"type":"b","ccloopObservedAt":202}\n');
+      const firstMarker = JSON.stringify({ type: "ccloop.line-observed", atBytes: 0, ccloopObservedAt: 101 }) + "\n";
+      const secondAt = Buffer.byteLength(first) + Buffer.byteLength(firstMarker) + Buffer.byteLength("not json\n");
+      const second = '{"type":"same-chunk"}\n';
+      const secondMarker = JSON.stringify({ type: "ccloop.line-observed", atBytes: secondAt, ccloopObservedAt: 101 }) + "\n";
+      const thirdAt = secondAt + Buffer.byteLength(second) + Buffer.byteLength(secondMarker) + Buffer.byteLength("[1,2]\n");
+      expect(await readFile(path, "utf8")).toBe(first.toString() + firstMarker + "not json\n" + second + secondMarker + "[1,2]\n" + '{"type":"b"}\n' + JSON.stringify({ type: "ccloop.line-observed", atBytes: thirdAt, ccloopObservedAt: 202 }) + "\n");
     } finally { clock.mockRestore(); }
   });
 
-  it("cuts at the preceding complete row when timestamp bytes push a raw row past the cap", async () => {
+  it("keeps the raw row and marks truncation when its observation marker exceeds the cap", async () => {
     const f = await codexFixture(); roots.push(f.dir);
     const path = join(f.dir, "timestamp-cap.jsonl");
     await writeFile(path, "", { mode: 0o600 });
     const file = new ObservedTranscriptFile(path, 60);
     file.write(Buffer.from('{"id":1}\n'));
     const first = await readFile(path, "utf8");
-    expect(JSON.parse(first)).toMatchObject({ id: 1, ccloopObservedAt: expect.any(Number) });
+    expect(first).toBe('{"id":1}\n' + transcriptMarker(Buffer.byteLength('{"id":1}\n')));
+    expect(file.truncatedAt).toBe(Buffer.byteLength('{"id":1}\n'));
     file.write(Buffer.from('{"id":2}\n'));
-    expect(file.truncatedAt).toBe(Buffer.byteLength(first));
     file.close();
-    expect(await readFile(path, "utf8")).toBe(first + transcriptMarker(Buffer.byteLength(first)));
+    expect(await readFile(path, "utf8")).toBe(first);
   });
 
   it("leaves malformed UTF-8 untouched rather than turning replacement characters into valid JSON", async () => {

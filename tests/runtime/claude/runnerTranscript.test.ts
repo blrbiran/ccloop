@@ -50,14 +50,17 @@ describe("the runner's transcript writer", () => {
     writer.line("[1,2]", [1, 2]);
     writer.dropped(123);
     const after = Date.now(); writer.close();
-    const [message, invalid, array, dropped] = lines(await readFile(path, "utf8"));
-    expect(JSON.parse(message!)).toMatchObject({ ...first, ccloopObservedAt: expect.any(Number) });
-    expect(JSON.parse(message!).ccloopObservedAt).toBeGreaterThanOrEqual(before);
-    expect(JSON.parse(message!).ccloopObservedAt).toBeLessThanOrEqual(after);
+    const [message, observed, invalid, array, dropped, droppedObserved] = lines(await readFile(path, "utf8"));
+    expect(message).toBe(JSON.stringify(first));
+    expect(JSON.parse(observed!)).toMatchObject({ type: "ccloop.line-observed", atBytes: 0, ccloopObservedAt: expect.any(Number) });
+    expect(JSON.parse(observed!).ccloopObservedAt).toBeGreaterThanOrEqual(before);
+    expect(JSON.parse(observed!).ccloopObservedAt).toBeLessThanOrEqual(after);
     expect(invalid).toBe("not json"); expect(array).toBe("[1,2]");
-    expect(JSON.parse(dropped!)).toMatchObject({ type: "ccloop.line-dropped", bytes: 123, ccloopObservedAt: expect.any(Number) });
+    expect(JSON.parse(dropped!)).toEqual({ type: "ccloop.line-dropped", bytes: 123 });
+    const droppedAt = Buffer.byteLength([message, observed, invalid, array].join("\n") + "\n");
+    expect(JSON.parse(droppedObserved!)).toMatchObject({ type: "ccloop.line-observed", atBytes: droppedAt, ccloopObservedAt: expect.any(Number) });
   });
-  // User request #320 (2026-11-17): kept JSON objects gain receipt time; the cap counts their recorded bytes.
+  // User request #320 (2026-11-17): complete objects get adjacent receipt markers; the cap counts both rows.
   it("has each kept line in the file when line() returns, and leaves out content_block_delta only", async () => {
     const dir = await tempDir(), path = join(dir, "transcript.jsonl");
     const writer = createTranscriptWriter(path);
@@ -67,30 +70,30 @@ describe("the runner's transcript writer", () => {
       const onDisk = readFileSync(path, "utf8");
       if (row.type === "stream_event" && (row as { event: { type: string } }).event.type === "content_block_delta") expect(onDisk.endsWith(`${JSON.stringify(row)}\n`)).toBe(false);
       else {
-        const observed = JSON.parse(lines(onDisk).at(-1)!);
-        const { ccloopObservedAt, ...source } = observed;
-        expect(source).toEqual(row);
-        expect(ccloopObservedAt).toEqual(expect.any(Number));
+        const kept = lines(onDisk);
+        expect(kept.at(-2)).toBe(JSON.stringify(row));
+        expect(JSON.parse(kept.at(-1)!)).toMatchObject({ type: "ccloop.line-observed", atBytes: Buffer.byteLength(onDisk.slice(0, onDisk.lastIndexOf(`${JSON.stringify(row)}\n`))), ccloopObservedAt: expect.any(Number) });
       }
     }
     writer.line("not json", undefined);
     writer.dropped(11 * 1024 * 1024);
     writer.close();
     const recorded = lines(await readFile(path, "utf8"));
-    expect(recorded.map((line) => { try { const { ccloopObservedAt, ...row } = JSON.parse(line); return row; } catch { return line; } })).toEqual(
+    expect(recorded.filter((line) => !line.startsWith('{"type":"ccloop.line-observed"')).map((line) => { try { return JSON.parse(line); } catch { return line; } })).toEqual(
       [ROWS.init, ROWS.start, ROWS.blockStart, ROWS.messageDelta, ROWS.assistant, "not json", { type: "ccloop.line-dropped", bytes: 11 * 1024 * 1024 }]);
-    expect(recorded.filter((line) => line !== "not json").every((line) => Number.isSafeInteger(JSON.parse(line).ccloopObservedAt))).toBe(true);
+    expect(recorded.filter((line) => line.startsWith('{"type":"ccloop.line-observed"'))).toHaveLength(6);
     expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 
   it("stops at its cap at a line end with one marker", async () => {
     const dir = await tempDir(), path = join(dir, "transcript.jsonl");
-    const writer = createTranscriptWriter(path, 60);
+    const writer = createTranscriptWriter(path, 110);
     for (const text of ['{"a":"0123456789"}', '{"b":"0123456789"}', '{"c":1}']) writer.line(text, JSON.parse(text));
     writer.close();
-    const [first, marker] = lines(await readFile(path, "utf8"));
-    expect(JSON.parse(first!)).toMatchObject({ a: "0123456789", ccloopObservedAt: expect.any(Number) });
-    expect(JSON.parse(marker!)).toEqual({ type: "ccloop.transcript-truncated", atBytes: Buffer.byteLength(first! + "\n") });
+    const [first, observed, marker] = lines(await readFile(path, "utf8"));
+    expect(first).toBe('{"a":"0123456789"}');
+    expect(JSON.parse(observed!)).toMatchObject({ type: "ccloop.line-observed", atBytes: 0, ccloopObservedAt: expect.any(Number) });
+    expect(JSON.parse(marker!)).toEqual({ type: "ccloop.transcript-truncated", atBytes: Buffer.byteLength(first! + "\n" + observed! + "\n") });
   });
 
   it("the splitter reports a dropped line with its size", () => {
@@ -131,8 +134,8 @@ for (const row of ${JSON.stringify([ROWS.messageDelta, ROWS.assistant, ROWS.resu
     expect(JSON.parse(run.out())).toMatchObject({ summary: "s", tokenUsage: 9 });
     const padBytes = Buffer.byteLength(JSON.stringify({ type: "user", pad: "p".repeat(11 * 1024 * 1024) }));
     const recorded = lines(await readFile(transcript, "utf8")).map((line) => JSON.parse(line));
-    expect(recorded.every((row) => Number.isSafeInteger(row.ccloopObservedAt))).toBe(true);
-    expect(recorded.map(({ ccloopObservedAt, ...row }) => row)).toEqual([
+    expect(recorded.filter((row) => row.type === "ccloop.line-observed")).toHaveLength(7);
+    expect(recorded.filter((row) => row.type !== "ccloop.line-observed")).toEqual([
       ROWS.init, ROWS.start, ROWS.blockStart,
       { type: "ccloop.line-dropped", bytes: padBytes },
       ROWS.messageDelta, ROWS.assistant, ROWS.result,
@@ -147,12 +150,13 @@ writeFileSync(${JSON.stringify(printed)}, "50");
 setInterval(() => {}, 1000);`);
     const run = start(dir, fake, transcript);
     await expect.poll(() => readFile(printed, "utf8").catch(() => ""), { timeout: 10_000 }).toBe("50");
-    await expect.poll(async () => lines(await readFile(transcript, "utf8").catch(() => "")).length, { timeout: 10_000 }).toBe(50);
+    await expect.poll(async () => lines(await readFile(transcript, "utf8").catch(() => "")).length, { timeout: 10_000 }).toBe(100);
     process.kill(-run.child.pid!, "SIGKILL");
     await run.done;
     const kept = lines(await readFile(transcript, "utf8"));
-    expect(kept).toHaveLength(50);
-    expect(JSON.parse(kept[49]!)).toMatchObject({ message: { id: "m49" } });
+    expect(kept).toHaveLength(100);
+    expect(JSON.parse(kept[98]!)).toMatchObject({ message: { id: "m49" } });
+    expect(JSON.parse(kept[99]!)).toMatchObject({ type: "ccloop.line-observed", ccloopObservedAt: expect.any(Number) });
   }, 30_000);
 });
 

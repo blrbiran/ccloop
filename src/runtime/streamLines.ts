@@ -120,27 +120,7 @@ export class CappedLineFile {
     closeSync(this.fd);
   }
 
-  /** Replace only the trailing raw line, after its bytes were recorded on receipt. */
-  replaceTrailing(originalLength: number, replacement: Buffer): void {
-    if (this.stopped || this.closed) return;
-    if (originalLength < 1 || originalLength > this.size) throw new Error("transcript trailing line length invalid");
-    const start = this.size - originalLength;
-    try {
-      if (start + replacement.length > this.cap) {
-        this.stopped = true;
-        this.truncatedAt = start;
-        const marker = this.marker === undefined ? Buffer.alloc(0) : Buffer.from(this.marker(start), "utf8");
-        if (marker.length > 0) this.writeAt(marker, start);
-        ftruncateSync(this.fd, start + marker.length);
-        this.size = start + marker.length;
-        return;
-      }
-      this.writeAt(replacement, start);
-      ftruncateSync(this.fd, start + replacement.length);
-      this.size = start + replacement.length;
-      this.lastLineEnd = this.size;
-    } catch (error) { this.stopped = true; throw error; }
-  }
+  get sizeBytes(): number { return this.size; }
 
   private writeAt(bytes: Buffer, position: number): void {
     let offset = 0;
@@ -148,12 +128,13 @@ export class CappedLineFile {
   }
 }
 
-/** Stamp complete JSON objects at receipt while leaving raw evidence and decoder input untouched. Oversized lines stay raw. */
+/** Append receipt metadata after complete object rows; provider bytes are written unchanged before the metadata. */
 export class ObservedTranscriptFile {
   private readonly file: CappedLineFile;
   private parts: Buffer[] = [];
   private pending = 0;
   private oversized = false;
+  private failed = false;
 
   constructor(path: string, cap = TRANSCRIPT_LIMIT) {
     this.file = new CappedLineFile(path, cap, transcriptMarker);
@@ -162,23 +143,26 @@ export class ObservedTranscriptFile {
   get truncatedAt(): number | null { return this.file.truncatedAt; }
 
   write(chunk: Buffer): void {
+    if (this.failed || this.file.truncatedAt !== null) return;
     const receivedAt = Date.now();
-    let start = 0;
-    for (;;) {
-      const newline = chunk.indexOf(10, start);
-      if (newline < 0) break;
-      this.add(chunk.subarray(start, newline));
-      this.file.write(Buffer.from("\n"));
-      if (!this.oversized) this.emit(receivedAt, true);
-      this.parts = []; this.pending = 0; this.oversized = false;
-      start = newline + 1;
-    }
-    if (start < chunk.length) this.add(chunk.subarray(start));
+    try {
+      let start = 0;
+      for (;;) {
+        const newline = chunk.indexOf(10, start);
+        if (newline < 0) break;
+        this.add(chunk.subarray(start, newline));
+        this.file.write(Buffer.from("\n"));
+        if (!this.oversized && this.file.truncatedAt === null) this.emit(receivedAt, true);
+        this.parts = []; this.pending = 0; this.oversized = false;
+        start = newline + 1;
+      }
+      if (start < chunk.length) this.add(chunk.subarray(start));
+    } catch (error) { this.failed = true; throw error; }
   }
 
   close(): void {
     try {
-      if (!this.oversized && this.pending > 0) this.emit(Date.now(), false);
+      if (!this.failed && this.file.truncatedAt === null && !this.oversized && this.pending > 0) this.emit(Date.now(), false);
     } finally { this.file.close(); }
   }
 
@@ -197,8 +181,9 @@ export class ObservedTranscriptFile {
     try { row = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
     catch { return; /* Preserve invalid input as received. */ }
     if (row !== null && typeof row === "object" && !Array.isArray(row)) {
-      const recorded = Buffer.from(`${JSON.stringify({ ...row, ccloopObservedAt: receivedAt })}\n`, "utf8");
-      this.file.replaceTrailing(this.pending + (terminated ? 1 : 0), recorded);
+      const atBytes = this.file.sizeBytes - this.pending - (terminated ? 1 : 0);
+      if (!terminated) this.file.write(Buffer.from("\n"));
+      this.file.write(Buffer.from(`${JSON.stringify({ type: "ccloop.line-observed", atBytes, ccloopObservedAt: receivedAt })}\n`, "utf8"));
     }
   }
 }
