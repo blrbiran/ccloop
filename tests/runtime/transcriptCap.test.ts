@@ -128,6 +128,19 @@ describe("per-row transcript observation", () => {
     } finally { clock.mockRestore(); }
   });
 
+  it("keeps an unterminated provider object that exactly fills the cap when close cannot append metadata", async () => {
+    const f = await codexFixture(); roots.push(f.dir);
+    const path = join(f.dir, "full-unterminated.jsonl");
+    await writeFile(path, "", { mode: 0o600 });
+    const raw = Buffer.from('{"a":1}');
+    const file = new ObservedTranscriptFile(path, raw.length);
+    file.write(raw);
+    expect(await readFile(path)).toEqual(raw);
+    file.close();
+    expect(await readFile(path)).toEqual(raw);
+    expect(file.truncatedAt).toBeNull();
+  });
+
   it("keeps the raw row and marks truncation when its observation marker exceeds the cap", async () => {
     const f = await codexFixture(); roots.push(f.dir);
     const path = join(f.dir, "timestamp-cap.jsonl");

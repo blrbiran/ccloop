@@ -136,7 +136,7 @@ export class ObservedTranscriptFile {
   private oversized = false;
   private failed = false;
 
-  constructor(path: string, cap = TRANSCRIPT_LIMIT) {
+  constructor(path: string, private readonly cap = TRANSCRIPT_LIMIT) {
     this.file = new CappedLineFile(path, cap, transcriptMarker);
   }
 
@@ -182,8 +182,11 @@ export class ObservedTranscriptFile {
     catch { return; /* Preserve invalid input as received. */ }
     if (row !== null && typeof row === "object" && !Array.isArray(row)) {
       const atBytes = this.file.sizeBytes - this.pending - (terminated ? 1 : 0);
+      const marker = Buffer.from(`${JSON.stringify({ type: "ccloop.line-observed", atBytes, ccloopObservedAt: receivedAt })}\n`, "utf8");
+      // A final line without a newline is already durable. Optional metadata must not evict it at the cap.
+      if (!terminated && this.file.sizeBytes + 1 + marker.length > this.cap) return;
       if (!terminated) this.file.write(Buffer.from("\n"));
-      this.file.write(Buffer.from(`${JSON.stringify({ type: "ccloop.line-observed", atBytes, ccloopObservedAt: receivedAt })}\n`, "utf8"));
+      this.file.write(marker);
     }
   }
 }
