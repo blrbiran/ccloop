@@ -1,34 +1,65 @@
 import { existsSync } from "node:fs";
-import { rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Review I1 (Orca session ffec7b28): the call's two records are opened before the agent is spawned. A record that cannot be
 // opened ends the call as io-error with no agent process (an agent nobody records would spend unseen), and the record that
 // did open is closed, not leaked.
+// User request #320 (2026-11-17): the transcript opener is now ObservedTranscriptFile; keep the pre-spawn failure criterion.
 const opened: Array<{ path: string; closed: boolean }> = [];
+let failOnOpen = true;
+let failOnClose = false;
 vi.mock("../../src/runtime/streamLines.js", async (original) => {
   const real = await original<typeof import("../../src/runtime/streamLines.js")>();
   class FailingTranscript extends real.CappedLineFile {
     private readonly entry: { path: string; closed: boolean };
     constructor(path: string, cap: number, marker?: (at: number) => string) {
-      if (path.endsWith("transcript.jsonl")) throw Object.assign(new Error("EMFILE: simulated"), { code: "EMFILE" });
       super(path, cap, marker);
       this.entry = { path, closed: false };
       opened.push(this.entry);
     }
     override close(): void { this.entry.closed = true; super.close(); }
   }
-  return { ...real, CappedLineFile: FailingTranscript };
+  class FailingObservedTranscript extends real.ObservedTranscriptFile {
+    constructor(path: string, cap?: number) {
+      if (failOnOpen && path.endsWith("transcript.jsonl")) throw Object.assign(new Error("EMFILE: simulated"), { code: "EMFILE" });
+      super(path, cap);
+    }
+    override close(): void {
+      super.close();
+      if (failOnClose) throw Object.assign(new Error("ENOSPC: simulated final-line flush"), { code: "ENOSPC" });
+    }
+  }
+  return { ...real, CappedLineFile: FailingTranscript, ObservedTranscriptFile: FailingObservedTranscript };
 });
 const { runCodexPhase } = await import("../../src/runtime/codex/runCodexPhase.js");
 const { runOmpPhase } = await import("../../src/runtime/omp/runOmpPhase.js");
 const { codexFixture } = await import("./codex/fixture.js");
 
 const roots: string[] = [];
-afterEach(async () => { opened.splice(0); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+afterEach(async () => { failOnOpen = true; failOnClose = false; opened.splice(0); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
 describe("a record that cannot be opened", () => {
+  it("codex keeps its decoded result when transcript flush fails at close", async () => {
+    failOnOpen = false; failOnClose = true;
+    const f = await codexFixture("ok"); roots.push(f.dir);
+    const outcome = await runCodexPhase(f.config as never, { phase: "plan", prompt: "p", context: f.context });
+    expect(outcome.reason).toBe("completed");
+    expect(JSON.parse(await readFile(join(outcome.evidenceDir, "outcome.json"), "utf8"))).toMatchObject({ transcriptError: expect.stringContaining("ENOSPC") });
+  });
+
+  it("omp keeps its process outcome when transcript flush fails at close", async () => {
+    failOnOpen = false; failOnClose = true;
+    const f = await codexFixture(); roots.push(f.dir);
+    const binary = join(f.dir, "omp");
+    await writeFile(binary, `#!/usr/bin/env node\nfor await(const chunk of process.stdin){}\nprocess.stdout.write(JSON.stringify({type:"agent_end",isTerminal:true})+"\\n");\n`, { mode: 0o700 });
+    const outcome = await runOmpPhase({ schema: "ccloop-agent-config-v1", kind: "omp",
+      installation: { kind: "omp", command: [binary], version: "18.10.1", configDir: null, timeoutMs: 10_000, killGraceMs: 50, defaultModel: "gateway/model-a", profile: null },
+      selection: { agent: "omp", model: "gateway/model-a", contextWindow: "agent-default" } }, "plan", "prompt", f.context);
+    expect(outcome.reason).toBe("completed");
+    expect(JSON.parse(await readFile(join(outcome.evidenceDir, "outcome.json"), "utf8"))).toMatchObject({ transcriptError: expect.stringContaining("ENOSPC") });
+  });
   it("codex: io-error, no agent spawned, the events record closed", async () => {
     const f = await codexFixture("ok"); roots.push(f.dir);
     const outcome = await runCodexPhase(f.config as never, { phase: "plan", prompt: "p", context: f.context });

@@ -10,7 +10,7 @@ import { CodexPhaseIsolationRefused, codexPhaseIsolation } from "./codexPhaseIso
 import { withCodexSkillLinks } from "./codexSkills.js";
 import type { AttemptContext, HandoffDirs } from "../types.js";
 import { codexToolRow, effectiveIdleTimeoutMs, IdleWatch, type IdleSnapshotV1 } from "../idleWatch.js";
-import { attachOutcomeStream, CappedLineFile, jsonLine, LineSplitter, STDOUT_HARD_LIMIT, TRANSCRIPT_LIMIT, transcriptMarker } from "../streamLines.js";
+import { attachOutcomeStream, CappedLineFile, jsonLine, LineSplitter, ObservedTranscriptFile, STDOUT_HARD_LIMIT } from "../streamLines.js";
 import { CodexStream } from "./codexStream.js";
 import { executeWireJsonSchema, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
 import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
@@ -143,9 +143,9 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     // Live transcript (spec §10.2.1-§10.2.3, §11.1): stdout goes to the 16 MiB evidence file and the 128 MiB transcript, each
     // cut at a line end, and through the line folds; only the 1 GiB hard limit stops the agent for its output.
     // Review I1: both records are opened before anything is spawned; a record that cannot be opened is io-error with no child.
-    let events:CappedLineFile,transcript:CappedLineFile;
+    let events:CappedLineFile,transcript:ObservedTranscriptFile;
     try{events=new CappedLineFile(join(evidenceDir,"events.jsonl"),LIMIT);}catch(e){ioError=String(e);result.reason="io-error";resolve();return;}
-    try{transcript=new CappedLineFile(join(evidenceDir,"transcript.jsonl"),TRANSCRIPT_LIMIT,transcriptMarker);}catch(e){events.close();ioError=String(e);result.reason="io-error";resolve();return;}
+    try{transcript=new ObservedTranscriptFile(join(evidenceDir,"transcript.jsonl"));}catch(e){events.close();ioError=String(e);result.reason="io-error";resolve();return;}
     const child=spawn(config.command[0],args,{cwd:context.worktreePath,detached:true,stdio:["pipe","pipe","pipe"],env:request.spawn?.env??spawnEnv});
     const err=new StringDecoder("utf8");
     let outBytes=0,errBytes=0,done=false,exited=false;
@@ -157,7 +157,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       clearTimeout(timer);clearTimeout(killTimer);clearTimeout(drainTimer);watch.stop();
       context.abortSignal?.removeEventListener("abort",abort);
       splitter.end();stderr+=err.end();
-      events.close();transcript.close();
+      events.close();try{transcript.close();}catch(e){transcriptError??=String(e);}
       stdoutTruncated||=events.truncatedAt!==null;transcriptTruncatedAt=transcript.truncatedAt;
       child.stdin.destroy();child.stdout.destroy();child.stderr.destroy();
       // close resolves the phase only after pipes and the child have settled.

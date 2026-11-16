@@ -1,6 +1,7 @@
 import { open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ObservedTranscriptFile } from "../../src/runtime/streamLines.js";
 import type { MaterializedAgentConfigV1 } from "../../src/agents/types.js";
 import { runCodexPhase } from "../../src/runtime/codex/runCodexPhase.js";
 import { runOmpPhase } from "../../src/runtime/omp/runOmpPhase.js";
@@ -51,6 +52,53 @@ async function expectCapped(evidenceDir: string): Promise<void> {
   expect(events.at(-1)).toBe(10);
   expect(events.includes(Buffer.from("ccloop.transcript-truncated"))).toBe(false);
 }
+
+describe("per-row transcript observation", () => {
+  it("timestamps each complete object at receipt, preserving raw lines, split UTF-8, and final no-newline flush", async () => {
+    const f = await codexFixture(); roots.push(f.dir);
+    const path = join(f.dir, "observed.jsonl");
+    await writeFile(path, "", { mode: 0o600 });
+    const file = new ObservedTranscriptFile(path, 1024);
+    const clock = vi.spyOn(Date, "now");
+    try {
+      clock.mockReturnValue(101);
+      const first = Buffer.from('{"type":"a","text":"中文"}\n');
+      const split = first.indexOf(Buffer.from("中")) + 1;
+      file.write(first.subarray(0, split));
+      expect(await readFile(path, "utf8")).toBe("");
+      clock.mockReturnValueOnce(101).mockReturnValue(999);
+      file.write(Buffer.concat([first.subarray(split), Buffer.from('not json\n{"type":"same-chunk"}\n[1,2]\n')]));
+      clock.mockReturnValue(202);
+      file.write(Buffer.from('{"type":"b"}'));
+      file.close();
+      expect(await readFile(path, "utf8")).toBe('{"type":"a","text":"中文","ccloopObservedAt":101}\nnot json\n{"type":"same-chunk","ccloopObservedAt":101}\n[1,2]\n{"type":"b","ccloopObservedAt":202}\n');
+    } finally { clock.mockRestore(); }
+  });
+
+  it("leaves malformed UTF-8 untouched rather than turning replacement characters into valid JSON", async () => {
+    const f = await codexFixture(); roots.push(f.dir);
+    const path = join(f.dir, "invalid.jsonl");
+    await writeFile(path, "", { mode: 0o600 });
+    const raw = Buffer.from([123, 34, 120, 34, 58, 34, 255, 34, 125, 10]);
+    const file = new ObservedTranscriptFile(path, 1024);
+    file.write(raw.subarray(0, 7)); file.write(raw.subarray(7)); file.close();
+    expect(await readFile(path)).toEqual(raw);
+  });
+
+  it("keeps an over-line-cap record raw and preserves the truncation marker", async () => {
+    const f = await codexFixture(); roots.push(f.dir);
+    const path = join(f.dir, "observed.jsonl");
+    await writeFile(path, "", { mode: 0o600 });
+    const line = Buffer.from(JSON.stringify({ payload: "x".repeat(16 * MIB) }) + "\n");
+    const file = new ObservedTranscriptFile(path, line.length + 2);
+    file.write(line.subarray(0, 100)); file.write(line.subarray(100));
+    file.write(Buffer.from('{"type":"later"}\n'));
+    expect(file.truncatedAt).toBe(line.length);
+    file.close();
+    expect((await readFile(path)).subarray(0, line.length).equals(line)).toBe(true);
+    expect(await lastLine(path)).toBe(`${JSON.stringify({ type: "ccloop.transcript-truncated", atBytes: line.length })}\n`);
+  });
+});
 
 describe("transcript and evidence caps", () => {
   it("codex: a 130 MiB stream completes; the transcript is cut at a line end ≤ 128 MiB with one marker; events.jsonl ≤ 16 MiB", async () => {

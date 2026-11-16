@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import type { MaterializedAgentConfigV1 } from "../../agents/types.js";
 import type { AttemptContext, HandoffDirs } from "../types.js";
 import { effectiveIdleTimeoutMs, IdleWatch, ompToolRow, type IdleSnapshotV1 } from "../idleWatch.js";
-import { attachOutcomeStream, CappedLineFile, jsonLine, LineSplitter, STDOUT_HARD_LIMIT, TRANSCRIPT_LIMIT, transcriptMarker } from "../streamLines.js";
+import { attachOutcomeStream, CappedLineFile, jsonLine, LineSplitter, ObservedTranscriptFile, STDOUT_HARD_LIMIT } from "../streamLines.js";
 import { OmpStream, type OmpStreamPurpose } from "./ompStream.js";
 import { ompSkillsPromptBlock } from "./ompSkills.js";
 import { ompPhaseTools, phaseSystemPrompt, type OmpPhase } from "./phasePrompt.js";
@@ -113,9 +113,9 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
   // Live transcript (spec §10.2.1-§10.2.3, §11.1): stdout goes to the 16 MiB evidence file and the 128 MiB transcript, each
   // cut at a line end, and through the line folds; only the 1 GiB hard limit stops the agent for its output.
   // Review I1: both records are opened before anything is spawned; a record that cannot be opened is io-error with no child.
-  let events: CappedLineFile, transcript: CappedLineFile;
+  let events: CappedLineFile, transcript: ObservedTranscriptFile;
   try { events = new CappedLineFile(eventsPath, OUTPUT_LIMIT); } catch { result.reason = "io-error"; result.neverStarted = true; return persist(); }
-  try { transcript = new CappedLineFile(transcriptPath, TRANSCRIPT_LIMIT, transcriptMarker); } catch { events.close(); result.reason = "io-error"; result.neverStarted = true; return persist(); }
+  try { transcript = new ObservedTranscriptFile(transcriptPath); } catch { events.close(); result.reason = "io-error"; result.neverStarted = true; return persist(); }
   await new Promise<void>((resolve) => {
     const child = spawn(config.installation.command[0], args, { cwd: input.cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
     let stopped = false;
@@ -192,7 +192,7 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       clearTimeout(drainTimer);
       input.abortSignal?.removeEventListener("abort", abort);
       splitter.end();
-      events.close(); transcript.close();
+      events.close(); try { transcript.close(); } catch (error) { transcriptError ??= String(error); }
       stdoutTruncated ||= events.truncatedAt !== null;
       transcriptTruncatedAt = transcript.truncatedAt;
       resolve();

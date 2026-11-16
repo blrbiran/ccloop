@@ -153,12 +153,14 @@ export function createTranscriptWriter(path, cap = TRANSCRIPT_LIMIT) {
       size += writeText(`${text}\n`);
     } catch (error) { fail(error); }
   };
+  const observed = (text, event) => event !== null && typeof event === "object" && !Array.isArray(event)
+    ? JSON.stringify({ ...event, ccloopObservedAt: Date.now() }) : text;
   return {
     line(text, event) {
       if (event && typeof event === "object" && event.type === "stream_event" && event.event && event.event.type === "content_block_delta") return;
-      put(text);
+      put(observed(text, event));
     },
-    dropped(bytes) { put(JSON.stringify({ type: "ccloop.line-dropped", bytes })); },
+    dropped(bytes) { const row = { type: "ccloop.line-dropped", bytes }; put(observed(JSON.stringify(row), row)); },
     close() { if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } fd = null; } stopped = true; },
   };
 }

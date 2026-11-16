@@ -126,6 +126,67 @@ export class CappedLineFile {
   }
 }
 
+/** Stamp complete JSON objects at receipt while leaving raw evidence and decoder input untouched. Oversized lines stay raw. */
+export class ObservedTranscriptFile {
+  private readonly file: CappedLineFile;
+  private parts: Buffer[] = [];
+  private pending = 0;
+  private oversized = false;
+
+  constructor(path: string, cap = TRANSCRIPT_LIMIT) {
+    this.file = new CappedLineFile(path, cap, transcriptMarker);
+  }
+
+  get truncatedAt(): number | null { return this.file.truncatedAt; }
+
+  write(chunk: Buffer): void {
+    const receivedAt = Date.now();
+    let start = 0;
+    for (;;) {
+      const newline = chunk.indexOf(10, start);
+      if (newline < 0) break;
+      this.add(chunk.subarray(start, newline));
+      if (this.oversized) this.file.write(Buffer.from("\n"));
+      else this.emit(receivedAt);
+      this.parts = []; this.pending = 0; this.oversized = false;
+      start = newline + 1;
+    }
+    if (start < chunk.length) this.add(chunk.subarray(start));
+  }
+
+  close(): void {
+    try {
+      if (this.oversized) this.file.write(Buffer.from("\n"));
+      else if (this.pending > 0) this.emit(Date.now());
+    } finally { this.file.close(); }
+  }
+
+  private add(bytes: Buffer): void {
+    if (bytes.length === 0) return;
+    if (this.oversized) { this.file.write(bytes); return; }
+    this.parts.push(bytes);
+    this.pending += bytes.length;
+    if (this.pending > MAX_LINE_BYTES) {
+      this.oversized = true;
+      for (const part of this.parts) this.file.write(part);
+      this.parts = [];
+    }
+  }
+
+  private emit(receivedAt: number): void {
+    const bytes = this.parts.length === 1 ? this.parts[0]! : Buffer.concat(this.parts, this.pending);
+    let recorded = bytes;
+    try {
+      const row: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      if (row !== null && typeof row === "object" && !Array.isArray(row)) {
+        recorded = Buffer.from(JSON.stringify({ ...row, ccloopObservedAt: receivedAt }), "utf8");
+      }
+    } catch { /* Preserve invalid input as received. */ }
+    this.file.write(recorded);
+    this.file.write(Buffer.from("\n"));
+  }
+}
+
 /** One stdout line as every runtime decoder reads it: blank, a parsed JSON value, text that does not parse, or too large. */
 export type JsonLine = { kind: "blank" } | { kind: "row"; row: unknown } | { kind: "unparsed" } | { kind: "too-large" };
 
