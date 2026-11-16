@@ -11,7 +11,7 @@ import {readTaskResultFile} from "../control/taskResultEvidence.js";import {read
 import {captureWorktreeSnapshot} from "./executionFormatFailure.js";
 import {parseMaterializedAgentConfig,agentConfigHash} from "../agents/materialize.js";
 import type {MaterializedAgentConfigV1} from "../agents/types.js";
-import {normalizeExecutionFinal,EXECUTION_NORMALIZER_VERSION} from "../runtime/executionNormalizer.js";
+import {normalizeCodexExecutionFinal,normalizeExecutionFinal,EXECUTION_NORMALIZER_VERSION} from "../runtime/executionNormalizer.js";
 import {decodeCodexResult,decodeCodexUsage,codexModelUsage} from "../runtime/codex/protocol.js";
 import {loopContractSchema,type LoopContract} from "../contract/schema.js";
 import {appendEvent} from "../persistence/fileStore.js";
@@ -70,7 +70,7 @@ export async function captureExhaustedCompletion(input:ExhaustedCaptureInput):Pr
     if(!registered.some(p=>p.pid===processRecord.pid&&p.pgid===processRecord.pgid&&p.startedAt===processRecord.startedAt&&p.phase==="execute"))throw new Error("saved-result-process-authority-invalid");
     for(const p of registered){let quiet=false;try{process.kill(-p.pgid,0);}catch(e){if((e as NodeJS.ErrnoException).code==="ESRCH")quiet=true;}if(!quiet)throw new Error("saved-result-process-not-settled");}
     const final=(await read(source,join(call,"final.json"))).toString(),events=(await read(source,join(call,"events.jsonl"))).toString();
-    const normalization=normalizeExecutionFinal(final);
+    const normalization=config.kind==="codex"?normalizeCodexExecutionFinal(final):normalizeExecutionFinal(final);
     const {tokenUsage:_execTokens,usageEvidence:_execEvidence,modelUsage:_execModels,...executionCore}=input.execution as Record<string,unknown>;
     if(normalization.status!=="available"||canonicalHash(normalization.execution)!==canonicalHash(executionCore))throw new Error("saved-result-execution-normalization-mismatch");
     if(!await missing(codexSkillsPendingPath(input.worktreePath)))throw new Error("saved-result-skills-cleanup-incomplete");

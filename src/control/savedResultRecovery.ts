@@ -46,7 +46,7 @@ import {promisify} from "node:util";
 import {canonicalHash,canonicalJson,startEnvelopeSchema,type ArtifactRefV1} from "./protocol.js";
 import {loopContractSchema,type LoopContract} from "../contract/schema.js";
 import {parseMaterializedAgentConfig,agentConfigHash} from "../agents/materialize.js";
-import {normalizeExecutionFinal} from "../runtime/executionNormalizer.js";
+import {normalizeCodexExecutionFinal,normalizeExecutionFinal} from "../runtime/executionNormalizer.js";
 import {decodeCodexResult,decodeCodexUsage,executeWireJsonSchema,phaseJsonSchema} from "../runtime/codex/protocol.js";
 import {CODEX_PHASE_CONFIG} from "../agents/codexIsolation.js";
 import {codexPhaseConfigArgs} from "../runtime/codex/codexPhaseIsolation.js";
@@ -396,7 +396,7 @@ async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation
   boundSavedResultRuntime(source.work.contract,loopContractSchema.parse(json(capsule.artifacts.runtimeContract)));
   const config=parseMaterializedAgentConfig(json(capsule.artifacts.config));
   if(config.kind!==capsule.executor.kind||agentConfigHash(config)!==source.claim.configHash)fail("saved-result-config-mismatch");
-  const normalized=normalizeExecutionFinal(get(capsule.artifacts.final).toString());
+  const normalized=(config.kind==="codex"?normalizeCodexExecutionFinal:normalizeExecutionFinal)(get(capsule.artifacts.final).toString());
   if(normalized.status!=="available")fail(normalized.reason);
   if(canonicalHash(normalized.execution)!==capsule.normalizedExecutionHash)fail("saved-result-normalization-hash-mismatch");
   const repo=source.work.contract.context.repoPath;
