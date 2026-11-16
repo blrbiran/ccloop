@@ -311,8 +311,8 @@ export function scanFinalMessage(final: string, accepts: PhaseAcceptor, strictEx
       const [node, level] = entry;
       if (level > MAX_DEPTH || (record(node) && ++nodes > MAX_NODES)) { hidden = true; break scan; }
       // Only an established strict execute envelope owns an opaque report subtree. Orphan artifacts grant no opacity.
-      if (accepts.opaqueTaskResult && record(node) && Object.hasOwn(node, "result") && executeEnvelope.safeParse(node).success) reportOwners.add(node.result as object);
-      if (strictExecution && record(node) && execution.safeParse(node).success) reportOwners.add(node);
+      if (accepts.opaqueTaskResult && record(node) && Object.hasOwn(node, "result") && accepts(node) && record(node.result)) reportOwners.add(node.result);
+      if (strictExecution && record(node) && accepts(node)) reportOwners.add(record(node.result) && Object.keys(node).length === 1 ? node.result : node);
       const opaque = record(node) && reportOwners.has(node) && Object.hasOwn(node, "taskResult");
       if (opaque) {
         const original = node.taskResult, bounded = boundedTaskResult(original);
@@ -332,7 +332,7 @@ export function scanFinalMessage(final: string, accepts: PhaseAcceptor, strictEx
     for (const node of found) {
       if (shaped.size >= 2) break;
       // Lossy diagnostics are presentation data: compare original report identities, independent of prefix order.
-      const semantic = strictExecution && executeEnvelope.safeParse(node).success ? node.result : node;
+      const semantic = strictExecution && record(node) && Object.keys(node).length === 1 && Object.hasOwn(node, "result") && accepts(node) ? node.result : node;
       const key = hasLossyReport ? "sha256:" + canonicalJsonHash(semantic, reportFingerprints) : JSON.stringify(semantic, sortKeys);
       if (!shaped.has(key)) {
         const ok = accepts(node);

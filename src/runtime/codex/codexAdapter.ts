@@ -1,4 +1,4 @@
-import { normalizeExecutionFinal, ExecutionFormatFailure, executionFormatFields, executionFormatFieldDetail } from "../executionNormalizer.js";
+import { normalizeCodexExecutionFinal, ExecutionFormatFailure, executionFormatFields, executionFormatFieldDetail } from "../executionNormalizer.js";
 import { access, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readAgentCatalog } from "../../agents/agentCatalog.js";
@@ -168,7 +168,7 @@ export class CodexAdapter implements RuntimeAdapter {
       }
       const modelUsage=outcome.stream.modelUsage.value(this.config.model) ?? undefined;
       await writeFile(join(outcome.evidenceDir,"usage.json"),JSON.stringify(usage.usageEvidence,null,2),{mode:0o600});
-      const normalization=normalizeExecutionFinal(outcome.final);
+      const normalization=normalizeCodexExecutionFinal(outcome.final);
       await writeFile(join(outcome.evidenceDir,"execution-normalization.json"),JSON.stringify(normalization),{mode:0o600});
       if (normalization.diagnostic.method !== "whole" && (normalization.diagnostic.candidates>0 || normalization.diagnostic.hidden)) {
         await writeFile(join(outcome.evidenceDir,"final-extraction.json"),JSON.stringify(normalization.diagnostic),{mode:0o600});

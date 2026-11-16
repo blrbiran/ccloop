@@ -13,14 +13,25 @@ const unwrap = (value:unknown):unknown => record(value) && Object.keys(value).le
 const accepts:PhaseAcceptor = Object.assign((value:unknown)=>executionSchema.safeParse(unwrap(value)).success, {
   keys:["result","changedFiles","diffPatch","commandOutputs","stdoutStderrLog","completionStatus","failureType","failureMessage"], opaqueTaskResult:true,
 });
+// #316: only the Codex execute boundary accepts a log as lines; all persisted results and other adapters remain string-only.
+const codexBody=(value:unknown):unknown=>{
+  const body=unwrap(value);
+  if(!record(body)||!Array.isArray(body.stdoutStderrLog)||!body.stdoutStderrLog.every((line:unknown)=>typeof line==="string"))return body;
+  return {...body,stdoutStderrLog:body.stdoutStderrLog.join("\n")};
+};
+const codexAccepts:PhaseAcceptor=Object.assign((value:unknown)=>executionSchema.safeParse(codexBody(value)).success,
+  {keys:accepts.keys,opaqueTaskResult:true});
 /** Exact execute shapes only; the bounded scanner owns ambiguity and original report fingerprints. */
-export function normalizeExecutionFinal(final:string):ExecutionNormalization {
+export function normalizeExecutionFinal(final:string):ExecutionNormalization {return normalize(final,accepts,unwrap);}
+/** A Codex answer can report its output log as lines; the resulting execution still has the shared strict shape. */
+export function normalizeCodexExecutionFinal(final:string):ExecutionNormalization {return normalize(final,codexAccepts,codexBody);}
+function normalize(final:string,acceptor:PhaseAcceptor,body:(value:unknown)=>unknown):ExecutionNormalization {
   let whole:unknown, isWhole=false;
   try { whole=JSON.parse(final);isWhole=true; } catch { /* decorated */ }
-  const {extraction,hidden}=scanFinalMessage(final,accepts,true);
+  const {extraction,hidden}=scanFinalMessage(final,acceptor,true);
   const diagnostic:Diagnostic={method:extraction.method,candidates:"candidates" in extraction?extraction.candidates:1,valid:"valid" in extraction?extraction.valid:1,hidden,originalBytes:Buffer.byteLength(final,"utf8")};
-  if (extraction.method === "candidate" && (!isWhole || accepts(whole))) {
-    return {status:"available",execution:dropUnreported(executionSchema.parse(unwrap(extraction.value))),diagnostic:{...diagnostic,method:isWhole?"whole":"candidate"}};
+  if (extraction.method === "candidate" && (!isWhole || acceptor(whole))) {
+    return {status:"available",execution:dropUnreported(executionSchema.parse(body(extraction.value))),diagnostic:{...diagnostic,method:isWhole?"whole":"candidate"}};
   }
   return {status:"unavailable",reason:hidden||diagnostic.valid>0?"execution-format-ambiguous-or-hidden":"execution-format-invalid",diagnostic};
 }
