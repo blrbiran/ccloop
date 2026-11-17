@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readlink, realpath, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readlink, realpath, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -194,6 +194,20 @@ describe("a failed Codex session deletion is recorded and retried once (Orca #34
     expect(deleteCalls(w)).toHaveLength(1);
     expect(existsSync(rolloutPath)).toBe(true);
     expect(existsSync(join(dir,"session-cleaned.json"))).toBe(false);
+  });
+
+  // codex-cli 0.167.0 exits 1 "failed to delete session" for a thread it never persisted in that home (measured, Orca
+  // session 4389b15f): nothing of the prompt is left there, so that is no failure to show a person.
+  it("a failed delete of a session whose rollout is not in the private home counts as cleaned", async () => {
+    const w=await world();
+    await w.run("plan");
+    const {dir,rolloutPath}=await recordedCall(w,"call-orphan",ID);
+    await unlink(rolloutPath);
+    vi.stubEnv("FAKE_CODEX_DELETE_FAIL","1");
+    await sweepCodexSessions(w.context.runDir);
+    expect(deleteCalls(w)).toHaveLength(1);
+    expect(existsSync(join(dir,"session-cleaned.json"))).toBe(true);
+    expect(existsSync(join(dir,"session-cleanup-failed.json"))).toBe(false);
   });
 
   it("a sweep retry that deletes the session marks the call cleaned", async () => {
