@@ -264,3 +264,12 @@ standing notice): the 2026-11-14 ERRATUM's "Failure to delete is reported as an 
   failure, whose run evidence no longer exists. A provider switch after the thread exists did not fail the delete.
 - A cleanup step that still fails the call (a broken rollout read, an evidence write) is classified `cleanup-failed`
   (failure-causes spec, Correction 2026-11-18 #349), not `unknown`.
+
+## Correction (2026-11-18, Orca session 4389b15f; Orca tester issue 349, review round)
+
+Adds to the Correction above (nothing in it is withdrawn): the run's end -- `runLoop` before its hand-off hook, `resumeLoop`
+after its last phase -- also retries, once, every deletion still recorded as `failed`, so the last phase's failure gets its
+retry too. A sessions directory that cannot be read inside the delete is a recorded failure
+(`codex-session-rollout-unreadable: ...`), not a throw. The record keeps the HOME the delete ran with (`userHome`), and
+collect's `sessionCleanup[]` carries the recorded argv as `command` and that `userHome`, both optional, so a person's
+manual delete runs exactly as ccloop's did (including its `-c model_catalog_json` pair).
