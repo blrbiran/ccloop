@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, realpath, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectExecution } from "../../src/control/collect.js";
 import { runControlCommand } from "../../src/control/command.js";
@@ -82,7 +82,9 @@ describe("collect lists the run's Codex sessions that could not be deleted (Orca
   it("ignores a malformed record rather than failing collect", async () => {
     const w = await world();
     await w.failed("call-aaaaaa", "failed", "not json");
-    await w.failed("call-bbbbbb", "failed", JSON.stringify({ threadId: ID, home: "relative", state: "failed", detail: "x" }));
+    // A relative home that does reach the rollout from this process's cwd: only the record check leaves it out.
+    await w.failed("call-bbbbbb", "failed", JSON.stringify({ schema: "ccloop-session-cleanup-failed-v1", threadId: ID, home: relative(process.cwd(), w.codexHome), state: "failed", detail: "x" }));
+    await w.failed("call-dddddd", "failed", JSON.stringify({ schema: "ccloop-session-cleanup-failed-v1", threadId: ID, home: w.codexHome, state: "pending", detail: "x" }));
     await w.failed("call-cccccc", "failed");
     expect((await collectExecution(w.envelope, 0)).sessionCleanup).toEqual([{ threadId: ID, home: w.codexHome, state: "failed", detail: "exit 1: Error: failed to delete session" }]);
   });
