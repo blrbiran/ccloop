@@ -362,3 +362,11 @@ The sections above are kept verbatim. Three cause values are added; no retry rul
   execute still answers null.
 - The 2026-11-05 Correction's "cause still `unknown`" for a refused omp execute answer no longer holds: such an answer is
   now `execution-shape` or `execution-not-json`, or `narration-only` when no tool ran.
+
+## Correction (2026-11-18, Orca session 4389b15f; Orca tester issue 349)
+
+- New cause `cleanup-failed`: a codex phase call that failed only in its cleanup after the call (a broken live-usage
+  rollout read, an evidence write after the session deletion). It replaces the `unknown` such a call was classified as.
+  Terminal, not in `RETRYABLE_CAUSES`: the call's work already ran. `detail` is the error's head (`causeDetail`).
+- A failed session deletion itself no longer fails the call (codex phase isolation spec, Correction 2026-11-18): it is
+  recorded and the call keeps its own outcome, so a finished plan or execute is never `failed` because of it.

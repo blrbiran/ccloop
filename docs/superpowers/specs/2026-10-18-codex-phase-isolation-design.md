@@ -240,3 +240,27 @@ process exit; a crash/worker-loss sweep deletes recorded UUIDs after process rea
 an error, never recorded as successful cleanup. A crash before the UUID was written cannot be swept by exact identity.
 Old archived `--ephemeral` argv remains valid under the saved-result versioned matcher; current argv without it requires
 private phase isolation. No claim here changes the published text above.
+
+## Correction (2026-11-18, Orca session 4389b15f; Orca tester issue 349)
+
+Human ruling (「照常结算、但明显标出删除失败、下一轮再删」; on a second failure, stop retrying automatically and keep a
+standing notice): the 2026-11-14 ERRATUM's "Failure to delete is reported as an error" no longer fails the phase. As built:
+
+- A failed `codex delete --force <UUID>` is written beside the call as `session-cleanup-failed.json`
+  (`ccloop-session-cleanup-failed-v1`: thread id, private `CODEX_HOME`, the command, exit code, signal, stderr head of at
+  most 512 bytes, `state` `failed` | `retry-failed`). It is still never recorded as successful cleanup
+  (`session-cleaned.json` is written only when the rollout is gone). The phase and the run keep their real outcome.
+- The deletion is proven by the rollout being gone, not by the exit code alone: codex-cli 0.167.0 exits 1 "failed to
+  delete session" for a UUID it never persisted in that home (measured, Orca session 4389b15f), which leaves nothing to
+  delete.
+- A recorded `failed` deletion is retried once by the next sweep: the crash / lost-worker sweep, or the run's next codex
+  phase (which retries only calls that already recorded a failure). A second failure is `retry-failed` and is never
+  retried automatically again. Collect lists every such session whose rollout still exists as the optional
+  `sessionCleanup` key (`[{threadId, home, state, detail}]`, absent when there is none).
+- Pairing fix: the deletion now gets the same config-file `-c` pair as the phase (2026-11-05 Correction, issue 121),
+  resolved against the installation's source `CODEX_HOME`, which `thread.json` now records as `sourceCodexHome`.
+  Measured on codex-cli 0.167.0: with a relative `model_catalog_json` the delete failed "failed to load configuration"
+  (exit 1) without the pair and succeeded with it. This gap is real; it is not proven to be the cause of the tester's
+  failure, whose run evidence no longer exists. A provider switch after the thread exists did not fail the delete.
+- A cleanup step that still fails the call (a broken rollout read, an evidence write) is classified `cleanup-failed`
+  (failure-causes spec, Correction 2026-11-18 #349), not `unknown`.
