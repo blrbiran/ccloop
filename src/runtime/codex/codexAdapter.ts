@@ -1,4 +1,4 @@
-import { normalizeCodexExecutionFinal, ExecutionFormatFailure, executionFormatFields, executionFormatFieldDetail } from "../executionNormalizer.js";
+import { normalizeCodexExecutionFinal, ExecutionFormatFailure, executeAnswerForm, executionFormatFields, executionFormatFieldDetail } from "../executionNormalizer.js";
 import { access, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readAgentCatalog } from "../../agents/agentCatalog.js";
@@ -11,7 +11,7 @@ import { codexResultOf, parseCodexConfig, phaseFinalAccepts, scanFinalMessage, t
 import { runCodexPhase, type PhaseOutcome } from "./runCodexPhase.js";
 import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
 import { codexToolRuleRows } from "../toolRules.js";
-import { attachedCause, causeDetail, singleCallCauseOf, type CallClassification } from "../failureCause.js";
+import { attachedCause, causeDetail, EXECUTE_ANSWER_CAUSES, singleCallCauseOf, withExecuteAnswerCause, type CallClassification } from "../failureCause.js";
 import { phaseLimitMs, runWithTransientRetry, tryContext, type TryObservation, type TryResult } from "../transientRetry.js";
 
 /** Codex rate-limit spec §3.2: waits before each retry of a phase rejected by 429 before any work (three retries). */
@@ -60,10 +60,13 @@ async function recordPromptFallback(evidenceDir: string, refused: { evidenceDir:
     refusedEvidenceDir: refused.evidenceDir, detail: refused.detail }), { mode: 0o600 });
 }
 
-/** Orca issue #262: the error carries a classified cause that is neither a timeout nor unknown. */
+/**
+ * Orca issue #262: the error carries a classified cause that is neither a timeout nor unknown.
+ * Orca tester #347: nor a refused execute answer -- those were `unknown` before, and an aborted execute keeps answering null.
+ */
 function ownCause(error: unknown): boolean {
   const cause = attachedCause(error)?.classification.cause;
-  return cause !== undefined && cause !== "budget-exhausted" && cause !== "unknown";
+  return cause !== undefined && cause !== "budget-exhausted" && cause !== "unknown" && !EXECUTE_ANSWER_CAUSES.has(cause);
 }
 
 export class CodexAdapter implements RuntimeAdapter {
@@ -117,6 +120,10 @@ export class CodexAdapter implements RuntimeAdapter {
     // Orca tester issue #274 (as omp's, issue 125): an execute answer the strict shape refused names what it refused; cause unchanged.
     const formatDetail = (error as { formatDetail?: unknown }).formatDetail;
     if (classification !== null && typeof formatDetail === "string") classification = { ...classification, detail: formatDetail };
+    // *** ERRATUM (Orca tester #347, session 4389b15f, 2026-11-18): "cause unchanged" above holds for that line only; the
+    // next line gives such an answer its own cause (failure-causes spec, Correction 2026-11-18). ***
+    // Orca tester #347: an execute final the strict decode refused is classified by its form and whether a work item was seen.
+    classification = withExecuteAnswerCause(classification, error, outcome.stream.call.toolObserved());
     // The 429 row keeps exactly the 2026-10-13 predicate; every other retryable cause needs a read-only phase or no work seen.
     const retrySafe = outcome.cleanupError !== undefined ? false : classification?.cause === "rate-limited" ? rateLimited === "before-work"
       : classification !== null && (phase !== "execute" || !classification.workObserved);
@@ -184,6 +191,8 @@ export class CodexAdapter implements RuntimeAdapter {
         if (detail!==null) await writeFile(join(outcome.evidenceDir,"execution-format-issues.json"),JSON.stringify({schema:"ccloop-execution-format-issues-v1",issues:fields}),{mode:0o600});
         await writeFile(join(outcome.evidenceDir,"decode-error.txt"),detail===null?String(original):`${String(original)}: ${detail}`,{mode:0o600});
         const failure=new ExecutionFormatFailure(`${String(original)}: ${outcome.evidenceDir}${detail===null?"":`: ${detail}`}`,outcome.evidenceDir,usage.tokenUsage,usage.usageEvidence,modelUsage,normalization);
+        // Orca tester #347: the final's form, for the failure cause (failedTry, withExecuteAnswerCause).
+        Object.assign(failure,{executeAnswer:executeAnswerForm(outcome.final,normalization.diagnostic)});
         throw detail===null?failure:Object.assign(failure,{formatDetail:causeDetail(`${normalization.reason}: ${detail}`)});
       }
       return {...normalization.execution,...usage,...(modelUsage===undefined?{}:{modelUsage})} as PhaseResults[P];

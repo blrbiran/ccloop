@@ -4,6 +4,9 @@
 // (the first issue's path and message, bounded to 512 bytes like every other detail), and the run directory gets
 // execute-format-failure.json naming the refs cleanup publishes the attempt under, the commit they build on, and the
 // normalizer's issues. Diagnosis only: no capsule, no recovery, nothing in collect.
+// *** ERRATUM (Orca tester #347, session 4389b15f, 2026-11-18): "the cause stays unknown" (and "cause unknown" in the first
+// test's title) no longer holds: an answer of the wrong shape is `execution-shape` (failure-causes spec, Correction
+// 2026-11-18; the two assertions carry the Ruling line). The detail and the error are unchanged. ***
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -42,7 +45,9 @@ describe("an omp execute answer the strict shape refuses (runLoop over the omp a
     const { w, state, head, diagnostics } = await run({ schema: "task-result-v1", goal: "Set answer.txt to 42" });
     expect(state.status).toBe("failed");
     expect(state.stopReason).toContain("omp-result-invalid");
-    expect(state.failureCause).toEqual({ cause: "unknown", phase: "execute", retries: 0,
+    // Ruling: human approved necessary criteria changes this round (session 4389b15f, 2026-11-18: 「这一轮必要的判据都允许改。」)
+    // Orca tester #347: a JSON answer of the wrong shape is now cause execution-shape (was unknown); the detail is unchanged.
+    expect(state.failureCause).toEqual({ cause: "execution-shape", phase: "execute", retries: 0,
       detail: "execution-format-invalid: (top level): Unrecognized key(s) in object: 'schema', 'goal'" });
     const file = JSON.parse(await readFile(diagnostics, "utf8")) as Record<string, any>;
     expect(file).toMatchObject({ schema: "ccloop-omp-execute-format-failure-v1", attempt: 1, attemptRefs: ["refs/ccloop/run/attempts/1"], attemptBase: head,
@@ -55,7 +60,9 @@ describe("an omp execute answer the strict shape refuses (runLoop over the omp a
 
   it("a required field of the wrong type: the detail names its path", async () => {
     const { state, diagnostics } = await run({ stdoutStderrLog: null });
-    expect(state.failureCause).toEqual({ cause: "unknown", phase: "execute", retries: 0, detail: "execution-format-invalid: stdoutStderrLog: Expected string, received null" });
+    // Ruling: human approved necessary criteria changes this round (session 4389b15f, 2026-11-18: 「这一轮必要的判据都允许改。」)
+    // Orca tester #347: was cause unknown.
+    expect(state.failureCause).toEqual({ cause: "execution-shape", phase: "execute", retries: 0, detail: "execution-format-invalid: stdoutStderrLog: Expected string, received null" });
     expect(existsSync(diagnostics)).toBe(true);
   }, 60_000);
 

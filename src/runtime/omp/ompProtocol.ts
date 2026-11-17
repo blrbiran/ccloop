@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ModelUsageV1 } from "../../control/usage.js";
-import { executionShapeIssues, normalizeExecutionFinal } from "../executionNormalizer.js";
+import { executeAnswerForm, executionShapeIssues, normalizeExecutionFinal } from "../executionNormalizer.js";
 import type { UsageEvidence } from "../types.js";
 import { phaseFinalAccepts, scanFinalMessage, verificationSchema, type PhaseResults } from "../codex/protocol.js";
 import { ompPhaseTools, type OmpPhase } from "./phasePrompt.js";
@@ -187,15 +187,19 @@ export class OmpPhaseFold {
     const final = this.last!;
     if (!this.ended || final.stopReason !== "stop" || !Array.isArray(final.content)) throw Object.assign(new Error("omp-no-completion"), { observedTokens: totals.total });
     const text = final.content.filter((item): item is { type: "text"; text: string } => record(item) && item.type === "text" && typeof item.text === "string").map((item) => item.text).join("");
-    if (!text.trim()) throw Object.assign(new Error("omp-result-invalid"), { observedTokens: totals.total });
+    // Orca tester #347: a refused execute final carries its form (executeAnswer); the adapter classifies it with the tools seen.
+    if (!text.trim()) throw Object.assign(new Error("omp-result-invalid"), { observedTokens: totals.total }, phase === "execute" ? { executeAnswer: executeAnswerForm(text, null) } : {});
     let result: unknown;
     if (phase === "execute") {
       const normalized = normalizeExecutionFinal(text);
       if (normalized.status !== "available") {
         // Issues 125/158: the failure carries its normalization and a bounded detail; the error and its cause are unchanged.
+        // *** ERRATUM (Orca tester #347, session 4389b15f, 2026-11-18): the error is unchanged; its cause is no longer --
+        // `executeAnswer` below lets the adapter classify it (failure-causes spec, Correction 2026-11-18). ***
         const issues = executionFormatIssues(text), first = issues[0];
         const formatDetail = causeDetail(first === undefined ? `${normalized.reason}: the final message is not one JSON object` : `${normalized.reason}: ${first.path === "" ? "(top level)" : first.path}: ${first.message}`);
-        throw Object.assign(new Error("omp-result-invalid"), { observedTokens: totals.total, formatDetail, formatNormalization: { reason: normalized.reason, diagnostic: normalized.diagnostic, issues } });
+        throw Object.assign(new Error("omp-result-invalid"), { observedTokens: totals.total, formatDetail, formatNormalization: { reason: normalized.reason, diagnostic: normalized.diagnostic, issues },
+          executeAnswer: executeAnswerForm(text, normalized.diagnostic) });
       }
       result = normalized.execution;
     } else {

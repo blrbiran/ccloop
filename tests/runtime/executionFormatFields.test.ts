@@ -85,7 +85,9 @@ describe("codex execute: the decode failure names the refused field (#274)", () 
     const state = await runLoop(f.contract, f.runDir, new CodexAdapter(f.config));
     expect(state.status).toBe("failed");
     expect(state.stopReason).toMatch(/codex-result-invalid: .*: commandOutputs: expected array, received string$/);
-    expect(state.failureCause).toMatchObject({ cause: "unknown", phase: "execute", detail: "execution-format-invalid: commandOutputs: expected array, received string" });
+    // Ruling: human approved necessary criteria changes this round (session 4389b15f, 2026-11-18: 「这一轮必要的判据都允许改。」)
+    // Orca tester #347: a JSON answer of the wrong shape is now cause execution-shape (was unknown); the detail is unchanged.
+    expect(state.failureCause).toMatchObject({ cause: "execution-shape", phase: "execute", detail: "execution-format-invalid: commandOutputs: expected array, received string" });
   }, 60_000);
 });
 

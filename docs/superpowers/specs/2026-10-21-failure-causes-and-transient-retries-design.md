@@ -322,3 +322,43 @@ The sections above are kept verbatim. §5 row 4 gains one exception; no cause va
   `usage-lower-bound.json` `{"tokens": <turn usage>}`, the shape omp writes (Orca #116), best-effort. Only when that
   usage is > 0. In the tester's run `observedTokens` was null (no `turn.completed` before the stall), so this would
   still have written nothing there.
+
+## Correction (2026-11-18, Orca session 4389b15f; Orca tester issue 347)
+
+The sections above are kept verbatim. Three cause values are added; no retry rule, contract key or collect shape changes
+(collect's `failureCause.cause` enum is `FAILURE_CAUSES`, so it gains the three values).
+
+- **Why.** A codex execute ended after one sentence ("I'll start by reading the handoff context ... before implementing.",
+  22 output tokens). The run recorded `cause: "unknown"` beside `ExecutionFormatFailure: SyntaxError ... is not valid JSON`,
+  so "the agent stopped without working" could not be told apart from "the agent worked and wrote a malformed answer".
+- **The rule** (`executeAnswerCause`, `src/runtime/failureCause.ts`). It applies to an execute call that completed but
+  whose final message the strict execute decode refused. The final is read by structure only (`executeAnswerForm`,
+  `src/runtime/executionNormalizer.ts`): `absent` (none or blank), `json` (the whole final parses, or it holds an object
+  with an execute answer key), `broken` (brace text that does not parse), or `prose`. Then:
+  - `json` gives `execution-shape`;
+  - `broken` gives `execution-not-json`;
+  - `absent` or `prose` with work observed gives `execution-not-json`;
+  - `absent` or `prose` with no work observed gives `narration-only`.
+  The `detail` of `execution-shape` and `execution-not-json` keeps the refused-field detail when there is one (the
+  2026-11-05 Correction above, and tester #274), so Orca's reader of that text is unaffected. Otherwise, and always for
+  `narration-only`, the detail is a fixed sentence naming the final's byte count. Model text never enters a detail.
+- **"Work observed"** is the adapter's own observation of the call, never an output-token threshold. A threshold cannot
+  tell a short answer from a short narration, and a long narration with no tool is still narration.
+  - codex: an `item.*` row whose item type is not `agent_message`, `reasoning` or `error` (the three a single call also
+    allows), or any line that is not a typed row.
+  - claude: the runner's signals file records `toolUses > 0`; a missing or unreadable signals file counts as work.
+  - omp: a `tool_execution_start` row.
+- **Where each adapter can see it.**
+  - codex: a refused final (`ExecutionFormatFailure`). A missing or empty final file is `io-error` before decode and stays
+    `unknown`.
+  - claude: a structured answer that fails the shape is always `execution-shape`. Claude exiting 0 without
+    `structured_output` and with a clean worktree is recognised by the runner's own last stderr line
+    (`Claude CLI did not return structured_output`) and classified by tool uses. With a dirty worktree the runner builds a
+    partial instead, which keeps its cause as before.
+  - omp: a refused final, including a stop whose only actionable block is not text.
+- **Only `unknown` is refined.** A cause the agent CLI typed (for example a claude `rate_limit` that also left no answer)
+  stays. None of the three is in `RETRYABLE_CAUSES`: Orca retries at task level, and a call that ran tools may have
+  changed the worktree. The codex abort rule of the 2026-11-12 Correction treats the three like `unknown`: an aborted
+  execute still answers null.
+- The 2026-11-05 Correction's "cause still `unknown`" for a refused omp execute answer no longer holds: such an answer is
+  now `execution-shape` or `execution-not-json`, or `narration-only` when no tool ran.

@@ -11,10 +11,10 @@ import { observedTokensOf, SingleCallOutputInvalid, type AttemptContext, type At
 import type { ModelUsageV1 } from "../../control/usage.js";
 import { boundedTaskResult } from "../taskResult.js";
 import { dropUnreported } from "../reportedDecisions.js";
-import { executionFormatFieldDetail, executionFormatFields, normalizeExecutionFinal } from "../executionNormalizer.js";
+import { executeAnswerForm, executionFormatFieldDetail, executionFormatFields, normalizeExecutionFinal } from "../executionNormalizer.js";
 import { buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from "./prompts.js";
 import type { ClaudePhaseRequest } from "./types.js";
-import { causeDetail, classifyClaudeCall, isExecutableMissing, parseClaudeSignals, singleCallCauseOf, type CallClassification } from "../failureCause.js";
+import { causeDetail, classifyClaudeCall, isExecutableMissing, parseClaudeSignals, singleCallCauseOf, withExecuteAnswerCause, type CallClassification } from "../failureCause.js";
 import { effectiveIdleTimeoutMs, IdleWatch, lineFeeder, type IdleSnapshotV1 } from "../idleWatch.js";
 import { transcriptTruncatedAt as transcriptTruncatedAtOf } from "../streamLines.js";
 import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
@@ -75,8 +75,12 @@ const parseObject = (text: string): object | undefined => {
   try { const v: unknown = JSON.parse(text); return v !== null && typeof v === "object" && !Array.isArray(v) ? v : undefined; } catch { return undefined; }
 };
 
-/** The runner's accounting fields are outside the model's strict execute answer. */
-async function decodeClaudeExecute(value: object, evidenceDir: string): Promise<ExecutionResult> {
+/**
+ * The runner's accounting fields are outside the model's strict execute answer. `classifyAnswer` (Orca tester #347): a
+ * refusal of the answer of a call that completed carries its form -- always `json`, the structured object claude returned --
+ * so its cause is `execution-shape`; an answer written after a stop keeps that stop's cause.
+ */
+async function decodeClaudeExecute(value: object, evidenceDir: string, classifyAnswer = false): Promise<ExecutionResult> {
   const { tokenUsage, usageEvidence, modelUsage, partialOrigin, ...answer } = value as Record<string, unknown>;
   const text = JSON.stringify(answer), normalized = normalizeExecutionFinal(text);
   if (normalized.status !== "available") {
@@ -88,11 +92,22 @@ async function decodeClaudeExecute(value: object, evidenceDir: string): Promise<
     throw Object.assign(new Error(`claude-result-invalid: ${evidenceDir}${detail === null ? "" : `: ${detail}`}`), {
       observedTokens: typeof tokenUsage === "number" ? tokenUsage : null,
       ...(detail === null ? {} : { formatDetail: causeDetail(`${normalized.reason}: ${detail}`) }),
+      ...(classifyAnswer ? { executeAnswer: executeAnswerForm(text, normalized.diagnostic) } : {}),
     });
   }
   return { ...normalized.execution, ...(partialOrigin === undefined ? {} : { partialOrigin }),
     ...(tokenUsage === undefined ? {} : { tokenUsage }), ...(usageEvidence === undefined ? {} : { usageEvidence }),
     ...(modelUsage === undefined ? {} : { modelUsage }) } as ExecutionResult;
+}
+
+/**
+ * Orca tester #347: the claude phase runner's own error when claude exited 0 without the structured answer
+ * (scripts/claude-phase-runner.mjs: `Claude CLI did not return structured_output`); with a clean worktree it is the last
+ * thing the runner writes to stderr before exiting 1. ccloop's text, never the model's; a truncated stderr does not match.
+ */
+const RUNNER_ANSWER_MISSING = "Claude CLI did not return structured_output";
+async function runnerAnswerMissing(evidenceDir: string): Promise<boolean> {
+  try { return (await readFile(join(evidenceDir, "stderr.log"), "utf8")).trimEnd().endsWith(RUNNER_ANSWER_MISSING); } catch { return false; }
 }
 
 // Spec §3.2: the runner's dedicated answer when claude never existed in this call. Checked before every other reading of
@@ -397,6 +412,10 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
           // Orca tester issue #274 (as omp's, issue 125): an execute answer the strict shape refused names what it refused; cause unchanged.
           const formatDetail = (error as { formatDetail?: unknown }).formatDetail;
           if (classification !== null && typeof formatDetail === "string") classification = { ...classification, detail: formatDetail };
+          // *** ERRATUM (Orca tester #347, session 4389b15f, 2026-11-18): "cause unchanged" above holds for that line only; the
+          // next line gives such an answer its own cause (failure-causes spec, Correction 2026-11-18). ***
+          // Orca tester #347: the signals' tool uses (workObserved: toolUses > 0, true when the signals are missing) are the work seen.
+          classification = withExecuteAnswerCause(classification, error, classification?.workObserved ?? true);
           const observed = (error as { observedTokens?: unknown }).observedTokens;
           const observation: TryObservation = (error as { neverStarted?: unknown }).neverStarted === true ? { kind: "rule0" }
             : typeof observed === "number" && observed > 0 ? { kind: "tokens", tokens: observed } : { kind: "null" };
@@ -446,6 +465,8 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       // neverStarted, which observedTokensOf answers 0 for. This error (timed out / failed after claude started) is unchanged. ***
       throw Object.assign(new Error(`claude-${outcome.reason}: ${outcome.evidenceDir}`), {
         observedTokens: await readObservedTokens(join(outcome.evidenceDir, OBSERVED_USAGE_FILE)),
+        // Orca tester #347: claude ended the execute call without an answer; the try is classified by the tool uses seen.
+        ...(request.phase === "execute" && outcome.reason === "exit-error" && await runnerAnswerMissing(outcome.evidenceDir) ? { executeAnswer: executeAnswerForm(null, null) } : {}),
       });
     }
     let parsed: unknown;
@@ -456,7 +477,7 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
     }
     const usageEvidence = (parsed as { usageEvidence?: unknown }).usageEvidence;
     if (usageEvidence !== undefined) await writeFile(join(outcome.evidenceDir, "usage.json"), JSON.stringify(usageEvidence, null, 2), { mode: 0o600 });
-    return (request.phase === "execute" ? await decodeClaudeExecute(parsed, outcome.evidenceDir) : parsed) as T;
+    return (request.phase === "execute" ? await decodeClaudeExecute(parsed, outcome.evidenceDir, true) : parsed) as T;
   }
 
   private call(context: AttemptContext): ClaudeCall {

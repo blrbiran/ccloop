@@ -181,6 +181,9 @@ if (NEW_WRITE_MODES.has(mode)) {
       debug: { choseInstead: "fix the parser", reproTests: ["tests/parser.test.ts"], reproCommand: "npx vitest run tests/parser.test.ts" },
     });
   }
+  // Orca tester #347: mode "no-answer" answers as "ok" does except that execute's result has no structured_output (claude
+  // ended its turn without the answer; the worktree stays clean); "no-answer-tool" also emits a tool_use first (work seen).
+  if (phase === "execute" && (mode === "no-answer" || mode === "no-answer-tool")) body = null;
   if (phase === "verify") body = { approved: true, rejectCategory: "", primaryTargetPaths: ["answer.txt"], failingCommand: null, safeToRetry: false, evidence: [], pauseSignals: [], stopSignals: [] };
   if (phase === "single-call") body = { answer: "fixture" };
   appendFileSync(`${marker}.calls`, `${phase}\n`);
@@ -230,6 +233,7 @@ if (NEW_WRITE_MODES.has(mode)) {
         await emitClosedMessage();
       }
     }
+    if (mode === "no-answer-tool" && phase === "execute") await emit({ type: "assistant", message: { id: "msg_tool", content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } }] } });
     await emit(envelope);
   };
   // Live token threshold (ccloop issue #225): mode "usage-stream" answers as "ok" does, except that the phase named in

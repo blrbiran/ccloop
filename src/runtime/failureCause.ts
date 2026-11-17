@@ -24,6 +24,13 @@ export const FAILURE_CAUSES = [
   // Orca follow-up J (#299): the provider does not serve the selected model (HTTP 404 naming a model). Terminal: never in
   // RETRYABLE_CAUSES -- the same model would be refused again; another agent or model is the way on.
   "model-unavailable",
+  // Orca tester #347: an execute call that completed but whose final message the strict execute decode refused
+  // (executeAnswerCause below). Terminal: never in RETRYABLE_CAUSES -- Orca retries at task level (its ladder), and a call
+  // that ran tools may have changed the worktree, so an in-phase retry would not start from the attempt's base.
+  // narration-only: the final is no answer (absent, or prose with no JSON in it) and no tool, command or file change was
+  // observed -- the agent said what it would do and ended its turn. execution-not-json: a final that is not JSON (or a
+  // missing answer after work was observed). execution-shape: JSON that is not exactly one accepted execute answer.
+  "narration-only", "execution-not-json", "execution-shape",
 ] as const;
 export type FailureCauseV1 = (typeof FAILURE_CAUSES)[number];
 
@@ -82,17 +89,29 @@ export function classifyCodexCall(events: string): CallClassification | null {
   return foldText(events, new CodexCallFold()).value();
 }
 
+/**
+ * Orca tester #347: the codex item types that are not work -- the agent's messages, its reasoning, and the `error` items
+ * codex emits for config warnings (codexSingleCall.ts allows the same three; every other item type, known or not, is a tool
+ * there too). A command_execution, file_change, mcp_tool_call, web_search or todo_list item is work.
+ */
+const CODEX_NON_WORK_ITEMS = new Set(["agent_message", "reasoning", "error"]);
+
 /** Live transcript (Orca spec 2026-10-23 §10.2.3): classifyCodexCall as a fold; a line too large to keep counts as unparsed. */
 export class CodexCallFold {
   private message: string | null = null; private completed = false; private workObserved = false;
+  /** Orca tester #347: a work item, or a line whose kind cannot be told (absence of work not proven); see toolObserved(). */
+  private tool = false;
   push(line: JsonLine): void {
     if (line.kind === "blank") return;
-    if (line.kind !== "row") { this.workObserved = true; return; }
+    if (line.kind !== "row") { this.workObserved = true; this.tool = true; return; }
     const row = line.row;
-    if (row === null || typeof row !== "object" || Array.isArray(row)) { this.workObserved = true; return; }
-    const r = row as { type?: unknown; message?: unknown; error?: { message?: unknown } | null };
-    if (typeof r.type !== "string") { this.workObserved = true; return; }
-    if (r.type.startsWith("item.")) this.workObserved = true;
+    if (row === null || typeof row !== "object" || Array.isArray(row)) { this.workObserved = true; this.tool = true; return; }
+    const r = row as { type?: unknown; message?: unknown; error?: { message?: unknown } | null; item?: { type?: unknown } | null };
+    if (typeof r.type !== "string") { this.workObserved = true; this.tool = true; return; }
+    if (r.type.startsWith("item.")) {
+      this.workObserved = true;
+      if (typeof r.item?.type !== "string" || !CODEX_NON_WORK_ITEMS.has(r.item.type)) this.tool = true;
+    }
     if (r.type === "turn.completed") this.completed = true;
     const text = r.type === "error" ? r.message : r.type === "turn.failed" ? r.error?.message : undefined;
     if (typeof text === "string") this.message = text;
@@ -102,6 +121,54 @@ export class CodexCallFold {
     if (this.message === null) return { cause: "unknown", workObserved: this.workObserved, detail: null };
     return { cause: codexRowCause(this.message), workObserved: this.workObserved, detail: causeDetail(this.message) };
   }
+  /**
+   * Orca tester #347: whether the call did anything but talk -- a work item (CODEX_NON_WORK_ITEMS), or a line that does not
+   * parse as a typed row. Unlike `workObserved` (any item, for retry safety), an agent_message or reasoning item is not work.
+   */
+  toolObserved(): boolean { return this.tool; }
+}
+
+/**
+ * Orca tester #347: what an execute final the strict decode refused looks like, by structure only (never its words):
+ * `absent` (no final, or blank), `json` (the whole final parses as JSON, or it holds an object with an execute answer key),
+ * `broken` (it has brace text that does not parse, so an answer may have been attempted), `prose` (none of these).
+ * `bytes` is the final's UTF-8 length. Computed by the adapter that decoded the final (executionNormalizer.ts).
+ */
+export type ExecuteAnswerForm = { form: "absent" | "json" | "broken" | "prose"; bytes: number };
+export type ExecuteAnswerCauseV1 = "narration-only" | "execution-not-json" | "execution-shape";
+export const EXECUTE_ANSWER_CAUSES: ReadonlySet<FailureCauseV1> = new Set<ExecuteAnswerCauseV1>(["narration-only", "execution-not-json", "execution-shape"]);
+
+/**
+ * Orca tester #347: the cause of an execute call that completed but whose answer was refused. `toolObserved` is the
+ * adapter's own observation of the call (codex: a work item; claude: a tool_use; omp: a tool_execution_start) and must be
+ * `true` whenever the adapter could not tell. Narration-only needs both facts: no answer, and no work. `formatDetail` (the
+ * refused field, issues 125/274) is kept as the detail of the other two causes, so Orca's formatRefusal reader still finds it.
+ */
+export function executeAnswerCause(answer: ExecuteAnswerForm, toolObserved: boolean, formatDetail: string | null): { cause: ExecuteAnswerCauseV1; detail: string } {
+  if (answer.form === "json") return { cause: "execution-shape", detail: formatDetail ?? "the final message holds JSON that is not exactly one accepted execute answer" };
+  if (answer.form === "broken") return { cause: "execution-not-json", detail: formatDetail ?? `the final message (${answer.bytes} bytes) holds brace text that does not parse as JSON` };
+  if (toolObserved) {
+    return { cause: "execution-not-json", detail: formatDetail
+      ?? (answer.form === "absent" ? "the call ended without a final answer after using tools" : `the final message (${answer.bytes} bytes) is not JSON`) };
+  }
+  return { cause: "narration-only", detail: answer.form === "absent"
+    ? "the call ended without a final answer; no tool, command or file change was observed"
+    : `the call ended after a ${answer.bytes}-byte final message that is not an execute answer; no tool, command or file change was observed` };
+}
+
+/**
+ * Orca tester #347: an adapter's classification of a failed execute try, with the cause executeAnswerCause gives when the
+ * error carries an `executeAnswer` form (attached where the strict decode refused the final); otherwise unchanged.
+ * Only an `unknown` classification is refined: a cause the agent CLI typed (a claude rate limit that also left no answer,
+ * for one) stays. `workObserved` (retry safety) is kept: none of these causes is retryable.
+ */
+export function withExecuteAnswerCause(classification: CallClassification | null, error: unknown, toolObserved: boolean): CallClassification | null {
+  if (classification === null || classification.cause !== "unknown" || error === null || typeof error !== "object") return classification;
+  const answer = (error as { executeAnswer?: unknown }).executeAnswer as ExecuteAnswerForm | undefined;
+  if (answer === undefined || answer === null || typeof answer !== "object" || !["absent", "json", "broken", "prose"].includes(answer.form)) return classification;
+  const formatDetail = (error as { formatDetail?: unknown }).formatDetail;
+  const { cause, detail } = executeAnswerCause(answer, toolObserved, typeof formatDetail === "string" ? formatDetail : null);
+  return { ...classification, cause, detail: causeDetail(detail) };
 }
 
 /** What the claude runner records per call (spec §3 claude), written to CCLOOP_CLAUDE_SIGNALS_PATH. */

@@ -9,7 +9,7 @@ import { runOmpSingleCall } from "./ompSingleCall.js";
 import type { OmpPhase } from "./phasePrompt.js";
 import { observedChangedPaths, worktreeHead, worktreeSnapshot } from "./worktreeSnapshot.js";
 import { attemptRefNames } from "../../workspace/worktreeManager.js";
-import type { CallClassification } from "../failureCause.js";
+import { withExecuteAnswerCause, type CallClassification } from "../failureCause.js";
 import { phaseLimitMs, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS, tryContext, type TryObservation } from "../transientRetry.js";
 import type { OmpPhaseOutcome } from "./runOmpPhase.js";
 import { LIVE_TOKEN_STOP_REASON } from "../../budget/tokenPolicy.js";
@@ -90,6 +90,10 @@ export class OmpAdapter implements RuntimeAdapter {
           // Orca tester issue 125: an execute answer the strict shape refused names what it refused (bounded); cause unchanged.
           const formatDetail = (error as { formatDetail?: unknown }).formatDetail;
           if (classification !== null && typeof formatDetail === "string") classification = { ...classification, detail: formatDetail };
+          // *** ERRATUM (Orca tester #347, session 4389b15f, 2026-11-18): "cause unchanged" above holds for that line only; the
+          // next line gives such an answer its own cause (failure-causes spec, Correction 2026-11-18). ***
+          // Orca tester #347: a refused execute final, classified by its form and the call's tool_execution_start rows.
+          classification = withExecuteAnswerCause(classification, error, outcome?.stream.call.value().workObserved ?? true);
           const observed = (error as { observedTokens?: unknown }).observedTokens;
           const observation: TryObservation = (error as { neverStarted?: unknown }).neverStarted === true ? { kind: "rule0" }
             : typeof observed === "number" && observed > 0 ? { kind: "tokens", tokens: observed } : { kind: "null" };

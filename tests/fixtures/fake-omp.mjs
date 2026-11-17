@@ -72,7 +72,10 @@ const result = phase === "plan" ? { summary: "Set answer to 42", primaryTargetPa
 // Reported decisions and debug (ccloop spec 2026-10-20 §5): with `<marker>.reported.json` present, the execute answer also
 // carries its fields (decisions, debug, anything given). Without the file nothing changes; the argv convention is unchanged.
 if (phase === "execute" && existsSync(`${marker}.reported.json`)) Object.assign(result, JSON.parse(readFileSync(`${marker}.reported.json`, "utf8")));
-const message = { role: "assistant", content: [{ type: "text", text: JSON.stringify(result) }], provider: "gateway", model: "model-a", stopReason: "stop", usage: { input: 8, output: 2, cacheRead: 3, cacheWrite: 1, totalTokens: 14, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+// Orca tester #347: `<marker>.final.txt`, when present, is the execute final message's text verbatim (replacing the JSON
+// answer). Without the file nothing changes.
+const finalText = phase === "execute" && existsSync(`${marker}.final.txt`) ? readFileSync(`${marker}.final.txt`, "utf8") : JSON.stringify(result);
+const message = { role: "assistant", content: [{ type: "text", text: finalText }], provider: "gateway", model: "model-a", stopReason: "stop", usage: { input: 8, output: 2, cacheRead: 3, cacheWrite: 1, totalTokens: 14, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
 // Tool rules (ccloop spec 2026-10-22 §4; shape from omp 18.10.1 source, Orca session b37f7ce9 measure-omp.md Q5):
 // `<marker>.tools.json` ([{toolName, args}], or {calls, hang}), when present, is emitted as real-shaped
 // tool_execution_start/end pairs before the final message (execute only); with `hang: true` the fake then hangs instead of

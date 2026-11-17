@@ -1,7 +1,7 @@
 import { executionSchema, scanFinalMessage, type PhaseAcceptor } from "./codex/protocol.js";
 import type { ExecutionResult } from "./types.js";
 import { dropUnreported } from "./reportedDecisions.js";
-import { causeDetail } from "./failureCause.js";
+import { causeDetail, type ExecuteAnswerForm } from "./failureCause.js";
 import type { ZodIssue } from "zod";
 export const EXECUTION_NORMALIZER_VERSION = "strict-execution-v1";
 type Diagnostic = { method:"whole"|"candidate"|"none"; candidates:number; valid:number; hidden:boolean; originalBytes:number };
@@ -34,6 +34,19 @@ function normalize(final:string,acceptor:PhaseAcceptor,body:(value:unknown)=>unk
     return {status:"available",execution:dropUnreported(executionSchema.parse(body(extraction.value))),diagnostic:{...diagnostic,method:isWhole?"whole":"candidate"}};
   }
   return {status:"unavailable",reason:hidden||diagnostic.valid>0?"execution-format-ambiguous-or-hidden":"execution-format-invalid",diagnostic};
+}
+
+/**
+ * Orca tester #347: the structure of a refused execute final, for its failure cause (failureCause.ts executeAnswerCause):
+ * from the normalization's own diagnostic (an object holding an execute answer key ⇒ candidates; unparseable brace text ⇒
+ * hidden) and whether the whole final is JSON. A null or blank final is `absent`.
+ */
+export function executeAnswerForm(final:string|null, diagnostic:{candidates:number;hidden:boolean}|null):ExecuteAnswerForm {
+  const bytes=final===null?0:Buffer.byteLength(final,"utf8");
+  if (final===null||final.trim()==="") return {form:"absent",bytes};
+  try { JSON.parse(final); return {form:"json",bytes}; } catch { /* not whole JSON */ }
+  const scanned=diagnostic??normalizeExecutionFinal(final).diagnostic;
+  return {form:scanned.candidates>0?"json":scanned.hidden?"broken":"prose",bytes};
 }
 
 /**

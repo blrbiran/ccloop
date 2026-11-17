@@ -293,7 +293,10 @@ process.stdin.on("end",()=>{
     const error=JSON.stringify({type:"error",message:"fixture mid-stream error"})+"\n";
     process.stdout.write(error+(mode==="error-then-usage"?events:events.split("\n")[0]+"\n"));return;
   }
-  process.stdout.write(mode==="bad-json" ? "not JSON\n" : events);
+  // Orca tester #347: in mode final-text, the finalsFile's `<phase>Items` (item objects, e.g. a command_execution) print as
+  // item.completed rows before the default events; absent, nothing changes.
+  const items=mode==="final-text"?(JSON.parse(readFileSync(process.argv[4],"utf8"))[`${phase}Items`]??[]):[];
+  process.stdout.write(mode==="bad-json" ? "not JSON\n" : items.map(item=>JSON.stringify({type:"item.completed",item})+"\n").join("")+events);
   if(mode==="nonzero") process.exitCode=7;
   };
   const delay=entry?.delayMs?.[phase];
