@@ -149,6 +149,19 @@ describe("claude: an execute call that ended without the structured answer", () 
     const state = await claudeRun("no-answer-tool");
     expect(state.failureCause).toEqual({ cause: "execution-not-json", phase: "execute", retries: 0, detail: "the call ended without a final answer after using tools" });
   }, 60_000);
+
+  it("a structured answer of the wrong shape: execution-shape, the refused field kept as the detail", async () => {
+    const f = await codexFixture("unused");
+    dirs.push(f.dir);
+    const marker = join(f.dir, "claude-marker.json");
+    await writeFile(`${marker}.reported.json`, JSON.stringify({ commandOutputs: "one string" }));
+    const config: MaterializedAgentConfigV1 = { schema: "ccloop-agent-config-v1", kind: "claude",
+      installation: { kind: "claude", command: [process.execPath, fakeClaude, "reported", marker], version: "9.9.9-fake", configDir: null, timeoutMs: 20_000, killGraceMs: 300 },
+      selection: { agent: "claude", model: "claude-opus-5-5", contextWindow: "agent-default" } };
+    const state = await runLoop(f.contract, f.runDir, new ClaudeAgentAdapter(config, { retryDelaysMs: [] }));
+    // mutation M11 (decodeClaudeExecute never attaches the form) -> cause unknown, red here.
+    expect(state.failureCause).toEqual({ cause: "execution-shape", phase: "execute", retries: 0, detail: "execution-format-invalid: commandOutputs: expected array, received string" });
+  }, 60_000);
 });
 
 const m: CaptureModules = { loopContractSchema, canonicalJson, ClaudeAgentAdapter, CodexAdapter, OmpAdapter, buildExecutorPrompt };
