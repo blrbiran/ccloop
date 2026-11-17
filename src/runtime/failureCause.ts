@@ -31,6 +31,10 @@ export const FAILURE_CAUSES = [
   // observed -- the agent said what it would do and ended its turn. execution-not-json: a final that is not JSON (or a
   // missing answer after work was observed). execution-shape: JSON that is not exactly one accepted execute answer.
   "narration-only", "execution-not-json", "execution-shape",
+  // Orca tester #349 (human's ruling, session 4389b15f, 2026-11-18): a phase call that failed only in its cleanup (a broken
+  // live-usage read or an evidence write after the session deletion; a failed deletion itself is recorded and never fails
+  // the call). Terminal: never in RETRYABLE_CAUSES -- the call's work already ran.
+  "cleanup-failed",
 ] as const;
 export type FailureCauseV1 = (typeof FAILURE_CAUSES)[number];
 

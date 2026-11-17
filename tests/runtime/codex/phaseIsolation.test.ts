@@ -107,19 +107,123 @@ describe("isolated Codex live response usage and retention", { timeout: 30_000 }
     expect(existsSync(join(sessions,`rollout-2026-11-14T00-00-00-${other}.jsonl`))).toBe(true);
     expect(existsSync(join(dir,"session-cleaned.json"))).toBe(true);
   });
-  it("a completed response keeps its authoritative tokens when exact deletion fails", async () => {
+  // Ruling: human approved necessary criteria changes this round (session 4389b15f, 2026-11-18). Orca tester #349, the
+  // human's ruling 「照常结算、但明显标出删除失败、下一轮再删」: a failed deletion no longer fails the phase (this test asserted
+  // the plan rejected with codex-session-delete-failed); the plan settles on its answer and the failure is recorded.
+  it("a completed response settles on its answer when exact deletion fails, and records the failure", async () => {
     const w=await world("rollout-usage-complete");vi.stubEnv("FAKE_CODEX_DELETE_FAIL","1");
     const adapter=new CodexAdapter(w.codexConfig,{CODEX_HOME:w.source},undefined,{installation:w.installation});
-    await expect(adapter.plan(w.context)).rejects.toMatchObject({observedTokens:125,message:expect.stringContaining("codex-session-delete-failed")});
+    await expect(adapter.plan(w.context)).resolves.toMatchObject({summary:"done",primaryTargetPaths:[]});
     expect(adapter.awaitAbortedPhaseCleanup).toBe(true);
+    const dir=await onlyCall(w,"plan"),id="01a13431-3db4-73a1-afd1-154f0477282d";
+    expect(existsSync(join(dir,"session-cleaned.json"))).toBe(false);
+    expect(cleanupRecord(dir)).toMatchObject({schema:"ccloop-session-cleanup-failed-v1",threadId:id,home:join(w.base,"codex-home"),
+      exitCode:3,signal:null,stderr:"Error: failed to delete session\n",state:"failed",detail:"exit 3: Error: failed to delete session"});
+    expect((cleanupRecord(dir).command as string[]).slice(-3)).toEqual(["delete","--force",id]);
   });
-  it("does not claim a failed deletion cleaned the session", async () => {
+  // Ruling: human approved necessary criteria changes this round (session 4389b15f, 2026-11-18). Orca tester #349: the
+  // aborted phase keeps its real outcome (this test asserted io-error with codex-session-delete-failed); "does not claim
+  // cleaned" is unchanged.
+  it("does not claim a failed deletion cleaned the session, and the phase keeps its own outcome", async () => {
     const w=await world("rollout-usage");vi.stubEnv("FAKE_CODEX_DELETE_FAIL","1");
     const controller=new AbortController();
     const result=await w.run("plan",{context:{...w.context,abortSignal:controller.signal,onObservedUsage:()=>controller.abort()}});
-    expect(result.reason).toBe("io-error");
-    expect(outcomeJson(result).ioError).toContain("codex-session-delete-failed");
+    expect(result.reason).toBe("aborted");
+    expect(result.cleanupError).toBeUndefined();
     expect(existsSync(join(result.evidenceDir,"session-cleaned.json"))).toBe(false);
+    expect(cleanupRecord(result.evidenceDir)).toMatchObject({state:"failed",exitCode:3});
+  });
+});
+
+const ID="01a13431-3db4-73a1-afd1-154f0477282d";
+async function onlyCall(w: World, phase: string): Promise<string> {
+  const calls=(await readdir(join(w.context.runDir,"codex","1",phase))).filter(name=>name.startsWith("call-"));
+  expect(calls).toHaveLength(1);
+  return join(w.context.runDir,"codex","1",phase,calls[0]!);
+}
+const cleanupRecord=(dir: string)=>JSON.parse(readFileSync(join(dir,"session-cleanup-failed.json"),"utf8")) as Record<string, unknown>;
+const deleteCalls=(w: World)=>existsSync(`${w.marker}.delete-calls`)?readFileSync(`${w.marker}.delete-calls`,"utf8").trim().split("\n").map(line=>JSON.parse(line) as string[]):[];
+/** A call directory of this run that recorded `id` in the private home (as a phase does on thread.started), with its rollout. */
+async function recordedCall(w: World, name: string, id: string, failure?: "failed" | "retry-failed"): Promise<{ dir: string; rolloutPath: string }> {
+  const home=phaseEnv(w),dir=join(w.context.runDir,"codex","1","execute",name),sessions=join(home.CODEX_HOME!,"sessions","2026","11","14");
+  await mkdir(dir,{recursive:true});await mkdir(sessions,{recursive:true});
+  await writeFile(join(dir,"thread.json"),JSON.stringify({threadId:id,codexHome:home.CODEX_HOME,home:home.HOME,command:w.codexConfig.command}));
+  const rolloutPath=join(sessions,`rollout-2026-11-14T00-00-00-${id}.jsonl`);
+  await writeFile(rolloutPath,"session content");
+  if(failure!==undefined) await writeFile(join(dir,"session-cleanup-failed.json"),JSON.stringify({schema:"ccloop-session-cleanup-failed-v1",threadId:id,
+    home:home.CODEX_HOME,command:[...w.codexConfig.command,"delete","--force",id],exitCode:3,signal:null,stderr:"x",detail:"exit 3: x",state:failure,at:"2026-11-18T00:00:00.000Z"}));
+  return {dir,rolloutPath};
+}
+
+// Orca tester #349 (human's ruling, session 4389b15f, 2026-11-18): a failed session deletion is housekeeping -- recorded
+// beside the call, retried once by the next sweep, then left as a standing notice that nothing retries automatically.
+describe("a failed Codex session deletion is recorded and retried once (Orca #349)", { timeout: 30_000 }, () => {
+  it("the deletion loads the same config file the phase did: a relative model_catalog_json gets its -c pair", async () => {
+    const w=await world("rollout-usage-complete");
+    await writeFile(join(w.source,"catalog.json"),"{}");
+    await writeFile(join(w.source,"config.toml"),"model_catalog_json = \"catalog.json\"\n");
+    expect((await w.run("plan")).reason).toBe("completed");
+    const dir=await onlyCall(w,"plan");
+    expect(existsSync(join(dir,"session-cleanup-failed.json"))).toBe(false);
+    expect(existsSync(join(dir,"session-cleaned.json"))).toBe(true);
+    const [call]=deleteCalls(w);
+    expect(call!.slice(call!.indexOf("-c"))).toEqual(["-c",`model_catalog_json=${JSON.stringify(join(w.source,"catalog.json"))}`,"delete","--force",ID]);
+  });
+
+  it("a crash sweep records a failed deletion instead of throwing", async () => {
+    const w=await world();
+    await w.run("plan");
+    const {dir,rolloutPath}=await recordedCall(w,"call-orphan",ID);
+    vi.stubEnv("FAKE_CODEX_DELETE_FAIL","1");
+    await sweepCodexSessions(w.context.runDir);
+    expect(existsSync(rolloutPath)).toBe(true);
+    expect(existsSync(join(dir,"session-cleaned.json"))).toBe(false);
+    expect(cleanupRecord(dir)).toMatchObject({threadId:ID,state:"failed",exitCode:3});
+  });
+
+  it("the next sweep retries a failed deletion once, marks a second failure retry-failed, and never retries it again", async () => {
+    const w=await world();
+    await w.run("plan");
+    const {dir,rolloutPath}=await recordedCall(w,"call-failed",ID,"failed");
+    vi.stubEnv("FAKE_CODEX_DELETE_FAIL","1");
+    await sweepCodexSessions(w.context.runDir);
+    expect(deleteCalls(w)).toHaveLength(1);
+    expect(cleanupRecord(dir)).toMatchObject({threadId:ID,state:"retry-failed",exitCode:3});
+    vi.stubEnv("FAKE_CODEX_DELETE_FAIL","0");
+    await sweepCodexSessions(w.context.runDir);
+    expect(deleteCalls(w)).toHaveLength(1);
+    expect(existsSync(rolloutPath)).toBe(true);
+    expect(existsSync(join(dir,"session-cleaned.json"))).toBe(false);
+  });
+
+  it("a sweep retry that deletes the session marks the call cleaned", async () => {
+    const w=await world();
+    await w.run("plan");
+    const {dir,rolloutPath}=await recordedCall(w,"call-failed",ID,"failed");
+    await sweepCodexSessions(w.context.runDir);
+    expect(existsSync(rolloutPath)).toBe(false);
+    expect(existsSync(join(dir,"session-cleaned.json"))).toBe(true);
+  });
+
+  it("the run's next codex phase retries an earlier failed deletion and leaves an unrecorded call alone", async () => {
+    const w=await world();
+    await w.run("plan");
+    const failed=await recordedCall(w,"call-failed",ID,"failed");
+    const other="01a13431-3db4-73a1-afd1-154f0477282f";
+    const live=await recordedCall(w,"call-live",other);
+    expect((await w.run("plan")).reason).toBe("completed");
+    expect(existsSync(failed.rolloutPath)).toBe(false);
+    expect(existsSync(join(failed.dir,"session-cleaned.json"))).toBe(true);
+    expect(existsSync(live.rolloutPath)).toBe(true);
+    expect(existsSync(join(live.dir,"session-cleaned.json"))).toBe(false);
+    expect(deleteCalls(w).map(call=>call.at(-1))).toEqual([ID]);
+  });
+
+  it("a cleanup step that still fails the phase is classified cleanup-failed, not unknown", async () => {
+    const w=await world("rollout-usage-complete");vi.stubEnv("FAKE_CODEX_ROLLOUT_UNREADABLE","1");
+    const adapter=new CodexAdapter(w.codexConfig,{CODEX_HOME:w.source},undefined,{installation:w.installation});
+    await expect(adapter.plan(w.context)).rejects.toMatchObject({failureCause:{cause:"cleanup-failed",retries:0}});
+    expect(existsSync(join(await onlyCall(w,"plan"),"session-cleaned.json"))).toBe(true);
   });
 });
 

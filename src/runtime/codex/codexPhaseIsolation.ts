@@ -40,7 +40,7 @@ export function codexPhaseConfigArgs(mcpServers: readonly string[], realHome: st
  * The pair is the single call's per installation; without a cache dir it is made under
  * `<runDir>/codex/<attempt>/phase-isolation/home-*` (spec §4).
  */
-export async function codexPhaseIsolation(input: { installation: InstallationV1; mcpServers: readonly string[] | null; runDir: string; attempt: number; env: NodeJS.ProcessEnv }): Promise<{ home: string; codexHome: string; args: string[] }> {
+export async function codexPhaseIsolation(input: { installation: InstallationV1; mcpServers: readonly string[] | null; runDir: string; attempt: number; env: NodeJS.ProcessEnv }): Promise<{ home: string; codexHome: string; source: string | null; args: string[] }> {
   let pair: { home: string; codexHome: string };
   const source = effectiveCodexHome(input.installation, input.env);
   try {
@@ -64,5 +64,6 @@ export async function codexPhaseIsolation(input: { installation: InstallationV1;
   if (unaddressable !== undefined) throw new CodexPhaseIsolationRefused(`codex-phase-isolation-mcp-unaddressable:${JSON.stringify(unaddressable)}`, pair);
   const realHome = input.env.HOME;
   if (realHome === undefined || realHome === "" || !isAbsolute(realHome)) throw new CodexPhaseIsolationRefused("codex-phase-isolation-real-home-unknown", pair);
-  return { ...pair, args: [...codexPhaseConfigArgs(input.mcpServers, realHome), ...configFileArgs] };
+  // Orca tester #349: `source` (the CODEX_HOME the pair links to) lets the session delete load the same config file.
+  return { ...pair, source, args: [...codexPhaseConfigArgs(input.mcpServers, realHome), ...configFileArgs] };
 }

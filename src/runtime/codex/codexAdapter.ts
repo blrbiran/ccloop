@@ -116,7 +116,8 @@ export class CodexAdapter implements RuntimeAdapter {
   private failedTry<T>(phase: CodexPhase, outcome: PhaseOutcome, error: Error): TryResult<T> {
     const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? outcome.stream.rateLimit.value() : null;
     let classification = outcome.cleanupError === undefined ? classifyOutcome(outcome)
-      : { cause: "unknown" as const, workObserved: true, detail: causeDetail(outcome.cleanupError) };
+      // Orca tester #349: a cleanup step that still fails the call has its own terminal cause (never retried in-phase).
+      : { cause: "cleanup-failed" as const, workObserved: true, detail: causeDetail(outcome.cleanupError) };
     // Orca tester issue #274 (as omp's, issue 125): an execute answer the strict shape refused names what it refused; cause unchanged.
     const formatDetail = (error as { formatDetail?: unknown }).formatDetail;
     if (classification !== null && typeof formatDetail === "string") classification = { ...classification, detail: formatDetail };

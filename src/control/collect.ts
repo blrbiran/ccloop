@@ -12,10 +12,11 @@ import { proveStopped, type StopProofV1 } from "./stopProof.js";
 import { inspectStart, type ExecutionStatusV1 } from "./accept.js";
 import { readAcceptedOptional } from "./store.js";
 import { readToolRulesReport } from "./toolRulesReport.js";
-import { listTranscripts, type TranscriptEntryV1 } from "./transcripts.js";
+import { ATTEMPT, CALL, PHASE, listTranscripts, realDirectories, type TranscriptEntryV1 } from "./transcripts.js";
 import { observedUsageLowerBound } from "./usageLowerBound.js";
 import { lstat, readdir } from "node:fs/promises";
-import type { LiveUsage } from "../runtime/codex/liveUsage.js";
+import { readCleanupFailure, sessionRemains, type LiveUsage } from "../runtime/codex/liveUsage.js";
+import { existsSync } from "node:fs";
 import { readLiveNoteDeliveries, type LiveNoteDeliveryV1 } from "./liveNotes.js";
 import { workerLiveness, workerReportApplies, type WorkerLivenessV1 } from "./workerLiveness.js";
 
@@ -93,6 +94,33 @@ export interface CollectionV1 {
    * there is one. Top level, like toolRules, so the protocol-3 terminal projection is untouched.
    */
   dirs?: CollectedDirV1[];
+  /**
+   * Orca tester #349 (human's ruling, session 4389b15f, 2026-11-18): the run's Codex sessions ccloop could not delete
+   * (session-cleanup-failed.json) and that are still in their private home -- a standing notice until the sweep or a
+   * person deletes the session. Absent when there is none, so no existing caller sees new bytes.
+   */
+  sessionCleanup?: SessionCleanupEntryV1[];
+}
+
+export interface SessionCleanupEntryV1 { threadId: string; home: string; state: "failed" | "retry-failed"; detail: string }
+
+/** A malformed record, or a call the sweep cleaned since, is left out rather than failing collect. */
+async function sessionCleanupOf(sourceDir: string): Promise<SessionCleanupEntryV1[]> {
+  const entries: SessionCleanupEntryV1[] = [];
+  const kindDir = join(sourceDir, "run", "codex");
+  for (const { name: attempt } of await realDirectories(kindDir, ATTEMPT)) {
+    for (const { name: phase } of await realDirectories(join(kindDir, attempt), PHASE)) {
+      for (const { name: call } of await realDirectories(join(kindDir, attempt, phase), CALL)) {
+        const dir = join(kindDir, attempt, phase, call);
+        const failure = readCleanupFailure(dir);
+        if (failure === null || existsSync(join(dir, "session-cleaned.json"))) continue;
+        let remains: boolean;
+        try { remains = sessionRemains(failure.home, failure.threadId); } catch { remains = true; }
+        if (remains) entries.push({ threadId: failure.threadId, home: failure.home, state: failure.state, detail: failure.detail });
+      }
+    }
+  }
+  return entries;
 }
 
 export interface HandoffFileV1 { present: boolean; bytes: number | null }
@@ -292,6 +320,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const handoffFiles = handoffDirs === undefined ? undefined
     : { handoff: await handoffFileOf(join(handoffDirs.outputDir, "handoff.md")), summary: await handoffFileOf(join(handoffDirs.outputDir, "summary.md")) };
   const liveNotes = await liveNotesOf(input.work.sourceDir);
+  const sessionCleanup = await sessionCleanupOf(input.work.sourceDir);
   const launch = storedCandidate === null ? await readAcceptedOptional(input.work.sourceDir) : accepted;
   const liveness = workerReportApplies(input, launch, storedCandidate !== null, terminal !== null, proof !== null) ? await workerLiveness(launch) : undefined;
   // An alive worker is today's in-flight run: its collect answer stays byte for byte as it was (existing criteria pin it).
@@ -314,6 +343,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     ...(dirs === undefined ? {} : { dirs }),
     ...(handoffFiles === undefined ? {} : { handoffFiles }),
     ...(liveNotes === undefined ? {} : { liveNotes }),
+    ...(sessionCleanup.length === 0 ? {} : { sessionCleanup }),
   };
 }
 

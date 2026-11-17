@@ -251,6 +251,10 @@ export const collectionSchema = z.object({
   liveUsage: z.object({ schema: z.literal("ccloop-live-usage-v1"), runId: z.string().min(1), attempt: safeInteger.positive(),
     phase: z.enum(["plan","execute","verify"]), callId: z.string().regex(/^call-[^/]+$/),
     threadId: z.string().uuid(), tokens: safeInteger.positive(), observedAt: z.string().datetime(), revision: safeInteger.positive() }).strict().optional(),
+  // Orca tester #349: the run's Codex sessions that could not be deleted; present iff there is one. Orca's strict collect
+  // parse must accept it before the repin.
+  sessionCleanup: z.array(z.object({ threadId: z.string().uuid(), home: z.string().min(1), state: z.enum(["failed", "retry-failed"]),
+    detail: z.string() }).strict()).min(1).optional(),
 }).strict();
 
 const METHODS = new Set<ControlMethodV1>([

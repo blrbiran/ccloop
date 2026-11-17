@@ -15,7 +15,7 @@ import { CodexStream } from "./codexStream.js";
 import { executeWireJsonSchema, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
 import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
 import { codexToolRuleArgs } from "../toolRules.js";
-import { CodexLiveObserver } from "./liveUsage.js";
+import { CodexLiveObserver, sweepCodexSessions } from "./liveUsage.js";
 
 // Task handoffs (Orca follow-up G §10.2): the output directory is written on execute only; codex reads anywhere.
 // Saved-result recovery expects exactly these arguments from the source envelope's work.handoff (Orca V11/O19 regression).
@@ -114,7 +114,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       args.splice(args.length-1,0,...isolated.args);
       spawnEnv={...spawnEnv,HOME:isolated.home,CODEX_HOME:isolated.codexHome};
       live=new CodexLiveObserver(isolated.codexHome,config.command,spawnEnv,evidenceDir,
-        {runId:context.runId??context.contract?.objective.taskId??"",attempt:context.attempt,phase:phase as CodexPhase},context.onObservedUsage);
+        {runId:context.runId??context.contract?.objective.taskId??"",attempt:context.attempt,phase:phase as CodexPhase},context.onObservedUsage,isolated.source);
     } catch(error) {
       if(!(error instanceof CodexPhaseIsolationRefused))throw error;
       // Spec §3.5: refused before spawn and before any skill link (plan Review Focus 3); final, booked 0 by the adapter.
@@ -123,6 +123,9 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       if(error.reason==="codex-phase-isolation-no-mcp-list"&&catalog.mcpError!==undefined)result.refusalDetail=catalog.mcpError;
       return persist();
     }
+    // Orca tester #349 (human's ruling 「下一轮再删」): the run's next codex phase retries, once, a deletion an earlier call of
+    // this run recorded as failed. Housekeeping: whatever happens here never changes this phase's outcome.
+    await sweepCodexSessions(context.runDir,{failedOnly:true}).catch((error:unknown)=>{process.stderr.write(`ccloop-codex-session-retry: ${String(error)}\n`);});
     childTimeout=deadline-Date.now();
   }
   // Per-contract tool rules (spec 2026-10-22 §4 codex): the rules' -c pairs join the phase's, before the trailing `-`.
@@ -245,6 +248,9 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
   }
   if(result.reason!=="completed")result.observedTokens=stream.turnUsage.value();
   // Delete only after the process and its pipes have closed; a failed deletion remains visible and blocks completion.
+  // *** ERRATUM (Orca tester #349, session 4389b15f, 2026-11-18): "blocks completion" no longer holds -- a failed deletion
+  // is recorded (session-cleanup-failed.json) and the phase keeps its outcome; what still reaches the catch below (a
+  // broken rollout read, an evidence write) is classified cleanup-failed by the adapter. ***
   try { await live?.finish(); }
   catch(error){ioError=String(error);result.cleanupError=ioError;result.observedTokens=stream.turnUsage.value();result.reason="io-error";}
   return persist();

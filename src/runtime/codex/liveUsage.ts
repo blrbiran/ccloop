@@ -5,6 +5,8 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
 import type { CodexPhase } from "./protocol.js";
+import { codexConfigFileArgs } from "../../agents/codexIsolation.js";
+import { causeDetail } from "../failureCause.js";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const exec = promisify(execFile);
@@ -36,16 +38,17 @@ export class CodexLiveObserver {
   private polling = false;
   private timer: NodeJS.Timeout | undefined;
   private stopped = false;
+  // `source`: the installation's own CODEX_HOME the private one links to (Orca tester #349: the delete's config-file pair).
   constructor(private readonly home: string, private readonly command: string[], private readonly env: NodeJS.ProcessEnv,
     private readonly evidenceDir: string, private readonly identity: {runId: string; attempt: number; phase: CodexPhase},
-    private readonly onUsage?: (tokens: number) => void) {}
+    private readonly onUsage?: (tokens: number) => void, private readonly source: string | null = null) {}
   started(value: unknown): void {
     if (!record(value) || value.type !== "thread.started" || typeof value.thread_id !== "string" || !uuid.test(value.thread_id)) return;
     if (this.id !== null) return;
     this.id = value.thread_id;
     // Durable before the callback or next poll; crash cleanup can discover this UUID after process reaping.
     writeFileSync(join(this.evidenceDir, "thread.json"), JSON.stringify({threadId:this.id, codexHome:this.home,
-      command:this.command,home:this.env.HOME}), {mode:0o600});
+      command:this.command,home:this.env.HOME,sourceCodexHome:this.source}), {mode:0o600});
     this.timer = setInterval(() => { void this.poll().catch(() => undefined); }, 50);
     void this.poll().catch(() => undefined);
   }
@@ -101,21 +104,74 @@ export class CodexLiveObserver {
     this.stopped=true;
     if (this.id === null) return;
     // A broken rollout read must never skip deletion of the identified session.
-    await deleteSession(this.home,this.command,this.env,this.id);
-    await writeFile(join(this.evidenceDir,"session-cleaned.json"),JSON.stringify({threadId:this.id}),{mode:0o600});
+    // Orca tester #349 (human's ruling, session 4389b15f, 2026-11-18): a failed deletion never changes the phase's outcome;
+    // it is recorded beside the call (session-cleanup-failed.json) for collect and the next sweep.
+    await settleDeletion(this.evidenceDir,null,this.home,this.command,this.source,this.env,this.id);
     if (observationError !== undefined) throw observationError;
   }
 }
 
-async function deleteSession(home:string,command:string[],env:NodeJS.ProcessEnv,id:string):Promise<void> {
+/** Orca tester #349: one recorded deletion failure (session-cleanup-failed.json beside the call's thread.json). */
+export type SessionCleanupFailureV1 = { schema:"ccloop-session-cleanup-failed-v1"; threadId:string; home:string; command:string[];
+  exitCode:number|null; signal:string|null; stderr:string; detail:string; state:"failed"|"retry-failed"; at:string };
+const FAILED="session-cleanup-failed.json";
+
+/**
+ * Orca tester #349: the delete loads the private CODEX_HOME's config.toml -- a link to the installation's -- so it needs
+ * the same config-file `-c` pair the phase got (codexConfigFileArgs, Orca issue 121), read now from the source home it
+ * links to. Without it, a relative `model_catalog_json` fails the delete with "failed to load configuration" (codex-cli
+ * 0.167.0, measured Orca session 4389b15f) while every phase ran. A source config whose catalog file is missing gives no
+ * pair: the delete then fails and is recorded like any other.
+ */
+async function deleteSession(home:string,command:string[],source:string|null,env:NodeJS.ProcessEnv,id:string):
+  Promise<{ok:true}|{ok:false;command:string[];exitCode:number|null;signal:string|null;stderr:string}> {
   if (!uuid.test(id)) throw new Error("codex-session-id-invalid");
-  try { await exec(command[0]!,[...command.slice(1),"delete","--force",id],{env,timeout:10_000,maxBuffer:1024*1024}); }
-  catch (error) { throw new Error(`codex-session-delete-failed: ${String(error)}`); }
-  if (rollout(home,id)!==null) throw new Error(`codex-session-delete-unverified: ${id}`);
+  const argv=[...command.slice(1),...await codexConfigFileArgs(source).catch(()=>[]),"delete","--force",id];
+  let failure:{exitCode:number|null;signal:string|null;stderr:string}|null=null;
+  try { await exec(command[0]!,argv,{env,timeout:10_000,maxBuffer:1024*1024}); }
+  catch (error) {
+    const e=error as {code?:unknown;signal?:unknown;stderr?:unknown;message?:unknown};
+    failure={exitCode:typeof e.code==="number"?e.code:null,signal:typeof e.signal==="string"?e.signal:null,
+      stderr:causeDetail(typeof e.stderr==="string"&&e.stderr!==""?e.stderr:String(e.message))};
+  }
+  // The deletion's proof is the rollout being gone, whatever the command answered (a thread codex never persisted here
+  // has nothing to delete; codex then exits 1 "failed to delete session").
+  if (rollout(home,id)===null) return {ok:true};
+  return {ok:false,command:[command[0]!,...argv],...(failure??{exitCode:0,signal:null,stderr:`codex-session-delete-unverified: ${id}`})};
 }
 
-/** Called only after reaping all run processes; never sweep another run's or another thread's sessions. */
-export async function sweepCodexSessions(runDir:string):Promise<void> {
+/** Deletes the session and writes session-cleaned.json, or records the failure as `failed` (no prior record) or `retry-failed`. */
+async function settleDeletion(dir:string,prior:SessionCleanupFailureV1|null,home:string,command:string[],source:string|null,env:NodeJS.ProcessEnv,id:string):Promise<void> {
+  const result=await deleteSession(home,command,source,env,id);
+  if (result.ok) { await writeFile(join(dir,"session-cleaned.json"),JSON.stringify({threadId:id}),{mode:0o600}); return; }
+  const how=result.exitCode!==null?`exit ${result.exitCode}`:result.signal!==null?`signal ${result.signal}`:"not run";
+  const record:SessionCleanupFailureV1={schema:"ccloop-session-cleanup-failed-v1",threadId:id,home,command:result.command,exitCode:result.exitCode,
+    signal:result.signal,stderr:result.stderr,detail:causeDetail(`${how}: ${result.stderr.trim()}`),state:prior===null?"failed":"retry-failed",at:new Date().toISOString()};
+  const tmp=join(dir,`${FAILED}.tmp`);
+  await writeFile(tmp,JSON.stringify(record),{mode:0o600});
+  renameSync(tmp,join(dir,FAILED));
+}
+
+/** The call's recorded deletion failure, or null when there is none or it is not one this code wrote. */
+export function readCleanupFailure(dir:string):SessionCleanupFailureV1|null {
+  let value:unknown;
+  try { value=JSON.parse(readFileSync(join(dir,FAILED),"utf8")); } catch { return null; }
+  if (!record(value)||value.schema!=="ccloop-session-cleanup-failed-v1"||typeof value.threadId!=="string"||!uuid.test(value.threadId)||
+    typeof value.home!=="string"||!isAbsolute(value.home)||(value.state!=="failed"&&value.state!=="retry-failed")||typeof value.detail!=="string") return null;
+  return value as SessionCleanupFailureV1;
+}
+
+/** Orca tester #349: whether the session's rollout is still in its private home (a person may have deleted it by hand). */
+export function sessionRemains(home:string,id:string):boolean { return uuid.test(id)&&rollout(home,id)!==null; }
+
+/**
+ * Called only after reaping all run processes; never sweep another run's or another thread's sessions.
+ * Orca tester #349 (human's ruling, session 4389b15f, 2026-11-18): a deletion that fails is recorded, never thrown; a
+ * recorded `failed` deletion is retried once, and a second failure is `retry-failed` -- never retried automatically again.
+ * `failedOnly` (the run's next codex phase, while no process of the run is reaped): only calls with a recorded failure,
+ * whose own deletion already ran, are touched.
+ */
+export async function sweepCodexSessions(runDir:string,options:{failedOnly?:boolean}={}):Promise<void> {
   const root=join(runDir,"codex");
   let attempts:string[];
   try {attempts=await readdir(root);}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return;throw error;}
@@ -125,17 +181,21 @@ export async function sweepCodexSessions(runDir:string):Promise<void> {
     for (const call of calls) {
       const dir=join(root,attempt,phase,call),file=join(dir,"thread.json");
       if (!call.startsWith("call-") || !existsSync(file) || existsSync(join(dir,"session-cleaned.json"))) continue;
+      const prior=readCleanupFailure(dir);
+      if (prior?.state==="retry-failed" || (options.failedOnly===true && prior===null)) continue;
       const value:unknown=JSON.parse(readFileSync(file,"utf8"));
       if (!record(value)||typeof value.threadId!=="string"||!uuid.test(value.threadId)||typeof value.codexHome!=="string"||
         !isAbsolute(value.codexHome)||basename(value.codexHome)!=="codex-home"||typeof value.home!=="string"||value.home!==join(dirname(value.codexHome),"home")||
-        !Array.isArray(value.command)||!value.command.every(v=>typeof v==="string")||!isAbsolute(value.command[0])) throw new Error("codex-session-cleanup-invalid");
+        !Array.isArray(value.command)||!value.command.every(v=>typeof v==="string")||!isAbsolute(value.command[0])||
+        // Orca tester #349: the installation's source CODEX_HOME (absent in a record written before it was kept).
+        (value.sourceCodexHome!==undefined&&value.sourceCodexHome!==null&&(typeof value.sourceCodexHome!=="string"||!isAbsolute(value.sourceCodexHome)))) throw new Error("codex-session-cleanup-invalid");
       // A worker crash has no outcome.json; thread.json was written synchronously on thread.started before the crash.
       if (existsSync(join(dir,"outcome.json"))) {
         const outcome:unknown=JSON.parse(readFileSync(join(dir,"outcome.json"),"utf8"));
         if (!record(outcome)||!record(outcome.isolation)||outcome.isolation.codexHome!==value.codexHome||outcome.isolation.home!==value.home) throw new Error("codex-session-cleanup-isolation-invalid");
       }
-      await deleteSession(value.codexHome,value.command,{...process.env,CODEX_HOME:value.codexHome,HOME:value.home},value.threadId);
-      await writeFile(join(dir,"session-cleaned.json"),JSON.stringify({threadId:value.threadId}),{mode:0o600});
+      await settleDeletion(dir,prior,value.codexHome,value.command,typeof value.sourceCodexHome==="string"?value.sourceCodexHome:null,
+        {...process.env,CODEX_HOME:value.codexHome,HOME:value.home},value.threadId);
     }
   }
 }

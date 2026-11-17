@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 const mode=process.argv[2], marker=process.argv[3];
@@ -23,8 +23,18 @@ const mode=process.argv[2], marker=process.argv[3];
 // `mcp` does not define fails as the real codex-cli 0.160.0 does: stderr "invalid transport in `mcp_servers.<name>`", exit 1.
 // Codex phase isolation (ccloop spec 2026-10-18, Orca session 3d229487, 2026-10-20): a phase call also writes
 // {HOME, CODEX_HOME} it ran with to <marker>.phase-env.json, right after <marker>.
+// Orca tester #349: every delete appends its argv after the marker to <marker>.delete-calls (one JSON line), before it
+// fails or deletes. FAKE_CODEX_DELETE_FAIL=1 fails it as codex-cli 0.167.0 does for a session it cannot delete (stderr
+// "Error: failed to delete session", here exit 3). As codex-cli 0.167.0 (measured, Orca session 4389b15f, 2026-11-18): a
+// top-level relative `model_catalog_json` in CODEX_HOME/config.toml whose file is not in CODEX_HOME fails the delete with
+// "Error: failed to load configuration", exit 1, unless a `-c model_catalog_json=...` pair is given.
 if(process.argv.includes("delete")) {
-  if(process.env.FAKE_CODEX_DELETE_FAIL==="1") process.exit(3);
+  appendFileSync(marker+".delete-calls",JSON.stringify(process.argv.slice(4))+"\n");
+  if(process.env.FAKE_CODEX_DELETE_FAIL==="1") {process.stderr.write("Error: failed to delete session\n",()=>process.exit(3));await new Promise(()=>{});}
+  let toml="";try{toml=readFileSync(join(process.env.CODEX_HOME,"config.toml"),"utf8");}catch{}
+  const catalog=/^\s*model_catalog_json\s*=\s*"([^"]*)"/m.exec(toml.split(/^\s*\[/m,1)[0])?.[1];
+  const paired=process.argv.some((arg,i)=>process.argv[i-1]==="-c"&&arg.startsWith("model_catalog_json="));
+  if(catalog!==undefined&&!catalog.startsWith("/")&&!existsSync(join(process.env.CODEX_HOME,catalog))&&!paired) {process.stderr.write("Error: failed to load configuration\n",()=>process.exit(1));await new Promise(()=>{});}
   const id=process.argv.at(-1);
   appendFileSync(marker+".deleted",id+"\n");
   const path=join(process.env.CODEX_HOME,"sessions","2026","11","14",`rollout-2026-11-14T00-00-00-${id}.jsonl`);
@@ -173,6 +183,8 @@ process.stdin.on("end",()=>{
     const id="01a13431-3db4-73a1-afd1-154f0477282d";
     writeFileSync(join(path,`rollout-2026-11-14T00-00-00-${id}.jsonl`),JSON.stringify({type:"event_msg",payload:{type:"token_count",info:{total_token_usage:{input_tokens:120,output_tokens:5,total_tokens:125}}}})+"\n");
     writeFileSync(join(path,"rollout-2026-11-14T00-00-00-01a13431-3db4-73a1-afd1-154f0477282e.jsonl"),"other thread");
+    // Orca tester #349: FAKE_CODEX_ROLLOUT_UNREADABLE=1 leaves this thread's rollout mode 000, so reading it fails.
+    if(process.env.FAKE_CODEX_ROLLOUT_UNREADABLE==="1") chmodSync(join(path,`rollout-2026-11-14T00-00-00-${id}.jsonl`),0o000);
     writeSync(1,JSON.stringify({type:"thread.started",thread_id:id})+"\n");
     if(mode==="rollout-usage-complete") {
       writeFileSync(value("-o"),JSON.stringify({summary:"done",primaryTargetPaths:[]}));
