@@ -41,10 +41,11 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-### 最新（2026-11-17，Orca 会话 `9982cf01`）—— 转录行接收时间标记已合入本地 main；未推送
+### 最新（2026-11-17，Orca 会话 `9982cf01`）—— 转录行接收时间标记已在远端，Orca 已 repin 并装进面板
 
 - 主题行 `feat(runtime): stamp transcript rows at receipt (#320)` 至 `fix(runtime): keep a full final raw transcript line at close (#320)`。每一条保留的 provider 原始行先按原字节写入 `transcript.jsonl`，随后追加 `{"type":"ccloop.line-observed","atBytes":<该原始行在 transcript 的物理起始字节>,"ccloopObservedAt":<接收 epoch ms>}`；原始 `events.jsonl`、decoder、16 MiB 行帽和 128 MiB transcript 帽不变。半行在 SIGKILL 前已落盘；末行无换行且帽不足以容纳完整标记时保留原始字节、时间缺席。
-- 证据：聚焦 7 文件／76 条通过，typecheck/build RC0；独立审阅复核 cap 边界与崩溃路径无剩余缺陷。没有全量 known-reds 门、没有真 provider 付费验收、没有变异矩阵。文档提交后本地 main 领先 `origin/main`，**push 被 Orca Tier 0 拒，待人推**；Orca 因此还不能按 GitHub pin 消费该 producer。
+- 证据：聚焦 7 文件／76 条通过，typecheck/build RC0；独立审阅复核 cap 边界与崩溃路径无剩余缺陷。没有全量 known-reds 门、没有真 provider 付费验收、没有变异矩阵。
+- 发布与消费（同会话后段现核 `/usr/bin/git ls-remote`）：本会话 agent 的 push 被 Orca Tier 0 拒且未重试；其后远端 `main` 已含上述提交（不是本会话 agent 推的）。Orca 在独立 `git clone --local` 安装树用 `scripts/pin-ccloop.mjs` 钉到 `fix(runtime): keep a full final raw transcript line at close (#320)` 这一提交，脚本各项检查与默认解析 E2E 12/12 均 ok；Orca 主仓 `npm ci`／build 后面板重启，`orca status` 报该 pin「installed and built」。旧 transcript 没有标记时 Orca 不显示时间，不回填。
 
 ### 上一轮（2026-11-13，Orca 会话 `c8b75eac`，测试者反馈 J 轮）—— 单次调用容许前言、陈旧锁回收、never-claimed、build-info、`model-unavailable`、原始用量明细；**全部已推、Orca 已 repin**（以 `git ls-remote` 现核）
 
