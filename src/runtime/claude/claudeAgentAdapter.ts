@@ -415,7 +415,9 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
           // *** ERRATUM (Orca tester #347, session 4389b15f, 2026-11-18): "cause unchanged" above holds for that line only; the
           // next line gives such an answer its own cause (failure-causes spec, Correction 2026-11-18). ***
           // Orca tester #347: the signals' tool uses (workObserved: toolUses > 0, true when the signals are missing) are the work seen.
-          classification = withExecuteAnswerCause(classification, error, classification?.workObserved ?? true);
+          // Only a call whose signals record no typed assistant error is refined: claudeErrorCause answers `unknown` for a typed
+          // error it does not map, and that error and its text (the detail) are the provider's facts, not a missing answer.
+          if (outcome === undefined || await this.assistantErrorOf(outcome) === null) classification = withExecuteAnswerCause(classification, error, classification?.workObserved ?? true);
           const observed = (error as { observedTokens?: unknown }).observedTokens;
           const observation: TryObservation = (error as { neverStarted?: unknown }).neverStarted === true ? { kind: "rule0" }
             : typeof observed === "number" && observed > 0 ? { kind: "tokens", tokens: observed } : { kind: "null" };
@@ -424,6 +426,13 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
         }
       },
     });
+  }
+
+  /** Orca tester #347: the typed assistant error the runner's signals recorded, or null (none, or no readable signals). */
+  private async assistantErrorOf(outcome: Outcome): Promise<string | null> {
+    let text: string | null = null;
+    try { text = await readFile(join(outcome.evidenceDir, SIGNALS_FILE), "utf8"); } catch { text = null; }
+    return text === null ? null : parseClaudeSignals(text)?.assistantError ?? null;
   }
 
   /** Spec §3 claude: the runner's signals file; missing or unparseable ⇒ work assumed, cause unknown (round 2 I-C). */

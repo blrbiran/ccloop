@@ -233,6 +233,9 @@ if (NEW_WRITE_MODES.has(mode)) {
         await emitClosedMessage();
       }
     }
+    // Orca tester #347: with <marker>.assistant-error present, "no-answer" also emits an assistant message carrying that typed
+    // `error` (text "fake provider error") before its answer-less envelope, and still exits 0.
+    if (mode === "no-answer" && phase === "execute" && existsSync(`${marker}.assistant-error`)) await emit({ type: "assistant", error: readFileSync(`${marker}.assistant-error`, "utf8").trim(), message: { id: "msg_error", content: [{ type: "text", text: "fake provider error" }] } });
     if (mode === "no-answer-tool" && phase === "execute") await emit({ type: "assistant", message: { id: "msg_tool", content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } }] } });
     await emit(envelope);
   };

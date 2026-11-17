@@ -9,6 +9,7 @@
 // - execution-shape: JSON that is not exactly one accepted execute answer (the refused field stays the detail, #274).
 // "No work" is an observation, not a token count: codex work items, claude tool_use blocks, omp tool_execution_start rows.
 // None of the three is retried inside the phase (Orca retries at task level).
+import { existsSync, readdirSync } from "node:fs";
 import { readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -124,12 +125,32 @@ describe("codex: the #347 run, end to end through runLoop", () => {
     const { state } = await codexRun(SENTENCE, [{ id: "c1", type: "command_execution", command: "ls", aggregated_output: "", exit_code: 0, status: "completed" }]);
     expect(state.failureCause).toEqual({ cause: "execution-not-json", phase: "execute", retries: 0, detail: `the final message (${BYTES} bytes) is not JSON` });
   }, 60_000);
+
+  it("an execute aborted after its call ended with a refused answer still answers null (the #262 abort rule; review follow-up)", async () => {
+    // Before #347 such a call's cause was unknown, so an aborted execute answered null and runLoop booked its timeout as
+    // budget-exhausted. The three answer causes must keep that: they are not a cause of the call's own ending like a stall.
+    const f = await codexFixture("final-text");
+    dirs.push(f.dir);
+    const finals = join(f.dir, "finals.json");
+    await writeFile(finals, JSON.stringify({ execute: SENTENCE }));
+    // The abort is seen only once the call's refused answer was decoded: decode-error.txt is written just before the
+    // format failure is thrown, so every check inside the call reads false and the execute's own catch reads true.
+    const root = join(f.runDir, "codex", "1", "execute");
+    const decoded = () => { try { return readdirSync(root).some((call) => existsSync(join(root, call, "decode-error.txt"))); } catch { return false; } };
+    const signal = { get aborted() { return decoded(); }, addEventListener() {}, removeEventListener() {} } as unknown as AbortSignal;
+    const adapter = new CodexAdapter({ ...f.config, command: [...f.config.command, finals] });
+    const out = await adapter.execute({ ...f.context, abortSignal: signal, plan: { summary: "p", primaryTargetPaths: ["answer.txt"] } }).then((value) => ({ value }), (error: unknown) => ({ error }));
+    expect(decoded(), "precondition: the call's answer was decoded and refused").toBe(true);
+    // mutation M15 (drop `&& !EXECUTE_ANSWER_CAUSES.has(cause)` from ownCause) -> the narration-only failure is thrown, red here.
+    expect(out).toEqual({ value: null });
+  }, 60_000);
 });
 
 const fakeClaude = fileURLToPath(new URL("../fixtures/fake-claude-cli.mjs", import.meta.url));
-async function claudeRun(mode: "no-answer" | "no-answer-tool") {
+async function claudeRun(mode: "no-answer" | "no-answer-tool", assistantError?: string) {
   const f = await codexFixture("unused");
   dirs.push(f.dir);
+  if (assistantError !== undefined) await writeFile(join(f.dir, "claude-marker.json.assistant-error"), assistantError);
   const config: MaterializedAgentConfigV1 = { schema: "ccloop-agent-config-v1", kind: "claude",
     installation: { kind: "claude", command: [process.execPath, fakeClaude, mode, join(f.dir, "claude-marker.json")], version: "9.9.9-fake", configDir: null, timeoutMs: 20_000, killGraceMs: 300 },
     selection: { agent: "claude", model: "claude-opus-5-5", contextWindow: "agent-default" } };
@@ -148,6 +169,14 @@ describe("claude: an execute call that ended without the structured answer", () 
   it("after a tool use: execution-not-json", async () => {
     const state = await claudeRun("no-answer-tool");
     expect(state.failureCause).toEqual({ cause: "execution-not-json", phase: "execute", retries: 0, detail: "the call ended without a final answer after using tools" });
+  }, 60_000);
+
+  it("a typed assistant error the classifier does not map stays unknown with the provider's text (review follow-up)", async () => {
+    // invalid_request without a context-overflow phrase: claudeErrorCause answers unknown. The answer is missing because
+    // the provider failed, so the provider's error -- not a narration -- is the fact; its text stays the detail.
+    const state = await claudeRun("no-answer", "invalid_request");
+    // mutation M14 (refine whatever the signals' assistantError) -> narration-only with the fixed detail, red here.
+    expect(state.failureCause).toEqual({ cause: "unknown", phase: "execute", retries: 0, detail: "fake provider error" });
   }, 60_000);
 
   it("a structured answer of the wrong shape: execution-shape, the refused field kept as the detail", async () => {
