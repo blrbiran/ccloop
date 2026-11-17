@@ -18,7 +18,7 @@ import { buildProcessInstanceId } from "../runtime/processIdentity.js";
 import type { RunState, RunStatus } from "../state/types.js";
 import type { RunLeaseLostError } from "../ownership/lease.js";
 import { reapRunProcesses } from "../ownership/reapRunProcesses.js";
-import { sweepCodexSessions } from "../runtime/codex/liveUsage.js";
+import { retryFailedSessionDeletions, sweepCodexSessions } from "../runtime/codex/liveUsage.js";
 import { adoptCrashedRun, confirmOwnerDead, isOrcaControlRunDir } from "./adoptCrashedRun.js";
 import { checkRunLease } from "./leaseGate.js";
 import { startLeaseHeartbeat } from "./leaseHeartbeat.js";
@@ -414,10 +414,13 @@ export async function resumeLoop(
         ? runState
         : { ...runState, status: "planning", waitingOnHuman: false, lastTransitionAt: new Date().toISOString() };
 
-    return await runLoopFromState(contract, runDir, adapter, resumedState, heartbeat, leaseLoss, {
+    const result = await runLoopFromState(contract, runDir, adapter, resumedState, heartbeat, leaseLoss, {
       onReconciliationWriteAbandoned: options?.onReconciliationWriteAbandoned,
       stopRequested: options?.stopRequested,
     });
+    // Orca #349 review: as runLoop, the run's end retries a deletion its last phase recorded as failed.
+    await retryFailedSessionDeletions(runDir);
+    return result;
   } finally {
     // §6.0: every exit path — normal completion, stop-boundary exit, and any throw.
     await heartbeat.stop();

@@ -254,7 +254,7 @@ export const collectionSchema = z.object({
   // Orca tester #349: the run's Codex sessions that could not be deleted; present iff there is one. Orca's strict collect
   // parse must accept it before the repin.
   sessionCleanup: z.array(z.object({ threadId: z.string().uuid(), home: z.string().min(1), state: z.enum(["failed", "retry-failed"]),
-    detail: z.string() }).strict()).min(1).optional(),
+    detail: z.string(), command: z.array(z.string().min(1)).min(1).optional(), userHome: z.string().min(1).optional() }).strict()).min(1).optional(),
 }).strict();
 
 const METHODS = new Set<ControlMethodV1>([

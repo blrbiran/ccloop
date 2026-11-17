@@ -948,3 +948,37 @@ describe("resumeLoop", () => {
     expect((await resumeLoop(runDir, new ScriptedAdapter([successFrame()]))).status).toBe("succeeded");
   });
 });
+
+// Orca #349 review: a resumed run's end retries, once, a session deletion its last phase recorded as failed -- no later
+// phase would. Here the verify phase leaves such a record (as a codex verify whose delete failed does); the fake codex's
+// delete fails again, so the record becomes retry-failed.
+describe("resumeLoop retries the last phase's failed session deletion at the run's end (Orca #349)", () => {
+  it("a second failure is retry-failed", async () => {
+    const repoPath = await createRepo();
+    const contract = createContract(repoPath);
+    const runDir = await mkdtemp(join(tmpdir(), "ccloop-run-"));
+    await seedEligibleRun(runDir, contract, 1);
+    const id = "01a13431-3db4-73a1-afd1-154f0477282d", base = await mkdtemp(join(tmpdir(), "ccloop-349-home-"));
+    const codexHome = join(base, "codex-home"), sessions = join(codexHome, "sessions", "2026", "11", "14"), marker = join(base, "marker");
+    const command = [process.execPath, new URL("../fixtures/fake-codex.mjs", import.meta.url).pathname, "integration", marker];
+    const call = join(runDir, "codex", "2", "verify", "call-x");
+    const frame = successFrame();
+    vi.stubEnv("FAKE_CODEX_DELETE_FAIL", "1");
+    try {
+      const finalState = await resumeLoop(runDir, {
+        async plan() { return frame.plan; },
+        async execute() { return frame.execution; },
+        async verify() {
+          await mkdir(sessions, { recursive: true }); await mkdir(join(base, "home")); await mkdir(call, { recursive: true });
+          await writeFile(join(sessions, `rollout-2026-11-14T00-00-00-${id}.jsonl`), "prompt");
+          await writeFile(join(call, "thread.json"), JSON.stringify({ threadId: id, codexHome, home: join(base, "home"), command }));
+          await writeFile(join(call, "session-cleanup-failed.json"), JSON.stringify({ schema: "ccloop-session-cleanup-failed-v1", threadId: id, home: codexHome,
+            command: [...command, "delete", "--force", id], exitCode: 3, signal: null, stderr: "x", detail: "exit 3: x", state: "failed", at: "2026-11-18T00:00:00.000Z", userHome: join(base, "home") }));
+          return frame.verification;
+        },
+      });
+      expect(finalState.status).toBe("succeeded");
+      expect(JSON.parse(await readFile(join(call, "session-cleanup-failed.json"), "utf8"))).toMatchObject({ state: "retry-failed" });
+    } finally { vi.unstubAllEnvs(); }
+  });
+});

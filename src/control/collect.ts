@@ -102,7 +102,9 @@ export interface CollectionV1 {
   sessionCleanup?: SessionCleanupEntryV1[];
 }
 
-export interface SessionCleanupEntryV1 { threadId: string; home: string; state: "failed" | "retry-failed"; detail: string }
+export interface SessionCleanupEntryV1 { threadId: string; home: string; state: "failed" | "retry-failed"; detail: string;
+  /** Orca #349 review: the delete's recorded argv and the HOME it ran with, for the person's manual delete. */
+  command?: string[]; userHome?: string }
 
 /** A malformed record, or a call the sweep cleaned since, is left out rather than failing collect. */
 async function sessionCleanupOf(sourceDir: string): Promise<SessionCleanupEntryV1[]> {
@@ -116,7 +118,9 @@ async function sessionCleanupOf(sourceDir: string): Promise<SessionCleanupEntryV
         if (failure === null || existsSync(join(dir, "session-cleaned.json"))) continue;
         let remains: boolean;
         try { remains = sessionRemains(failure.home, failure.threadId); } catch { remains = true; }
-        if (remains) entries.push({ threadId: failure.threadId, home: failure.home, state: failure.state, detail: failure.detail });
+        const command = Array.isArray(failure.command) && failure.command.length > 0 && failure.command.every((part) => typeof part === "string" && part !== "") ? failure.command : undefined;
+        if (remains) entries.push({ threadId: failure.threadId, home: failure.home, state: failure.state, detail: failure.detail,
+          ...(command === undefined ? {} : { command }), ...(typeof failure.userHome === "string" && failure.userHome !== "" ? { userHome: failure.userHome } : {}) });
       }
     }
   }

@@ -113,7 +113,9 @@ export class CodexLiveObserver {
 
 /** Orca tester #349: one recorded deletion failure (session-cleanup-failed.json beside the call's thread.json). */
 export type SessionCleanupFailureV1 = { schema:"ccloop-session-cleanup-failed-v1"; threadId:string; home:string; command:string[];
-  exitCode:number|null; signal:string|null; stderr:string; detail:string; state:"failed"|"retry-failed"; at:string };
+  exitCode:number|null; signal:string|null; stderr:string; detail:string; state:"failed"|"retry-failed"; at:string;
+  /** Orca #349 review: the HOME the delete ran with (the private one), so a person's manual delete runs as ccloop's did. */
+  userHome:string|null };
 const FAILED="session-cleanup-failed.json";
 
 /**
@@ -136,8 +138,12 @@ async function deleteSession(home:string,command:string[],source:string|null,env
   }
   // The deletion's proof is the rollout being gone, whatever the command answered (a thread codex never persisted here
   // has nothing to delete; codex then exits 1 "failed to delete session").
-  if (rollout(home,id)===null) return {ok:true};
-  return {ok:false,command:[command[0]!,...argv],...(failure??{exitCode:0,signal:null,stderr:`codex-session-delete-unverified: ${id}`})};
+  // Orca #349 review: a sessions directory that cannot be read proves nothing either way, so it is a recorded failure
+  // (retried as any other), never a throw that would end the phase or the sweep.
+  let unreadable:string|null=null;
+  try { if (rollout(home,id)===null) return {ok:true}; } catch (error) { unreadable=String(error); }
+  return {ok:false,command:[command[0]!,...argv],...(failure??{exitCode:0,signal:null,
+    stderr:causeDetail(unreadable!==null?`codex-session-rollout-unreadable: ${unreadable}`:`codex-session-delete-unverified: ${id}`)})};
 }
 
 /** Deletes the session and writes session-cleaned.json, or records the failure as `failed` (no prior record) or `retry-failed`. */
@@ -146,7 +152,8 @@ async function settleDeletion(dir:string,prior:SessionCleanupFailureV1|null,home
   if (result.ok) { await writeFile(join(dir,"session-cleaned.json"),JSON.stringify({threadId:id}),{mode:0o600}); return; }
   const how=result.exitCode!==null?`exit ${result.exitCode}`:result.signal!==null?`signal ${result.signal}`:"not run";
   const record:SessionCleanupFailureV1={schema:"ccloop-session-cleanup-failed-v1",threadId:id,home,command:result.command,exitCode:result.exitCode,
-    signal:result.signal,stderr:result.stderr,detail:causeDetail(`${how}: ${result.stderr.trim()}`),state:prior===null?"failed":"retry-failed",at:new Date().toISOString()};
+    signal:result.signal,stderr:result.stderr,detail:causeDetail(`${how}: ${result.stderr.trim()}`),state:prior===null?"failed":"retry-failed",at:new Date().toISOString(),
+    userHome:typeof env.HOME==="string"?env.HOME:null};
   const tmp=join(dir,`${FAILED}.tmp`);
   await writeFile(tmp,JSON.stringify(record),{mode:0o600});
   renameSync(tmp,join(dir,FAILED));
@@ -171,6 +178,15 @@ export function sessionRemains(home:string,id:string):boolean { return uuid.test
  * `failedOnly` (the run's next codex phase, while no process of the run is reaped): only calls with a recorded failure,
  * whose own deletion already ran, are touched.
  */
+/**
+ * Orca #349 review: the run's end retries, once, every deletion still recorded as `failed` -- the last phase's included,
+ * which no later phase would retry. Called after the run's last phase returned (its codex process closed) and before the
+ * run's result is handed off. Housekeeping: it never changes the run's outcome.
+ */
+export async function retryFailedSessionDeletions(runDir:string):Promise<void> {
+  await sweepCodexSessions(runDir,{failedOnly:true}).catch((error:unknown)=>{process.stderr.write(`ccloop-codex-session-retry: ${String(error)}\n`);});
+}
+
 export async function sweepCodexSessions(runDir:string,options:{failedOnly?:boolean}={}):Promise<void> {
   const root=join(runDir,"codex");
   let attempts:string[];

@@ -15,7 +15,7 @@ import { CodexStream } from "./codexStream.js";
 import { executeWireJsonSchema, phaseJsonSchema, type CodexConfig, type CodexPhase } from "./protocol.js";
 import { codexToolRuleNetworkSetting } from "../../agents/codexNetworkConfig.js";
 import { codexToolRuleArgs } from "../toolRules.js";
-import { CodexLiveObserver, sweepCodexSessions } from "./liveUsage.js";
+import { CodexLiveObserver, retryFailedSessionDeletions } from "./liveUsage.js";
 
 // Task handoffs (Orca follow-up G §10.2): the output directory is written on execute only; codex reads anywhere.
 // Saved-result recovery expects exactly these arguments from the source envelope's work.handoff (Orca V11/O19 regression).
@@ -125,7 +125,7 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     }
     // Orca tester #349 (human's ruling 「下一轮再删」): the run's next codex phase retries, once, a deletion an earlier call of
     // this run recorded as failed. Housekeeping: whatever happens here never changes this phase's outcome.
-    await sweepCodexSessions(context.runDir,{failedOnly:true}).catch((error:unknown)=>{process.stderr.write(`ccloop-codex-session-retry: ${String(error)}\n`);});
+    await retryFailedSessionDeletions(context.runDir);
     childTimeout=deadline-Date.now();
   }
   // Per-contract tool rules (spec 2026-10-22 §4 codex): the rules' -c pairs join the phase's, before the trailing `-`.

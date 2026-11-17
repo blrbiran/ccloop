@@ -39,7 +39,7 @@ async function world() {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await writeFile(join(dir, "session-cleanup-failed.json"), body ?? JSON.stringify({ schema: "ccloop-session-cleanup-failed-v1", threadId: ID, home: codexHome,
       command: ["/bin/codex", "delete", "--force", ID], exitCode: 1, signal: null, stderr: "Error: failed to delete session\n",
-      detail: "exit 1: Error: failed to delete session", state, at: "2026-11-18T00:00:00.000Z" }), { mode: 0o600 });
+      detail: "exit 1: Error: failed to delete session", state, at: "2026-11-18T00:00:00.000Z", userHome: "/c/home" }), { mode: 0o600 });
     return dir;
   };
   const collect = async () => {
@@ -61,7 +61,9 @@ describe("collect lists the run's Codex sessions that could not be deleted (Orca
     const w = await world();
     await w.failed("call-aaaaaa", "failed");
     await w.failed("call-bbbbbb", "retry-failed");
-    const entry = (state: string) => ({ threadId: ID, home: w.codexHome, state, detail: "exit 1: Error: failed to delete session" });
+    // Orca #349 review: the recorded argv and HOME travel too, so the person's manual delete runs as ccloop's did.
+    const entry = (state: string) => ({ threadId: ID, home: w.codexHome, state, detail: "exit 1: Error: failed to delete session",
+      command: ["/bin/codex", "delete", "--force", ID], userHome: "/c/home" });
     expect((await w.collect()).sessionCleanup).toEqual([entry("failed"), entry("retry-failed")]);
   });
 
@@ -86,6 +88,7 @@ describe("collect lists the run's Codex sessions that could not be deleted (Orca
     await w.failed("call-bbbbbb", "failed", JSON.stringify({ schema: "ccloop-session-cleanup-failed-v1", threadId: ID, home: relative(process.cwd(), w.codexHome), state: "failed", detail: "x" }));
     await w.failed("call-dddddd", "failed", JSON.stringify({ schema: "ccloop-session-cleanup-failed-v1", threadId: ID, home: w.codexHome, state: "pending", detail: "x" }));
     await w.failed("call-cccccc", "failed");
-    expect((await collectExecution(w.envelope, 0)).sessionCleanup).toEqual([{ threadId: ID, home: w.codexHome, state: "failed", detail: "exit 1: Error: failed to delete session" }]);
+    expect((await collectExecution(w.envelope, 0)).sessionCleanup).toEqual([{ threadId: ID, home: w.codexHome, state: "failed", detail: "exit 1: Error: failed to delete session",
+      command: ["/bin/codex", "delete", "--force", ID], userHome: "/c/home" }]);
   });
 });

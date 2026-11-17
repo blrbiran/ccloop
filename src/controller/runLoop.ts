@@ -30,6 +30,7 @@ import {
 import { allowlistMisses, evaluatePathPolicy } from "../policy/pathPolicy.js";
 import { dropHandoffOutput } from "../policy/handoffOutput.js";
 import { evaluateRunBoundary, evaluateStopDecision } from "../stop/stopController.js";
+import { retryFailedSessionDeletions } from "../runtime/codex/liveUsage.js";
 import { isTerminalRunStatus, transitionRunState } from "../state/stateMachine.js";
 import type { LoopContract } from "../contract/schema.js";
 import { applyOwnerEpochTransfer, evaluateOwnership } from "../ownership/ownerController.js";
@@ -1602,6 +1603,8 @@ export async function runLoop(
 
   try {
     const result = await runLoopFromState(contract, runDir, adapter, state, heartbeat, leaseLoss, hooks);
+    // Orca #349 review: a session deletion the last phase recorded as failed gets its one retry before the hand-off.
+    await retryFailedSessionDeletions(runDir);
     await hooks?.onRunSettledBeforeLeaseRelease?.(result);
     return result;
   } finally {

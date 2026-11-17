@@ -1,5 +1,6 @@
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 const mode=process.argv[2], marker=process.argv[3];
 // Orca agent selection (2026-09-26), spec §4.8: `--version` with no `exec` answers a fixed version and
@@ -30,7 +31,15 @@ const mode=process.argv[2], marker=process.argv[3];
 // "Error: failed to load configuration", exit 1, unless a `-c model_catalog_json=...` pair is given.
 if(process.argv.includes("delete")) {
   appendFileSync(marker+".delete-calls",JSON.stringify(process.argv.slice(4))+"\n");
-  if(process.env.FAKE_CODEX_DELETE_FAIL==="1") {process.stderr.write("Error: failed to delete session\n",()=>process.exit(3));await new Promise(()=>{});}
+  // Orca #349 review: FAKE_CODEX_DELETE_FAIL=signal kills the delete with SIGKILL (no exit code, no stderr); =long fails it
+  // with ~2 KiB of multi-byte stderr; FAKE_CODEX_DELETE_FAIL_FROM=<n> fails the n-th delete of this marker and every later
+  // one, FAKE_CODEX_DELETE_FAIL_ONLY=<n> only the n-th.
+  const nth=readFileSync(marker+".delete-calls","utf8").trim().split("\n").length;
+  const failNth=(process.env.FAKE_CODEX_DELETE_FAIL_FROM!==undefined&&nth>=Number(process.env.FAKE_CODEX_DELETE_FAIL_FROM))||
+    (process.env.FAKE_CODEX_DELETE_FAIL_ONLY!==undefined&&nth===Number(process.env.FAKE_CODEX_DELETE_FAIL_ONLY));
+  if(process.env.FAKE_CODEX_DELETE_FAIL==="signal") process.kill(process.pid,"SIGKILL");
+  if(process.env.FAKE_CODEX_DELETE_FAIL==="long") {process.stderr.write("删".repeat(700)+"\n",()=>process.exit(3));await new Promise(()=>{});}
+  if(process.env.FAKE_CODEX_DELETE_FAIL==="1"||failNth) {process.stderr.write("Error: failed to delete session\n",()=>process.exit(3));await new Promise(()=>{});}
   let toml="";try{toml=readFileSync(join(process.env.CODEX_HOME,"config.toml"),"utf8");}catch{}
   const catalog=/^\s*model_catalog_json\s*=\s*"([^"]*)"/m.exec(toml.split(/^\s*\[/m,1)[0])?.[1];
   const paired=process.argv.some((arg,i)=>process.argv[i-1]==="-c"&&arg.startsWith("model_catalog_json="));
@@ -308,6 +317,13 @@ process.stdin.on("end",()=>{
   // Orca tester #347: in mode final-text, the finalsFile's `<phase>Items` (item objects, e.g. a command_execution) print as
   // item.completed rows before the default events; absent, nothing changes.
   const items=mode==="final-text"?(JSON.parse(readFileSync(process.argv[4],"utf8"))[`${phase}Items`]??[]):[];
+  // Orca #349 review: FAKE_CODEX_THREADS=1 gives every phase call its own thread (thread.started first, a rollout in
+  // CODEX_HOME), as the real codex does, so each call's session is deleted after it.
+  if(process.env.FAKE_CODEX_THREADS==="1") {
+    const id=randomUUID(),dir=join(process.env.CODEX_HOME,"sessions","2026","11","14");mkdirSync(dir,{recursive:true});
+    writeFileSync(join(dir,`rollout-2026-11-14T00-00-00-${id}.jsonl`),"prompt");
+    process.stdout.write(JSON.stringify({type:"thread.started",thread_id:id})+"\n");
+  }
   process.stdout.write(mode==="bad-json" ? "not JSON\n" : items.map(item=>JSON.stringify({type:"item.completed",item})+"\n").join("")+events);
   if(mode==="nonzero") process.exitCode=7;
   };

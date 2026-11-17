@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readlink, realpath, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readlink, realpath, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import { parseCodexConfig } from "../../../src/runtime/codex/protocol.js";
 import { runCodexPhase, type PhaseOutcome } from "../../../src/runtime/codex/runCodexPhase.js";
 import { sweepCodexSessions } from "../../../src/runtime/codex/liveUsage.js";
 import { CodexAdapter } from "../../../src/runtime/codex/codexAdapter.js";
+import { runLoop } from "../../../src/controller/runLoop.js";
 import { codexFixture } from "./fixture.js";
 
 // Codex phase isolation (ccloop spec 2026-10-18 §3.3, §3.5, §5): with an installation, a codex loop phase runs in the
@@ -113,7 +114,8 @@ describe("isolated Codex live response usage and retention", { timeout: 30_000 }
   it("a completed response settles on its answer when exact deletion fails, and records the failure", async () => {
     const w=await world("rollout-usage-complete");vi.stubEnv("FAKE_CODEX_DELETE_FAIL","1");
     const adapter=new CodexAdapter(w.codexConfig,{CODEX_HOME:w.source},undefined,{installation:w.installation});
-    await expect(adapter.plan(w.context)).resolves.toMatchObject({summary:"done",primaryTargetPaths:[]});
+    // Orca #349 review: the completed call's authoritative stdout usage (120 + 5) is kept, as before the ruling.
+    await expect(adapter.plan(w.context)).resolves.toMatchObject({summary:"done",primaryTargetPaths:[],tokenUsage:125});
     expect(adapter.awaitAbortedPhaseCleanup).toBe(true);
     const dir=await onlyCall(w,"plan"),id="01a13431-3db4-73a1-afd1-154f0477282d";
     expect(existsSync(join(dir,"session-cleaned.json"))).toBe(false);
@@ -231,6 +233,75 @@ describe("a failed Codex session deletion is recorded and retried once (Orca #34
     expect(existsSync(live.rolloutPath)).toBe(true);
     expect(existsSync(join(live.dir,"session-cleaned.json"))).toBe(false);
     expect(deleteCalls(w).map(call=>call.at(-1))).toEqual([ID]);
+  });
+
+  it("a delete stopped by a signal records no exit code, the signal, and the error message as its stderr", async () => {
+    const w=await world();
+    await w.run("plan");
+    const {dir}=await recordedCall(w,"call-orphan",ID);
+    vi.stubEnv("FAKE_CODEX_DELETE_FAIL","signal");
+    await sweepCodexSessions(w.context.runDir);
+    const record=cleanupRecord(dir);
+    expect(record).toMatchObject({exitCode:null,signal:"SIGKILL",state:"failed",userHome:phaseEnv(w).HOME});
+    expect(record.stderr).toContain("Command failed");
+    expect(record.detail).toMatch(/^signal SIGKILL: Command failed/);
+  });
+
+  it("keeps at most 512 bytes of stderr and of the detail, cut at a character", async () => {
+    const w=await world();
+    await w.run("plan");
+    const {dir}=await recordedCall(w,"call-orphan",ID);
+    vi.stubEnv("FAKE_CODEX_DELETE_FAIL","long");
+    await sweepCodexSessions(w.context.runDir);
+    const record=cleanupRecord(dir) as {stderr:string;detail:string};
+    for (const text of [record.stderr,record.detail]) {
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(512);
+      expect(Buffer.byteLength(text)).toBeGreaterThan(500);
+      expect(text).not.toContain("\uFFFD");
+    }
+  });
+
+  it("a sessions directory that cannot be read is a recorded failure, not a throw", async () => {
+    const w=await world();
+    await w.run("plan");
+    const {dir}=await recordedCall(w,"call-orphan",ID);
+    const sessions=join(phaseEnv(w).CODEX_HOME!,"sessions");
+    await chmod(sessions,0o000);
+    try {
+      await expect(sweepCodexSessions(w.context.runDir)).resolves.toBeUndefined();
+      expect(cleanupRecord(dir)).toMatchObject({state:"failed"});
+      expect(cleanupRecord(dir).stderr).toMatch(/^codex-session-rollout-unreadable: .*EACCES/);
+      expect(existsSync(join(dir,"session-cleaned.json"))).toBe(false);
+    } finally { await chmod(sessions,0o700); }
+  });
+
+  it("a next-phase retry that fails again is retry-failed, and the phase still completes", async () => {
+    const w=await world();
+    await w.run("plan");
+    const {dir}=await recordedCall(w,"call-failed",ID,"failed");
+    vi.stubEnv("FAKE_CODEX_DELETE_FAIL","1");
+    expect((await w.run("plan")).reason).toBe("completed");
+    expect(cleanupRecord(dir)).toMatchObject({state:"retry-failed"});
+  });
+
+  it("the run's end retries the last phase's failed deletion: a second failure is retry-failed", async () => {
+    const w=await world();vi.stubEnv("FAKE_CODEX_THREADS","1");vi.stubEnv("FAKE_CODEX_DELETE_FAIL_FROM","3");
+    const adapter=new CodexAdapter(w.codexConfig,{CODEX_HOME:w.source},undefined,{installation:w.installation});
+    const state=await runLoop(w.contract,w.runDir,adapter);
+    expect(state.status).toBe("succeeded");
+    const verify=(await readdir(join(w.runDir,"codex","1","verify"))).filter(name=>name.startsWith("call-"));
+    expect(verify).toHaveLength(1);
+    expect(cleanupRecord(join(w.runDir,"codex","1","verify",verify[0]!))).toMatchObject({state:"retry-failed"});
+    expect(deleteCalls(w)).toHaveLength(4);
+  });
+
+  it("the run's end retry that deletes the session marks the last phase's call cleaned", async () => {
+    const w=await world();vi.stubEnv("FAKE_CODEX_THREADS","1");vi.stubEnv("FAKE_CODEX_DELETE_FAIL_ONLY","3");
+    const adapter=new CodexAdapter(w.codexConfig,{CODEX_HOME:w.source},undefined,{installation:w.installation});
+    expect((await runLoop(w.contract,w.runDir,adapter)).status).toBe("succeeded");
+    const verify=(await readdir(join(w.runDir,"codex","1","verify"))).filter(name=>name.startsWith("call-"));
+    expect(existsSync(join(w.runDir,"codex","1","verify",verify[0]!,"session-cleaned.json"))).toBe(true);
+    expect(deleteCalls(w)).toHaveLength(4);
   });
 
   it("a cleanup step that still fails the phase is classified cleanup-failed, not unknown", async () => {
