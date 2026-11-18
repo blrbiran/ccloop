@@ -241,13 +241,16 @@ export function classifyOmpCall(events: string): CallClassification {
  * Orca #369 (a): an omp assistant error's typed provider status (`errorStatus`) as a cause, mirroring the codex status rows
  * above. Only the typed status is read; `errorMessage` is consulted only to tell a 404 that names a model, as codex's 404 row.
  * 408 stays unknown (a request timeout, not a refusal).
+ * Review fixes (spec 2026-11-18 §6, I3): "`errorMessage` is consulted" no longer holds -- an omp 404 is `model-unavailable`
+ * whatever its text (the #369 field text is 「模型已下架」, which names no "model"); the message is never read. omp's 404 is
+ * the model endpoint's answer to a request for one selected model, so a missing model is the reading the run can act on.
  */
-function ompStatusCause(status: number, errorMessage: string): FailureCauseV1 {
+function ompStatusCause(status: number): FailureCauseV1 {
   if (status === 429) return "rate-limited";
   if (status >= 500 && status <= 599) return "provider-5xx";
   if (status === 401 || status === 403) return "auth";
   if (status === 402) return "quota";
-  if (status === 404 && /model/i.test(errorMessage)) return "model-unavailable";
+  if (status === 404) return "model-unavailable";
   if (status >= 400 && status <= 499 && status !== 408) return "provider-error";
   return "unknown";
 }
@@ -271,7 +274,7 @@ export class OmpCallFold {
       const status = r.message.errorStatus;
       if (typeof status === "number" && Number.isSafeInteger(status)) {
         this.status = status;
-        this.cause = ompStatusCause(status, r.message.errorMessage);
+        this.cause = ompStatusCause(status);
         this.detail = causeDetail(`HTTP ${status}: ${r.message.errorMessage}`);
       } else {
         this.status = null; this.cause = "unknown";
@@ -279,7 +282,8 @@ export class OmpCallFold {
       }
     } else if (r.type === "message_end" && r.message?.role === "assistant") {
       // A later assistant message that is not an error: the call went on, so an earlier refusal neither ends nor names it.
-      this.status = null; this.cause = "unknown";
+      // Review fixes (spec §6, M5): nor is its detail kept -- the detail belongs to the final errored message only.
+      this.status = null; this.cause = "unknown"; this.detail = null;
     }
   }
   value(): CallClassification { return { cause: this.cause, workObserved: this.workObserved, detail: this.detail }; }

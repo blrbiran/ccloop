@@ -70,16 +70,21 @@ if (system.includes("one ccloop single call")) {
 const phase = system.includes("execution phase") ? "execute" : system.includes("verification phase") ? "verify" : "plan";
 appendFileSync(`${marker}.calls`, `${phase}\n`);
 for (const match of system.matchAll(/\(SKILL\.md: ([^)]+)\)$/gmu)) appendFileSync(`${marker}.skills`, readFileSync(match[1], "utf8"));
-// omp launch isolation (spec 2026-11-18): `<marker>.phase-script.json` ({phase?, stderr?, rows?, hang?, exitCode?}), when present
-// and for its phase (any phase without one), first writes `stderr` to stderr; with `rows` it then prints them and hangs
-// (`hang: true`) or exits with `exitCode` (0) instead of answering. Without the file nothing changes.
+// omp launch isolation (spec 2026-11-18): `<marker>.phase-script.json` ({phase?, stderr?, rows?, hang?, exitCode?, answerAfterMs?}),
+// when present and for its phase (any phase without one), first writes `stderr` to stderr; with `rows` it then prints them and
+// hangs (`hang: true`) or exits with `exitCode` (0) instead of answering -- or, with `answerAfterMs`, waits that long and then
+// answers as usual without a second session/agent_start (omp recovering in-session, e.g. after a compaction). Without the
+// file nothing changes.
 const phaseScript = existsSync(`${marker}.phase-script.json`) ? JSON.parse(readFileSync(`${marker}.phase-script.json`, "utf8")) : null;
+let scriptedOpening = false;
 if (phaseScript !== null && (phaseScript.phase === undefined || phaseScript.phase === phase)) {
   if (phaseScript.stderr !== undefined) await new Promise((done) => process.stderr.write(phaseScript.stderr, done));
   if (phaseScript.rows !== undefined) {
     await new Promise((done) => process.stdout.write(phaseScript.rows.map((row) => `${JSON.stringify(row)}\n`).join(""), done));
     if (phaseScript.hang === true) { setInterval(() => {}, 1000); await new Promise(() => {}); }
-    process.exit(phaseScript.exitCode ?? 0);
+    if (phaseScript.answerAfterMs === undefined) process.exit(phaseScript.exitCode ?? 0);
+    await new Promise((done) => setTimeout(done, phaseScript.answerAfterMs));
+    scriptedOpening = true;
   }
 }
 if (phase === "execute") writeFileSync("answer.txt", "42\n");
@@ -114,7 +119,7 @@ if (toolScript !== null && !Array.isArray(toolScript) && toolScript.hang === tru
 // `intervalMs` apart, appending each one's index to `<marker>.usage-stream` once printed and `done` after the last, then
 // answer as usual; a SIGTERM appends `terminated` there and exits. Without the file nothing changes.
 const usageStream = existsSync(`${marker}.usage-stream.json`) ? JSON.parse(readFileSync(`${marker}.usage-stream.json`, "utf8")) : null;
-const opening = [{ type: "session", id: "fake" }, { type: "agent_start" }];
+const opening = scriptedOpening ? [] : [{ type: "session", id: "fake" }, { type: "agent_start" }];
 if (usageStream !== null && usageStream.phase === phase) {
   process.on("SIGTERM", () => { appendFileSync(`${marker}.usage-stream`, "terminated\n"); process.exit(143); });
   for (const row of opening.splice(0)) process.stdout.write(`${JSON.stringify(row)}\n`);

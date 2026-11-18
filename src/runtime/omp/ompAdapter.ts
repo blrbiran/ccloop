@@ -53,7 +53,9 @@ async function writeExecuteFormatFailure(context: AttemptContext, evidenceDir: s
 const OMP_STREAM_WATCHDOG = /stream (stalled|timed out) while waiting for the (next|first) event/;
 
 export class OmpAdapter implements RuntimeAdapter {
-  constructor(private readonly config: MaterializedAgentConfigV1, private readonly skillsDir?: string, private readonly retryDelaysMs: readonly number[] = TRANSIENT_RETRY_DELAYS_MS) {}
+  // providerErrorGraceMs (review fixes, spec 2026-11-18 §6, C1): how long a phase waits after a non-retryable 4xx for omp to
+  // continue in-session; absent ⇒ runOmpPhase's OMP_PROVIDER_ERROR_GRACE_MS. Criteria inject a short one.
+  constructor(private readonly config: MaterializedAgentConfigV1, private readonly skillsDir?: string, private readonly retryDelaysMs: readonly number[] = TRANSIENT_RETRY_DELAYS_MS, private readonly providerErrorGraceMs?: number) {}
 
   /**
    * Failure causes (ccloop spec 2026-10-21-failure-causes-and-transient-retries-design.md §3 omp, §4): omp has no provider
@@ -70,6 +72,11 @@ export class OmpAdapter implements RuntimeAdapter {
    * own retry and model fallback off, and an errored assistant message with a typed provider status is classified by that
    * status (failureCause.ts OmpCallFold): 429 and 5xx are retryable here, a non-retryable 4xx stops the call at once
    * (outcome reason `provider-error`) and names its cause. A status-less error, the stream watchdog's included, is unchanged. ***
+   *
+   * *** ERRATUM (review fixes, 2026-11-18; spec 2026-11-18-omp-launch-isolation-design.md §6) -- "retry ... off" and "stops the
+   * call at once" no longer hold: omp's in-session retry stays on but bounded (only model fallback is off), and a non-retryable
+   * 4xx stops the call at a terminal agent_end or after a grace window without a continuation row (OMP_PROVIDER_ERROR_GRACE_MS),
+   * so omp's own recovery (a compaction after a context overflow) still runs. An omp 404 is `model-unavailable`. ***
    */
   private async phase<P extends OmpPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
     return runWithTransientRetry<PhaseResults[P]>({
@@ -113,7 +120,10 @@ export class OmpAdapter implements RuntimeAdapter {
     // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.3): a read-only phase is checked in every worktree.
     const watched = [{ key: null as string | null, path: context.worktreePath }, ...(context.extraWorktrees ?? []).map((extra) => ({ key: extra.key as string | null, path: extra.worktreePath }))];
     const before = phase === "execute" ? null : await Promise.all(watched.map((tree) => worktreeSnapshot(tree.path)));
-    const outcome = await runOmpPhase(this.config, phase, prompt, context, this.skillsDir === undefined ? {} : { skillsDir: this.skillsDir });
+    const outcome = await runOmpPhase(this.config, phase, prompt, context, {
+      ...(this.skillsDir === undefined ? {} : { skillsDir: this.skillsDir }),
+      ...(this.providerErrorGraceMs === undefined ? {} : { providerErrorGraceMs: this.providerErrorGraceMs }),
+    });
     seen.outcome = outcome;
     // Per-contract tool rules (spec 2026-10-22 §4; plan Task 4): checked on every execute outcome, before any other reading,
     // so a violation followed by a timeout, a crash or a bad answer still ends the run as tool-rule-violated.

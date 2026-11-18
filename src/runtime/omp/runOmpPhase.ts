@@ -22,9 +22,37 @@ const OUTPUT_LIMIT = 16 * 1024 * 1024;
  * owns retries), and MCP configs of the target repository are never loaded. Keys read from omp 18.17.0's source (§2).
  */
 export const OMP_PHASE_OVERLAY = {
-  retry: { enabled: false, modelFallback: false },
+  // Review fixes (spec §6, I1): "auto-retry ... off" above no longer holds -- omp's in-session retry stays as the profile has
+  // it (on by default) but bounded: at most 3 attempts, and a provider that asks for a longer wait than 60 s fails fast
+  // instead of sleeping (omp 18.17.0 `retry.maxRetries`, `retry.maxDelayMs`). Only the model fallback is off: a phase must
+  // run on the model the run selected.
+  retry: { maxRetries: 3, maxDelayMs: 60_000, modelFallback: false },
   mcp: { enableProjectConfig: false },
 } as const;
+
+/**
+ * Review fixes (spec §6, C1): omp writes an errored assistant `message_end` BEFORE it decides whether to recover in-session
+ * (a compaction after a context overflow, a bounded retry). A non-retryable 4xx therefore ends a phase only when nothing
+ * continues it: at a terminal `agent_end`, or after this long without a continuation row (omp announces a recovery with a
+ * local event before any network call, so the gap is omp's own bookkeeping; 20 s leaves room for a heavily loaded machine
+ * while a dead phase still ends in seconds, not at the 10-minute watchdog).
+ */
+export const OMP_PROVIDER_ERROR_GRACE_MS = 20_000;
+
+/**
+ * Review fixes (spec §6, C1): rows by which omp shows it goes on after an errored message (omp 18.17.0 agent-session /
+ * session-maintenance / turn-recovery and the agent loop). The errored turn's own `turn_end` and its placeholder tool-result
+ * messages are not among them: the loop always writes those after the error. A non-terminal `agent_end` is not either: omp
+ * holds `agent_end` while the prompt runs and prints only the last one (agent-session.ts `#emitSessionEvent`), and the phase
+ * fold refuses a non-terminal one anyway (`omp-phase-continuation`).
+ */
+function ompContinuationRow(row: { type?: unknown; message?: { role?: unknown } }): boolean {
+  switch (row.type) {
+    case "auto_compaction_start": case "auto_retry_start": case "agent_start": case "turn_start": case "tool_execution_start": return true;
+    case "message_start": return row.message?.role === "assistant";
+    default: return false;
+  }
+}
 
 /**
  * Spec §4.1 (#375): omp's wait for MCP servers before the first turn (its default is 30 000 ms; 0 would mean no timeout). A
@@ -34,8 +62,16 @@ export const OMP_PHASE_OVERLAY = {
 export const OMP_MCP_TIMEOUT_MS = "2000";
 
 /** Spec §4.3: omp's stderr `Warning: ` lines kept as the call's observation (outcome.json `warnings`), bounded. */
-const WARNING_PREFIX = "Warning: ";
 const MAX_WARNINGS = 16;
+/**
+ * Review fixes (spec §6, M1/M2): "`Warning: ` lines" above narrows to omp 18.17.0's two MCP readiness shapes (print-mode.ts
+ * `evaluateReadiness`), kept only up to the server's name and state: the failed-to-connect tail is the server's own error and
+ * can carry a URL with a token, and any other `Warning:` line (session store notices, ...) may carry paths or secrets, so it is
+ * dropped. ANSI escapes are stripped before matching (omp colours some stderr; FORCE_COLOR may be inherited).
+ */
+const MCP_READINESS_WARNING = /^Warning: MCP server "[^"]*" (?:not ready(?: after \d+ms)?|failed to connect)/;
+// CSI sequences (colours, cursor moves) and two-byte ESC sequences.
+const ANSI_ESCAPE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g;
 
 export interface OmpPhaseOutcome {
   // "provider-error" (Orca #369 (a), spec 2026-11-18 §3.3): a phase stopped by ccloop on a non-retryable 4xx refusal.
@@ -72,6 +108,8 @@ export interface OmpProcessInput {
   onObservedUsage?: AttemptContext["onObservedUsage"];
   /** Working time (Orca issue #262): the phase's idle ledger; phases only. */
   idleLedger?: AttemptContext["idleLedger"];
+  /** Review fixes (spec 2026-11-18 §6, C1): the grace window after a non-retryable 4xx; OMP_PROVIDER_ERROR_GRACE_MS when absent. */
+  providerErrorGraceMs?: number;
 }
 
 /** Task handoffs (Orca follow-up G §10.2): the handoff directories, after the extra worktrees. Saved-result capture
@@ -81,7 +119,7 @@ export function ompHandoffArgs(handoff: HandoffDirs | undefined): string[] {
 }
 
 export async function runOmpPhase(
-  config: MaterializedAgentConfigV1, phase: OmpPhase, prompt: string, context: AttemptContext, options: { skillsDir?: string } = {},
+  config: MaterializedAgentConfigV1, phase: OmpPhase, prompt: string, context: AttemptContext, options: { skillsDir?: string; providerErrorGraceMs?: number } = {},
 ): Promise<OmpPhaseOutcome> {
   // OMP skill injection (spec 2026-10-13): checked before anything is spawned; OMP's own discovery stays off below.
   const skills = options.skillsDir === undefined ? "" : await ompSkillsPromptBlock(options.skillsDir, context.worktreePath);
@@ -111,6 +149,7 @@ export async function runOmpPhase(
     timeoutMs: Math.min(config.installation.timeoutMs, context.state.budgetSnapshot.timeRemainingMs),
     abortSignal: context.abortSignal, onProcessRegistered: context.onProcessRegistered, onObservedUsage: context.onObservedUsage,
     idleLedger: context.idleLedger,
+    ...(options.providerErrorGraceMs === undefined ? {} : { providerErrorGraceMs: options.providerErrorGraceMs }),
   });
 }
 
@@ -167,6 +206,9 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       killTimer = setTimeout(() => kill("SIGKILL"), config.installation.killGraceMs);
     };
     const abort = (): void => stop("aborted");
+    // Review fixes (spec §6, C1): armed by a non-retryable 4xx assistant message, disarmed by a continuation row.
+    let graceTimer: NodeJS.Timeout | undefined;
+    const disarmGrace = (): void => { clearTimeout(graceTimer); graceTimer = undefined; };
     const timer = setTimeout(() => stop("timeout"), timeoutMs);
     // Activity watchdog (spec 2026-10-21 §2.2 omp): stdout/stderr bytes are activity; tool executions suspend the clock.
     const watch = new IdleWatch(effectiveIdleTimeoutMs(config.installation), () => { idle = watch.snapshot(); stop("stalled"); }, input.idleLedger);
@@ -174,7 +216,18 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
     const splitter = new LineSplitter((line) => {
       const parsed = jsonLine(line); stream.push(parsed); if (parsed.kind === "row") ompToolRow(parsed.row, watch);
       // Orca #369 (a) (spec 2026-11-18 §3.3): a phase ends on a refusal that no retry would pass; the single call is unchanged.
-      if (input.purpose.phase !== "single-call" && stream.call.terminalProviderStatus() !== null) stop("provider-error");
+      // Review fixes (spec §6, C1): not at the refusal itself -- at a terminal agent_end, or when the grace window runs out
+      // with no continuation row in between.
+      if (input.purpose.phase !== "single-call" && parsed.kind === "row" && parsed.row !== null && typeof parsed.row === "object" && !Array.isArray(parsed.row)) {
+        const row = parsed.row as { type?: unknown; isTerminal?: unknown; message?: { role?: unknown } };
+        const refused = stream.call.terminalProviderStatus() !== null;
+        if (refused && row.type === "message_end" && row.message?.role === "assistant") {
+          disarmGrace();
+          graceTimer = setTimeout(() => { graceTimer = undefined; stop("provider-error"); }, input.providerErrorGraceMs ?? OMP_PROVIDER_ERROR_GRACE_MS);
+        } else if (refused && row.type === "agent_end" && row.isTerminal !== false) {
+          disarmGrace(); stop("provider-error");
+        } else if (ompContinuationRow(row)) disarmGrace();
+      }
       // Live token threshold (issue #225): every assistant message_end carries its usage, so the running sum is observed.
       const total = input.onObservedUsage === undefined ? null : stream.lowerBound.value();
       if (total !== null && total !== observed) { observed = total; input.onObservedUsage!(total); }
@@ -192,7 +245,9 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       splitter.write(chunk);
     });
     const stderrLines = new LineSplitter((line) => {
-      if (warnings.length < MAX_WARNINGS && !line.tooLarge && line.text.startsWith(WARNING_PREFIX)) warnings.push(causeDetail(line.text.trimEnd()));
+      if (warnings.length >= MAX_WARNINGS || line.tooLarge) return;
+      const kept = MCP_READINESS_WARNING.exec(line.text.replace(ANSI_ESCAPE, ""));
+      if (kept !== null) warnings.push(causeDetail(kept[0]));
     });
     child.stderr.on("data", (chunk: Buffer) => {
       if (stderrBytes < OUTPUT_LIMIT) stderrLines.write(chunk);
@@ -226,6 +281,7 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       closed = true;
       kill("SIGKILL");
       clearTimeout(timer);
+      disarmGrace();
       watch.stop();
       clearTimeout(killTimer);
       clearTimeout(drainTimer);

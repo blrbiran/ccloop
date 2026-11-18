@@ -101,3 +101,70 @@ schema accepts them. The fake omp gains an opt-in `<marker>.phase-script.json` (
 Rewritten (golden argv now has `--config <evidence>/config-overlay.yml` after `--cwd`): the omp golden comparisons in
 `tests/runtime/omp/ompToolRules.test.ts` and `tests/runtime/multiRepoArgv.test.ts`, through one fixture helper that
 inserts exactly that pair into the 2a2ae53 capture (left byte-for-byte), as `executorPromptGolden.ts` does for the prompt.
+
+## 6. Review fixes (2026-11-18)
+
+Written 2026-11-18 by the fix-wave implementer subagent of the same Orca session (controller-dispatched), on branch
+`fix/omp-mcp-retry-369-375` after the commit `fix(runtime): omp phases run without omp's own retry, end on a non-retryable 4xx
+as provider-error, wait 2 s for MCP and never load project MCP (Orca #369 (a), #375)`. An independent review found the items
+below; each was re-checked against the code and the installed omp 18.17.0 source before it was fixed. §3 and §4 above are kept
+as written; where this section differs, **this section holds**.
+
+**C1 (critical) -- the early stop killed omp's in-session recovery.** Verified: omp writes the errored assistant `message_end`
+first; its `agent_end` handling then decides to recover (`agent-session.ts` ~5150-5283: compaction on a context overflow --
+`turn-recovery.ts` `isRetryableError` says overflow "is handled by compaction instead" -- a retryable error, a malformed call),
+so §3.3's stop "at once" could kill a phase that omp was about to recover. Now: a non-retryable 4xx assistant message
+(`OmpCallFold.terminalProviderStatus`, unchanged) **arms a grace window** (`OMP_PROVIDER_ERROR_GRACE_MS` = 20 000 ms); a
+**continuation row** disarms it (`auto_compaction_start`, `auto_retry_start`, `agent_start`, `turn_start`,
+`tool_execution_start`, an assistant `message_start`); a **terminal `agent_end`** while the latest assistant message is still
+such a refusal stops the phase at once; the window running out stops it. Either stop is outcome reason `provider-error`.
+Choices, with the evidence:
+- *Not "any later row".* The agent loop always writes the errored turn's own `turn_end` (and placeholder tool-result messages
+  for any tool calls in it) after the error (`pi-agent-core` `agent-loop.ts` ~1594-1633), so "any row" would disarm on the
+  error's own bookkeeping and a dead phase would again run to the watchdog.
+- *A non-terminal `agent_end` is not a continuation signal.* omp holds `agent_end` while a prompt is in flight and replaces the
+  held one (`agent-session.ts` `#emitSessionEvent`, `#pendingAgentEndEmit`), so print mode writes only the last; the measured
+  18.10.1 continuation stream had one `agent_end` (plan `2026-10-26-omp-empty-stop-and-perf-l7.md`), and ccloop's phase fold
+  refuses a non-terminal one anyway (`omp-phase-continuation`, unchanged).
+- *20 s.* omp announces a recovery with a local event before any network call (`session-maintenance.ts` emits
+  `auto_compaction_start` right after installing its abort controller; `turn-recovery.ts` emits `auto_retry_start` before the
+  backoff), so the gap is omp's own bookkeeping; 20 s leaves room for a machine at load 60+ while a dead phase still ends in
+  seconds rather than at the 10-minute watchdog. A terminal `agent_end` (the usual dead-end shape) does not wait at all.
+- Injectable for criteria only: `OmpAdapter`'s 4th constructor argument → `runOmpPhase` option → `OmpProcessInput.providerErrorGraceMs`.
+  No configuration key; the production path never passes it.
+Not proven: a real omp compaction after a provider 400 (no paid run); the continuation shapes are read from source.
+
+**I1 -- omp's in-session retry stays on, bounded.** §3.1's overlay retry keys become
+`{"retry":{"maxRetries":3,"maxDelayMs":60000,"modelFallback":false}}` (keys and meaning from omp 18.17.0
+`src/session/settings.ts`: `retry.maxRetries` default 10, `retry.maxDelayMs` default 300 000 -- "when the provider asks us to
+wait longer than this ... the request fails fast instead of sleeping"). `retry.enabled` is no longer written: the profile decides
+(default true). Only the model fallback is forced off (a phase runs on the run's selected model). A 429/5xx that outlives omp's
+3 attempts still reaches ccloop typed (`rate-limited`/`provider-5xx`) and ccloop's bounded transient retry still applies.
+
+**I3 -- an omp 404 is `model-unavailable` whatever its text.** §3.2's "404 whose `errorMessage` names a model" is dropped: the
+#369 field text 「模型已下架，建议更换新模型」 names no "model". Other non-408/429 4xx stay `provider-error`; a 404 still stops
+the phase (it is still a non-retryable 4xx).
+
+**M1/M2 -- warnings.** §4.3's "lines that start with `Warning: `" narrows to omp's two MCP readiness shapes
+(`print-mode.ts` `evaluateReadiness`), kept only up to the server name and state:
+`Warning: MCP server "<name>" not ready after <t>ms` and `Warning: MCP server "<name>" failed to connect`. The
+failed-to-connect tail is the server's own error and can carry a URL with a token; every other `Warning:` line (omp also prints
+session-store notices and others) is **dropped**, not cut at a colon -- the safe choice, since nothing else needs it. ANSI
+escapes (CSI and two-byte ESC sequences) are stripped before matching. Bounds unchanged (16 lines, 512 bytes each).
+
+**M3 -- saved results from an older ccloop.** `captureOmpWithoutFinal` compares a saved call's argv with today's
+(`--config <call>/config-overlay.yml` included), so a saved omp execute result recorded by a ccloop before this change is refused
+`saved-result-config-mismatch`: it fails closed (no recovery, nothing accepted on a guess). Accepted; no migration.
+
+**M4 -- timing.** The 404 criterion no longer bounds elapsed time from above; it asserts outcome reason `provider-error`, which
+only ccloop's own stop writes (not the call limit, not the watchdog), plus a lower bound (the window was waited out).
+
+**M5.** `OmpCallFold` clears `detail` together with status and cause when a later assistant message is not an error.
+
+Tests (`tests/runtime/omp/ompLaunchIsolation.test.ts`, this branch's own file): the overlay criterion now expects the keys above;
+the status table has the Chinese-text 404 and a bare 404 as `model-unavailable`; the 404-then-silence phase stops after an
+injected 300 ms window with cause `model-unavailable`; 400 then a terminal `agent_end` stops at once under a 10-minute window;
+400 (context overflow), its `turn_end`, then `auto_compaction_start` / `auto_retry_start` / `agent_start` and a successful answer
+1.2 s later (window 200 ms) completes; the warnings criteria use the MCP shapes, a token-bearing tail, an ANSI-coloured line and
+a non-MCP warning. The fake omp's phase script gains an opt-in `answerAfterMs`. No other existing test was rewritten; the two
+rewrites listed in §5 are unchanged and still await the human's per-test confirmation.

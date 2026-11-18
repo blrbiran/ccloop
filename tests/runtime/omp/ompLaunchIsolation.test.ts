@@ -32,7 +32,8 @@ const onlyCallDir = async (root: string) => {
 const outcomeOf = async (w: World, phase: string) => JSON.parse(await readFile(join(await onlyCallDir(join(w.runDir, "omp", "1", phase)), "outcome.json"), "utf8")) as Record<string, unknown>;
 const failureOf = async (promise: Promise<unknown>): Promise<unknown> => promise.then(() => null, (error: unknown) => error);
 
-const PHASE_OVERLAY = { retry: { enabled: false, modelFallback: false }, mcp: { enableProjectConfig: false } };
+// Review fixes 2026-11-18 (spec §6, I1): omp's in-session retry stays on but bounded; only model fallback is off.
+const PHASE_OVERLAY = { retry: { maxRetries: 3, maxDelayMs: 60_000, modelFallback: false }, mcp: { enableProjectConfig: false } };
 const SINGLE_CALL_OVERLAY = {
   retry: { enabled: false, modelFallback: false }, model: { loopGuard: { enabled: false } }, advisor: { enabled: false },
   compaction: { enabled: false }, mcp: { enableProjectConfig: false },
@@ -47,7 +48,7 @@ const FIELD_404 = "404 data: {\"error\":{\"message\":\"模型已下架，建议�
 
 describe("Fix A/B: the per-launch overlay of every phase", () => {
   for (const phase of PHASES) {
-    it(`${phase}: --config <evidence>/config-overlay.yml right after --cwd, with no omp retry, no model fallback, no project MCP`, async () => {
+    it(`${phase}: --config <evidence>/config-overlay.yml right after --cwd, with a bounded omp retry, no model fallback, no project MCP`, async () => {
       const w = await fresh();
       await new OmpAdapter(await ompInstallation(w) as never)[phase](w.context as never).catch(() => undefined);
       const callDir = await onlyCallDir(join(w.runDir, "omp", "1", phase));
@@ -94,7 +95,9 @@ describe("Fix B: OMP_MCP_TIMEOUT_MS is a small positive number on every omp call
 describe("Fix A: an errored assistant message is classified by its typed status only", () => {
   const events = (...messages: object[]) => messages.map((message) => JSON.stringify({ type: "message_end", message })).join("\n");
   const cases: Array<[number | undefined, string, string]> = [
-    [404, FIELD_404, "provider-error"],
+    // Review fixes (spec §6, I3): an omp 404 is model-unavailable whatever its text -- the field's says 「模型已下架」.
+    [404, FIELD_404, "model-unavailable"],
+    [404, "404 not found", "model-unavailable"],
     [404, "404 The model `x` does not exist", "model-unavailable"],
     [400, "400 bad request", "provider-error"],
     [422, "422 unprocessable", "provider-error"],
@@ -132,24 +135,61 @@ describe("Fix A: an errored assistant message is classified by its typed status 
     const later = { ...errored(undefined, "unused"), stopReason: "toolUse", errorMessage: undefined, usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 } };
     expect(status(errored(404, FIELD_404), later)).toBeNull();
     expect(classifyOmpCall(events(errored(429, "429 x"), later)).cause).toBe("unknown");
+    // Review fixes (spec §6, M5): nor does the earlier refusal's detail outlive it.
+    expect(classifyOmpCall(events(errored(404, FIELD_404), later)).detail).toBeNull();
   });
 });
 
-describe("Fix A: a phase whose provider refuses with a non-retryable 4xx ends at once, named", () => {
-  it("404 then a hanging omp: the plan phase fails within seconds as provider-error, one call, outcome reason provider-error", async () => {
+describe("Fix A: a phase whose provider refuses with a non-retryable 4xx ends after a grace window, named", () => {
+  // Review fixes (spec §6, C1): omp emits the errored message_end BEFORE it recovers in-session (a compaction after a context
+  // overflow, a bounded retry), so the refusal ends the phase only when nothing continues it: a terminal agent_end, or
+  // silence for the grace window. The window is injected short here (OmpAdapter's 4th argument); production uses 20 s.
+  const turnEnd = (status: number, message: string) => ({ type: "turn_end", message: errored(status, message), toolResults: [] });
+
+  it("404, its own turn_end, then silence: stopped as provider-error once the window ran out, cause model-unavailable", async () => {
     const w = await fresh();
     await writeFile(`${w.marker}.phase-script.json`, JSON.stringify({ phase: "plan", hang: true,
-      rows: [{ type: "session", id: "s" }, { type: "agent_start" }, { type: "message_end", message: errored(404, FIELD_404) }] }));
+      rows: [{ type: "session", id: "s" }, { type: "agent_start" }, { type: "message_end", message: errored(404, FIELD_404) }, turnEnd(404, FIELD_404)] }));
     const started = Date.now();
-    const failure = await failureOf(new OmpAdapter(await ompInstallation(w) as never, undefined, [5]).plan(w.context as never));
-    const elapsed = Date.now() - started;
-    // The installation allows 10 s and the idle watchdog min(10 min, 10 s): ending well before either is this fix.
-    expect(elapsed).toBeLessThan(5_000);
-    expect(failure).toMatchObject({ failureCause: { cause: "provider-error", retries: 0, detail: `HTTP 404: ${FIELD_404}` } });
+    const failure = await failureOf(new OmpAdapter(await ompInstallation(w) as never, undefined, [5], 300).plan(w.context as never));
+    // Not at once: the window was waited out (a lower bound only; timers never fire early).
+    expect(Date.now() - started).toBeGreaterThanOrEqual(300);
+    expect(failure).toMatchObject({ failureCause: { cause: "model-unavailable", retries: 0, detail: `HTTP 404: ${FIELD_404}` } });
     expect(String(failure)).toContain("omp-provider-error");
+    // Event-based (review M4): only ccloop's own stop writes this reason -- not the 10 s call limit, not the watchdog.
     expect((await outcomeOf(w, "plan")).reason).toBe("provider-error");
     expect(await readFile(`${w.marker}.calls`, "utf8")).toBe("plan\n");
   }, 30_000);
+
+  it("400 then a terminal agent_end: stopped at once, without waiting for the window", async () => {
+    const w = await fresh();
+    await writeFile(`${w.marker}.phase-script.json`, JSON.stringify({ phase: "plan", hang: true,
+      rows: [{ type: "session", id: "s" }, { type: "agent_start" }, { type: "message_end", message: errored(400, "400 bad request") },
+        turnEnd(400, "400 bad request"), { type: "agent_end", isTerminal: true, yielded: true, messages: [] }] }));
+    // A 10-minute window: the 10 s call limit would end the phase first (reason timeout) unless the terminal agent_end did.
+    const failure = await failureOf(new OmpAdapter(await ompInstallation(w) as never, undefined, [5], 600_000).plan(w.context as never));
+    expect(failure).toMatchObject({ failureCause: { cause: "provider-error", retries: 0, detail: "HTTP 400: 400 bad request" } });
+    expect((await outcomeOf(w, "plan")).reason).toBe("provider-error");
+  }, 30_000);
+
+  const OVERFLOW = "400 prompt is too long: 250000 tokens > 200000 maximum";
+  const continuations: Array<[string, object]> = [
+    ["auto_compaction_start", { type: "auto_compaction_start", reason: "overflow", action: "context-full" }],
+    ["auto_retry_start", { type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 500, errorMessage: OVERFLOW }],
+    // omp 18.10.1's measured continuation shape (turn_end, then agent_start; plan 2026-10-26-omp-empty-stop).
+    ["agent_start", { type: "agent_start" }],
+  ];
+  for (const [name, row] of continuations) {
+    it(`400 (context overflow), its turn_end, then ${name} and a successful turn after the window: not stopped, the phase succeeds`, async () => {
+      const w = await fresh();
+      await writeFile(`${w.marker}.phase-script.json`, JSON.stringify({ phase: "plan", answerAfterMs: 1_200,
+        rows: [{ type: "session", id: "s" }, { type: "agent_start" }, { type: "message_end", message: errored(400, OVERFLOW) }, turnEnd(400, OVERFLOW), row] }));
+      const plan = await new OmpAdapter(await ompInstallation(w) as never, undefined, [5], 200).plan(w.context as never);
+      expect(plan).toMatchObject({ summary: "Set answer to 42" });
+      expect((await outcomeOf(w, "plan")).reason).toBe("completed");
+      expect(await readFile(`${w.marker}.calls`, "utf8")).toBe("plan\n");
+    }, 30_000);
+  }
 
   for (const status of [429, 408]) {
     it(`${status} then a hanging omp is not stopped as provider-error (it runs to the call's own limit)`, async () => {
@@ -166,23 +206,32 @@ describe("Fix A: a phase whose provider refuses with a non-retryable 4xx ends at
   }
 });
 
-describe("Fix B: omp's stderr Warning: lines are an observation in outcome.json and collect", () => {
-  const MCP_WARNING = "Warning: MCP server \"rea\" not ready after 2000ms; its tools are unavailable for this run.";
+describe("Fix B: omp's MCP readiness warnings are an observation in outcome.json and collect", () => {
+  // Review fixes (spec §6, M1/M2): only omp's two MCP readiness shapes are kept, cut after the server's name and state -- the
+  // failed-to-connect tail is the server's own error and can carry a URL with a token. Any other `Warning:` line is dropped.
+  // ANSI escapes are stripped before matching (omp colours some stderr with chalk; FORCE_COLOR may be inherited).
+  const NOT_READY = "Warning: MCP server \"rea\" not ready after 2000ms; its tools are unavailable for this run.";
+  const FAILED = "Warning: MCP server \"db\" failed to connect: GET https://mcp.example/sse?token=SECRET-123 401; its tools are unavailable for this run.";
+  const COLOURED = "\u001b[33mWarning: MCP server \"git\" not ready after 2000ms; its tools are unavailable for this run.\u001b[39m";
+  const KEPT = ["Warning: MCP server \"rea\" not ready after 2000ms", "Warning: MCP server \"db\" failed to connect", "Warning: MCP server \"git\" not ready after 2000ms"];
 
-  it("the Warning: lines (only those) reach outcome.json and the call's collect transcript entry, which collect's schema accepts", async () => {
+  it("the MCP readiness lines (only those, cut after name and state) reach outcome.json and the collect entry, which collect's schema accepts", async () => {
     const w = await fresh();
-    await writeFile(`${w.marker}.phase-script.json`, JSON.stringify({ phase: "plan", stderr: `${MCP_WARNING}\nsome other line\nWarning: second\n` }));
+    await writeFile(`${w.marker}.phase-script.json`, JSON.stringify({ phase: "plan",
+      stderr: `${NOT_READY}\nsome other line\nWarning: session store at /x?token=SECRET-456 is slow\n${FAILED}\n${COLOURED}\n` }));
     await new OmpAdapter(await ompInstallation(w) as never).plan(w.context as never);
-    expect((await outcomeOf(w, "plan")).warnings).toEqual([MCP_WARNING, "Warning: second"]);
+    expect((await outcomeOf(w, "plan")).warnings).toEqual(KEPT);
+    expect(await readFile(join(await onlyCallDir(join(w.runDir, "omp", "1", "plan")), "outcome.json"), "utf8")).not.toContain("SECRET");
     const entries = await listTranscripts(w.dir, true);
     expect(entries).toHaveLength(1);
-    expect(entries[0]!.warnings).toEqual([MCP_WARNING, "Warning: second"]);
+    expect(entries[0]!.warnings).toEqual(KEPT);
     const parsed = collectionSchema.parse({ events: [], candidate: null, terminal: null, progress: null, transcripts: entries });
-    expect(parsed.transcripts![0]!.warnings).toEqual([MCP_WARNING, "Warning: second"]);
+    expect(parsed.transcripts![0]!.warnings).toEqual(KEPT);
   }, 30_000);
 
-  it("without a warning neither outcome.json nor the transcript entry has the key (no new bytes for a quiet call)", async () => {
+  it("without an MCP readiness warning neither outcome.json nor the transcript entry has the key (no new bytes for a quiet call)", async () => {
     const w = await fresh();
+    await writeFile(`${w.marker}.phase-script.json`, JSON.stringify({ phase: "plan", stderr: "Warning: something else\n" }));
     await new OmpAdapter(await ompInstallation(w) as never).plan(w.context as never);
     expect(Object.keys(await outcomeOf(w, "plan"))).not.toContain("warnings");
     const entries = await listTranscripts(w.dir, true);
@@ -191,12 +240,12 @@ describe("Fix B: omp's stderr Warning: lines are an observation in outcome.json 
 
   it("bounded: at most 16 lines, each at most 512 bytes", async () => {
     const w = await fresh();
-    const lines = Array.from({ length: 20 }, (_, index) => `Warning: ${index} ${"é".repeat(index === 0 ? 400 : 1)}`);
+    const lines = Array.from({ length: 20 }, (_, index) => `Warning: MCP server "s${index}${"é".repeat(index === 0 ? 400 : 1)}" not ready after 2000ms; x`);
     await writeFile(`${w.marker}.phase-script.json`, JSON.stringify({ phase: "plan", stderr: `${lines.join("\n")}\n` }));
     await new OmpAdapter(await ompInstallation(w) as never).plan(w.context as never);
     const warnings = (await outcomeOf(w, "plan")).warnings as string[];
     expect(warnings).toHaveLength(16);
-    expect(warnings[1]).toBe(lines[1]);
+    expect(warnings[1]).toBe("Warning: MCP server \"s1é\" not ready after 2000ms");
     expect(Buffer.byteLength(warnings[0]!)).toBeLessThanOrEqual(512);
     expect(lines[0]!.startsWith(warnings[0]!)).toBe(true);
   }, 30_000);
