@@ -41,9 +41,19 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-> **Orca 会话 `ca534c51`（2026-11-18 下午）：ccloop 零代码改动，Orca 仍钉上一节那笔（#349）。** 唯一与本仓相关的产出是一份**未实现**的跨仓设计稿：测试者 #321 B「修复型重试」——`required-check-failed` 之后下一次尝试从上一次的产物起步、跳过 plan（ccloop 侧：启动信封 `work.repair`、`features.repairAttempt:"v1"`，协议号不变）。稿在 Orca 主仓 `docs/superpowers/specs/2026-11-18-repair-attempt-design.md`。**它要改本仓两条既有判据**（`tests/control/protocol4.test.ts:13`、`tests/control/savedResultEvidence.test.ts:112`，都钉 `features` 的确切答案），按本仓人裁 88 须人**逐条点名**批准后才能开工；一揽子「批准改写所有必要的判据」不算。
+> **Orca 会话 `543e800e`（2026-11-18 晚 → 11-19）：本仓有代码改动，已推、Orca 已 repin 到它（见下一节）。** 另：Orca 侧「修复型重试」设计稿（#321 B，`Orca/docs/superpowers/specs/2026-11-18-repair-attempt-design.md`）要改的两条本仓判据 `tests/control/protocol4.test.ts:13`、`tests/control/savedResultEvidence.test.ts:112`，**人已于 2026-11-19 逐条点名「允许」**（同一对判据也是 Orca「去掉复制」设计 `Orca/docs/superpowers/specs/2026-11-19-change-sized-runs-design.md` 的 ccloop 阶段 P1 要改的）；两件的 ccloop 半边都**还没开工**。Orca 侧 #321 C1（下一个 run 被告知最后一次尝试失败的命令）读 collect 终态的 `currentAttempt`，本仓无需改。
 
-### 最新（2026-11-18，Orca 会话 `4389b15f`）—— #347 execute 答案失败细分、#349 codex 会话删除失败不再判失败；均已推，Orca 已 repin 到 #349 那笔
+### 最新（2026-11-19，Orca 会话 `543e800e`）—— omp 启动隔离（Orca #369 a、#375）：已推，Orca 已 repin
+
+- 设计 `docs/superpowers/specs/2026-11-18-omp-launch-isolation-design.md`（§6 审阅修复、§7 Correction）；主题行 `docs(spec): omp launch isolation …` 至 `fix(runtime): an errored turn's placeholder tool rows do not cancel the provider-error grace window (Orca #369 re-review)`。
+- **全部按次启动，不改任何 agent 的 profile／配置文件**（人：「我们不应该删 omp 或其他 agent 的 profile 文件内容」）：每个 omp loop 阶段在自己的证据目录写 `config-overlay.yml` 并 `--config` 传入（`retry.maxRetries:3`、`retry.maxDelayMs:60000`、`retry.modelFallback:false`、`mcp.enableProjectConfig:false`；single-call 的覆盖也加 `mcp.enableProjectConfig:false`）；`OMP_MCP_TIMEOUT_MS=2000`（0 表示不设超时，不能用）。
+- provider 的非 408/429 的 4xx：起 20 s 宽限窗（`OMP_PROVIDER_ERROR_GRACE_MS`），只被恢复行取消（`auto_compaction_start`、`auto_retry_start`、`agent_start`、`turn_start`、assistant `message_start`；**不含** `tool_execution_start`——出错那一轮自己的占位工具结果也发它），窗满或终态 `agent_end` 即以 `provider-error` 结束；任何 omp 404 = `model-unavailable`（现场文本「模型已下架」）。
+- omp stderr 只保留 MCP 就绪两种形态（服务名＋not ready／failed to connect，截掉尾巴，先剥 ANSI），进 `outcome.json` 与 collect `transcripts[].warnings`（≤16 行、每行 ≤512 B，无则缺席）。Orca 侧 strict schema 已认它（Orca 先合了读取端，再 repin）。
+- 改了 2 条既有判据（omp argv golden 多 `--config`）：`tests/runtime/omp/ompToolRules.test.ts:25`、`tests/runtime/multiRepoArgv.test.ts:93`——**人逐条点名「允许」**，注释写明。旧 ccloop 记录的 saved result 会以 `saved-result-config-mismatch` 被拒（失败关闭，已写进设计）。
+- 门：负载 58–127 下全量红在 omp 之外（`savedResultRecovery.native`、`cli`、`setupCommands`、`stalledCauseAndFloor` #262 等），与未改动 main 对照同红；omp 测试文件 30/30。**真 omp 付费验收未跑**；真 omp 遇上下文溢出后的压缩恢复只按源码推，未实测。
+- 登记：`listAgents` 未报 omp 的 MCP 清单（Orca `doctor` 想要）；用户级 MCP 服务仍会启动（关它要改 profile，禁止）；omp 4xx 后进程挂 4 分钟的根因未证。
+
+### 上一轮（2026-11-18，Orca 会话 `4389b15f`）—— #347 execute 答案失败细分、#349 codex 会话删除失败不再判失败；均已推，Orca 已 repin 到 #349 那笔
 
 - 主题行 `feat(runtime): a refused execute answer is narration-only, execution-not-json or execution-shape (Orca #347)` 至 `fix(runtime): a typed claude assistant error is not refined into an answer cause; …`（#347）；`fix(runtime): a failed codex session deletion is recorded and retried once, never a failed phase (Orca #349)` 至 `docs(spec): Orca #349 review round …`（#349）。人授权本轮改 ccloop。
 - **#347**：执行阶段答案被拒时 `failureCause` 从 `unknown` 细分为 `narration-only`（无答案或散文，且未观察到工作）／`execution-not-json`／`execution-shape`；「工作」按适配器观察：codex 非 `agent_message`/`reasoning`/`error` 的 item（未知类型算工作）、claude runner 的 `toolUses`（缺 signals 文件算工作）、omp `tool_execution_start`。只细化 `unknown`；claude 已有带类型的 `assistantError` 时不细化；不进 `RETRYABLE_CAUSES`；codex 中止规则对三类同 `unknown`。改了 2 条既有判据（cause `unknown`→`execution-shape`，Ruling 行）。
@@ -52,11 +62,9 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 - **环境教训**：vitest 2.1.9 单独 `--maxWorkers=2` 报 min/max 冲突，要 `--minWorkers=1 --maxWorkers=2`；`/private/tmp` 会话 scratchpad 会被外部清掉（本轮删掉过一个 worktree，残留记录已用不带 force 的 `git worktree remove` 清掉）。
 - **登记未修**：live ceiling 被调低后 ccloop 只在下一次用量观测或阶段边界才比较（`createLiveCeilingWatch` 读新 revision 但不触发检查），abandon 的花费已封顶（最多再一次调用），只影响收尾快慢——低优先。
 
-### 上一轮（2026-11-17，Orca 会话 `9982cf01`）—— 转录行接收时间标记已在远端，Orca 已 repin 并装进面板
+### 上一轮（2026-11-17，Orca 会话 `9982cf01`）—— 转录行接收时间标记（已推，Orca 已 repin）
 
-- 主题行 `feat(runtime): stamp transcript rows at receipt (#320)` 至 `fix(runtime): keep a full final raw transcript line at close (#320)`。每一条保留的 provider 原始行先按原字节写入 `transcript.jsonl`，随后追加 `{"type":"ccloop.line-observed","atBytes":<该原始行在 transcript 的物理起始字节>,"ccloopObservedAt":<接收 epoch ms>}`；原始 `events.jsonl`、decoder、16 MiB 行帽和 128 MiB transcript 帽不变。半行在 SIGKILL 前已落盘；末行无换行且帽不足以容纳完整标记时保留原始字节、时间缺席。
-- 证据：聚焦 7 文件／76 条通过，typecheck/build RC0；独立审阅复核 cap 边界与崩溃路径无剩余缺陷。没有全量 known-reds 门、没有真 provider 付费验收、没有变异矩阵。
-- 发布与消费（同会话后段现核 `/usr/bin/git ls-remote`）：本会话 agent 的 push 被 Orca Tier 0 拒且未重试；其后远端 `main` 已含上述提交（不是本会话 agent 推的）。Orca 在独立 `git clone --local` 安装树用 `scripts/pin-ccloop.mjs` 钉到 `fix(runtime): keep a full final raw transcript line at close (#320)` 这一提交，脚本各项检查与默认解析 E2E 12/12 均 ok；Orca 主仓 `npm ci`／build 后面板重启，`orca status` 报该 pin「installed and built」。旧 transcript 没有标记时 Orca 不显示时间，不回填。
+- 主题行 `feat(runtime): stamp transcript rows at receipt (#320)` 至 `fix(runtime): keep a full final raw transcript line at close (#320)`：每条保留的原始行后追加 `{"type":"ccloop.line-observed","atBytes":…,"ccloopObservedAt":…}`，原始 events、decoder 与各帽不变；旧 transcript 无标记时 Orca 不显示时间、不回填。（过程于 Orca 会话 `543e800e` 压掉：分支已合推、Orca 已 repin 多次，结论在此句；原文按页首方法取回。）
 
 ### 上一轮（2026-11-13，Orca 会话 `c8b75eac`，测试者反馈 J 轮）—— 单次调用容许前言、陈旧锁回收、never-claimed、build-info、`model-unavailable`、原始用量明细；**全部已推、Orca 已 repin**（以 `git ls-remote` 现核）
 
