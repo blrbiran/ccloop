@@ -168,3 +168,15 @@ injected 300 ms window with cause `model-unavailable`; 400 then a terminal `agen
 1.2 s later (window 200 ms) completes; the warnings criteria use the MCP shapes, a token-bearing tail, an ANSI-coloured line and
 a non-MCP warning. The fake omp's phase script gains an opt-in `answerAfterMs`. No other existing test was rewritten; the two
 rewrites listed in §5 are unchanged and still await the human's per-test confirmation.
+
+
+## 7. Correction (2026-11-19, re-review I-1, Orca controller session)
+
+§6 says the errored turn's placeholder tool results are not among the continuation rows and lists `tool_execution_start`
+as one. The omp 18.17.0 source says otherwise: `pi-agent-core/src/agent-loop.ts` (createAbortedToolResult, ~4092-4121)
+emits `tool_execution_start`/`tool_execution_end` and a toolResult message for each tool call of an errored message, before
+its `turn_end`. `tool_execution_start` is therefore removed from the continuation rows; every real continuation begins with
+`agent_start` (agent-loop.ts ~656, ~723-728). §6's claim that omp always announces a recovery with a local event before any
+network call has two rare exceptions (a usage-limit 4xx awaits a usage report before `auto_retry_start`; an overflow during
+a handoff summary awaits that summary before `auto_compaction_start`); both still end typed. Test:
+"4xx with a tool call, its placeholder tool rows and turn_end, then silence: still stopped as provider-error".

@@ -48,7 +48,9 @@ export const OMP_PROVIDER_ERROR_GRACE_MS = 20_000;
  */
 function ompContinuationRow(row: { type?: unknown; message?: { role?: unknown } }): boolean {
   switch (row.type) {
-    case "auto_compaction_start": case "auto_retry_start": case "agent_start": case "turn_start": case "tool_execution_start": return true;
+    // Re-review I-1: not `tool_execution_start` -- omp emits it for the errored turn's own placeholder tool results
+    // (pi-agent-core agent-loop.ts createAbortedToolResult); every real continuation starts with `agent_start`.
+    case "auto_compaction_start": case "auto_retry_start": case "agent_start": case "turn_start": return true;
     case "message_start": return row.message?.role === "assistant";
     default: return false;
   }

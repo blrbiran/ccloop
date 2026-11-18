@@ -161,6 +161,21 @@ describe("Fix A: a phase whose provider refuses with a non-retryable 4xx ends af
     expect(await readFile(`${w.marker}.calls`, "utf8")).toBe("plan\n");
   }, 30_000);
 
+  // Re-review I-1: omp writes the errored turn's placeholder tool results (tool_execution_start/end and a toolResult
+  // message) before its turn_end (pi-agent-core agent-loop.ts createAbortedToolResult); they must not disarm the window.
+  it("4xx with a tool call, its placeholder tool rows and turn_end, then silence: still stopped as provider-error", async () => {
+    const w = await fresh();
+    await writeFile(`${w.marker}.phase-script.json`, JSON.stringify({ phase: "plan", hang: true,
+      rows: [{ type: "session", id: "s" }, { type: "agent_start" }, { type: "message_end", message: errored(400, "bad request") },
+        { type: "tool_execution_start", toolCallId: "c1", toolName: "read", args: {} },
+        { type: "tool_execution_end", toolCallId: "c1", toolName: "read", result: { content: [] }, isError: true },
+        { type: "message_start", message: { role: "toolResult" } }, { type: "message_end", message: { role: "toolResult", content: [] } },
+        turnEnd(400, "bad request")] }));
+    const failure = await failureOf(new OmpAdapter(await ompInstallation(w) as never, undefined, [5], 300).plan(w.context as never));
+    expect(String(failure)).toContain("omp-provider-error");
+    expect((await outcomeOf(w, "plan")).reason).toBe("provider-error");
+  }, 30_000);
+
   it("400 then a terminal agent_end: stopped at once, without waiting for the window", async () => {
     const w = await fresh();
     await writeFile(`${w.marker}.phase-script.json`, JSON.stringify({ phase: "plan", hang: true,
