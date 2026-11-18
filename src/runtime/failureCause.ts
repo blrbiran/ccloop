@@ -35,6 +35,10 @@ export const FAILURE_CAUSES = [
   // live-usage read or an evidence write after the session deletion; a failed deletion itself is recorded and never fails
   // the call). Terminal: never in RETRYABLE_CAUSES -- the call's work already ran.
   "cleanup-failed",
+  // Orca #369 (a) (spec 2026-11-18-omp-launch-isolation-design.md §3): an omp assistant error whose typed provider status is a
+  // 4xx no other row names (not 401/402/403/408/429, nor a 404 naming a model). Terminal: never in RETRYABLE_CAUSES -- the
+  // same request would be refused again. The detail carries the status (`HTTP <status>: <errorMessage>`).
+  "provider-error",
 ] as const;
 export type FailureCauseV1 = (typeof FAILURE_CAUSES)[number];
 
@@ -223,25 +227,64 @@ export function parseClaudeSignals(text: string): ClaudeSignalsV1 | null {
 /**
  * Spec §3 omp v1: no provider error sample exists, so a failed call classifies `unknown`; a final assistant message with
  * stopReason "error" records its errorMessage as detail. `workObserved`: any tool_execution_start.
+ *
+ * *** ERRATUM (Orca #369 (a), 2026-11-18; spec 2026-11-18-omp-launch-isolation-design.md §3) -- "classifies `unknown`" no
+ * longer holds when that last errored message carries a numeric `errorStatus` (omp's typed provider status; a field sample
+ * exists, #369): it is classified by status as the codex table does (OMP_STATUS_CAUSE below) and its detail becomes
+ * `HTTP <status>: <errorMessage>`. A message without a status is unchanged. ***
  */
 export function classifyOmpCall(events: string): CallClassification {
   return foldText(events, new OmpCallFold()).value();
 }
 
+/**
+ * Orca #369 (a): an omp assistant error's typed provider status (`errorStatus`) as a cause, mirroring the codex status rows
+ * above. Only the typed status is read; `errorMessage` is consulted only to tell a 404 that names a model, as codex's 404 row.
+ * 408 stays unknown (a request timeout, not a refusal).
+ */
+function ompStatusCause(status: number, errorMessage: string): FailureCauseV1 {
+  if (status === 429) return "rate-limited";
+  if (status >= 500 && status <= 599) return "provider-5xx";
+  if (status === 401 || status === 403) return "auth";
+  if (status === 402) return "quota";
+  if (status === 404 && /model/i.test(errorMessage)) return "model-unavailable";
+  if (status >= 400 && status <= 499 && status !== 408) return "provider-error";
+  return "unknown";
+}
+
+/** Orca #369 (a): a provider refusal that will not pass on a retry -- a 4xx other than 408 (timeout) and 429 (rate limit). */
+function terminalProviderStatus(status: number): boolean {
+  return status >= 400 && status <= 499 && status !== 408 && status !== 429;
+}
+
 /** Live transcript (Orca spec 2026-10-23 §10.2.3): classifyOmpCall as a fold. */
 export class OmpCallFold {
   private workObserved = false; private detail: string | null = null;
+  private status: number | null = null; private cause: FailureCauseV1 = "unknown";
   push(line: JsonLine): void {
     if (line.kind !== "row") return;
     const row = line.row;
     if (row === null || typeof row !== "object" || Array.isArray(row)) return;
-    const r = row as { type?: unknown; message?: { role?: unknown; stopReason?: unknown; errorMessage?: unknown } };
+    const r = row as { type?: unknown; message?: { role?: unknown; stopReason?: unknown; errorMessage?: unknown; errorStatus?: unknown } };
     if (r.type === "tool_execution_start") this.workObserved = true;
     if (r.type === "message_end" && r.message?.role === "assistant" && r.message.stopReason === "error" && typeof r.message.errorMessage === "string") {
-      this.detail = causeDetail(r.message.errorMessage);
+      const status = r.message.errorStatus;
+      if (typeof status === "number" && Number.isSafeInteger(status)) {
+        this.status = status;
+        this.cause = ompStatusCause(status, r.message.errorMessage);
+        this.detail = causeDetail(`HTTP ${status}: ${r.message.errorMessage}`);
+      } else {
+        this.status = null; this.cause = "unknown";
+        this.detail = causeDetail(r.message.errorMessage);
+      }
+    } else if (r.type === "message_end" && r.message?.role === "assistant") {
+      // A later assistant message that is not an error: the call went on, so an earlier refusal neither ends nor names it.
+      this.status = null; this.cause = "unknown";
     }
   }
-  value(): CallClassification { return { cause: "unknown", workObserved: this.workObserved, detail: this.detail }; }
+  value(): CallClassification { return { cause: this.cause, workObserved: this.workObserved, detail: this.detail }; }
+  /** Orca #369 (a): the status when the latest assistant message is a non-retryable 4xx refusal (the phase ends on it); else null. */
+  terminalProviderStatus(): number | null { return this.status !== null && terminalProviderStatus(this.status) ? this.status : null; }
 }
 
 /** Spec §3 "Every kind": a spawn that failed with ENOENT. `spawnError` is the runner's `<code>: <message>` string. */

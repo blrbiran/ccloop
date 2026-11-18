@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { MaterializedAgentConfigV1 } from "../../agents/types.js";
 import type { AttemptContext, HandoffDirs } from "../types.js";
+import { causeDetail } from "../failureCause.js";
 import { effectiveIdleTimeoutMs, IdleWatch, ompToolRow, type IdleSnapshotV1 } from "../idleWatch.js";
 import { attachOutcomeStream, CappedLineFile, jsonLine, LineSplitter, ObservedTranscriptFile, STDOUT_HARD_LIMIT } from "../streamLines.js";
 import { OmpStream, type OmpStreamPurpose } from "./ompStream.js";
@@ -14,8 +15,31 @@ import { ompPhaseTools, phaseSystemPrompt, type OmpPhase } from "./phasePrompt.j
 const execFileAsync = promisify(execFile);
 const OUTPUT_LIMIT = 16 * 1024 * 1024;
 
+/**
+ * omp launch isolation (spec 2026-11-18-omp-launch-isolation-design.md §3.1, §4.2; Orca #369 (a), #375): the `--config`
+ * overlay of every loop phase, written into the call's own evidence directory -- no profile or config file on disk is
+ * touched. omp's own auto-retry and model fallback are off (a refusal must reach ccloop, whose bounded transient retry
+ * owns retries), and MCP configs of the target repository are never loaded. Keys read from omp 18.17.0's source (§2).
+ */
+export const OMP_PHASE_OVERLAY = {
+  retry: { enabled: false, modelFallback: false },
+  mcp: { enableProjectConfig: false },
+} as const;
+
+/**
+ * Spec §4.1 (#375): omp's wait for MCP servers before the first turn (its default is 30 000 ms; 0 would mean no timeout). A
+ * phase may never call an MCP tool, so the wait buys the run nothing; 2 s still tells a healthy server from a dead one for
+ * the warning omp prints. Set on every omp call, over any inherited value.
+ */
+export const OMP_MCP_TIMEOUT_MS = "2000";
+
+/** Spec §4.3: omp's stderr `Warning: ` lines kept as the call's observation (outcome.json `warnings`), bounded. */
+const WARNING_PREFIX = "Warning: ";
+const MAX_WARNINGS = 16;
+
 export interface OmpPhaseOutcome {
-  reason: "completed" | "aborted" | "timeout" | "stalled" | "spawn-error" | "exit-error" | "output-limit" | "io-error";
+  // "provider-error" (Orca #369 (a), spec 2026-11-18 §3.3): a phase stopped by ccloop on a non-retryable 4xx refusal.
+  reason: "completed" | "aborted" | "timeout" | "stalled" | "spawn-error" | "exit-error" | "output-limit" | "io-error" | "provider-error";
   code: number | null;
   signal: NodeJS.Signals | null;
   evidenceDir: string;
@@ -65,12 +89,18 @@ export async function runOmpPhase(
   await mkdir(root, { recursive: true, mode: 0o700 });
   const evidenceDir = await mkdtemp(join(root, "call-"));
   const systemPath = join(evidenceDir, "system-prompt.md");
-  await writeFile(systemPath, skills === "" ? phaseSystemPrompt(phase) : `${phaseSystemPrompt(phase)}\n\n${skills}`, { mode: 0o600 });
+  const overlayPath = join(evidenceDir, "config-overlay.yml");
+  await Promise.all([
+    writeFile(systemPath, skills === "" ? phaseSystemPrompt(phase) : `${phaseSystemPrompt(phase)}\n\n${skills}`, { mode: 0o600 }),
+    writeFile(overlayPath, `${JSON.stringify(OMP_PHASE_OVERLAY)}\n`, { mode: 0o600 }),
+  ]);
   const tools = ompPhaseTools(phase).join(",");
   const profile = config.installation.profile as string | null;
   const args = ["--profile", profile ?? "default", "--no-extensions", "--no-skills", "--no-tools", "--tools", tools,
     "--no-session", "--no-title", "--no-prewalk", "--model", config.selection.model,
     "--mode", "json", "-p", "--system-prompt", systemPath, "--cwd", context.worktreePath,
+    // omp launch isolation (spec 2026-11-18 §3.1): the per-launch overlay, before the extra worktrees and handoff dirs.
+    "--config", overlayPath,
     // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5, §19.2 P5): the extra worktrees, on every phase.
     ...(context.extraWorktrees ?? []).map((extra) => `--add-dir=${extra.worktreePath}`),
     ...ompHandoffArgs(context.handoff)];
@@ -98,15 +128,18 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
   let transcriptError: string | undefined;
   // Activity watchdog (spec 2026-10-21 §2.3): recorded in outcome.json when the call was stopped as stalled.
   let idle: IdleSnapshotV1 | null = null;
+  // Spec 2026-11-18 §4.3 (#375): omp's stderr `Warning: ` lines, in order; written only when there is one.
+  const warnings: string[] = [];
   const persist = async (): Promise<OmpPhaseOutcome> => {
-    await writeFile(join(evidenceDir, "outcome.json"), JSON.stringify({ reason: result.reason, code: result.code, signal: result.signal, neverStarted: result.neverStarted, executable: config.installation.command[0], args, stdoutTruncated, transcriptTruncatedAt, transcriptError, ...(result.reason === "stalled" && idle !== null ? { idle } : {}) }, null, 2), { mode: 0o600 });
+    await writeFile(join(evidenceDir, "outcome.json"), JSON.stringify({ reason: result.reason, code: result.code, signal: result.signal, neverStarted: result.neverStarted, executable: config.installation.command[0], args, stdoutTruncated, transcriptTruncatedAt, transcriptError, ...(result.reason === "stalled" && idle !== null ? { idle } : {}), ...(warnings.length === 0 ? {} : { warnings }) }, null, 2), { mode: 0o600 });
     return result;
   };
   if (input.abortSignal?.aborted) { result.reason = "aborted"; result.neverStarted = true; return persist(); }
   const timeoutMs = input.timeoutMs;
   if (timeoutMs <= 0) { result.reason = "timeout"; result.neverStarted = true; return persist(); }
   const profile = config.installation.profile as string | null;
-  const env: NodeJS.ProcessEnv = { ...process.env, OMP_PROFILE: profile ?? "default" };
+  // Spec 2026-11-18 §4.1 (#375): the bounded MCP wait, per launch, over any inherited value.
+  const env: NodeJS.ProcessEnv = { ...process.env, OMP_PROFILE: profile ?? "default", OMP_MCP_TIMEOUT_MS };
   if (config.installation.configDir !== null) env.PI_CODING_AGENT_DIR = config.installation.configDir;
   let stdoutBytes = 0;
   let stderrBytes = 0;
@@ -140,6 +173,8 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
     let observed: number | null = null;
     const splitter = new LineSplitter((line) => {
       const parsed = jsonLine(line); stream.push(parsed); if (parsed.kind === "row") ompToolRow(parsed.row, watch);
+      // Orca #369 (a) (spec 2026-11-18 §3.3): a phase ends on a refusal that no retry would pass; the single call is unchanged.
+      if (input.purpose.phase !== "single-call" && stream.call.terminalProviderStatus() !== null) stop("provider-error");
       // Live token threshold (issue #225): every assistant message_end carries its usage, so the running sum is observed.
       const total = input.onObservedUsage === undefined ? null : stream.lowerBound.value();
       if (total !== null && total !== observed) { observed = total; input.onObservedUsage!(total); }
@@ -156,7 +191,11 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       try { transcript.write(chunk); } catch (error) { transcriptError ??= String(error); }
       splitter.write(chunk);
     });
+    const stderrLines = new LineSplitter((line) => {
+      if (warnings.length < MAX_WARNINGS && !line.tooLarge && line.text.startsWith(WARNING_PREFIX)) warnings.push(causeDetail(line.text.trimEnd()));
+    });
     child.stderr.on("data", (chunk: Buffer) => {
+      if (stderrBytes < OUTPUT_LIMIT) stderrLines.write(chunk);
       const kept = chunk.subarray(0, Math.max(0, OUTPUT_LIMIT - stderrBytes));
       stderrBytes += chunk.length;
       try { appendFileSync(stderrPath, kept); } catch { stop("io-error"); }
@@ -191,7 +230,7 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       clearTimeout(killTimer);
       clearTimeout(drainTimer);
       input.abortSignal?.removeEventListener("abort", abort);
-      splitter.end();
+      splitter.end(); stderrLines.end();
       events.close(); try { transcript.close(); } catch (error) { transcriptError ??= String(error); }
       stdoutTruncated ||= events.truncatedAt !== null;
       transcriptTruncatedAt = transcript.truncatedAt;

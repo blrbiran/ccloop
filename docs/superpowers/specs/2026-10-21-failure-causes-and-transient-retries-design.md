@@ -370,3 +370,13 @@ The sections above are kept verbatim. Three cause values are added; no retry rul
   Terminal, not in `RETRYABLE_CAUSES`: the call's work already ran. `detail` is the error's head (`causeDetail`).
 - A failed session deletion itself no longer fails the call (codex phase isolation spec, Correction 2026-11-18): it is
   recorded and the call keeps its own outcome, so a finished plan or execute is never `failed` because of it.
+
+## Correction (2026-11-18, Orca session, controller-dispatched implementer; Orca tester issues 369 (a) and 375)
+
+§3 omp's "No error sample exists. v1: ... classifies `unknown`" no longer holds for an errored assistant message that carries
+omp's typed `errorStatus` (field sample: Orca #369, `errorStatus:404`). That message is classified by status as the codex
+table does: 429 `rate-limited`, 5xx `provider-5xx`, 401/403 `auth`, 402 `quota`, 404 naming a model `model-unavailable`,
+every other 4xx except 408 the new terminal cause **`provider-error`** (not in `RETRYABLE_CAUSES`); its detail is
+`HTTP <status>: <errorMessage>`. A message without a status (the stream watchdog's included) is unchanged. A loop phase now
+runs with omp's own retry and model fallback off and ends at once on a non-retryable 4xx (outcome reason `provider-error`).
+The original text above is kept as written. Design: `2026-11-18-omp-launch-isolation-design.md` §3.

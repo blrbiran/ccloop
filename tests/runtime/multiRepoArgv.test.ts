@@ -14,6 +14,7 @@ import { buildExecutorPrompt } from "../../src/runtime/claude/prompts.js";
 import { CodexAdapter } from "../../src/runtime/codex/codexAdapter.js";
 import { OmpAdapter } from "../../src/runtime/omp/ompAdapter.js";
 import { captureClaude, captureCodex, captureOmp, dispose, FAKE_CLAUDE, normalise, PHASES, world, type CaptureModules, type World } from "../fixtures/toolRules/argvCapture.js";
+import { currentOmpArgsGolden } from "../fixtures/toolRules/ompArgsGolden.js";
 
 const m: CaptureModules = { loopContractSchema, canonicalJson, ClaudeAgentAdapter, CodexAdapter, OmpAdapter, buildExecutorPrompt };
 const worlds: World[] = [];
@@ -89,7 +90,10 @@ describe("codex --add-dir (C6)", () => {
 describe("omp --add-dir= (C6)", () => {
   for (const phase of PHASES) {
     it(`${phase}: --add-dir=<wi> per extra worktree after --cwd; the golden argv without extras`, async () => {
-      const want = (await golden("omp", phase)).args!;
+      // Ruling (2026-11-18, Orca session; blanket approval — per-test confirmation pending): the omp argv gained the
+      // per-launch `--config` overlay after `--cwd` (Orca #369 (a), #375), before the extra worktrees' --add-dir=. Was:
+      // `(await golden("omp", phase)).args!`.
+      const want = await currentOmpArgsGolden(phase);
       expect((await captureOmp(m, phase, await multiWorld(true))).args).toEqual([...want, `--add-dir=${ADD_LIB}`, `--add-dir=${ADD_DOCS}`]);
       expect((await captureOmp(m, phase, await multiWorld(false))).args).toEqual(want);
     }, 30_000);

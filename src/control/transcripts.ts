@@ -21,6 +21,11 @@ export interface TranscriptEntryV1 {
   truncatedAt: number | null;
   /** Orca #252: the call's spawn time (process.json `startedAt`, ps lstart, 1 s resolution) as ISO-8601; absent when unknown. */
   startedAt?: string;
+  /**
+   * Orca #375 (spec 2026-11-18-omp-launch-isolation-design.md §4.3): an omp call's stderr `Warning: ` lines (at most 16, each
+   * at most 512 bytes) as its outcome.json recorded them; absent when there is none, or before the call ended.
+   */
+  warnings?: string[];
 }
 
 export const KINDS = ["claude", "codex", "omp"] as const;
@@ -63,6 +68,17 @@ async function startedAtMs(callDir: string): Promise<number | null> {
   } catch { return null; } finally { await handle?.close(); }
 }
 
+/** Spec 2026-11-18 §4.3: outcome.json's `warnings`, when it is a non-empty list of non-empty strings (≤ 16); else null. */
+async function outcomeWarnings(callDir: string): Promise<string[] | null> {
+  let handle;
+  try {
+    handle = await open(join(callDir, "outcome.json"), constants.O_RDONLY | constants.O_NOFOLLOW);
+    if (!(await handle.stat()).isFile()) return null;
+    const warnings = (JSON.parse((await handle.readFile()).toString("utf8")) as { warnings?: unknown }).warnings;
+    return Array.isArray(warnings) && warnings.length > 0 && warnings.length <= 16 && warnings.every((line) => typeof line === "string" && line !== "") ? warnings as string[] : null;
+  } catch { return null; } finally { await handle?.close(); }
+}
+
 /**
  * Every call under `<sourceDir>/run/<kind>/<attempt>/<phase>/call-*`. Order: kind-major (claude, codex, omp), then attempt
  * (numeric), then phase (by name), then seq. Call directories are mkdtemp names, so their order means nothing: within a
@@ -85,6 +101,7 @@ export async function listTranscripts(sourceDir: string, runFinal: boolean): Pro
           const callDir = join(phaseDir, call.name);
           const transcript = await regularFile(join(callDir, "transcript.jsonl"));
           const outcome = await regularFile(join(callDir, "outcome.json"));
+          const warnings = kind === "omp" && outcome !== null ? await outcomeWarnings(callDir) : null;
           entries.push({
             attempt: Number(attempt), phase, seq: index + 1,
             path: transcript === null ? null : [kind, attempt, phase, call.name, "transcript.jsonl"].join("/"),
@@ -92,6 +109,7 @@ export async function listTranscripts(sourceDir: string, runFinal: boolean): Pro
             final: outcome !== null || runFinal,
             truncatedAt: transcript === null ? null : await transcriptTruncatedAt(join(callDir, "transcript.jsonl")),
             ...(call.startedAt === null ? {} : { startedAt: new Date(call.startedAt).toISOString() }),
+            ...(warnings === null ? {} : { warnings }),
           });
         }
       }

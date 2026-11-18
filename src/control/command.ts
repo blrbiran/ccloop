@@ -232,6 +232,9 @@ export const collectionSchema = z.object({
     path: z.string().min(1).nullable(), bytes: safeInteger, final: z.boolean(), truncatedAt: safeInteger.nullable(),
     // Orca #252: the call's spawn time, when process.json recorded one.
     startedAt: z.string().datetime().optional(),
+    // Orca #375 (spec 2026-11-18-omp-launch-isolation §4.3): an omp call's stderr `Warning: ` lines; present iff there is one.
+    // Orca's strict transcript entry parse must accept it in the same repin.
+    warnings: z.array(z.string().min(1).refine((line) => Buffer.byteLength(line, "utf8") <= 512)).min(1).max(16).optional(),
   }).strict()).min(1).optional(),
   // Task handoffs (Orca follow-up G §10.2): present iff the envelope has work.handoff.
   handoffFiles: z.object({ handoff: z.object({ present: z.boolean(), bytes: safeInteger.nullable() }).strict(),

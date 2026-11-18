@@ -14,12 +14,15 @@ import { runOmpProcess, type OmpPhaseOutcome } from "./runOmpPhase.js";
  * OMP single call (Orca spec 2026-10-14 §3.3.3): switches off session auto-retry, model fallback, the loop guard, the
  * advisor and auto-compaction. Keys confirmed against omp 18.10.1 in plan Task 0 (spec §7), applied on top of the
  * operator's config.yml: omp deep-merges a --config file (YAML; JSON is YAML) after its own configuration.
+ * omp launch isolation (spec 2026-11-18-omp-launch-isolation-design.md §4.2, Orca #375): `mcp.enableProjectConfig: false`
+ * too, so the cwd's MCP configs never start a process; every key re-read in omp 18.17.0's source (that spec §2).
  */
 export const OMP_SINGLE_CALL_OVERLAY = {
   retry: { enabled: false, modelFallback: false },
   model: { loopGuard: { enabled: false } },
   advisor: { enabled: false },
   compaction: { enabled: false },
+  mcp: { enableProjectConfig: false },
 } as const;
 
 /** §3.3.1: refused before anything was spawned, so nothing was sent; observedTokensOf books 0 for it. */

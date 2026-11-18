@@ -65,6 +65,11 @@ export class OmpAdapter implements RuntimeAdapter {
    * stalled while waiting for the next event" / "... timed out while waiting for the first event"). By that spec's ruling
    * only the single call names it (code omp-stalled, singleCall below); this phase path is unchanged and still classifies
    * it `unknown`. ***
+   *
+   * *** ERRATUM (Orca #369 (a), 2026-11-18; spec 2026-11-18-omp-launch-isolation-design.md §3) -- a phase now runs with omp's
+   * own retry and model fallback off, and an errored assistant message with a typed provider status is classified by that
+   * status (failureCause.ts OmpCallFold): 429 and 5xx are retryable here, a non-retryable 4xx stops the call at once
+   * (outcome reason `provider-error`) and names its cause. A status-less error, the stream watchdog's included, is unchanged. ***
    */
   private async phase<P extends OmpPhase>(phase: P, prompt: string, context: AttemptContext): Promise<PhaseResults[P]> {
     return runWithTransientRetry<PhaseResults[P]>({

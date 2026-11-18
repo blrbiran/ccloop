@@ -18,11 +18,15 @@ import { OmpAdapter } from "../../../src/runtime/omp/ompAdapter.js";
 import { FAILURE_CAUSES, RETRYABLE_CAUSES } from "../../../src/runtime/failureCause.js";
 import { ompToolRuleRows, ompToolRuleViolation, type ToolRulesV1 } from "../../../src/runtime/toolRules.js";
 import { captureOmp, dispose, ompInstallation, PHASES, RAW_CONTRACT, world, type CaptureModules, type World } from "../../fixtures/toolRules/argvCapture.js";
+import { currentOmpArgsGolden } from "../../fixtures/toolRules/ompArgsGolden.js";
 
 const m: CaptureModules = { loopContractSchema, canonicalJson, ClaudeAgentAdapter, CodexAdapter, OmpAdapter, buildExecutorPrompt };
 const worlds: World[] = [];
 afterEach(async () => { for (const w of worlds.splice(0)) await dispose(w); });
-const golden = async (phase: string) => JSON.parse(await readFile(new URL(`../../fixtures/toolRules/golden-2a2ae53/omp-${phase}.json`, import.meta.url), "utf8")) as { args: string[] };
+// Ruling (2026-11-18, Orca session; blanket approval — per-test confirmation pending): the omp argv gained the per-launch
+// `--config` overlay after `--cwd` (Orca #369 (a), #375); the 2a2ae53 capture stays byte-for-byte, the insertion lives in
+// currentOmpArgsGolden. Was: `golden-2a2ae53/omp-${phase}.json` args compared as they are.
+const golden = async (phase: string) => ({ args: await currentOmpArgsGolden(phase) });
 const withRules = (toolRules: ToolRulesV1) => ({ ...RAW_CONTRACT, executionPolicy: { ...RAW_CONTRACT.executionPolicy, toolRules } });
 const npmTest: ToolRulesV1 = { commands: [{ kind: "prefix", value: "npm test" }], network: false, secretEnv: [] };
 

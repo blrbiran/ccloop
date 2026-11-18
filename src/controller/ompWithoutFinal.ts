@@ -46,7 +46,9 @@ export async function captureOmpWithoutFinal(input:OmpWithoutFinalCaptureInput):
   const outcome=JSON.parse((await read(source,join(call,'outcome.json'))).toString());
   if(outcome.reason!=='completed'||outcome.code!==0||outcome.signal!==null||outcome.stdoutTruncated!==false||outcome.transcriptTruncatedAt!==null||outcome.transcriptError!==undefined||outcome.neverStarted!==false)throw Error('saved-result-process-incomplete');
   // The handoff --add-dir the envelope named (work.handoff), by the runtime's own builder; none without one.
-  const expectedArgs=['--profile',config.installation.profile??'default','--no-extensions','--no-skills','--no-tools','--tools',ompPhaseTools('execute').join(','),'--no-session','--no-title','--no-prewalk','--model',config.selection.model,'--mode','json','-p','--system-prompt',join(call,'system-prompt.md'),'--cwd',input.worktreePath,...ompHandoffArgs(envelope.work.handoff)];
+  const expectedArgs=['--profile',config.installation.profile??'default','--no-extensions','--no-skills','--no-tools','--tools',ompPhaseTools('execute').join(','),'--no-session','--no-title','--no-prewalk','--model',config.selection.model,'--mode','json','-p','--system-prompt',join(call,'system-prompt.md'),'--cwd',input.worktreePath,
+   // omp launch isolation (spec 2026-11-18-omp-launch-isolation-design.md §3.1): every phase's per-launch overlay, after --cwd.
+   '--config',join(call,'config-overlay.yml'),...ompHandoffArgs(envelope.work.handoff)];
   if(outcome.executable!==config.installation.command[0]||canonicalHash(outcome.args)!==canonicalHash(expectedArgs))throw Error('saved-result-config-mismatch');
   const record=JSON.parse((await read(source,join(call,'process.json'))).toString());
   const registered=JSON.parse((await read(source,join(source,'control/processes.json'))).toString());

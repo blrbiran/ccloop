@@ -45,6 +45,11 @@ if (args.includes("config")) {
 let prompt = "";
 for await (const chunk of process.stdin) prompt += chunk.toString();
 const system = readFileSync(args[args.indexOf("--system-prompt") + 1], "utf8");
+// omp launch isolation (ccloop spec 2026-11-18-omp-launch-isolation): with `<marker>.record-env` present, each phase or single
+// call appends {call, mcpTimeout} (its OMP_MCP_TIMEOUT_MS, null when unset) to `<marker>.env.jsonl`. Without the file nothing changes.
+if (existsSync(`${marker}.record-env`)) {
+  appendFileSync(`${marker}.env.jsonl`, `${JSON.stringify({ call: system.includes("one ccloop single call") ? "single-call" : system.includes("execution phase") ? "execute" : system.includes("verification phase") ? "verify" : "plan", mcpTimeout: process.env.OMP_MCP_TIMEOUT_MS ?? null })}\n`);
+}
 // OMP single call (Orca spec 2026-10-14 §5): ccloop's single-call system prompt says "one ccloop single call". Records the
 // call and its argv, then prints `<marker>.single.json` ({rows?, exitCode?, hang?}) or one complete {"answer":"42"}.
 // `holdOpen` keeps the process running after the rows (for an abort after a complete message); `blockFiles` makes each
@@ -65,6 +70,18 @@ if (system.includes("one ccloop single call")) {
 const phase = system.includes("execution phase") ? "execute" : system.includes("verification phase") ? "verify" : "plan";
 appendFileSync(`${marker}.calls`, `${phase}\n`);
 for (const match of system.matchAll(/\(SKILL\.md: ([^)]+)\)$/gmu)) appendFileSync(`${marker}.skills`, readFileSync(match[1], "utf8"));
+// omp launch isolation (spec 2026-11-18): `<marker>.phase-script.json` ({phase?, stderr?, rows?, hang?, exitCode?}), when present
+// and for its phase (any phase without one), first writes `stderr` to stderr; with `rows` it then prints them and hangs
+// (`hang: true`) or exits with `exitCode` (0) instead of answering. Without the file nothing changes.
+const phaseScript = existsSync(`${marker}.phase-script.json`) ? JSON.parse(readFileSync(`${marker}.phase-script.json`, "utf8")) : null;
+if (phaseScript !== null && (phaseScript.phase === undefined || phaseScript.phase === phase)) {
+  if (phaseScript.stderr !== undefined) await new Promise((done) => process.stderr.write(phaseScript.stderr, done));
+  if (phaseScript.rows !== undefined) {
+    await new Promise((done) => process.stdout.write(phaseScript.rows.map((row) => `${JSON.stringify(row)}\n`).join(""), done));
+    if (phaseScript.hang === true) { setInterval(() => {}, 1000); await new Promise(() => {}); }
+    process.exit(phaseScript.exitCode ?? 0);
+  }
+}
 if (phase === "execute") writeFileSync("answer.txt", "42\n");
 const result = phase === "plan" ? { summary: "Set answer to 42", primaryTargetPaths: ["answer.txt"] }
   : phase === "execute" ? { changedFiles: ["answer.txt"], diffPatch: "", commandOutputs: [], stdoutStderrLog: "wrote answer" }
