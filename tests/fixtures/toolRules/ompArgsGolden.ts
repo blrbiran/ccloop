@@ -3,7 +3,7 @@
 // that is not in the capture exactly once throws, so the insertion cannot silently do nothing.
 import { readFile } from "node:fs/promises";
 
-// Ruling (2026-11-18, Orca session; blanket approval — per-test confirmation pending): Orca #369 (a) / #375 (ccloop spec
+// Ruling (human named this test, 2026-11-19, Orca session: 「允许。这一轮session允许改写所有必要判据」): Orca #369 (a) / #375 (ccloop spec
 // docs/superpowers/specs/2026-11-18-omp-launch-isolation-design.md §3.1) -- every omp phase passes its per-launch overlay
 // (omp's own retry and model fallback off, project MCP configs off) as `--config <evidence>/config-overlay.yml` right after
 // `--cwd <worktree>`. Human: 「这次批准改写所有必要的判据」.

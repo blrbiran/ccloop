@@ -23,7 +23,7 @@ import { currentOmpArgsGolden } from "../../fixtures/toolRules/ompArgsGolden.js"
 const m: CaptureModules = { loopContractSchema, canonicalJson, ClaudeAgentAdapter, CodexAdapter, OmpAdapter, buildExecutorPrompt };
 const worlds: World[] = [];
 afterEach(async () => { for (const w of worlds.splice(0)) await dispose(w); });
-// Ruling (2026-11-18, Orca session; blanket approval — per-test confirmation pending): the omp argv gained the per-launch
+// Ruling (human named this test, 2026-11-19, Orca session: 「允许。这一轮session允许改写所有必要判据」): the omp argv gained the per-launch
 // `--config` overlay after `--cwd` (Orca #369 (a), #375); the 2a2ae53 capture stays byte-for-byte, the insertion lives in
 // currentOmpArgsGolden. Was: `golden-2a2ae53/omp-${phase}.json` args compared as they are.
 const golden = async (phase: string) => ({ args: await currentOmpArgsGolden(phase) });

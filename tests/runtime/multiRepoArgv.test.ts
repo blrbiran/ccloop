@@ -90,7 +90,7 @@ describe("codex --add-dir (C6)", () => {
 describe("omp --add-dir= (C6)", () => {
   for (const phase of PHASES) {
     it(`${phase}: --add-dir=<wi> per extra worktree after --cwd; the golden argv without extras`, async () => {
-      // Ruling (2026-11-18, Orca session; blanket approval — per-test confirmation pending): the omp argv gained the
+      // Ruling (human named this test, 2026-11-19, Orca session: 「允许。这一轮session允许改写所有必要判据」): the omp argv gained the
       // per-launch `--config` overlay after `--cwd` (Orca #369 (a), #375), before the extra worktrees' --add-dir=. Was:
       // `(await golden("omp", phase)).args!`.
       const want = await currentOmpArgsGolden(phase);
