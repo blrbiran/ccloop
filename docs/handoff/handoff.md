@@ -41,6 +41,8 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
+> **Orca 会话 `ca534c51`（2026-11-18 下午）：ccloop 零代码改动，Orca 仍钉上一节那笔（#349）。** 唯一与本仓相关的产出是一份**未实现**的跨仓设计稿：测试者 #321 B「修复型重试」——`required-check-failed` 之后下一次尝试从上一次的产物起步、跳过 plan（ccloop 侧：启动信封 `work.repair`、`features.repairAttempt:"v1"`，协议号不变）。稿在 Orca 主仓 `docs/superpowers/specs/2026-11-18-repair-attempt-design.md`。**它要改本仓两条既有判据**（`tests/control/protocol4.test.ts:13`、`tests/control/savedResultEvidence.test.ts:112`，都钉 `features` 的确切答案），按本仓人裁 88 须人**逐条点名**批准后才能开工；一揽子「批准改写所有必要的判据」不算。
+
 ### 最新（2026-11-18，Orca 会话 `4389b15f`）—— #347 execute 答案失败细分、#349 codex 会话删除失败不再判失败；均已推，Orca 已 repin 到 #349 那笔
 
 - 主题行 `feat(runtime): a refused execute answer is narration-only, execution-not-json or execution-shape (Orca #347)` 至 `fix(runtime): a typed claude assistant error is not refined into an answer cause; …`（#347）；`fix(runtime): a failed codex session deletion is recorded and retried once, never a failed phase (Orca #349)` 至 `docs(spec): Orca #349 review round …`（#349）。人授权本轮改 ccloop。
