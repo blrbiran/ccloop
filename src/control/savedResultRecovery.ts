@@ -26,7 +26,7 @@ export const savedResultAdmissionSchema=z.object({
 }).strict();
 export type SavedResultAdmission=z.infer<typeof savedResultAdmissionSchema>;
 export const savedResultPackageSchema=z.object({schema:z.literal("ccloop-saved-result-package-v1"),
- authorityKind:z.enum(["execution-format-failure-v1","legacy-published-candidate-v1","execution-complete-before-verification-v1","execution-without-final-v1"]),source:artifactRefSchema,admission:artifactRefSchema,
+ authorityKind:z.enum(["execution-format-failure-v1","legacy-published-candidate-v1","execution-complete-before-verification-v1","execution-without-final-v1","legacy-published-candidate-v2"]),source:artifactRefSchema,admission:artifactRefSchema,
  artifacts:z.array(z.object({ref:artifactRefSchema,file:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/)}).strict()).max(20000),
 }).strict();
 export type SavedResultPackage=z.infer<typeof savedResultPackageSchema>;
@@ -41,7 +41,7 @@ import {constants} from "node:fs";
 import {lstat,open,readdir,realpath,mkdtemp,writeFile,rm,mkdir,chmod} from "node:fs/promises";
 import {dirname,isAbsolute,join,resolve} from "node:path";
 import {tmpdir} from "node:os";
-import {execFile} from "node:child_process";
+import {execFile,spawn} from "node:child_process";
 import {promisify} from "node:util";
 import {canonicalHash,canonicalJson,startEnvelopeSchema,type ArtifactRefV1} from "./protocol.js";
 import {loopContractSchema,type LoopContract} from "../contract/schema.js";
@@ -59,6 +59,7 @@ import {OmpStream} from "../runtime/omp/ompStream.js";
 import {ompPhaseTools} from "../runtime/omp/phasePrompt.js";
 import {safeTaskResultPath} from "./taskResultEvidence.js";
 import {createAttemptWorkspace} from "../workspace/worktreeManager.js";
+import {snapshotV2Schema} from "./snapshotV2.js";
 import type {AttemptPlan,ExecutionResult} from "../runtime/types.js";
 const exec=promisify(execFile),digest=(b:Buffer)=>createHash("sha256").update(b).digest("hex");
 function fail(reason:string):never{throw new Error(reason);}
@@ -219,6 +220,68 @@ async function validateSnapshot(snapshot:LegacySnapshot,get:(ref:ArtifactRefV1)=
  }finally{await rm(root,{recursive:true,force:true});}
 }
 /**
+ * Change-sized runs P1 (Orca spec 2026-11-19-change-sized-runs-design.md §5.5.4, §7; Orca #363 #366): a v2 archive holds the
+ * attempt as a commit pinned at refs/orca/runs/<source> and a range bundle <base>..<ref>, readable only where the base is
+ * (review C1: never an empty bare repository). It is verified in a temporary bare repository whose objects/info/alternates
+ * borrows `repository`'s objects, so the base resolves and nothing is written to `repository`. The candidate is then given
+ * the v1 shape -- its index from `ls-tree -r <attempt>`, its file bytes read from the bundle -- so materializeSavedResult and
+ * the delivery checks read it unchanged, and the v1 schema's caps apply.
+ */
+async function validateSnapshotV2(value:unknown,get:(ref:ArtifactRefV1)=>Buffer,packaged:Map<string,Buffer>,runId:string,base:string,repository:string){
+ const v2=snapshotV2Schema.parse(value);
+ if(v2.missing.length)fail("saved-result-snapshot-partial");
+ if(v2.bundle===null||v2.ref!==`refs/orca/runs/${runId}`)fail("saved-result-legacy-ref-missing");
+ if(v2.base!==base)fail("saved-result-original-base-unavailable");
+ if(v2.head!==v2.attempt&&v2.head!==v2.base)fail("saved-result-snapshot-head-mismatch");
+ const root=await mkdtemp(join(tmpdir(),"saved-result-v2-"));await chmod(root,0o700);
+ try{
+  let objects:string;
+  try{objects=join((await savedGit(repository,"rev-parse","--path-format=absolute","--git-common-dir")).toString().trim(),"objects");}
+  catch{fail("saved-result-original-base-unavailable");}
+  await savedGit(root,"init","--bare","-q",`--object-format=${v2.objectFormat}`);
+  await writeFile(join(root,"objects","info","alternates"),`${objects}\n`,{mode:0o600});
+  const bundle=join(root,"source.bundle");await writeFile(bundle,get(v2.bundle),{mode:0o600});
+  // A range bundle's only prerequisite is the base: a repository without it cannot verify the bundle.
+  try{await savedGit(root,"bundle","verify","-q",bundle);}catch{fail("saved-result-original-base-unavailable");}
+  const heads=(await savedGit(root,"bundle","list-heads",bundle)).toString().trim().split("\n");
+  if(heads.length!==1||heads[0]!==`${v2.attempt} ${v2.ref}`)fail("saved-result-snapshot-head-mismatch");
+  await savedGit(root,"-c","gc.auto=0","-c","maintenance.auto=false","fetch","-q","--no-tags",bundle,`${v2.ref}:refs/saved-result/attempt`);
+  const parent=(await savedGit(root,"rev-list","--parents","-n","1",v2.attempt)).toString().trim().split(" ");
+  if(parent.length!==2||parent[1]!==base)fail("saved-result-original-base-unavailable");
+  if((await savedGit(root,"rev-parse",`${v2.attempt}^{tree}`)).toString().trim()!==v2.tree)fail("saved-result-snapshot-tree-mismatch");
+  const files=(await savedGit(root,"ls-tree","-r","-z",v2.attempt)).toString().split("\0").filter(Boolean).map(entry=>{
+   const match=/^(100644|100755) blob ([a-f0-9]{40}|[a-f0-9]{64})\t/.exec(entry),path=match===null?"":entry.slice(match[0].length);
+   if(!match||!safeTaskResultPath(path))fail("saved-result-snapshot-index-mismatch");
+   return {path,mode:match[1] as "100644"|"100755",oid:match[2]!};
+  });
+  const blobs=await savedBlobs(root,[...new Set(files.map(file=>file.oid))]),bytes=new Map(packaged);
+  const ref=(oid:string):ArtifactRefV1=>{const b=blobs.get(oid)!,hash=digest(b),value={artifactId:`attempt-blob-${hash}`,hash};bytes.set(value.artifactId,b);return value;};
+  const directories=new Set<string>();for(const file of files){let p=dirname(file.path);while(p!=="."){directories.add(p);p=dirname(p);}}
+  const snapshot=legacySnapshotSchema.parse({version:1,head:v2.attempt,bundle:v2.bundle,index:files.map(file=>({...file,stage:0,ref:ref(file.oid)})),
+   tree:[...[...directories].sort().map(path=>({path,kind:"directory",mode:0o755})),...files.map(file=>({path:file.path,kind:"file",mode:file.mode==="100755"?0o755:0o644,ref:ref(file.oid)}))],
+   deleted:[],missing:[]});
+  const actualChangedPaths=(await savedGit(root,"diff","--name-only","-z",base,v2.attempt)).toString().split("\0").filter(Boolean);
+  return {snapshot,bytes,actualChangedPaths,bundleRefName:v2.ref};
+ }finally{await rm(root,{recursive:true,force:true});}
+}
+/** `git cat-file --batch` for each oid, in order; a missing or non-blob object refuses the candidate. */
+async function savedBlobs(cwd:string,oids:string[]):Promise<Map<string,Buffer>>{
+ const env={...process.env};for(const key of Object.keys(env))if(key.startsWith("GIT_"))delete env[key];
+ const child=spawn("/usr/bin/git",["--no-replace-objects","cat-file","--batch"],{cwd,env,stdio:["pipe","pipe","ignore"]}),chunks:Buffer[]=[];
+ child.stdout.on("data",(chunk:Buffer)=>chunks.push(chunk));child.stdin.on("error",()=>undefined);
+ const closed=new Promise<number|null>((resolve,reject)=>{child.on("error",reject);child.on("close",resolve);});
+ child.stdin.end(oids.map(oid=>`${oid}\n`).join(""));
+ if(await closed!==0)fail("saved-result-snapshot-index-mismatch");
+ const out=Buffer.concat(chunks),blobs=new Map<string,Buffer>();let at=0;
+ for(const oid of oids){
+  const eol=out.indexOf(10,at),header=eol<0?null:/^(\S+) blob (\d+)$/.exec(out.subarray(at,eol).toString());
+  if(header===null||header[1]!==oid)fail("saved-result-snapshot-index-mismatch");
+  const start=eol+1,end=start+Number(header[2]);if(end>out.length)fail("saved-result-snapshot-index-mismatch");
+  blobs.set(oid,Buffer.from(out.subarray(start,end)));at=end+1;
+ }
+ return blobs;
+}
+/**
  * The published attempt commit's bindings, verified without the source workspace (Orca deletes it once the source run is
  * settled, while its envelope still names that path). `bindExhaustedCandidate` bundles the attempt ref into evidence, so
  * the sha/tree/parent check and the changed-path diff run against that bundle. Null when the bundle predates the publish
@@ -326,7 +389,8 @@ function validateAccounting(admission:SavedResultAdmission,source:LoopStartEnvel
   }
  }else if(a.settlement!==null||a.receipt!==null||!same(a.work,baseline.work)||!same(a.handoff,baseline.handoff))fail("saved-result-accounting-invalid");
 }
-type SourceExpectation={runId:string;attempt:number;envelopeHash:string;contractHash:string;snapshotHash?:string};
+// repository: where a v2 archive's range bundle is verified (it must hold the base); read through alternates, never written.
+type SourceExpectation={runId:string;attempt:number;envelopeHash:string;contractHash:string;snapshotHash?:string;repository:string};
 type SourceBytes={manifest:Pick<SavedResultPackage,"authorityKind"|"source">;get:(ref:ArtifactRefV1)=>Buffer;json:(ref:ArtifactRefV1)=>any;bytes:Map<string,Buffer>};
 async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation){
  const {manifest,get,json,bytes}=loaded;
@@ -491,17 +555,19 @@ async function validateSavedSource(loaded:SourceBytes,expected:SourceExpectation
  if(!proof)fail("saved-result-process-authority-invalid");
  if(!Array.isArray(proof.registered)||!registered.every(p=>proof.registered.some((q:any)=>q.pid===p.pid&&q.pgid===p.pgid&&q.startedAt===p.startedAt&&q.phase===p.phase)))fail("saved-result-process-authority-invalid");
  if(!oid.safeParse(source.work.base).success)fail("saved-result-original-base-unavailable");
- const snapshot=legacySnapshotSchema.parse(json(archive.snapshot));const actualChangedPaths=await validateSnapshot(snapshot,get,source.claim.runId,attempt,source.work.base);
+ const candidate:{snapshot:LegacySnapshot;bytes:Map<string,Buffer>;actualChangedPaths:string[];bundleRefName?:string}=manifest.authorityKind==="legacy-published-candidate-v2"?await validateSnapshotV2(json(archive.snapshot),get,bytes,source.claim.runId,source.work.base,expected.repository)
+  :await (async()=>{const snapshot=legacySnapshotSchema.parse(json(archive.snapshot));return {snapshot,bytes,actualChangedPaths:await validateSnapshot(snapshot,get,source.claim.runId,attempt,source.work.base)};})();
+ const {snapshot,actualChangedPaths}=candidate;
  idSchema.parse(source.claim.taskId);
  const {groupId,workItemId,taskId,runId,generation,graphVersion,targetVersion}=source.claim;
  const identity={groupId,workItemId,taskId,runId,generation,graphVersion,targetVersion,executionId:accepted.executionId,envelopeHash:accepted.envelopeHash};
- return {verificationOnly:false,source,identity,plan,execution:normalized.execution,snapshot,bytes,originalBase:source.work.base,ledger,logical,registered,
-  rawExecutionTokens,snapshotHash:archive.snapshot.hash,actualChangedPaths};
+ return {verificationOnly:false,source,identity,plan,execution:normalized.execution,snapshot,bytes:candidate.bytes,originalBase:source.work.base,ledger,logical,registered,
+  rawExecutionTokens,snapshotHash:archive.snapshot.hash,actualChangedPaths,bundleRefName:candidate.bundleRefName};
 }
 /** Execution requires both strict source eligibility and the independently fenced controller admission. */
 export async function loadSavedResultRecovery(input:LoopStartEnvelope,requireFence=true):Promise<LoadedSavedResult>{
  const loaded=await loadPackage(input,requireFence),{admission}=loaded,r=input.savedResultRecovery!;
- const original=await validateSavedSource(loaded,{runId:admission.source.runId,attempt:r.recoveryOf.sourceAttempt,envelopeHash:admission.source.envelopeHash,contractHash:admission.contractHash,snapshotHash:r.recoveryOf.snapshotHash});
+ const original=await validateSavedSource(loaded,{runId:admission.source.runId,attempt:r.recoveryOf.sourceAttempt,envelopeHash:admission.source.envelopeHash,contractHash:admission.contractHash,snapshotHash:r.recoveryOf.snapshotHash,repository:input.work.contract.context.repoPath});
  if(!same(original.identity,admission.source)||!same(semantic(original.source.work.contract),semantic(input.work.contract)))fail("saved-result-source-stale");
  if(original.verificationOnly){if(!('kind' in r.recoveryOf)||r.recoveryOf.kind!=='verification-only-v1'||original.source.work.contract.verification.commandChecksDecideGoal!==true)fail('saved-result-source-stale');}
  else if(!('normalizedExecutionHash' in r.recoveryOf)||canonicalHash(original.execution)!==r.recoveryOf.normalizedExecutionHash)fail("saved-result-normalization-hash-mismatch");
@@ -555,7 +621,9 @@ export async function readSavedResultSourceEligibility(input:SavedResultSourceIn
   for(const e of manifest.artifacts){if(files.has(e.file)||bytes.has(e.ref.artifactId))fail("saved-result-package-duplicate");files.add(e.file);const value=await privateBytes(input.packagePath,e.file);if(digest(value)!==e.ref.hash)fail("saved-result-source-hash-mismatch");bytes.set(e.ref.artifactId,value);}
   if((await readdir(input.packagePath)).some(name=>!files.has(name)))fail("saved-result-package-unmanifested");
   const get=(ref:ArtifactRefV1)=>{const b=bytes.get(ref.artifactId);if(!b||digest(b)!==ref.hash)fail("saved-result-source-hash-mismatch");return b;};
-  const original=await validateSavedSource({manifest,bytes,get,json:ref=>JSON.parse(get(ref).toString())},{runId:input.source.claim.runId,attempt:input.sourceAttempt,envelopeHash:canonicalHash(input.source),contractHash:input.source.contractHash});
+  const original=await validateSavedSource({manifest,bytes,get,json:ref=>JSON.parse(get(ref).toString())},{runId:input.source.claim.runId,attempt:input.sourceAttempt,envelopeHash:canonicalHash(input.source),contractHash:input.source.contractHash,
+   // No recovery run exists yet, and the source's own repoPath (Orca's C1) is gone once it settled: its target holds the base.
+   repository:input.source.work.targetRepo});
   return {status:"eligible" as const,authorityKind:manifest.authorityKind,sourceIdentity:original.identity,rawExecutionTokens:original.rawExecutionTokens,
    recoveryOf:original.verificationOnly?{sourceRunId:original.source.claim.runId,sourceAttempt:input.sourceAttempt,capsuleHash:manifest.source.hash,snapshotHash:original.snapshotHash,kind:'verification-only-v1' as const}
     :{sourceRunId:original.source.claim.runId,sourceAttempt:input.sourceAttempt,capsuleHash:manifest.source.hash,snapshotHash:original.snapshotHash,normalizedExecutionHash:canonicalHash(original.execution)},
@@ -605,7 +673,7 @@ async function validateInterruptedPredecessor(input:LoopStartEnvelope,loaded:Awa
 }
 
 const unavailableSchema=z.object({status:z.literal("unavailable"),reason:z.string().min(1)}).strict();
-const legacyAuthorityKind=z.enum(['execution-format-failure-v1','legacy-published-candidate-v1','execution-complete-before-verification-v1']);
+const legacyAuthorityKind=z.enum(['execution-format-failure-v1','legacy-published-candidate-v1','execution-complete-before-verification-v1','legacy-published-candidate-v2']);
 const sourceEligibilityFields={status:z.literal('eligible'),sourceIdentity:savedResultAdmissionSchema.shape.source,rawExecutionTokens:safe.nullable(),
  limitation:z.literal('published-candidate-only; current membership and settled accounting require controller admission')};
 export const savedResultEligibilitySchema=z.union([unavailableSchema,z.object({status:z.literal('eligible'),authorityKind:legacyAuthorityKind,normalizedExecutionHash:hash}).strict(),
