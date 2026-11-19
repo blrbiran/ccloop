@@ -187,6 +187,10 @@ async function materializeSnapshotV2(repoPath:string,runDir:string,attempt:numbe
  const git=async(cwd:string,args:string[],env?:NodeJS.ProcessEnv)=>(await execFileAsync("git",args,{cwd,maxBuffer:64*1024*1024,...(env?{env}:{})})).stdout.trim();
  if(snapshot.bundle!==null){
   const localBundle=join(runDir,"continuation-repo.bundle");await writePrivate(localBundle,bytes.get(snapshot.bundle.artifactId)!);
+  // Review minor: a fetch failure is named for its cause. A bundle that is not one, or that does not carry the pin, is told
+  // apart (list-heads needs no prerequisite) before the fetch, whose remaining failure is the missing base.
+  let heads:string;try{heads=await git(repoPath,["bundle","list-heads",localBundle]);}catch{fail("control-resume-snapshot-invalid");}
+  if(!heads.split("\n").some(line=>line.endsWith(` ${snapshot.ref}`)))fail("control-resume-head-mismatch");
   try{await git(repoPath,["-c","gc.auto=0","-c","maintenance.auto=false","fetch","-q","--no-tags",localBundle,snapshot.ref]);}catch{fail("control-resume-base-unavailable");}
   if(await git(repoPath,["rev-parse","FETCH_HEAD"])!==snapshot.attempt)fail("control-resume-head-mismatch");
  }

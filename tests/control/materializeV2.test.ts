@@ -23,7 +23,13 @@ const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex
 const artifact = (bytes: Buffer) => ({ artifactId: `sha256-${sha256(bytes)}`, hash: sha256(bytes) });
 
 type Source = "ccloop-live" | "ccloop-published";
-async function world(source: Source, tamper: (snapshot: Record<string, unknown>) => void = () => undefined) {
+/**
+ * Review I2, I3 and minors: `bundle` makes the range bundle carry another commit at the pin ("other"), the attempt under
+ * another ref name ("wrong-ref"), or bytes that are no bundle ("garbage"); `agentCommit` has the agent commit inside its
+ * worktree before the attempt is recorded, so attempt^ is the agent's commit and a live capture's head is it.
+ */
+type WorldOptions = { bundle?: "other" | "wrong-ref" | "garbage"; agentCommit?: boolean };
+async function world(source: Source, tamper: (snapshot: Record<string, unknown>) => void = () => undefined, options: WorldOptions = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ccloop-materialize-v2-")));
   roots.push(root);
   const target = join(root, "target"), producer = join(root, "producer"), repoPath = join(root, "c1"), sourceDir = join(root, "new-source"), runDir = join(sourceDir, "run");
@@ -34,12 +40,17 @@ async function world(source: Source, tamper: (snapshot: Record<string, unknown>)
   const base = git(target, "rev-parse", "HEAD");
   // The predecessor's attempt, made where Orca made it (a handle on the target), then pinned and bundled as a range.
   execFileSync("git", ["clone", "-q", "--local", target, producer]);
+  let agent: string | null = null;
+  if (options.agentCommit) { await writeFile(join(producer, "answer.txt"), "41\n"); git(producer, "commit", "-qam", "the agent's own commit"); agent = git(producer, "rev-parse", "HEAD"); }
   await writeFile(join(producer, "answer.txt"), "42\n"); await writeFile(join(producer, "new.txt"), "n\n");
   git(producer, "rm", "-q", "gone.txt"); git(producer, "add", "-A"); git(producer, "commit", "-qm", "attempt");
   const attempt = git(producer, "rev-parse", "HEAD");
   git(producer, "update-ref", "refs/orca/runs/run-pred", attempt);
+  if (options.bundle === "other") git(producer, "update-ref", "refs/orca/runs/run-pred", git(producer, "commit-tree", `${attempt}^{tree}`, "-p", base, "-m", "not the attempt"));
+  if (options.bundle === "wrong-ref") { git(producer, "update-ref", "refs/orca/runs/run-other", attempt); git(producer, "update-ref", "-d", "refs/orca/runs/run-pred"); }
   const bundleFile = join(root, "range.bundle");
-  git(producer, "bundle", "create", "-q", bundleFile, `${base}..refs/orca/runs/run-pred`);
+  git(producer, "bundle", "create", "-q", bundleFile, `${base}..refs/orca/runs/${options.bundle === "wrong-ref" ? "run-other" : "run-pred"}`);
+  if (options.bundle === "garbage") await writeFile(bundleFile, "not a bundle\n");
   // A later commit in the target: the continuation's C1 is a no-checkout clone with HEAD put back at base (Orca P0).
   await writeFile(join(target, "answer.txt"), "later\n"); git(target, "commit", "-qam", "later");
   execFileSync("git", ["clone", "-q", "--local", "--no-checkout", target, repoPath]);
@@ -47,7 +58,7 @@ async function world(source: Source, tamper: (snapshot: Record<string, unknown>)
 
   const bundleBytes = await readFile(bundleFile), bundleRef = artifact(bundleBytes);
   const snapshot: Record<string, unknown> = { version: 2, objectFormat: "sha1", base, attempt, tree: git(producer, "rev-parse", `${attempt}^{tree}`),
-    head: source === "ccloop-live" ? base : attempt, ref: "refs/orca/runs/run-pred", source, bundle: bundleRef, missing: [] };
+    head: source === "ccloop-live" ? agent ?? base : attempt, ref: "refs/orca/runs/run-pred", source, bundle: bundleRef, missing: [] };
   tamper(snapshot);
   const snapshotBytes = Buffer.from(JSON.stringify(snapshot)), snapshotRef = artifact(snapshotBytes);
   const checkpointBytes = Buffer.from(JSON.stringify({ checkpointId: "cp1", snapshot: snapshotRef }));
@@ -63,7 +74,7 @@ async function world(source: Source, tamper: (snapshot: Record<string, unknown>)
     snapshot: snapshotRef, artifacts, unfinished: [], pendingDecisions: [], awaitingHuman: [] };
   await writeFile(join(bundlePath, "resume-bundle.json"), JSON.stringify(manifest), { mode: 0o600 });
   const input: InputCheckpointV1 = { predecessorRunId: "run-pred", checkpointId: "cp1", checkpointHash: checkpointRef.hash, bundlePath };
-  return { base, attempt, repoPath, runDir, input, snapshot };
+  return { base, attempt, agent, repoPath, runDir, input, snapshot };
 }
 
 describe("continuation from snapshot v2 (P1-6)", () => {
@@ -98,5 +109,32 @@ describe("continuation from snapshot v2 (P1-6)", () => {
     const empty = join(w.runDir, "..", "empty");
     git(w.runDir, "init", "-q", empty);
     await expect(materializeFirstWorkspace(empty, w.runDir, 1, w.input)).rejects.toThrow("control-resume-base-unavailable");
+  });
+});
+
+describe("continuation from snapshot v2: the bundle and an agent's own commit (review I2, I3, minors)", () => {
+  it("a bundle whose pin is not the attempt is refused and leaves no worktree", async () => {
+    const w = await world("ccloop-published", undefined, { bundle: "other" });
+    await expect(materializeFirstWorkspace(w.repoPath, w.runDir, 1, w.input)).rejects.toThrow("control-resume-head-mismatch");
+    expect(existsSync(join(w.runDir, "worktrees", "attempt-1"))).toBe(false);
+  });
+
+  it("a bundle without the pin is a head mismatch and bytes that are no bundle an invalid snapshot, not a missing base", async () => {
+    const ref = await world("ccloop-published", undefined, { bundle: "wrong-ref" });
+    await expect(materializeFirstWorkspace(ref.repoPath, ref.runDir, 1, ref.input)).rejects.toThrow("control-resume-head-mismatch");
+    const garbage = await world("ccloop-published", undefined, { bundle: "garbage" });
+    await expect(materializeFirstWorkspace(garbage.repoPath, garbage.runDir, 1, garbage.input)).rejects.toThrow("control-resume-snapshot-invalid");
+  });
+
+  // I3: the agent committed inside its worktree. The record's head is that commit (report.attempt.head) and attempt^ is it;
+  // a continuation comes back at that HEAD with the attempt as the dirty tree. (Recovery refuses the same attempt:
+  // savedResultRecoveryV2.test.ts.)
+  it("an agent-commit live capture comes back with HEAD at the agent's commit and the attempt as the dirty tree", async () => {
+    const w = await world("ccloop-live", undefined, { agentCommit: true });
+    const { worktreePath } = await materializeFirstWorkspace(w.repoPath, w.runDir, 1, w.input);
+    expect(git(worktreePath, "rev-parse", "HEAD")).toBe(w.agent);
+    expect(git(worktreePath, "rev-parse", "HEAD^")).toBe(w.base);
+    expect(git(worktreePath, "status", "--porcelain", "--untracked-files=all").split("\n").map((line) => line.trim()).sort()).toEqual(["?? new.txt", "D gone.txt", "M answer.txt"]);
+    expect(await readFile(join(worktreePath, "answer.txt"), "utf8")).toBe("42\n");
   });
 });
