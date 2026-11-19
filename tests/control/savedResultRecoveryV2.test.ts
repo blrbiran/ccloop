@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { savedRecoveryFixture } from "./savedRecoveryFixture.js";
-import { canonicalJson } from "../../src/control/protocol.js";
+import { canonicalHash, canonicalJson } from "../../src/control/protocol.js";
 import { runLoop } from "../../src/controller/runLoop.js";
 import { verified } from "./taskResultFixture.js";
 
@@ -103,9 +103,17 @@ it("restores the v2 candidate and verifies it once, as the v1 archive does", asy
 
 it("source-only eligibility verifies a v2 candidate in the source's target repository", async () => {
   const f = await v2Fixture();
-  // The genuine source envelope names its own target; its hash binds the path, so the test makes that path exist.
-  const target = f.source.work.targetRepo, top = dirname(dirname(target));
-  await mkdir(top); // throws EEXIST rather than touch a directory this test did not make
+  // Review I5: the genuine source envelope names a target under /private/tmp, outside this test's temp root. The source is
+  // re-sealed with a target inside the root instead: its archived control/envelope.json, the envelopeHash its archived
+  // control/accepted.json binds, and the archive (the capsule) that holds both.
+  const target = join(f.root, "source-target", "repo"), source = { ...f.source, work: { ...f.source.work, targetRepo: target } };
+  const log = (path: string) => f.archive.logs.find((entry: { path: string }) => entry.path === path);
+  const accepted = JSON.parse(f.bytes.get(log("control/accepted.json").ref.artifactId)!.toString());
+  log("control/accepted.json").ref = await f.put({ ...accepted, envelopeHash: canonicalHash(source) });
+  log("control/envelope.json").ref = await f.put(source);
+  const archiveRef = await f.put(f.archive);
+  f.manifest.source = archiveRef;
+  f.admission.recoveryOf.capsuleHash = archiveRef.hash;
   try {
     await mkdir(dirname(target));
     git(f.root, "clone", "-q", "--no-checkout", f.repo, target);
@@ -114,13 +122,13 @@ it("source-only eligibility verifies a v2 candidate in the source's target repos
     const manifest = { ...rest, schema: "ccloop-saved-result-source-package-v1" };
     for (const e of manifest.artifacts) await cp(join(f.input.savedResultRecovery!.packagePath, e.file), join(packagePath, e.file));
     const bytes = Buffer.from(canonicalJson(manifest)); await writeFile(join(packagePath, "package.json"), bytes, { mode: 0o600 });
-    const input = { source: f.source, sourceAttempt: 1, packagePath, packageHash: createHash("sha256").update(bytes).digest("hex") };
+    const input = { source, sourceAttempt: 1, packagePath, packageHash: createHash("sha256").update(bytes).digest("hex") };
     const before = repositoryState(target);
     const result = await f.rpc("saved-result-source-eligibility", { input });
     expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ status: "eligible", authorityKind: "legacy-published-candidate-v2", rawExecutionTokens: 15, recoveryOf: f.admission.recoveryOf });
     expect(repositoryState(target)).toEqual(before);
-  } finally { await rm(top, { recursive: true, force: true }); await rm(f.root, { recursive: true, force: true }); }
+  } finally { await rm(f.root, { recursive: true, force: true }); }
 }, 30000);
 
 // Review I2: one refusal per v2 recovery check that nothing pinned. Each is a recovery of a snapshot that is well-formed but
