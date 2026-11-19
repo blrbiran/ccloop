@@ -102,17 +102,24 @@ async function settleState(input: LoopStartEnvelope, runDir: string, reason: str
   }
   // The dead worker's attempt worktrees: published under their refs, then removed (as a failed attempt's cleanup does).
   registerAttemptRefNamespace(runDir, input.claim.runId);
-  // Change-sized runs (Orca spec 2026-11-19 §5.2.3): the current attempt is recorded (and its worktree removed) before the
-  // best-effort cleanup below, and no result repository is made.
+  // Change-sized runs (Orca spec 2026-11-19 §5.2.3): under the key the current attempt is recorded (and its worktree
+  // removed) and no result repository is made.
   const refDelivery = input.work.attemptDelivery === "ref-v1";
-  if (refDelivery) await recordAttemptEnd(input, runDir, state.currentAttempt);
-  let trees: string[] = [];
-  try { trees = (await readdir(join(runDir, "worktrees"))).filter((name) => /^attempt-\d+$/.test(name)); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  for (const tree of trees) await cleanupAttemptWorkspaceBestEffort(input.work.contract.context.repoPath, join(runDir, "worktrees", tree), runDir, "cleanup after worker-lost settlement");
-  if (input.work.contract.context.additionalRepos !== undefined) await cleanupResidualExtraWorktrees(input.work.contract, runDir);
-  if (!refDelivery) {
+  if (refDelivery) {
+    // Change-sized runs P1 review I1: recordAttemptEnd judges the trees itself -- the current one, every older primary one,
+    // and the current attempt's extras -- and removes each whose content a ref pins. What it leaves it leaves on purpose (a
+    // recorded tree whose removal failed, a record-failed tree, an older tree its ref does not pin): the publishing cleanup
+    // below would commit on that tree's real index and move both refs off the recorded sha, and a plain removal would lose
+    // content no ref holds. So under the key neither publishing loop runs (an older attempt's extra worktree a crash left
+    // behind is therefore left in place too).
+    await recordAttemptEnd(input, runDir, state.currentAttempt);
+  } else {
+    let trees: string[] = [];
+    try { trees = (await readdir(join(runDir, "worktrees"))).filter((name) => /^attempt-\d+$/.test(name)); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    for (const tree of trees) await cleanupAttemptWorkspaceBestEffort(input.work.contract.context.repoPath, join(runDir, "worktrees", tree), runDir, "cleanup after worker-lost settlement");
+    if (input.work.contract.context.additionalRepos !== undefined) await cleanupResidualExtraWorktrees(input.work.contract, runDir);
     await materializeResultRepository(input, runDir, state.currentAttempt);
     await materializeExtraResultRepositories(input, runDir, state.currentAttempt);
   }
