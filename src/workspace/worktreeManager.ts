@@ -39,7 +39,7 @@ export async function createAttemptWorkspace(repoPath: string, runDir: string, a
  * hooks (shared by every worktree through the main .git/hooks) would otherwise run, slow or refuse it
  * (savedResultRecovery.ts and executionFormatFailure.ts already pass the same flag).
  */
-const ATTEMPT_IDENTITY = ["-c", "user.name=ccloop", "-c", "user.email=ccloop@invalid", "-c", "core.hooksPath=/dev/null"];
+export const ATTEMPT_IDENTITY = ["-c", "user.name=ccloop", "-c", "user.email=ccloop@invalid", "-c", "core.hooksPath=/dev/null"];
 
 /** Subject length limit for an attempt commit (git's conventional 72 columns, counted in code points). */
 export const ATTEMPT_SUBJECT_MAX = 72;
@@ -59,7 +59,7 @@ export function attemptCommitMessageArgs(ref: string, goal: string | null): stri
 }
 
 /** The run's goal from <runDir>/loop-contract.json, or null when it cannot be read (the message then falls back). */
-async function runGoal(runDir: string): Promise<string | null> {
+export async function runGoal(runDir: string): Promise<string | null> {
   try {
     const goal = (JSON.parse(await readFile(join(runDir, "loop-contract.json"), "utf8")) as { objective?: { goal?: unknown } }).objective?.goal;
     return typeof goal === "string" ? goal : null;

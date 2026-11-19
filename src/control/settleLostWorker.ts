@@ -17,6 +17,7 @@ import { candidateOf, type CollectionV1 } from "./collect.js";
 import { workerLiveness } from "./workerLiveness.js";
 import { materializeExtraResultRepositories, materializeResultRepository } from "./resultRepository.js";
 import { proveStopped } from "./stopProof.js";
+import { recordAttemptEnd } from "./attemptRecord.js";
 import { testCrashPoint } from "./testCrashPoint.js";
 import { readAccepted, writeAccepted, withAcceptedLock } from "./store.js";
 import { appendUsageObservation } from "./usage.js";
@@ -101,14 +102,20 @@ async function settleState(input: LoopStartEnvelope, runDir: string, reason: str
   }
   // The dead worker's attempt worktrees: published under their refs, then removed (as a failed attempt's cleanup does).
   registerAttemptRefNamespace(runDir, input.claim.runId);
+  // Change-sized runs (Orca spec 2026-11-19 §5.2.3): the current attempt is recorded (and its worktree removed) before the
+  // best-effort cleanup below, and no result repository is made.
+  const refDelivery = input.work.attemptDelivery === "ref-v1";
+  if (refDelivery) await recordAttemptEnd(input, runDir, state.currentAttempt);
   let trees: string[] = [];
   try { trees = (await readdir(join(runDir, "worktrees"))).filter((name) => /^attempt-\d+$/.test(name)); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   for (const tree of trees) await cleanupAttemptWorkspaceBestEffort(input.work.contract.context.repoPath, join(runDir, "worktrees", tree), runDir, "cleanup after worker-lost settlement");
   if (input.work.contract.context.additionalRepos !== undefined) await cleanupResidualExtraWorktrees(input.work.contract, runDir);
-  await materializeResultRepository(input, runDir, state.currentAttempt);
-  await materializeExtraResultRepositories(input, runDir, state.currentAttempt);
+  if (!refDelivery) {
+    await materializeResultRepository(input, runDir, state.currentAttempt);
+    await materializeExtraResultRepositories(input, runDir, state.currentAttempt);
+  }
   const result = resultOf(state.status);
   const usage = await appendUsageObservation(source, { runId: input.claim.runId, generation: input.claim.generation, bucket: "handoff", observationId: "worker-lost-settlement",
     threadTotalTokens: 0, elapsedMs: 0, attempts: 0, sessions: 0, evidence: { requestId: null, result, mechanical: true } });

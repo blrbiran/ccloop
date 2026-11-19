@@ -19,6 +19,7 @@ import { readCleanupFailure, sessionRemains, type LiveUsage } from "../runtime/c
 import { existsSync } from "node:fs";
 import { readLiveNoteDeliveries, type LiveNoteDeliveryV1 } from "./liveNotes.js";
 import { workerLiveness, workerReportApplies, type WorkerLivenessV1 } from "./workerLiveness.js";
+import { readAttemptRecord, type AttemptRecordV1 } from "./attemptRecord.js";
 
 /** Orca labels and progress spec §3.2 (2026-09-28): the loop's latest state, as Orca shows a task's step. */
 export interface ProgressV1 {
@@ -100,6 +101,12 @@ export interface CollectionV1 {
    * person deletes the session. Absent when there is none, so no existing caller sees new bytes.
    */
   sessionCleanup?: SessionCleanupEntryV1[];
+  /**
+   * Change-sized runs (Orca spec 2026-11-19-change-sized-runs-design.md §6.1): how the run's current attempt ended, recorded as a
+   * commit. Present iff the envelope carries work.attemptDelivery and there is a candidate (a terminal state or a sealed
+   * boundary); absent otherwise, so no existing caller sees new bytes. A record the worker did not leave is `record-failed`.
+   */
+  attempt?: AttemptRecordV1;
 }
 
 export interface SessionCleanupEntryV1 { threadId: string; home: string; state: "failed" | "retry-failed"; detail: string;
@@ -329,6 +336,8 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const liveness = workerReportApplies(input, launch, storedCandidate !== null, terminal !== null, proof !== null) ? await workerLiveness(launch) : undefined;
   // An alive worker is today's in-flight run: its collect answer stays byte for byte as it was (existing criteria pin it).
   const worker = liveness?.state === "alive" ? undefined : liveness;
+  const attempt = input.work.kind === "loop" && input.work.attemptDelivery === "ref-v1" && storedCandidate !== null
+    ? await attemptOf(input.work.sourceDir, progress) : undefined;
   return {
     events,
     candidate: storedCandidate === null ? null : candidateOf(storedCandidate, proof),
@@ -348,7 +357,18 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     ...(handoffFiles === undefined ? {} : { handoffFiles }),
     ...(liveNotes === undefined ? {} : { liveNotes }),
     ...(sessionCleanup.length === 0 ? {} : { sessionCleanup }),
+    ...(attempt === undefined ? {} : { attempt }),
   };
+}
+
+/** A missing or malformed record is reported, never thrown: the run then has no recorded attempt, by name. */
+async function attemptOf(sourceDir: string, progress: ProgressV1 | null): Promise<AttemptRecordV1> {
+  const attempt = progress?.currentAttempt ?? 0;
+  try {
+    return await readAttemptRecord(sourceDir) ?? { attempt, sha: null, reason: "record-failed", detail: "attempt-record-missing" };
+  } catch {
+    return { attempt, sha: null, reason: "record-failed", detail: "attempt-record-invalid" };
+  }
 }
 
 export async function inspectExecution(input: StartEnvelopeV3): Promise<ExecutionStatusV1> {

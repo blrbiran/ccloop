@@ -28,6 +28,7 @@ import { updateLiveCeiling } from "./liveCeilingFile.js";
 import { settleLostWorker } from "./settleLostWorker.js";
 import { collectTaskResults, readTaskResultEvidence, taskResultCollectionSchema } from "./taskResults.js";
 import { byModelSchema, usagePhaseSchema } from "./usage.js";
+import { attemptRecordSchema } from "./attemptRecord.js";
 
 export interface ControlCommandResult {
   code: number;
@@ -258,6 +259,9 @@ export const collectionSchema = z.object({
   // parse must accept it before the repin.
   sessionCleanup: z.array(z.object({ threadId: z.string().uuid(), home: z.string().min(1), state: z.enum(["failed", "retry-failed"]),
     detail: z.string(), command: z.array(z.string().min(1)).min(1).optional(), userHome: z.string().min(1).optional() }).strict()).min(1).optional(),
+  // Change-sized runs (Orca spec 2026-11-19 §6.1): the recorded attempt; present iff the envelope carries work.attemptDelivery
+  // and there is a candidate.
+  attempt: attemptRecordSchema.optional(),
 }).strict();
 
 const METHODS = new Set<ControlMethodV1>([
