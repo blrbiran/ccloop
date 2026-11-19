@@ -41,17 +41,19 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-> **Orca 会话 `543e800e`（2026-11-18 晚 → 11-19）：本仓有代码改动，已推、Orca 已 repin 到它（见下一节）。** 另：Orca 侧「修复型重试」设计稿（#321 B，`Orca/docs/superpowers/specs/2026-11-18-repair-attempt-design.md`）要改的两条本仓判据 `tests/control/protocol4.test.ts:13`、`tests/control/savedResultEvidence.test.ts:112`，**人已于 2026-11-19 逐条点名「允许」**（同一对判据也是 Orca「去掉复制」设计 `Orca/docs/superpowers/specs/2026-11-19-change-sized-runs-design.md` 的 ccloop 阶段 P1 要改的）；两件的 ccloop 半边都**还没开工**。Orca 侧 #321 C1（下一个 run 被告知最后一次尝试失败的命令）读 collect 终态的 `currentAttempt`，本仓无需改。
+> **Orca 会话 `3ba26002`（2026-11-19）：本仓有代码改动——「去掉复制」P1 已 `--ff-only` 进本地 main 并 `npm run build`，【未推】；Orca 尚未 repin 到它（Orca 的 npm 钉是 GitHub 依赖，必须先推）。** 推送要人在消息开头敲 `allow-push`（整条消息粘贴的也算——Orca 闸门本会话修好了粘贴包装那一层）。远端一律 `/usr/bin/git ls-remote` 现测。
 
-### 最新（2026-11-19，Orca 会话 `543e800e`）—— omp 启动隔离（Orca #369 a、#375）：已推，Orca 已 repin
+### 最新（2026-11-19，Orca 会话 `3ba26002`）—— 去掉复制 P1（Orca #363 #366）：在本地 main，未推、Orca 未 repin
 
-- 设计 `docs/superpowers/specs/2026-11-18-omp-launch-isolation-design.md`（§6 审阅修复、§7 Correction）；主题行 `docs(spec): omp launch isolation …` 至 `fix(runtime): an errored turn's placeholder tool rows do not cancel the provider-error grace window (Orca #369 re-review)`。
-- **全部按次启动，不改任何 agent 的 profile／配置文件**（人：「我们不应该删 omp 或其他 agent 的 profile 文件内容」）：每个 omp loop 阶段在自己的证据目录写 `config-overlay.yml` 并 `--config` 传入（`retry.maxRetries:3`、`retry.maxDelayMs:60000`、`retry.modelFallback:false`、`mcp.enableProjectConfig:false`；single-call 的覆盖也加 `mcp.enableProjectConfig:false`）；`OMP_MCP_TIMEOUT_MS=2000`（0 表示不设超时，不能用）。
-- provider 的非 408/429 的 4xx：起 20 s 宽限窗（`OMP_PROVIDER_ERROR_GRACE_MS`），只被恢复行取消（`auto_compaction_start`、`auto_retry_start`、`agent_start`、`turn_start`、assistant `message_start`；**不含** `tool_execution_start`——出错那一轮自己的占位工具结果也发它），窗满或终态 `agent_end` 即以 `provider-error` 结束；任何 omp 404 = `model-unavailable`（现场文本「模型已下架」）。
-- omp stderr 只保留 MCP 就绪两种形态（服务名＋not ready／failed to connect，截掉尾巴，先剥 ANSI），进 `outcome.json` 与 collect `transcripts[].warnings`（≤16 行、每行 ≤512 B，无则缺席）。Orca 侧 strict schema 已认它（Orca 先合了读取端，再 repin）。
-- 改了 2 条既有判据（omp argv golden 多 `--config`）：`tests/runtime/omp/ompToolRules.test.ts:25`、`tests/runtime/multiRepoArgv.test.ts:93`——**人逐条点名「允许」**，注释写明。旧 ccloop 记录的 saved result 会以 `saved-result-config-mismatch` 被拒（失败关闭，已写进设计）。
-- 门：负载 58–127 下全量红在 omp 之外（`savedResultRecovery.native`、`cli`、`setupCommands`、`stalledCauseAndFloor` #262 等），与未改动 main 对照同红；omp 测试文件 30/30。**真 omp 付费验收未跑**；真 omp 遇上下文溢出后的压缩恢复只按源码推，未实测。
-- 登记：`listAgents` 未报 omp 的 MCP 清单（Orca `doctor` 想要）；用户级 MCP 服务仍会启动（关它要改 profile，禁止）；omp 4xx 后进程挂 4 分钟的根因未证。
+- 设计在 Orca：`Orca/docs/superpowers/specs/2026-11-19-change-sized-runs-design.md`（§5.2、§5.5、§6.1、§13 P1 行；末尾有 P0／P1／P2 的 Correction）。本仓主题行 `feat(control): the protocol-4 envelope key work.attemptDelivery "ref-v1", refused beside mode (…)` 至 `docs(protocol): a Correction for the P1 review -- attempt.base is attempt^, v2 recovery's strict rule and names (…)`（13 笔）；`docs/control-protocol-v1.md`「Continuation and result repository」后追加两段 Correction。
+- **一切行为由 envelope 键 `work.attemptDelivery:"ref-v1"` 开关（只 protocol 4，与 `mode` 同现即拒 `attempt-delivery-with-saved-result`）；不带键时逐字节同旧**（独立审阅逐处核过）。带键时：worker 与 settle-lost 把尝试结束记成 commit（临时 index、`update-ref --stdin` 一次设两名、读回），不建 `repo`/`repos`；collect 多顶层 `attempt`（`AttemptRecordV1`）；续跑读 Orca snapshot v2（范围 bundle 取进 repoPath、单个 worktree）；恢复认 `legacy-published-candidate-v2`（在临时 bare＋alternates 里验，不写人的仓库）；`features.attemptRef:"v1"`。
+- **给 Orca P2 的约定（P2 已按此实现、已进 Orca main）**：`attempt.base` 是 `attempt^`（捕获时的 HEAD），不是 run 的起点 base；agent 在 worktree 里自己提交过的 run 可续跑、**不可**按 saved-result 恢复（`saved-result-attempt-not-on-base`）；新拒绝 `saved-result-snapshot-too-large`（先查一万文件／单文件上限再读 blob）、`saved-result-snapshot-partial`；续跑取件失败分 `control-resume-head-mismatch`／`-snapshot-invalid`／`-base-unavailable`；带键时 settle-lost **不再跑两个清理循环**（不改动已判过的树，留下的树 Orca 不得假定已删）；collect `dirs[].resultRepo` 仍写 `repos/<key>`，读 `commits.json` 的 `attemptSha`。
+- 判据：人逐条点名允许的两条已改（`tests/control/protocol4.test.ts`、`tests/control/savedResultEvidence.test.ts` 的 features `toEqual` 加 `attemptRef`，注释引人原话）；其余零改写。变异全红（P1 两轮共 26 个，含审阅补的 13 个）。全量 vitest（`--minWorkers=1 --maxWorkers=2`）2921/2921，`check-known-reds` RC 0；未改动 `214125f` 上 `tests/runtime/codex/stalledCauseAndFloor.test.ts`（#262）在高负载下曾 2/2 红，与本件无关（本件不碰 runtime）。
+- **等人**：推 ccloop main；之后 Orca repin（`scripts/pin-ccloop.mjs`，独立 `clone --local` 装树），repin 那一轮改写 Orca `tests/control/allowanceHeldSettlement.test.ts:59`（P1 下停住的 worktree 被记录并删掉，前提不再成立；改写方案在 Orca 台账）。本仓主检出有一个他人假 codex 留下的未跟踪 `undefined.version-calls`（未动）。
+
+### 上一轮（2026-11-19，Orca 会话 `543e800e`）—— omp 启动隔离（Orca #369 a、#375）：已推，Orca 已 repin 到 `57b6d15`（压成结论）
+
+- 设计 `docs/superpowers/specs/2026-11-18-omp-launch-isolation-design.md`（§6、§7）。**按次启动、不改任何 agent 的 profile／配置文件**（人裁）：omp loop 阶段 `--config` 覆盖（重试 3 次／60 s、关模型回退、关项目 MCP 配置）、`OMP_MCP_TIMEOUT_MS=2000`；provider 非 408/429 的 4xx 起 20 s 宽限（只被恢复行取消）后以 `provider-error` 结束，任何 omp 404 = `model-unavailable`；MCP 就绪警告进 collect `transcripts[].warnings`。两条 omp argv golden 人逐条允许改。真 omp 付费验收未跑；登记：`listAgents` 不报 omp MCP 清单、用户级 MCP 仍会启动、omp 4xx 后挂 4 分钟根因未证。
 
 ### 上一轮（2026-11-18，Orca 会话 `4389b15f`）—— #347 execute 答案失败细分、#349 codex 会话删除失败不再判失败；均已推，Orca 已 repin 到 #349 那笔
 
