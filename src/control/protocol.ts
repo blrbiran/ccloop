@@ -93,6 +93,11 @@ export interface LoopWork {
   additionalRepos?: AdditionalRepoWorkV1[];
   /** Task handoffs (Orca spec 2026-11-12 tester follow-up G §10.2): directories outside every worktree, Orca-owned. */
   handoff?: import("../runtime/types.js").HandoffDirs;
+  /**
+   * Change-sized runs (Orca spec 2026-11-19-change-sized-runs-design.md §5.2, §6.1; Orca #363 #366): protocol 4 only, never
+   * beside `mode`. With it the worker records every attempt end as a commit (collect `attempt`) and makes no result repository.
+   */
+  attemptDelivery?: "ref-v1";
 }
 
 export interface AdditionalRepoWorkV1 {
@@ -344,6 +349,9 @@ const nullableLoopWorkSchema = z.object({
   operatorNote: operatorNoteSchema,
   additionalRepos: additionalReposWorkSchema,
   handoff: handoffDirsSchema,
+  // Change-sized runs (Orca spec 2026-11-19 §6.1): optional, so an envelope without it parses and hashes exactly as before.
+  // Only this protocol-4 work schema knows it; the protocol-3 loopWorkSchema is strict and refuses it.
+  attemptDelivery: z.literal("ref-v1").optional(),
 }).strict().refine(work => atMostOneSkillDirectory(work)).refine(work => workKeysMatchContract(work));
 const v4StartEnvelopeSchema = z.object({
   protocol: z.literal(4), contractHash: hashSchema, tokenPolicy: tokenPolicySchema.optional(),
@@ -490,6 +498,12 @@ function validateHandoffDirs(work: LoopWork, sourceDir: string, method: ControlM
 }
 
 function validateEnvelopePaths(envelope: StartEnvelopeV3, method: ControlMethodV1): void {
+  // Change-sized runs (Orca spec 2026-11-19 §5.2.3, §6.1): a saved-result recovery keeps its result repository and its
+  // delivery checks (which skip silently without <sourceDir>/repo), so the key is refused beside `mode`, by name, before
+  // anything else about the envelope is read.
+  if (isLoopEnvelope(envelope) && envelope.mode !== undefined && envelope.work.attemptDelivery !== undefined) {
+    throw new ControlProtocolError("attempt-delivery-with-saved-result");
+  }
   const sourceDir = validateCanonicalDirectory(envelope.work.sourceDir);
   // Orca single-call estimate (2026-09-27), spec §5.1: a single call names no repository and takes no input
   // checkpoint (its schema holds that to null), so its sourceDir is all there is to check.
