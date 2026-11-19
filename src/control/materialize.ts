@@ -12,6 +12,7 @@ import { z } from "zod";
 import { loopContractSchema, type LoopContract } from "../contract/schema.js";
 import { createAttemptWorkspace } from "../workspace/worktreeManager.js";
 import { canonicalHash, artifactRefSchema, type ArtifactRefV1, type InputCheckpointV1, type LoopStartEnvelope } from "./protocol.js";
+import { snapshotV2Schema, type SnapshotV2 } from "./snapshotV2.js";
 
 const execFileAsync = promisify(execFile);
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -38,7 +39,7 @@ const resumeBundleSchema = z.object({
 
 type SnapshotV1 = z.infer<typeof snapshotSchema>;
 type ResumeBundleV1 = z.infer<typeof resumeBundleSchema>;
-interface LoadedBundle { manifest:ResumeBundleV1;snapshot:SnapshotV1;bytes:Map<string,Buffer>;fingerprints:Map<string,string> }
+interface LoadedBundle { manifest:ResumeBundleV1;snapshot:SnapshotV1|SnapshotV2;bytes:Map<string,Buffer>;fingerprints:Map<string,string> }
 export interface MaterializeDependencies { afterValidation?:()=>Promise<void> }
 
 function fail(code: string): never { throw new Error(code); }
@@ -119,6 +120,14 @@ async function loadBundle(input:InputCheckpointV1):Promise<LoadedBundle>{
  refuseRecoveryCheckpoint(checkpointRecord,manifest,bytes);
  const snapshotBytes=bytes.get(manifest.snapshot.artifactId);if(!snapshotBytes)fail("control-resume-artifact-missing");let snapshotRaw:unknown;
  try{snapshotRaw=JSON.parse(snapshotBytes.toString("utf8"));}catch{fail("control-resume-snapshot-invalid");}
+ // Change-sized runs (Orca spec 2026-11-19 §5.5.3): a v2 snapshot names a commit and a range bundle, not files.
+ if((snapshotRaw as {version?:unknown}|null)?.version===2){
+  const v2=snapshotV2Schema.safeParse(snapshotRaw);if(!v2.success)fail("control-resume-snapshot-invalid");const snapshot=v2.data;
+  if(snapshot.missing.length)fail("control-resume-snapshot-partial");
+  if(snapshot.ref!==`refs/orca/runs/${manifest.predecessorRunId}`)fail("control-resume-snapshot-invalid");
+  if(snapshot.bundle!==null){const listed=byId.get(snapshot.bundle.artifactId);if(!listed)fail("control-resume-artifact-missing");if(listed.hash!==snapshot.bundle.hash)fail("control-resume-artifact-conflict");}
+  return {manifest,snapshot,bytes,fingerprints};
+ }
  const snapshotParsed=snapshotSchema.safeParse(snapshotRaw);if(!snapshotParsed.success)fail("control-resume-snapshot-invalid");const snapshot=snapshotParsed.data;
  if(snapshot.missing.length)fail("control-resume-snapshot-partial");assertUniquePaths(snapshot);
  for(const ref of collectSnapshotRefs(snapshot)){const listed=byId.get(ref.artifactId);if(!listed)fail("control-resume-artifact-missing");if(listed.hash!==ref.hash)fail("control-resume-artifact-conflict");}
@@ -159,11 +168,45 @@ async function verifyMaterialized(worktree:string,snapshot:SnapshotV1,bytes:Map<
 export async function materializeFirstWorkspace(repoPath:string,runDir:string,attempt:number,input:InputCheckpointV1,deps:MaterializeDependencies={}):Promise<{worktreePath:string}>{
  const canonicalRun=await realpath(runDir),canonicalBundle=await realpath(input.bundlePath),inputRoot=await realpath(join(dirname(canonicalRun),"input"));if(!within(inputRoot,canonicalBundle)||canonicalBundle===inputRoot)fail("control-resume-bundle-path-invalid");
  const loaded=await loadBundle(input);await deps.afterValidation?.();await assertUnchanged(input,loaded);
- const localBundle=join(canonicalRun,"continuation-repo.bundle");await writePrivate(localBundle,loaded.bytes.get(loaded.snapshot.bundle.artifactId)!);
- await execFileAsync("git",["fetch","-q",localBundle,"HEAD"],{cwd:repoPath});const {stdout:fetched}=await execFileAsync("git",["rev-parse","FETCH_HEAD"],{cwd:repoPath});if(fetched.trim()!==loaded.snapshot.head)fail("control-resume-head-mismatch");
- const {worktreePath}=await createAttemptWorkspace(repoPath,canonicalRun,attempt,loaded.snapshot.head);
- try{await restoreTree(worktreePath,loaded.snapshot,loaded.bytes);await restoreIndex(worktreePath,loaded.snapshot,loaded.bytes);await verifyMaterialized(worktreePath,loaded.snapshot,loaded.bytes);return {worktreePath};}
+ if(loaded.snapshot.version===2)return await materializeSnapshotV2(repoPath,canonicalRun,attempt,loaded.snapshot,loaded.bytes);
+ const snapshot=loaded.snapshot;
+ const localBundle=join(canonicalRun,"continuation-repo.bundle");await writePrivate(localBundle,loaded.bytes.get(snapshot.bundle.artifactId)!);
+ await execFileAsync("git",["fetch","-q",localBundle,"HEAD"],{cwd:repoPath});const {stdout:fetched}=await execFileAsync("git",["rev-parse","FETCH_HEAD"],{cwd:repoPath});if(fetched.trim()!==snapshot.head)fail("control-resume-head-mismatch");
+ const {worktreePath}=await createAttemptWorkspace(repoPath,canonicalRun,attempt,snapshot.head);
+ try{await restoreTree(worktreePath,snapshot,loaded.bytes);await restoreIndex(worktreePath,snapshot,loaded.bytes);await verifyMaterialized(worktreePath,snapshot,loaded.bytes);return {worktreePath};}
  catch(error){await execFileAsync("git",["worktree","remove","--force",worktreePath],{cwd:repoPath}).catch(()=>undefined);throw error;}
+}
+
+/**
+ * Change-sized runs P1 (Orca spec 2026-11-19-change-sized-runs-design.md §5.5.3): the range bundle is fetched into repoPath
+ * (FETCH_HEAD only; repoPath holds the predecessor's base, which the continuation keeps), one worktree is added at the attempt,
+ * and when the snapshot's head is the attempt's parent (a live capture) `reset --mixed <head>` gives back that HEAD with the
+ * attempt as the dirty tree. Then HEAD == head and a temp-index `add -A` + `write-tree` == tree, or the worktree goes.
+ */
+async function materializeSnapshotV2(repoPath:string,runDir:string,attempt:number,snapshot:SnapshotV2,bytes:Map<string,Buffer>):Promise<{worktreePath:string}>{
+ const git=async(cwd:string,args:string[],env?:NodeJS.ProcessEnv)=>(await execFileAsync("git",args,{cwd,maxBuffer:64*1024*1024,...(env?{env}:{})})).stdout.trim();
+ if(snapshot.bundle!==null){
+  const localBundle=join(runDir,"continuation-repo.bundle");await writePrivate(localBundle,bytes.get(snapshot.bundle.artifactId)!);
+  try{await git(repoPath,["-c","gc.auto=0","-c","maintenance.auto=false","fetch","-q","--no-tags",localBundle,snapshot.ref]);}catch{fail("control-resume-base-unavailable");}
+  if(await git(repoPath,["rev-parse","FETCH_HEAD"])!==snapshot.attempt)fail("control-resume-head-mismatch");
+ }
+ let tree:string,parent:string|null;
+ try{tree=await git(repoPath,["rev-parse",`${snapshot.attempt}^{tree}`]);}catch{fail("control-resume-base-unavailable");}
+ try{parent=await git(repoPath,["rev-parse","-q","--verify",`${snapshot.attempt}^`]);}catch{parent=null;}
+ if(tree!==snapshot.tree)fail("control-resume-tree-mismatch");
+ if(snapshot.head!==snapshot.attempt&&snapshot.head!==parent)fail("control-resume-snapshot-invalid");
+ const {worktreePath}=await createAttemptWorkspace(repoPath,runDir,attempt,snapshot.attempt);
+ const temp=join(runDir,"continuation-verify.index");
+ try{
+  if(snapshot.head!==snapshot.attempt)await git(worktreePath,["reset","-q","--mixed",snapshot.head]);
+  if(await git(worktreePath,["rev-parse","HEAD"])!==snapshot.head)fail("control-resume-head-mismatch");
+  let index=await git(worktreePath,["rev-parse","--git-path","index"]);if(!isAbsolute(index))index=join(worktreePath,index);
+  await writePrivate(temp,await readFile(index));
+  const env={...process.env,GIT_INDEX_FILE:temp};await git(worktreePath,["add","-A"],env);
+  if(await git(worktreePath,["write-tree"],env)!==snapshot.tree)fail("control-resume-tree-mismatch");
+  return {worktreePath};
+ }catch(error){await execFileAsync("git",["worktree","remove","--force",worktreePath],{cwd:repoPath}).catch(()=>undefined);throw error;}
+ finally{await rm(temp,{force:true});}
 }
 
 const CONTINUATION_CONSTRAINT="Treat continuation input fields unfinished, pendingDecisions, and awaitingHuman as required planning inputs.";
