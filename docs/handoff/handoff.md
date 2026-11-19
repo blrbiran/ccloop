@@ -41,9 +41,16 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-> **Orca 会话 `3ba26002`（2026-11-19）：本仓有代码改动——「去掉复制」P1 已 `--ff-only` 进本地 main 并 `npm run build`，【未推】；Orca 尚未 repin 到它（Orca 的 npm 钉是 GitHub 依赖，必须先推）。** 推送要人在消息开头敲 `allow-push`（整条消息粘贴的也算——Orca 闸门本会话修好了粘贴包装那一层）。远端一律 `/usr/bin/git ls-remote` 现测。
+> **Orca 会话 `57896c64`（2026-11-20）：P1 与 #397 都已推远端（`/usr/bin/git ls-remote` 现测），Orca 本轮已 repin 到 P1、并在会后重钉到含 #397 的提交。** 推送按人的 `allow-push`；远端一律 `/usr/bin/git ls-remote` 现测。
 
-### 最新（2026-11-19，Orca 会话 `3ba26002`）—— 去掉复制 P1（Orca #363 #366）：在本地 main，未推、Orca 未 repin
+### 最新（2026-11-20，Orca 会话 `57896c64`）—— #397 转录热路径写入合批：已推、Orca 将重钉
+
+- 测试者 #397（Orca 台账）：`ObservedTranscriptFile` 每个 JSON 行写 body、`\n`、`line-observed` marker 三次 `writeSync`，33 MB／20 万行 968–1083 ms（缓冲 23–32 ms）；适配器每个 stderr chunk 一次 `appendFileSync`。现在完整行（正文＋换行＋marker）作为一块、每次 `write()` 一次落盘，256 KiB 阈值与 `close()` 各再 flush；`write()` 返回前必定落盘（既有「SIGKILL 前已接受的字节不丢」判据照绿）；stderr／stdout 每次调用保持一个描述符，`finish()` 后关闭。
+- 字节、marker 位置与 `atBytes` 均不变（判据断言），cap／truncate 语义不变。判据：新增 `tests/runtime/transcriptWriteBatch.test.ts`（5 条，按 `fs.writeSync` 调用数断言）与 `stderrDescriptor.test.ts`（1 条）；改写 1 条既有判据（`transcriptCap.test.ts` 的「marker 处截断」用例，Ruling 行引用人 2026-11-19「这次批准改写所有必要的判据。」）。
+- **登记**：`finish()` 之后到达的 stdout／stderr chunk 现在被丢弃（events／transcript 本来就如此），被停掉的一次调用的原始日志可能少最后一截；`closeSync` 的错误被吞（数据已落盘）。实测（同一台机器、负载高）：旧形状 16–21 s vs 新 1.3–1.6 s（约 12×）；`npm run perf:stream` 三个 runtime 的增长仍远低于 32 MiB 门（19.8／22.6／12.9 MiB）。全量 `tests/runtime` 在本机高负载下 2–7 条墙钟红，逐文件单跑全绿（重跑，不是门）；typecheck／build RC 0。
+- 变异在 `git clone --local` 副本里：删 marker、正文与换行分开写、`close()` 不 flush、按 cap 截断（非整行）、stderr 退回 `appendFileSync` —— 各自见红并 0 字节还原（`git diff` 字节数证明）。
+
+### 上上轮（2026-11-19，Orca 会话 `3ba26002`）—— 去掉复制 P1（Orca #363 #366）：已推、Orca 已 repin
 
 - 设计在 Orca：`Orca/docs/superpowers/specs/2026-11-19-change-sized-runs-design.md`（§5.2、§5.5、§6.1、§13 P1 行；末尾有 P0／P1／P2 的 Correction）。本仓主题行 `feat(control): the protocol-4 envelope key work.attemptDelivery "ref-v1", refused beside mode (…)` 至 `docs(protocol): a Correction for the P1 review -- attempt.base is attempt^, v2 recovery's strict rule and names (…)`（13 笔）；`docs/control-protocol-v1.md`「Continuation and result repository」后追加两段 Correction。
 - **一切行为由 envelope 键 `work.attemptDelivery:"ref-v1"` 开关（只 protocol 4，与 `mode` 同现即拒 `attempt-delivery-with-saved-result`）；不带键时逐字节同旧**（独立审阅逐处核过）。带键时：worker 与 settle-lost 把尝试结束记成 commit（临时 index、`update-ref --stdin` 一次设两名、读回），不建 `repo`/`repos`；collect 多顶层 `attempt`（`AttemptRecordV1`）；续跑读 Orca snapshot v2（范围 bundle 取进 repoPath、单个 worktree）；恢复认 `legacy-published-candidate-v2`（在临时 bare＋alternates 里验，不写人的仓库）；`features.attemptRef:"v1"`。
@@ -321,7 +328,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-18 近况（原位滚动，Orca 会话 `4389b15f`；上一轮 `0e0846ae`）**：本轮改了本仓（#347、#349，见「当前状态·最新」），人已推；Orca 已用 `pin-ccloop.mjs` repin 到 `docs(spec): Orca #349 review round …` 那笔（各检查 ok、默认解析 E2E 12/12）并合入 Orca main、已推；**Orca 面板尚未重装**（下一轮做）。Orca 本轮还合入测试者 #319/#321C/#327/#332/#337/#345/#348/#350、stuck-runs 审阅修复（spec Correction 3），#346（计划外写入）做到 Task 5 在分支上——**#346 仍不改本仓**：它依赖本仓「空 allowlist＝不检查」与 denylist 的精确／`<dir>/**`／`**` 匹配（Orca 自己的 harvest 边界对 v4 也用同一匹配，`src/control/harvestBound.ts`），改这两点前先同步 Orca。**Orca 依赖本仓的新契约**：collect `failureCause.cause` 的 `narration-only`／`execution-not-json`／`execution-shape`／`cleanup-failed`（Orca 按开放字符串读）、collect 可选 `sessionCleanup[]`（Orca strict 解析已接受，含 `command`／`userHome`）。登记未修：live ceiling 调低后不立即复查（见上）；`savedResultRecovery.ts` 松 `indexOf` 仍在。
+- **2026-11-20 近况（原位滚动，Orca 会话 `57896c64`；上一轮 `3ba26002`）**：本仓已推两轮——「去掉复制」P1（`work.attemptDelivery:"ref-v1"`，见「当前状态·最新·上上轮」）与 #397 转录热路径合批（见「当前状态·最新」）；Orca 本轮先 repin 到 P1，收尾再重钉到含 #397 的提交（`scripts/pin-ccloop.mjs`，独立 clone 装树）。**Orca 依赖本仓的新契约（本轮起）**：`features.attemptRef:"v1"` 与 collect 顶层 `attempt`（P2 只在宣告时走新路）；**#397 的边界**：`finish()` 后的 stdout／stderr chunk 不再落盘（与 events／transcript 一致）。此前（`4389b15f` / `347`、`349` 轮）的契约结论仍成立：collect `failureCause.cause` 的 `narration-only`／`execution-not-json`／`execution-shape`／`cleanup-failed`、collect 可选 `sessionCleanup[]`。登记未修：live ceiling 调低后不立即复查；`savedResultRecovery.ts` 松 `indexOf`；`#346` 仍不改本仓（改 allowlist／denylist 匹配前先同步 Orca）。
   - 只有带私有 `CODEX_HOME` 的 Codex loop phase 去掉了 `--ephemeral`；single-call 与 legacy 路径保持。`thread.started` 的 `thread_id` 精确绑定 `sessions/**/rollout-*-<thread_id>.jsonl`，每个完成的响应后读 `token_count` 累计值并触发原有软停；终局记账仍只认 stdout `turn.completed`。阶段结束及崩溃/worker-lost 进程回收后按本 run 的 `thread.json` 用已装 `codex delete --force <UUID>` 删除该线程，失败响亮报错；旧 `--ephemeral` archive 仍可验，新 argv 要求私有隔离。
   - collect 可选只读 `liveUsage`（`ccloop-live-usage-v1`，run/attempt/phase/callId/threadId/tokens/observedAt/revision）只在活跃调用有完整观测时出现，outcome 后消失，不写账本；descriptor 的 `usageObservation` 已是 `realtime`，`contextObservation` 仍 `unavailable`（累计响应用量不是下一请求的精确上下文）。
   - **保留边界（提交前必须知道）**：Codex 在 `thread.started` 写入证据前已落盘而 worker 崩溃时，无法按 UUID 安全清扫，不能按最新文件/目录时间删共享 home；SQLite 空闲页/WAL 的物理擦除未证。受支持的删除路径已由隔离 HOME＋假端点实测（并发与失败线程各自删除互不影响），证据在 Orca 会话 scratch（会话结束即失）。
