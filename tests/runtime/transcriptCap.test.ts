@@ -76,14 +76,20 @@ describe("per-row transcript observation", () => {
       expect(await readFile(path)).toEqual(raw);
     } finally { if (child.exitCode === null) child.kill("SIGKILL"); }
   });
+  // Ruling: human approval 2026-11-19 (this session, verbatim 「这次批准改写所有必要的判据。」; tester issue #397) --
+  // a line, its newline and its marker are now one buffer, so a write error can no longer fall between them. The
+  // criterion cuts that combined buffer at the marker's first byte instead; its intent is unchanged: the raw source
+  // line survives and recording stops for good, so later chunks and close add nothing.
   it("keeps raw source intact and stops after an incomplete observation marker", async () => {
     const f = await codexFixture(); roots.push(f.dir);
     const path = join(f.dir, "marker-failure.jsonl");
     await writeFile(path, "", { mode: 0o600 });
     const write = CappedLineFile.prototype.write;
+    const markerAt = (chunk: Buffer) => chunk.indexOf('{"type":"ccloop.line-observed"');
     const spy = vi.spyOn(CappedLineFile.prototype, "write").mockImplementation(function (this: CappedLineFile, chunk: Buffer) {
-      if (chunk.includes(Buffer.from('"type":"ccloop.line-observed"'))) {
-        write.call(this, chunk.subarray(0, 14));
+      const at = markerAt(chunk);
+      if (at >= 0) {
+        write.call(this, chunk.subarray(0, at));
         throw new Error("ENOSPC: observation marker interrupted");
       }
       return write.call(this, chunk);
@@ -93,8 +99,7 @@ describe("per-row transcript observation", () => {
       const raw = Buffer.from('{"type":"first"}\n');
       expect(() => file.write(raw)).toThrow("ENOSPC: observation marker interrupted");
       const interrupted = await readFile(path);
-      expect(interrupted.subarray(0, raw.length)).toEqual(raw);
-      expect(interrupted.subarray(raw.length).toString()).toBe('{"type":"ccloop.line-observed"'.slice(0, 14));
+      expect(interrupted).toEqual(raw);
       file.write(Buffer.from('{"type":"second"}\n'));
       file.close();
       expect(await readFile(path)).toEqual(interrupted);

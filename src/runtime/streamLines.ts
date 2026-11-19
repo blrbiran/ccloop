@@ -128,16 +128,32 @@ export class CappedLineFile {
   }
 }
 
-/** Append receipt metadata after complete object rows; provider bytes are written unchanged before the metadata. */
+const NEWLINE = Buffer.from("\n");
+const NO_MARKER = Buffer.alloc(0);
+/** Bytes of complete lines held before they go to the file in one write; write() also flushes on return. */
+const FLUSH_BYTES = 256 * 1024;
+
+/**
+ * Append receipt metadata after complete object rows; provider bytes are written unchanged before the metadata.
+ * Orca tester #397: complete lines (body, "\n", marker) are queued and handed to the file in one write per incoming
+ * chunk, instead of the three writeSync calls per line that cost 968-1083 ms for 33 MB (a buffered write costs 23-32 ms).
+ * write() flushes before returning, so a SIGKILLed writer still loses nothing it accepted.
+ */
 export class ObservedTranscriptFile {
   private readonly file: CappedLineFile;
   private parts: Buffer[] = [];
   private pending = 0;
   private oversized = false;
   private failed = false;
+  /** Bytes not yet handed to `file`: complete lines, and the unfinished line this call received. */
+  private out: Buffer[] = [];
+  private outBytes = 0;
+  /** Offset in the file where the line being observed began. */
+  private lineStart: number;
 
   constructor(path: string, private readonly cap = TRANSCRIPT_LIMIT) {
     this.file = new CappedLineFile(path, cap, transcriptMarker);
+    this.lineStart = this.file.sizeBytes;
   }
 
   get truncatedAt(): number | null { return this.file.truncatedAt; }
@@ -147,47 +163,81 @@ export class ObservedTranscriptFile {
     const receivedAt = Date.now();
     try {
       let start = 0;
+      /** First byte of the pending line that this call has not queued yet (earlier calls queued theirs and flushed). */
+      let lineStartInChunk = 0;
       for (;;) {
         const newline = chunk.indexOf(10, start);
         if (newline < 0) break;
         this.add(chunk.subarray(start, newline));
-        this.file.write(Buffer.from("\n"));
-        if (!this.oversized && this.file.truncatedAt === null) this.emit(receivedAt, true);
+        if (this.oversized) {
+          // A line over MAX_LINE_BYTES is never kept whole: its bytes go straight out, then the newline.
+          this.queue(chunk.subarray(lineStartInChunk, newline));
+          this.queue(NEWLINE);
+        } else {
+          // Queued as pieces; flush() concatenates them into the one write for this chunk.
+          this.queue(chunk.subarray(lineStartInChunk, newline));
+          this.queue(NEWLINE);
+          this.queue(this.marker(this.lineStart, receivedAt));
+        }
         this.parts = []; this.pending = 0; this.oversized = false;
-        start = newline + 1;
+        start = newline + 1; lineStartInChunk = start;
+        this.lineStart = this.size;
+        this.flushIfFull();
+        if (this.file.truncatedAt !== null) { this.reset(); return; }
       }
       if (start < chunk.length) this.add(chunk.subarray(start));
+      if (chunk.length > lineStartInChunk) this.queue(chunk.subarray(lineStartInChunk));
+      // Everything write() accepted is on disk before it returns.
+      this.flush();
     } catch (error) { this.failed = true; throw error; }
   }
 
   close(): void {
     try {
-      if (!this.failed && this.file.truncatedAt === null && !this.oversized && this.pending > 0) this.emit(Date.now(), false);
+      if (!this.failed && this.file.truncatedAt === null && !this.oversized && this.pending > 0) {
+        const marker = this.marker(this.lineStart, Date.now());
+        // A final line without a newline is already durable. Optional metadata must not evict it at the cap.
+        if (marker.length > 0 && this.size + 1 + marker.length <= this.cap) this.queue(Buffer.concat([NEWLINE, marker]));
+      }
+      if (!this.failed) this.flush();
     } finally { this.file.close(); }
   }
 
-  private add(bytes: Buffer): void {
+  /** The file position the queued bytes will occupy. */
+  private get size(): number { return this.file.sizeBytes + this.outBytes; }
+
+  private queue(bytes: Buffer): void {
     if (bytes.length === 0) return;
+    this.out.push(bytes);
+    this.outBytes += bytes.length;
+  }
+
+  private flushIfFull(): void { if (this.outBytes >= FLUSH_BYTES) this.flush(); }
+
+  private flush(): void {
+    if (this.outBytes === 0) return;
+    const bytes = this.out.length === 1 ? this.out[0]! : Buffer.concat(this.out, this.outBytes);
+    this.out = []; this.outBytes = 0;
     this.file.write(bytes);
-    if (this.oversized) return;
+  }
+
+  private reset(): void { this.parts = []; this.pending = 0; this.oversized = false; this.out = []; this.outBytes = 0; }
+
+  private add(bytes: Buffer): void {
+    if (bytes.length === 0 || this.oversized) return;
     this.parts.push(bytes);
     this.pending += bytes.length;
     if (this.pending > MAX_LINE_BYTES) { this.oversized = true; this.parts = []; }
   }
 
-  private emit(receivedAt: number, terminated: boolean): void {
+  /** The observation marker for a complete line, or nothing when the line is not a JSON object (kept as received). */
+  private marker(atBytes: number, receivedAt: number): Buffer {
     const bytes = this.parts.length === 1 ? this.parts[0]! : Buffer.concat(this.parts, this.pending);
     let row: unknown;
     try { row = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
-    catch { return; /* Preserve invalid input as received. */ }
-    if (row !== null && typeof row === "object" && !Array.isArray(row)) {
-      const atBytes = this.file.sizeBytes - this.pending - (terminated ? 1 : 0);
-      const marker = Buffer.from(`${JSON.stringify({ type: "ccloop.line-observed", atBytes, ccloopObservedAt: receivedAt })}\n`, "utf8");
-      // A final line without a newline is already durable. Optional metadata must not evict it at the cap.
-      if (!terminated && this.file.sizeBytes + 1 + marker.length > this.cap) return;
-      if (!terminated) this.file.write(Buffer.from("\n"));
-      this.file.write(marker);
-    }
+    catch { return NO_MARKER; /* Preserve invalid input as received. */ }
+    if (row === null || typeof row !== "object" || Array.isArray(row)) return NO_MARKER;
+    return Buffer.from(`${JSON.stringify({ type: "ccloop.line-observed", atBytes, ccloopObservedAt: receivedAt })}\n`, "utf8");
   }
 }
 

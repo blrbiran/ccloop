@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { closeSync, openSync, writeSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -184,6 +184,9 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
   if (config.installation.configDir !== null) env.PI_CODING_AGENT_DIR = config.installation.configDir;
   let stdoutBytes = 0;
   let stderrBytes = 0;
+  // Orca tester #397: stderr keeps one descriptor for the call instead of open+write+close per chunk. The file was
+  // pre-created above, so its mode is unchanged and order is the order the chunks arrive in.
+  let stderrFd: number | undefined;
   // Live transcript (spec §10.2.1-§10.2.3, §11.1): stdout goes to the 16 MiB evidence file and the 128 MiB transcript, each
   // cut at a line end, and through the line folds; only the 1 GiB hard limit stops the agent for its output.
   // Review I1: both records are opened before anything is spawned; a record that cannot be opened is io-error with no child.
@@ -252,10 +255,14 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       if (kept !== null) warnings.push(causeDetail(kept[0]));
     });
     child.stderr.on("data", (chunk: Buffer) => {
+      if (closed) return;
       if (stderrBytes < OUTPUT_LIMIT) stderrLines.write(chunk);
       const kept = chunk.subarray(0, Math.max(0, OUTPUT_LIMIT - stderrBytes));
       stderrBytes += chunk.length;
-      try { appendFileSync(stderrPath, kept); } catch { stop("io-error"); }
+      try {
+        stderrFd ??= openSync(stderrPath, "a");
+        for (let offset = 0; offset < kept.length;) offset += writeSync(stderrFd, kept, offset, kept.length - offset);
+      } catch { stop("io-error"); }
       watch.activity();
       if (stderrBytes > OUTPUT_LIMIT) stop("output-limit");
     });
@@ -290,6 +297,8 @@ export async function runOmpProcess(config: MaterializedAgentConfigV1, input: Om
       input.abortSignal?.removeEventListener("abort", abort);
       splitter.end(); stderrLines.end();
       events.close(); try { transcript.close(); } catch (error) { transcriptError ??= String(error); }
+      // Every accepted chunk is already on disk; a failing close cannot change that.
+      try { if (stderrFd !== undefined) closeSync(stderrFd); } catch { /* nothing left to record */ } finally { stderrFd = undefined; }
       stdoutTruncated ||= events.truncatedAt !== null;
       transcriptTruncatedAt = transcript.truncatedAt;
       resolve();

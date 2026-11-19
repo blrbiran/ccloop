@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { closeSync, openSync, writeSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -296,6 +296,9 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       });
       const out = new StringDecoder("utf8"), err = new StringDecoder("utf8");
       let outBytes = 0, errBytes = 0, done = false, exited = false;
+      // Orca tester #397: one descriptor per file for the call instead of open+write+close per chunk. Both files were
+      // pre-created above, so their modes are unchanged and chunks land in the order they arrive.
+      let stdoutFd: number | undefined, stderrFd: number | undefined;
       let killTimer: NodeJS.Timeout | undefined, drainTimer: NodeJS.Timeout | undefined;
       const kill = (signal: NodeJS.Signals) => {
         if (child.pid === undefined) return;
@@ -309,6 +312,11 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
         clearTimeout(timer); clearTimeout(killTimer); clearTimeout(drainTimer); watch.stop();
         call.abortSignal?.removeEventListener("abort", abort);
         result.stdout += out.end(); stderr += err.end();
+        // Every accepted chunk is already on disk; a failing close cannot change that.
+        try {
+          if (stdoutFd !== undefined) closeSync(stdoutFd);
+          if (stderrFd !== undefined) closeSync(stderrFd);
+        } catch { /* nothing left to record */ } finally { stdoutFd = undefined; stderrFd = undefined; }
         child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
         (child.stdio[3] as { destroy?: () => void } | null)?.destroy?.();
         (child.stdio[4] as { destroy?: () => void } | null)?.destroy?.();
@@ -341,14 +349,22 @@ export class ClaudeAgentAdapter implements RuntimeAdapter {
       child.on("error", () => { result.reason = "spawn-error"; finish(); });
       child.stdin.on("error", (e) => { ioError = String(e); if (!exited) stop("io-error"); });
       child.stdout.on("data", (b: Buffer) => {
+        if (done) return;
         const kept = b.subarray(0, Math.max(0, LIMIT - outBytes)); outBytes += b.length;
-        try { appendFileSync(join(evidenceDir, "stdout.json"), kept); } catch (e) { ioError = String(e); stop("io-error"); }
+        try {
+          stdoutFd ??= openSync(join(evidenceDir, "stdout.json"), "a");
+          for (let offset = 0; offset < kept.length;) offset += writeSync(stdoutFd, kept, offset, kept.length - offset);
+        } catch (e) { ioError = String(e); stop("io-error"); }
         result.stdout += out.write(kept);
         if (outBytes > LIMIT) { stdoutTruncated = true; stop("output-limit"); }
       });
       child.stderr.on("data", (b: Buffer) => {
+        if (done) return;
         const kept = b.subarray(0, Math.max(0, LIMIT - errBytes)); errBytes += b.length;
-        try { appendFileSync(join(evidenceDir, "stderr.log"), kept); } catch (e) { ioError = String(e); stop("io-error"); }
+        try {
+          stderrFd ??= openSync(join(evidenceDir, "stderr.log"), "a");
+          for (let offset = 0; offset < kept.length;) offset += writeSync(stderrFd, kept, offset, kept.length - offset);
+        } catch (e) { ioError = String(e); stop("io-error"); }
         stderr += err.write(kept);
         if (errBytes > LIMIT) { stderrTruncated = true; stop("output-limit"); }
       });

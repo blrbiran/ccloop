@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { appendFileSync, constants } from "node:fs";
+import { closeSync, constants, openSync, writeSync } from "node:fs";
 import { mkdir, mkdtemp, open, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -152,6 +152,9 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     const child=spawn(config.command[0],args,{cwd:context.worktreePath,detached:true,stdio:["pipe","pipe","pipe"],env:request.spawn?.env??spawnEnv});
     const err=new StringDecoder("utf8");
     let outBytes=0,errBytes=0,done=false,exited=false;
+    // Orca tester #397: one descriptor for the call's stderr.log instead of open+write+close per chunk. The file was
+    // pre-created above, so its mode is unchanged and chunks land in the order they arrive.
+    let stderrFd:number|undefined;
     let killTimer:NodeJS.Timeout|undefined,drainTimer:NodeJS.Timeout|undefined;
     const kill=(signal:NodeJS.Signals)=>{if(child.pid!==undefined){try{process.kill(-child.pid,signal);}catch(e){if((e as NodeJS.ErrnoException).code!=="ESRCH"){ioError=String(e);result.reason="io-error";}}}};
     const finish=()=>{
@@ -161,6 +164,8 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       context.abortSignal?.removeEventListener("abort",abort);
       splitter.end();stderr+=err.end();
       events.close();try{transcript.close();}catch(e){transcriptError??=String(e);}
+      // Every accepted chunk is already on disk; a failing close cannot change that.
+      try{if(stderrFd!==undefined)closeSync(stderrFd);}catch{/* nothing left to record */}finally{stderrFd=undefined;}
       stdoutTruncated||=events.truncatedAt!==null;transcriptTruncatedAt=transcript.truncatedAt;
       child.stdin.destroy();child.stdout.destroy();child.stderr.destroy();
       // close resolves the phase only after pipes and the child have settled.
@@ -194,8 +199,12 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       splitter.write(b);
     });
     child.stderr.on("data",(b:Buffer)=>{
+      if(done)return;
       const kept=b.subarray(0,Math.max(0,LIMIT-errBytes));errBytes+=b.length;
-      try{appendFileSync(join(evidenceDir,"stderr.log"),kept);}catch(e){ioError=String(e);stop("io-error");}
+      try{
+        stderrFd??=openSync(join(evidenceDir,"stderr.log"),"a");
+        for(let offset=0;offset<kept.length;)offset+=writeSync(stderrFd,kept,offset,kept.length-offset);
+      }catch(e){ioError=String(e);stop("io-error");}
       watch.activity();
       stderr+=err.write(kept);if(errBytes>LIMIT){stderrTruncated=true;stop("output-limit");}
     });
