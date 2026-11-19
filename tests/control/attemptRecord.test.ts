@@ -5,7 +5,7 @@
 // failure must be named in the record, never thrown, because the worker is releasing its lease; (c) leftovers are removed
 // only when their content is provably pinned by a ref.
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -157,5 +157,82 @@ describe("the other ends of an attempt", () => {
     const events = (await readFile(join(f.runDir, "events.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: "workspace_cleanup_failed", detail: expect.stringContaining("attempt-2 retained") });
+  });
+});
+
+// Review minors. recordAttemptEnd runs in the worker's lease-release hook, so nothing in it may throw; both attempt refs move
+// together or not at all; a current attempt that never had a worktree is not a recording failure; and while skills cleanup is
+// pending nothing is published, the extra repositories included.
+async function withExtra(f: Awaited<ReturnType<typeof fixture>>) {
+  const lib = join(f.repo, "..", "lib");
+  await mkdir(join(lib, "lib"), { recursive: true });
+  await git(lib, "init", "-q");
+  await writeFile(join(lib, "lib", "lib.txt"), "lib\n");
+  await git(lib, "add", "-A");
+  await git(lib, "commit", "-qm", "lib base");
+  const context = (f.envelope.work.contract as unknown as { context: Record<string, unknown> }).context;
+  context.repoKey = "app";
+  context.additionalRepos = [{ key: "lib", repoPath: lib, targetPaths: ["lib/**"] }];
+  const tree = join(f.runDir, "dirs", "attempt-1", "lib");
+  await mkdir(join(f.runDir, "dirs", "attempt-1"), { recursive: true });
+  await git(lib, "worktree", "add", "-q", "--detach", tree);
+  await writeFile(join(tree, "lib", "edit.txt"), "edited\n");
+  return { lib, tree };
+}
+const eventTypes = async (runDir: string) => (await readFile(join(runDir, "events.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line).type);
+
+describe("review minors", () => {
+  it("both attempt refs are set in one transaction: a lock on the second leaves the first unset", async () => {
+    const f = await fixture();
+    const worktree = await liveWorktree(f);
+    await mkdir(join(f.repo, ".git", "refs", "ccloop", "run-mine", "attempts"), { recursive: true });
+    await writeFile(join(f.repo, ".git", "refs", "ccloop", "run-mine", "attempts", "1.lock"), "");
+    expect(await recordAttemptEnd(f.envelope, f.runDir, 1)).toMatchObject({ attempt: 1, sha: null, reason: "record-failed" });
+    await expect(git(f.repo, "rev-parse", "-q", "--verify", "refs/ccloop/run/attempts/1")).rejects.toBeDefined();
+    expect(existsSync(worktree)).toBe(true);
+  });
+
+  it("never throws: an unwritable record, an unreadable worktrees directory, an unreadable commits.json", async () => {
+    const unwritable = await fixture();
+    await liveWorktree(unwritable);
+    await mkdir(join(unwritable.runDir, "attempt-record.json"));
+    expect(await recordAttemptEnd(unwritable.envelope, unwritable.runDir, 1)).toMatchObject({ attempt: 1, sha: null, reason: "record-failed" });
+
+    const unreadable = await fixture();
+    const sha = await git(unreadable.repo, "commit-tree", "-p", unreadable.base, "-m", "attempt 1", `${unreadable.base}^{tree}`);
+    await git(unreadable.repo, "update-ref", "refs/ccloop/run-mine/attempts/1", sha);
+    // Searchable (lstat of attempt-1 answers ENOENT) but not listable (readdir answers EACCES).
+    await mkdir(join(unreadable.runDir, "worktrees"), { mode: 0o300 });
+    try {
+      expect(await recordAttemptEnd(unreadable.envelope, unreadable.runDir, 1)).toMatchObject({ attempt: 1, sha, capture: "published" });
+    } finally { await chmod(join(unreadable.runDir, "worktrees"), 0o700); }
+    expect(await eventTypes(unreadable.runDir)).toEqual(["workspace_cleanup_failed"]);
+
+    const extras = await fixture();
+    await liveWorktree(extras);
+    await withExtra(extras);
+    await mkdir(join(extras.runDir, "attempts", "1", "commits.json"), { recursive: true });
+    const record = await recordAttemptEnd(extras.envelope, extras.runDir, 1);
+    expect(record).toMatchObject({ attempt: 1, capture: "live", worktree: "removed" });
+    expect(await eventTypes(extras.runDir)).toEqual(["attempt_record_failed"]);
+    expect(await readAttemptRecord(extras.sourceDir)).toEqual(record);
+  });
+
+  it("a current attempt with no worktree, no ref and no failed publish is not-started; with a failed publish it is record-failed", async () => {
+    const f = await fixture();
+    expect(await recordAttemptEnd(f.envelope, f.runDir, 1)).toEqual({ attempt: 1, sha: null, reason: "not-started" });
+    await writeFile(join(f.runDir, "events.jsonl"), `${JSON.stringify({ type: "attempt_commit_publish_failed", at: "2026-11-19T00:00:00Z", detail: "x" })}\n`);
+    expect(await recordAttemptEnd(f.envelope, f.runDir, 1)).toMatchObject({ attempt: 1, sha: null, reason: "record-failed" });
+  });
+
+  it("while skills cleanup is pending an extra repository's worktree is neither recorded nor removed", async () => {
+    const f = await fixture();
+    const worktree = await liveWorktree(f);
+    await writeFile(`${worktree}.codex-skills-pending`, "snapshot");
+    const { lib, tree } = await withExtra(f);
+    expect(await recordAttemptEnd(f.envelope, f.runDir, 1)).toEqual({ attempt: 1, sha: null, reason: "skills-cleanup-pending" });
+    expect(existsSync(tree)).toBe(true);
+    expect(existsSync(join(f.runDir, "attempts", "1", "commits.json"))).toBe(false);
+    await expect(git(lib, "rev-parse", "-q", "--verify", "refs/ccloop/run/attempts/1")).rejects.toBeDefined();
   });
 });

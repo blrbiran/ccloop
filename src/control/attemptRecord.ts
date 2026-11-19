@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, copyFile, lstat, readdir, rm } from "node:fs/promises";
+import { chmod, copyFile, lstat, readFile, readdir, rm } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
@@ -35,6 +35,14 @@ const DETAIL_MAX = 512;
 async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
   return (await exec("git", args, { cwd, maxBuffer: 64 * 1024 * 1024, ...(env === undefined ? {} : { env }) })).stdout.trim();
 }
+/** `git update-ref --stdin`: every ref is set in one transaction, so a failure leaves none of them moved (review minor). */
+function updateRefs(cwd: string, refs: string[], sha: string): Promise<void> {
+  return new Promise((done, failed) => {
+    const child = execFile("git", ["update-ref", "--stdin"], { cwd }, (error) => (error === null ? done() : failed(error)));
+    child.stdin?.on("error", () => undefined);
+    child.stdin?.end(refs.map((ref) => `update ${ref} ${sha}\n`).join(""));
+  });
+}
 async function revParseOptional(cwd: string, name: string): Promise<string | null> {
   try { return await git(cwd, ["rev-parse", "-q", "--verify", `${name}^{commit}`]); } catch { return null; }
 }
@@ -63,7 +71,7 @@ export async function recordLiveWorktree(worktree: string, runDir: string, refs:
     await git(worktree, ["add", "-A"], env);
     const tree = await git(worktree, ["write-tree"], env);
     const sha = await git(worktree, [...ATTEMPT_IDENTITY, "commit-tree", tree, "-p", base, ...attemptCommitMessageArgs(messageRef, await runGoal(runDir))]);
-    for (const ref of refs) await git(worktree, ["update-ref", ref, sha]);
+    await updateRefs(worktree, refs, sha);
     for (const ref of refs) if (await git(worktree, ["rev-parse", ref]) !== sha) throw new Error(`attempt-ref-mismatch: ${ref}`);
     if (await git(worktree, ["rev-parse", `${sha}^{tree}`]) !== tree) throw new Error("attempt-tree-mismatch");
     return { sha, base, tree };
@@ -101,20 +109,45 @@ export async function readAttemptRecord(sourceDir: string): Promise<AttemptRecor
 
 /**
  * Spec §5.2.2: records the current attempt's end, removes its worktree (and every older published leftover whose ref equals
- * its HEAD), and records each extra repository's worktree into run/attempts/<n>/commits.json. Never throws for a recording
- * failure: that is the record `record-failed` (with an `attempt_record_failed` event) and the worktree stays. Idempotent: a
- * record already written for this attempt whose ref still holds its sha is kept, and only the removal is retried.
+ * its HEAD), and records each extra repository's worktree into run/attempts/<n>/commits.json. Never throws (it runs in the
+ * worker's lease-release hook; review minor): a recording failure is the record `record-failed` (with an
+ * `attempt_record_failed` event) and the worktree stays; a record that cannot even be written is still returned, and collect
+ * then reports `record-failed` (attempt-record-missing). Idempotent: a record already written for this attempt whose ref
+ * still holds its sha is kept, and only the removal is retried.
  */
 export async function recordAttemptEnd(envelope: LoopStartEnvelope, runDir: string, currentAttempt: number): Promise<AttemptRecordV1> {
+  const event = (type: string, detail: string) => appendEvent(runDir, { type, at: new Date().toISOString(), detail }).catch(() => undefined);
+  try {
+    return await recordAttemptEndOrThrow(envelope, runDir, currentAttempt, event);
+  } catch (error) {
+    await event("attempt_record_failed", `attempt-${currentAttempt}: ${detailOf(error)}`);
+    const record: AttemptRecordV1 = { attempt: Math.max(0, currentAttempt), sha: null, reason: "record-failed", detail: detailOf(error) };
+    return writeRecord(envelope.work.sourceDir, runDir, record).catch(() => record);
+  }
+}
+
+/** Review minor: a current attempt with no worktree, no ref and no failed publish never had anything to record. */
+async function publishFailed(runDir: string): Promise<boolean> {
+  let text: string;
+  try { text = await readFile(join(runDir, "events.jsonl"), "utf8"); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  return text.split("\n").some((line) => { try { return (JSON.parse(line) as { type?: unknown }).type === "attempt_commit_publish_failed"; } catch { return false; } });
+}
+
+async function recordAttemptEndOrThrow(envelope: LoopStartEnvelope, runDir: string, currentAttempt: number, event: (type: string, detail: string) => Promise<unknown>): Promise<AttemptRecordV1> {
   const sourceDir = envelope.work.sourceDir, repo = envelope.work.contract.context.repoPath, runId = envelope.claim.runId;
   if (currentAttempt < 1) return writeRecord(sourceDir, runDir, { attempt: currentAttempt, sha: null, reason: "not-started" });
   const worktree = join(runDir, "worktrees", `attempt-${currentAttempt}`);
   const ref = namespacedAttemptRefName(worktree, runId);
-  const event = (type: string, detail: string) => appendEvent(runDir, { type, at: new Date().toISOString(), detail }).catch(() => undefined);
   let record: AttemptRecordV1;
   if (await exists(codexSkillsPendingPath(worktree))) {
-    // Spec §5.2.2: nothing is published while skills cleanup is pending, as the base-only result repository did before.
+    // Spec §5.2.2: nothing is published while skills cleanup is pending, as the base-only result repository did before --
+    // the extra repositories' worktrees included (review minor): they are neither recorded nor removed.
     record = await writeRecord(sourceDir, runDir, { attempt: currentAttempt, sha: null, reason: "skills-cleanup-pending" });
+    await removeOlderPublished(repo, runDir, runId, currentAttempt, event).catch((error) => event("workspace_cleanup_failed", `attempt record: ${detailOf(error)}`));
+    return record;
   } else {
     let prior: AttemptRecordV1 | null = null;
     try { prior = await readAttemptRecord(sourceDir); } catch { prior = null; }
@@ -127,6 +160,7 @@ export async function recordAttemptEnd(envelope: LoopStartEnvelope, runDir: stri
         recorded = await recordWorktree(repo, worktree, runDir, [attemptRefName(worktree), ref], attemptRefName(worktree));
       } else {
         const sha = await revParseOptional(repo, ref);
+        if (sha === null && !(await publishFailed(runDir))) return writeRecord(sourceDir, runDir, { attempt: currentAttempt, sha: null, reason: "not-started" });
         if (sha === null) throw new Error(`attempt-ref-missing: ${ref}`);
         recorded = { sha, base: await git(repo, ["rev-parse", `${sha}^`]), tree: await git(repo, ["rev-parse", `${sha}^{tree}`]), head: sha, capture: "published" };
       }
@@ -134,7 +168,8 @@ export async function recordAttemptEnd(envelope: LoopStartEnvelope, runDir: stri
       record = await writeRecord(sourceDir, runDir, { attempt: currentAttempt, sha, base, tree, ref, head, capture, worktree: live ? "retained" : "removed" });
     } catch (error) {
       await event("attempt_record_failed", `attempt-${currentAttempt}: ${detailOf(error)}`);
-      return writeRecord(sourceDir, runDir, { attempt: currentAttempt, sha: null, reason: "record-failed", detail: detailOf(error) });
+      const failed: AttemptRecordV1 = { attempt: currentAttempt, sha: null, reason: "record-failed", detail: detailOf(error) };
+      return writeRecord(sourceDir, runDir, failed).catch(() => failed);
     }
     if (live) {
       try {
@@ -145,8 +180,9 @@ export async function recordAttemptEnd(envelope: LoopStartEnvelope, runDir: stri
       }
     }
   }
-  await removeOlderPublished(repo, runDir, runId, currentAttempt, event);
-  await recordExtras(envelope, runDir, currentAttempt, record, event);
+  // Review minor: past the record these are cleanup; a failure is an event, never a throw, and the record stands.
+  await removeOlderPublished(repo, runDir, runId, currentAttempt, event).catch((error) => event("workspace_cleanup_failed", `attempt record: ${detailOf(error)}`));
+  await recordExtras(envelope, runDir, currentAttempt, record, event).catch((error) => event("attempt_record_failed", `attempt-${currentAttempt}: extras: ${detailOf(error)}`));
   return record;
 }
 
