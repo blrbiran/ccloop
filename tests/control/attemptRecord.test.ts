@@ -197,6 +197,8 @@ describe("review minors", () => {
     await liveWorktree(unwritable);
     await mkdir(join(unwritable.runDir, "attempt-record.json"));
     expect(await recordAttemptEnd(unwritable.envelope, unwritable.runDir, 1)).toMatchObject({ attempt: 1, sha: null, reason: "record-failed" });
+    expect(await eventTypes(unwritable.runDir)).toEqual(["attempt_record_failed"]);
+    expect(await recordAttemptEnd(unwritable.envelope, unwritable.runDir, 0)).toMatchObject({ attempt: 0, sha: null, reason: "record-failed" });
 
     const unreadable = await fixture();
     const sha = await git(unreadable.repo, "commit-tree", "-p", unreadable.base, "-m", "attempt 1", `${unreadable.base}^{tree}`);
