@@ -19,8 +19,17 @@ afterEach(() => vi.unstubAllEnvs());
 const git = (repo: string, ...args: string[]) =>
   execFileSync("/usr/bin/git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
 
+const gitIn = (repo: string, input: string | Buffer, ...args: string[]) =>
+  execFileSync("/usr/bin/git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { input, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 }).toString().trim();
+
+/**
+ * Review I2-I4: `attempt` replaces the recorded attempt with another commit made in the producer (it returns the commit and
+ * the snapshot's head); `tamper` edits the snapshot before it is archived.
+ */
+type V2Options = { attempt?: (producer: string, base: string, recorded: string) => { attempt: string; head: string }; tamper?: (snapshot: Record<string, unknown>) => void };
+
 /** The genuine v1 fixture, re-archived as Orca P2 archives it: the attempt pinned and bundled as a range over the base. */
-async function v2Fixture(bundledCommit: "attempt" | "other" = "attempt") {
+async function v2Fixture(bundledCommit: "attempt" | "other" = "attempt", options: V2Options = {}) {
   const f = await savedRecoveryFixture();
   const runId = f.source.claim.runId, ref = `refs/orca/runs/${runId}`, base = f.source.work.base;
   const v1 = JSON.parse(f.bytes.get(f.archive.snapshot.artifactId)!.toString());
@@ -28,13 +37,16 @@ async function v2Fixture(bundledCommit: "attempt" | "other" = "attempt") {
   await writeFile(v1Bundle, f.bytes.get(v1.bundle.artifactId)!);
   git(f.root, "init", "-q", "--bare", producer);
   git(producer, "fetch", "-q", v1Bundle, `refs/ccloop/${runId}/attempts/1:${ref}`);
+  const custom = options.attempt?.(producer, base, git(producer, "rev-parse", ref));
+  if (custom !== undefined) git(producer, "update-ref", ref, custom.attempt);
   const attempt = git(producer, "rev-parse", ref), tree = git(producer, "rev-parse", `${attempt}^{tree}`);
   if (bundledCommit === "other") git(producer, "update-ref", ref, git(producer, "commit-tree", tree, "-p", base, "-m", "not the recorded attempt"));
   git(producer, "bundle", "create", range, `${base}..${ref}`);
   // The recovery run's repoPath holds the base (it is a handle on the target) but not the attempt.
   git(producer, "update-ref", "refs/heads/base", base);
   git(f.repo, "fetch", "-q", producer, "refs/heads/base:refs/heads/source-base");
-  const snapshot = { version: 2, objectFormat: "sha1", base, attempt, tree, head: attempt, ref, source: "ccloop-published", bundle: await f.put(await readFile(range)), missing: [] };
+  const snapshot: Record<string, unknown> = { version: 2, objectFormat: "sha1", base, attempt, tree, head: custom?.head ?? attempt, ref, source: "ccloop-published", bundle: await f.put(await readFile(range)), missing: [] };
+  options.tamper?.(snapshot);
   // Only the v2 closure is packaged: the v1 snapshot and its self-contained bundle are not.
   const dropped = new Set([f.manifest.source.artifactId, f.archive.snapshot.artifactId, v1.bundle.artifactId]);
   for (const entry of f.manifest.artifacts.filter((e) => dropped.has(e.ref.artifactId))) await rm(join(f.input.savedResultRecovery!.packagePath, entry.file));
@@ -110,3 +122,58 @@ it("source-only eligibility verifies a v2 candidate in the source's target repos
     expect(repositoryState(target)).toEqual(before);
   } finally { await rm(top, { recursive: true, force: true }); await rm(f.root, { recursive: true, force: true }); }
 }, 30000);
+
+// Review I2: one refusal per v2 recovery check that nothing pinned. Each is a recovery of a snapshot that is well-formed but
+// does not describe an attempt on the source's base, so Orca must not verify it as that source's result.
+async function eligibility(f: Awaited<ReturnType<typeof v2Fixture>>) {
+  try {
+    const result = await f.rpc("saved-result-eligibility", { input: f.input });
+    expect(result.code, result.stderr).toBe(0);
+    return JSON.parse(result.stdout);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+}
+
+it("refuses a v2 snapshot whose base is not the source envelope's base", async () => {
+  const f = await v2Fixture("attempt", { tamper: (s) => { s.base = "e".repeat(40); } });
+  expect(await eligibility(f)).toEqual({ status: "unavailable", reason: "saved-result-original-base-unavailable" });
+}, 30000);
+
+it("refuses a v2 snapshot whose head is neither the attempt nor the base", async () => {
+  const f = await v2Fixture("attempt", { tamper: (s) => { s.head = "e".repeat(40); } });
+  expect(await eligibility(f)).toEqual({ status: "unavailable", reason: "saved-result-snapshot-head-mismatch" });
+}, 30000);
+
+// Review I3 (controller ruling, reversible: v2 keeps v1's strict rule). The agent committed inside its worktree, so the
+// recorded attempt's parent is the agent's commit, not the run's base; the live capture's head is that commit
+// (report.attempt.head), the published one's the attempt. Recovery refuses both by name.
+const agentCommitted = (head: "agent" | "attempt") => (producer: string, base: string, recorded: string) => {
+  const agent = git(producer, "commit-tree", `${recorded}^{tree}`, "-p", base, "-m", "the agent's own commit");
+  const attempt = git(producer, "commit-tree", `${recorded}^{tree}`, "-p", agent, "-m", "attempt");
+  return { attempt, head: head === "agent" ? agent : attempt };
+};
+it("refuses an agent-commit attempt (live or published capture) as saved-result-attempt-not-on-base", async () => {
+  for (const head of ["agent", "attempt"] as const) {
+    const f = await v2Fixture("attempt", { attempt: agentCommitted(head) });
+    expect(await eligibility(f)).toEqual({ status: "unavailable", reason: "saved-result-attempt-not-on-base" });
+  }
+}, 60000);
+
+// Review I4: the v1 caps (10,000 entries, a packaged file's size) refuse an attempt before any blob is read; the trees are
+// synthetic (one empty blob 10,001 times; one blob of zeros over the limit), so they cost nothing to bundle.
+it("refuses a v2 attempt over 10,000 files or with a blob over the package's per-file limit", async () => {
+  const many = await v2Fixture("attempt", { attempt: (producer, base) => {
+    const empty = gitIn(producer, "", "hash-object", "-w", "--stdin");
+    const inner = gitIn(producer, Array.from({ length: 10001 }, (_, i) => `100644 blob ${empty}\tf${i}\n`).join(""), "mktree");
+    const top = gitIn(producer, `040000 tree ${inner}\td\n`, "mktree");
+    const attempt = git(producer, "commit-tree", top, "-p", base, "-m", "many");
+    return { attempt, head: attempt };
+  } });
+  expect(await eligibility(many)).toEqual({ status: "unavailable", reason: "saved-result-snapshot-too-large" });
+  const big = await v2Fixture("attempt", { attempt: (producer, base) => {
+    const blob = gitIn(producer, Buffer.alloc(12 * 1024 * 1024 - 1024 + 1), "hash-object", "-w", "--stdin");
+    const top = gitIn(producer, `100644 blob ${blob}\tbig.bin\n`, "mktree");
+    const attempt = git(producer, "commit-tree", top, "-p", base, "-m", "big");
+    return { attempt, head: attempt };
+  } });
+  expect(await eligibility(big)).toEqual({ status: "unavailable", reason: "saved-result-snapshot-too-large" });
+}, 120000);

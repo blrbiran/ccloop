@@ -109,9 +109,10 @@ const treeEntry=z.union([
  z.object({path,kind:z.literal("file"),mode:safe.max(0o777),ref:artifactRefSchema}).strict(),
  z.object({path,kind:z.literal("directory"),mode:safe.max(0o777)}).strict(),
 ]);
+const SNAPSHOT_ENTRIES_MAX=10000;
 const legacySnapshotSchema=z.object({version:z.literal(1),head:oid,bundle:artifactRefSchema,
- index:z.array(z.object({path,mode:z.enum(["100644","100755"]),oid,stage:z.literal(0),ref:artifactRefSchema}).strict()).max(10000),
- tree:z.array(treeEntry).max(10000),deleted:z.array(path).length(0),missing:z.array(z.string()).length(0)}).strict();
+ index:z.array(z.object({path,mode:z.enum(["100644","100755"]),oid,stage:z.literal(0),ref:artifactRefSchema}).strict()).max(SNAPSHOT_ENTRIES_MAX),
+ tree:z.array(treeEntry).max(SNAPSHOT_ENTRIES_MAX),deleted:z.array(path).length(0),missing:z.array(z.string()).length(0)}).strict();
 const archiveSchema=z.object({version:z.literal(1),runId:idSchema,sourceIdentity:z.object({dev:z.string(),ino:z.string(),birthtimeNs:z.string()}).strict(),
  logs:z.array(treeEntry).max(20000),snapshot:artifactRefSchema,missing:z.array(z.string()).length(0)}).strict();
 type LegacySnapshot=z.infer<typeof legacySnapshotSchema>;
@@ -128,11 +129,13 @@ async function assertPrivateAuthorityDirectory(root:string):Promise<void>{
  if(await realpath(root)!==root||!metadata.isDirectory()||metadata.isSymbolicLink()||(metadata.mode&0o7777)!==0o700
   ||typeof process.getuid!=="function"||metadata.uid!==process.getuid())fail("saved-result-package-path-invalid");
 }
+/** The largest file a saved-result package may hold (privateBytes); a v2 attempt blob is held to it too (review I4). */
+const PACKAGE_FILE_MAX=12*1024*1024-1024;
 async function privateBytes(root:string,file:string):Promise<Buffer>{
  await assertPrivateAuthorityDirectory(root);
  const target=join(root,file);if(await realpath(target)!==target)fail("saved-result-package-path-invalid");
  const before=await lstat(target,{bigint:true});
- if(!before.isFile()||before.nlink!==1n||(before.mode&0o7777n)!==0o600n||before.size>BigInt(12*1024*1024-1024))fail("saved-result-package-file-invalid");
+ if(!before.isFile()||before.nlink!==1n||(before.mode&0o7777n)!==0o600n||before.size>BigInt(PACKAGE_FILE_MAX))fail("saved-result-package-file-invalid");
  const handle=await open(target,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);let bytes:Buffer;
  try{bytes=await handle.readFile();}finally{await handle.close();}
  const after=await lstat(target,{bigint:true});
@@ -232,7 +235,6 @@ async function validateSnapshotV2(value:unknown,get:(ref:ArtifactRefV1)=>Buffer,
  if(v2.missing.length)fail("saved-result-snapshot-partial");
  if(v2.bundle===null||v2.ref!==`refs/orca/runs/${runId}`)fail("saved-result-legacy-ref-missing");
  if(v2.base!==base)fail("saved-result-original-base-unavailable");
- if(v2.head!==v2.attempt&&v2.head!==v2.base)fail("saved-result-snapshot-head-mismatch");
  const root=await mkdtemp(join(tmpdir(),"saved-result-v2-"));await chmod(root,0o700);
  try{
   let objects:string;
@@ -246,17 +248,26 @@ async function validateSnapshotV2(value:unknown,get:(ref:ArtifactRefV1)=>Buffer,
   const heads=(await savedGit(root,"bundle","list-heads",bundle)).toString().trim().split("\n");
   if(heads.length!==1||heads[0]!==`${v2.attempt} ${v2.ref}`)fail("saved-result-snapshot-head-mismatch");
   await savedGit(root,"-c","gc.auto=0","-c","maintenance.auto=false","fetch","-q","--no-tags",bundle,`${v2.ref}:refs/saved-result/attempt`);
+  // Review I3 (controller ruling, reversible): as v1, the attempt must sit directly on the envelope's base. A run whose agent
+  // committed inside its worktree records an attempt whose parent is that commit (attempt.base is attempt^, HEAD at capture,
+  // not the run's start base): a continuation reads it, a recovery refuses it by this name. Checked before the head, so such
+  // a capture (head = the agent's commit) is named for what it is.
   const parent=(await savedGit(root,"rev-list","--parents","-n","1",v2.attempt)).toString().trim().split(" ");
-  if(parent.length!==2||parent[1]!==base)fail("saved-result-original-base-unavailable");
+  if(parent.length!==2||parent[1]!==base)fail("saved-result-attempt-not-on-base");
+  if(v2.head!==v2.attempt&&v2.head!==v2.base)fail("saved-result-snapshot-head-mismatch");
   if((await savedGit(root,"rev-parse",`${v2.attempt}^{tree}`)).toString().trim()!==v2.tree)fail("saved-result-snapshot-tree-mismatch");
-  const files=(await savedGit(root,"ls-tree","-r","-z",v2.attempt)).toString().split("\0").filter(Boolean).map(entry=>{
-   const match=/^(100644|100755) blob ([a-f0-9]{40}|[a-f0-9]{64})\t/.exec(entry),path=match===null?"":entry.slice(match[0].length);
+  // Review I4: the v1 caps (10,000 index and tree entries; a packaged file's size) are applied from `ls-tree -l` before a
+  // single blob is read, so an oversized attempt is refused without loading it.
+  const files=(await savedGit(root,"ls-tree","-r","-l","-z",v2.attempt)).toString().split("\0").filter(Boolean).map(entry=>{
+   const match=/^(100644|100755) blob ([a-f0-9]{40}|[a-f0-9]{64}) +(\d+)\t/.exec(entry),path=match===null?"":entry.slice(match[0].length);
    if(!match||!safeTaskResultPath(path))fail("saved-result-snapshot-index-mismatch");
+   if(Number(match[3])>PACKAGE_FILE_MAX)fail("saved-result-snapshot-too-large");
    return {path,mode:match[1] as "100644"|"100755",oid:match[2]!};
   });
+  const directories=new Set<string>();for(const file of files){let p=dirname(file.path);while(p!=="."){directories.add(p);p=dirname(p);}}
+  if(files.length>SNAPSHOT_ENTRIES_MAX||files.length+directories.size>SNAPSHOT_ENTRIES_MAX)fail("saved-result-snapshot-too-large");
   const blobs=await savedBlobs(root,[...new Set(files.map(file=>file.oid))]),bytes=new Map(packaged);
   const ref=(oid:string):ArtifactRefV1=>{const b=blobs.get(oid)!,hash=digest(b),value={artifactId:`attempt-blob-${hash}`,hash};bytes.set(value.artifactId,b);return value;};
-  const directories=new Set<string>();for(const file of files){let p=dirname(file.path);while(p!=="."){directories.add(p);p=dirname(p);}}
   const snapshot=legacySnapshotSchema.parse({version:1,head:v2.attempt,bundle:v2.bundle,index:files.map(file=>({...file,stage:0,ref:ref(file.oid)})),
    tree:[...[...directories].sort().map(path=>({path,kind:"directory",mode:0o755})),...files.map(file=>({path:file.path,kind:"file",mode:file.mode==="100755"?0o755:0o644,ref:ref(file.oid)}))],
    deleted:[],missing:[]});
