@@ -10,7 +10,11 @@ describe("optional token policy protocol boundary", () => {
  it("negotiates implemented recovery independently of core capabilities", async () => {
    const result = await runControlCommand(["features"], "{}");
    expect(result.code).toBe(0);
-   expect(JSON.parse(result.stdout)).toEqual({protocol:1, tokenPolicy:"optional-v1", savedResultRecovery:"v1", agentInstallationUpdate:"v1", transcripts:"v1"});
+   // Ruling (human named this test, 2026-11-19, Orca session 543e800e: 「允许」; Orca session 3ba26002: 「这次批准改写所有必要的判据」):
+   // change-sized runs P1 (Orca spec 2026-11-19-change-sized-runs-design.md §6.1, §11.2; Orca #363 #366) -- ccloop now
+   // implements work.attemptDelivery "ref-v1" and its readers, so features answers attemptRef:"v1". Was: the same object
+   // without attemptRef.
+   expect(JSON.parse(result.stdout)).toEqual({protocol:1, tokenPolicy:"optional-v1", savedResultRecovery:"v1", agentInstallationUpdate:"v1", transcripts:"v1", attemptRef:"v1"});
  });
  it("accepts v4 nullable normal work while preserving v3 hash and refusing nullable v3", async () => {
    const {envelope} = await fixture(); const hash=canonicalHash(envelope);

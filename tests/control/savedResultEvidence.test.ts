@@ -109,7 +109,10 @@ it('captures original attempt, usage, full snapshot and exact runtime bytes befo
  const collected=JSON.parse(legacy.stdout);expect(Object.keys(collected)).toEqual(['events','candidate','terminal','progress','failureCause','transcripts']);expect(collected.terminal.status).toBe('failed');
  expect(Object.keys(collected.terminal)).toEqual(['status','currentAttempt','attemptsUsed','lastTransitionAt','waitingOnHuman','stopReason','budgetSnapshot','recentFailures']);
  expect(Object.hasOwn(collected.candidate,'capsule')).toBe(false);
- expect(JSON.parse((await f.rpc('features',{})).stdout)).toEqual({protocol:1,tokenPolicy:'optional-v1',savedResultRecovery:'v1',agentInstallationUpdate:'v1',transcripts:'v1'});
+ // Ruling (human named this test, 2026-11-19, Orca session 543e800e: 「允许」; Orca session 3ba26002: 「这次批准改写所有必要的判据」):
+ // change-sized runs P1 (Orca spec 2026-11-19-change-sized-runs-design.md §6.1, §11.2; Orca #363 #366) -- features also answers
+ // attemptRef:'v1'; nothing else in this test changes. Was: the same object without attemptRef.
+ expect(JSON.parse((await f.rpc('features',{})).stdout)).toEqual({protocol:1,tokenPolicy:'optional-v1',savedResultRecovery:'v1',agentInstallationUpdate:'v1',transcripts:'v1',attemptRef:'v1'});
  const foreign=await writeSavedBytes(f.sourceDir,Buffer.from('private foreign bytes'),async()=>{});
  expect((await f.rpc('read-saved-result-evidence',{input:f.input,capsuleRef:page.capsule,ref:foreign})).code).not.toBe(0);
  const changed=structuredClone(f.input);changed.claim.generation=2;
