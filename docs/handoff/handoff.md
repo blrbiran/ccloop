@@ -41,14 +41,19 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-> **Orca 会话 `57896c64`（2026-11-20）：P1 与 #397 都已推远端（`/usr/bin/git ls-remote` 现测），Orca 本轮已 repin 到 P1、并在会后重钉到含 #397 的提交。** 推送按人的 `allow-push`；远端一律 `/usr/bin/git ls-remote` 现测。
+> **Orca 会话 `c8fc876f`（2026-11-20）：本仓 main 已推（`/usr/bin/git ls-remote` 现测），Orca 已 repin 到含本轮 tick 的提交。** 推送按人的 `allow-push`；远端一律 `/usr/bin/git ls-remote` 现测。
 
-### 最新（2026-11-20，Orca 会话 `57896c64`）—— #397 转录热路径写入合批：已推、Orca 将重钉
+### 最新（2026-11-20，Orca 会话 `c8fc876f`）—— 完全静默 run 的 live ceiling tick（Orca #369）：已推、已 repin
 
-- 测试者 #397（Orca 台账）：`ObservedTranscriptFile` 每个 JSON 行写 body、`\n`、`line-observed` marker 三次 `writeSync`，33 MB／20 万行 968–1083 ms（缓冲 23–32 ms）；适配器每个 stderr chunk 一次 `appendFileSync`。现在完整行（正文＋换行＋marker）作为一块、每次 `write()` 一次落盘，256 KiB 阈值与 `close()` 各再 flush；`write()` 返回前必定落盘（既有「SIGKILL 前已接受的字节不丢」判据照绿）；stderr／stdout 每次调用保持一个描述符，`finish()` 后关闭。
-- 字节、marker 位置与 `atBytes` 均不变（判据断言），cap／truncate 语义不变。判据：新增 `tests/runtime/transcriptWriteBatch.test.ts`（5 条，按 `fs.writeSync` 调用数断言）与 `stderrDescriptor.test.ts`（1 条）；改写 1 条既有判据（`transcriptCap.test.ts` 的「marker 处截断」用例，Ruling 行引用人 2026-11-19「这次批准改写所有必要的判据。」）。
-- **登记**：`finish()` 之后到达的 stdout／stderr chunk 现在被丢弃（events／transcript 本来就如此），被停掉的一次调用的原始日志可能少最后一截；`closeSync` 的错误被吞（数据已落盘）。实测（同一台机器、负载高）：旧形状 16–21 s vs 新 1.3–1.6 s（约 12×）；`npm run perf:stream` 三个 runtime 的增长仍远低于 32 MiB 门（19.8／22.6／12.9 MiB）。全量 `tests/runtime` 在本机高负载下 2–7 条墙钟红，逐文件单跑全绿（重跑，不是门）；typecheck／build RC 0。
-- 变异在 `git clone --local` 副本里：删 marker、正文与换行分开写、`close()` 不 flush、按 cap 截断（非整行）、stderr 退回 `appendFileSync` —— 各自见红并 0 字节还原（`git diff` 字节数证明）。
+- 测试者 #369：Orca 的 `run abandon` 把 live ceiling 降到已观测的 work token；ccloop 只在 `onObservedUsage` 里比较 ceiling，provider 完全静默时没有任何 usage 事件 ⇒ 停下要等 10 分钟 idle watchdog 或 phase 超时（现场 4 分钟无信号）。
+- 做法（`src/controller/runLoop.ts`）：`runPhaseWithTimeout` 在有 `liveCeilingThreshold` 时再加一个 1 s `setInterval`，用同一谓词（`observedTokens >= ceiling`）判断，命中时走既有 abort／budgetStop 路径（`ceilingStop=true`），`finally` 清掉。**没有新的杀进程权限**，Orca 的结算路径不变；没有配置 ceiling 的 stage 行为逐字节不变。
+- 判据：新增 `tests/controller/liveCeilingTick.test.ts`（claude fake `hang` 模式，400 ms 后把 ceiling 降到 0；断言 `exhausted`＋`liveCeilingStop.at="mid-call"` 并在约 1.3 s 内结束）。该判据先在旧码上红在「plan phase exceeded per-attempt timeout of 15000ms」。相邻 `liveCeiling.test.ts`＋`liveTokenThreshold.test.ts` 14/14 绿；typecheck／build RC 0。
+- **门（现测）**：全量 vitest 与 Orca quick/wide 门同时在跑时 14 红（`materializeV2`／`workerLost`／`endToEnd`／`ompVerificationOnlyRecovery` 等 13 条名单外）；四个文件单跑 **38/38 绿**（重跑，不是门）⇒ 判负载。`check-known-reds` 因此 RC 1，名单未改。
+- 登记：tick 只在已配置 ceiling 时存在（1 s 一个定时器／phase）；ceiling 为 0 且一个 token 都没观测到时按 `0 >= 0` 停，这是 abandon 的预期；`setInterval` 在 `finally` 清理，phase 结束后不残留。
+
+### 上一轮（2026-11-20，Orca 会话 `57896c64`）—— #397 转录热路径写入合批（压成结论）
+
+- 每个完整行（正文＋换行＋marker）作为一块一次 `writeSync`，256 KiB 与 `close()` 再 flush；stderr 每调用一个描述符。字节／marker／`atBytes` 不变，cap 不变。新增 `transcriptWriteBatch`（5）与 `stderrDescriptor`（1），改写 `transcriptCap` 一条（Ruling 行）。同机实测 16–21 s → 1.3–1.6 s；`finish()` 后到达的 chunk 不再落盘（已登记）。已推、已 repin。
 
 ### 上上轮（2026-11-19，Orca 会话 `3ba26002`）—— 去掉复制 P1（Orca #363 #366）：已推、Orca 已 repin
 
@@ -328,7 +333,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-20 近况（原位滚动，Orca 会话 `57896c64`；其后 `9299e610` 只改 Orca；上一轮 `3ba26002`）**：本仓已推两轮——「去掉复制」P1（`work.attemptDelivery:"ref-v1"`，见「当前状态·最新·上上轮」）与 #397 转录热路径合批（见「当前状态·最新」）；Orca 本轮先 repin 到 P1，收尾再重钉到含 #397 的提交（`scripts/pin-ccloop.mjs`，独立 clone 装树）。**Orca 依赖本仓的新契约（本轮起）**：`features.attemptRef:"v1"` 与 collect 顶层 `attempt`（P2 只在宣告时走新路）；**#397 的边界**：`finish()` 后的 stdout／stderr chunk 不再落盘（与 events／transcript 一致）。此前（`4389b15f` / `347`、`349` 轮）的契约结论仍成立：collect `failureCause.cause` 的 `narration-only`／`execution-not-json`／`execution-shape`／`cleanup-failed`、collect 可选 `sessionCleanup[]`。**`9299e610`（2026-11-20 第三批）只改 Orca，本仓无代码改动、pin 不变（`d50c468`）**；#369 的 1 s ceiling tick（让 abandon 在完全静默的 run 里约 1 s 生效，ccloop 自己 SIGTERM→SIGKILL，不需要 Orca 杀进程）是下一轮 ccloop 候选；#363/#366 的 settle lane 分片与 GC 仍待设计。登记未修：live ceiling 调低后不立即复查；`savedResultRecovery.ts` 松 `indexOf`；`#346` 仍不改本仓（改 allowlist／denylist 匹配前先同步 Orca）。
+- **2026-11-20 近况（原位滚动，Orca 会话 `c8fc876f`；上一轮 `9299e610`／`57896c64`）**：本仓 main 已推三轮——「去掉复制」P1、#397 转录合批、以及本轮 **#369 的 1 s live-ceiling tick**（静默 run 里 abandon 约 1 s 生效；见「当前状态·最新」）；Orca 已 repin 到含 tick 的提交。**Orca 依赖本仓的契约**：`features.attemptRef:"v1"` 与 collect 顶层 `attempt`（P2 只在宣告时走新路）；**#397 的边界**：`finish()` 后的 stdout／stderr chunk 不再落盘（与 events／transcript 一致）。此前（`4389b15f` / `347`、`349` 轮）的契约结论仍成立：collect `failureCause.cause` 的 `narration-only`／`execution-not-json`／`execution-shape`／`cleanup-failed`、collect 可选 `sessionCleanup[]`。**下一轮候选**：#375 的 `--no-mcp` 隔离（omp phase／single-call；需先量 omp 是否支持）；#363/#366 的 settle lane 分片与 GC 仍待设计（设计备忘录在 Orca `.superpowers/sdd/plan/design-370-363-382.md`）。登记未修：`savedResultRecovery.ts` 松 `indexOf`；`#346` 仍不改本仓（改 allowlist／denylist 匹配前先同步 Orca）。
   - 只有带私有 `CODEX_HOME` 的 Codex loop phase 去掉了 `--ephemeral`；single-call 与 legacy 路径保持。`thread.started` 的 `thread_id` 精确绑定 `sessions/**/rollout-*-<thread_id>.jsonl`，每个完成的响应后读 `token_count` 累计值并触发原有软停；终局记账仍只认 stdout `turn.completed`。阶段结束及崩溃/worker-lost 进程回收后按本 run 的 `thread.json` 用已装 `codex delete --force <UUID>` 删除该线程，失败响亮报错；旧 `--ephemeral` archive 仍可验，新 argv 要求私有隔离。
   - collect 可选只读 `liveUsage`（`ccloop-live-usage-v1`，run/attempt/phase/callId/threadId/tokens/observedAt/revision）只在活跃调用有完整观测时出现，outcome 后消失，不写账本；descriptor 的 `usageObservation` 已是 `realtime`，`contextObservation` 仍 `unavailable`（累计响应用量不是下一请求的精确上下文）。
   - **保留边界（提交前必须知道）**：Codex 在 `thread.started` 写入证据前已落盘而 worker 崩溃时，无法按 UUID 安全清扫，不能按最新文件/目录时间删共享 home；SQLite 空闲页/WAL 的物理擦除未证。受支持的删除路径已由隔离 HOME＋假端点实测（并发与失败线程各自删除互不影响），证据在 Orca 会话 scratch（会话结束即失）。
