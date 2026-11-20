@@ -715,6 +715,13 @@ function getPhaseTimeoutReason(phase: PhaseName, timeoutMs: number): string {
   return `${phase} phase exceeded per-attempt timeout of ${timeoutMs}ms`;
 }
 
+/**
+ * Tester #369 (Orca issue): how often a phase with a live ceiling re-evaluates it without a usage observation. Orca's
+ * abandon lowers the ceiling to the observed total; a provider that has gone silent emits nothing, so evaluating only in
+ * onObservedUsage left the stop to the idle watchdog (10 minutes) or the phase timeout.
+ */
+const LIVE_CEILING_TICK_MS = 1_000;
+
 function getPhaseTimeoutMs(contract: LoopContract, state: RunState): number {
   return Math.min(contract.executionPolicy.perAttemptTimeoutMs, state.budgetSnapshot.timeRemainingMs);
 }
@@ -784,6 +791,17 @@ async function runPhaseWithTimeout<T>(
   const operationPromise = operation(abortController.signal, onObservedUsage, idleLedger).catch((error: unknown) => {
     throw new PhaseExecutionError(working(Date.now() - startedAtMs), error);
   });
+  // Tester #369: the ceiling is the same predicate as above, evaluated on a tick as well, so a ceiling Orca lowered while
+  // the phase emits nothing still stops it within about a second. It never aborts without a configured ceiling.
+  const ceilingTimer = options?.liveCeilingThreshold === undefined ? undefined : setInterval(() => {
+    if (abortController.signal.aborted) return;
+    const ceiling = options?.liveCeilingThreshold?.() ?? null;
+    if (ceiling !== null && observedTokens >= ceiling) {
+      ceilingStop = true;
+      abortController.abort(LIVE_TOKEN_STOP_REASON);
+      stopForBudget();
+    }
+  }, LIVE_CEILING_TICK_MS);
 
   try {
     const outcome = await Promise.race([
@@ -856,6 +874,9 @@ async function runPhaseWithTimeout<T>(
   } finally {
     if (timer !== undefined) {
       clearTimeout(timer);
+    }
+    if (ceilingTimer !== undefined) {
+      clearInterval(ceilingTimer);
     }
   }
 }
