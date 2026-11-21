@@ -262,6 +262,9 @@ export const collectionSchema = z.object({
   // Change-sized runs (Orca spec 2026-11-19 §6.1): the recorded attempt; present iff the envelope carries work.attemptDelivery
   // and there is a candidate.
   attempt: attemptRecordSchema.optional(),
+  // Memory in runs (Orca spec 2026-11-20 §3, Correction 2026-11-21): the bundle identity, present iff the envelope carried
+  // work.memory. Orca's strict collect parse must accept it before the repin.
+  memory: z.object({ sha256: z.string().regex(/^[0-9a-f]{64}$/), ids: z.array(safeInteger.positive()).min(1).max(64), tokens: safeInteger.positive() }).strict().optional(),
 }).strict();
 
 const METHODS = new Set<ControlMethodV1>([
@@ -323,7 +326,7 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
   // Live transcript (Orca spec 2026-10-23 §10.2.4): collect may carry `transcripts`.
   // attemptRef (change-sized runs P1, Orca spec 2026-11-19-change-sized-runs-design.md §6.1; Orca #363 #366): this ccloop
   // records attempts under work.attemptDelivery "ref-v1" and reads snapshot v2 (continuation, legacy-published-candidate-v2).
-  if (request.method === "features") return { protocol: 1, tokenPolicy: "optional-v1", savedResultRecovery: "v1", agentInstallationUpdate: "v1", transcripts: "v1", attemptRef: "v1" };
+  if (request.method === "features") return { protocol: 1, tokenPolicy: "optional-v1", savedResultRecovery: "v1", agentInstallationUpdate: "v1", transcripts: "v1", attemptRef: "v1", memory: "v1" };
   if (request.method === "agent-installation-observe") return observeAgentInstallations(context.agentsTablePath);
   if (request.method === "agent-installation-preview") return previewAgentInstallations(context.agentsTablePath);
   if (request.method === "agent-installation-apply") return applyAgentInstallations(context.agentsTablePath, request);
@@ -375,7 +378,7 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
 
 function validateResponse(method: ControlMethodV1, value: unknown, protocol = 3): unknown {
   try {
-    if (method === "features") return z.object({ protocol: z.literal(1), tokenPolicy: z.literal("optional-v1"), savedResultRecovery: z.literal("v1"), agentInstallationUpdate: z.literal("v1"), transcripts: z.literal("v1"), attemptRef: z.literal("v1") }).strict().parse(value);
+    if (method === "features") return z.object({ protocol: z.literal(1), tokenPolicy: z.literal("optional-v1"), savedResultRecovery: z.literal("v1"), agentInstallationUpdate: z.literal("v1"), transcripts: z.literal("v1"), attemptRef: z.literal("v1"), memory: z.literal("v1") }).strict().parse(value);
     if (method === "agent-installation-observe") return observationSchema.parse(value);
     if (method === "agent-installation-preview") return previewSchema.parse(value);
     if (method === "agent-installation-apply") return receiptSchema.parse(value);

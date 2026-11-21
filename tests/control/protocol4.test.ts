@@ -14,7 +14,10 @@ describe("optional token policy protocol boundary", () => {
    // change-sized runs P1 (Orca spec 2026-11-19-change-sized-runs-design.md §6.1, §11.2; Orca #363 #366) -- ccloop now
    // implements work.attemptDelivery "ref-v1" and its readers, so features answers attemptRef:"v1". Was: the same object
    // without attemptRef.
-   expect(JSON.parse(result.stdout)).toEqual({protocol:1, tokenPolicy:"optional-v1", savedResultRecovery:"v1", agentInstallationUpdate:"v1", transcripts:"v1", attemptRef:"v1"});
+   // Necessary rewrite, named in the task brief (2026-11-21; memory-in-runs spec §3 "Lockstep order for features.memory"):
+   // ccloop now implements work.memory, so features answers memory:"v1" and Orca can start sending the key. Was: the same
+   // object without memory.
+   expect(JSON.parse(result.stdout)).toEqual({protocol:1, tokenPolicy:"optional-v1", savedResultRecovery:"v1", agentInstallationUpdate:"v1", transcripts:"v1", attemptRef:"v1", memory:"v1"});
  });
  it("accepts v4 nullable normal work while preserving v3 hash and refusing nullable v3", async () => {
    const {envelope} = await fixture(); const hash=canonicalHash(envelope);

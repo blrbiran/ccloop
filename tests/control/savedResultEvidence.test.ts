@@ -112,7 +112,9 @@ it('captures original attempt, usage, full snapshot and exact runtime bytes befo
  // Ruling (human named this test, 2026-11-19, Orca session 543e800e: 「允许」; Orca session 3ba26002: 「这次批准改写所有必要的判据」):
  // change-sized runs P1 (Orca spec 2026-11-19-change-sized-runs-design.md §6.1, §11.2; Orca #363 #366) -- features also answers
  // attemptRef:'v1'; nothing else in this test changes. Was: the same object without attemptRef.
- expect(JSON.parse((await f.rpc('features',{})).stdout)).toEqual({protocol:1,tokenPolicy:'optional-v1',savedResultRecovery:'v1',agentInstallationUpdate:'v1',transcripts:'v1',attemptRef:'v1'});
+ // Necessary rewrite, named in the task brief (2026-11-21; memory-in-runs spec §3 "Lockstep order for features.memory"):
+ // features also answers memory:'v1'. Was: the same object without memory.
+ expect(JSON.parse((await f.rpc('features',{})).stdout)).toEqual({protocol:1,tokenPolicy:'optional-v1',savedResultRecovery:'v1',agentInstallationUpdate:'v1',transcripts:'v1',attemptRef:'v1',memory:'v1'});
  const foreign=await writeSavedBytes(f.sourceDir,Buffer.from('private foreign bytes'),async()=>{});
  expect((await f.rpc('read-saved-result-evidence',{input:f.input,capsuleRef:page.capsule,ref:foreign})).code).not.toBe(0);
  const changed=structuredClone(f.input);changed.claim.generation=2;

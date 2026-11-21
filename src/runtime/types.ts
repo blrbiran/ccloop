@@ -11,6 +11,9 @@ export type LastFailure = { rejectCategory: string; failingCommand: string | nul
 
 /** Operator note (Orca spec 2026-10-23-live-transcript-design.md §10.2.6): the person's note for the next attempt(s). */
 export type OperatorNote = { text: string; scope: "next-attempt" | "remaining-attempts" };
+/** Memory in runs (Orca spec 2026-11-20-memory-in-runs-and-read-api-design.md §3, Correction 2026-11-21): the ccmem
+ * bundle Orca froze into the envelope for this run. ids are ccmem's positive integers, in the text's row order. */
+export type RunMemory = { format: "ccloop-memory-v1"; sha256: string; tokens: number; ids: number[]; text: string };
 /** Prior-failures spec 2026-10-21 §2.2: one earlier run's failure as the attempt sees it (the wire's runId is dropped:
  * it is never rendered). Oldest first, as on the wire. */
 export type PriorFailure = { rejectCategory: string; failingCommand: string | null; evidence: string[] | null; failureCause?: string };
@@ -46,6 +49,8 @@ export type AttemptContext = {
   priorFailures?: PriorFailure[];
   /** Operator note (spec §10.2.6): set for plan and execute only, per its scope (src/runtime/operatorNote.ts). */
   operatorNote?: OperatorNote;
+  /** Memory in runs (Orca spec 2026-11-20 §3): set for plan and execute of every attempt; verify never gets it. */
+  memory?: RunMemory;
   /**
    * Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.5): the extra repositories' worktrees, contract order; set only
    * when the contract has additionalRepos. Agents get them as extra directories; prompts list them.

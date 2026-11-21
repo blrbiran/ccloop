@@ -89,6 +89,11 @@ export interface LoopWork {
   priorFailures?: PriorFailureV1[];
   /** Operator note (Orca spec 2026-10-23-live-transcript-design.md §10.2.6): the person's note for plan and execute. */
   operatorNote?: { text: string; scope: "next-attempt" | "remaining-attempts" };
+  /**
+   * Memory in runs (Orca spec 2026-11-20-memory-in-runs-and-read-api-design.md §3, Correction 2026-11-21): Orca's bounded
+   * ccmem bundle for plan and execute; never beside `mode`; ids are positive integers in the text's row order.
+   */
+  memory?: { format: "ccloop-memory-v1"; sha256: string; tokens: number; ids: number[]; text: string };
   /** Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.1): each extra repository's target and base, contract order. */
   additionalRepos?: AdditionalRepoWorkV1[];
   /** Task handoffs (Orca spec 2026-11-12 tester follow-up G §10.2): directories outside every worktree, Orca-owned. */
@@ -287,6 +292,24 @@ const priorFailuresSchema = z.array(priorFailureSchema).min(1).max(3).optional()
 // Operator note (Orca spec 2026-10-23-live-transcript-design.md §10.2.6): optional, so an envelope without it parses and
 // hashes exactly as before; text is 1-4096 UTF-8 bytes.
 const operatorNoteSchema = z.object({ text: utf8Bounded(4096), scope: z.enum(["next-attempt", "remaining-attempts"]) }).strict().optional();
+// Memory in runs (Orca spec 2026-11-20-memory-in-runs-and-read-api-design.md §3, Correction 2026-11-21): optional, so an
+// envelope without it parses and hashes exactly as before. ccloop recomputes the sha256 over text rather than trusting the
+// producer, and text is 1-8192 UTF-8 bytes as defence in depth (Orca drops an oversized bundle before sending it).
+const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
+const memorySchema = z
+  .object({
+    format: z.literal("ccloop-memory-v1"),
+    sha256: sha256Schema,
+    tokens: z.number().int().positive(),
+    ids: z.array(z.number().int().positive()).min(1).max(64),
+    text: utf8Bounded(8192),
+  })
+  .strict()
+  .refine((memory) => createHash("sha256").update(memory.text).digest("hex") === memory.sha256, {
+    path: ["sha256"],
+    message: "sha256 must be the SHA-256 of text",
+  })
+  .optional();
 // Multi-repo runs (spec 2026-10-24-multi-dir-projects §11.1): optional, so a single-repo envelope parses and hashes exactly
 // as before; when present its keys are the contract's additionalRepos keys, in the same order.
 const additionalReposWorkSchema = z.array(z.object({ key: repoKeySchema, targetRepo: z.string().min(1), base: z.string().min(1) }).strict())
@@ -316,6 +339,7 @@ const loopWorkSchema = z
     ompSkillsDir: z.string().min(1).optional(),
     priorFailures: priorFailuresSchema,
     operatorNote: operatorNoteSchema,
+    memory: memorySchema,
     additionalRepos: additionalReposWorkSchema,
     handoff: handoffDirsSchema,
   })
@@ -347,6 +371,7 @@ const nullableLoopWorkSchema = z.object({
   skillPluginDir: z.string().min(1).optional(), codexSkillsDir: z.string().min(1).optional(), ompSkillsDir: z.string().min(1).optional(),
   priorFailures: priorFailuresSchema,
   operatorNote: operatorNoteSchema,
+  memory: memorySchema,
   additionalRepos: additionalReposWorkSchema,
   handoff: handoffDirsSchema,
   // Change-sized runs (Orca spec 2026-11-19 §6.1): optional, so an envelope without it parses and hashes exactly as before.
@@ -362,8 +387,8 @@ const v4StartEnvelopeSchema = z.object({
   liveCeiling: liveCeilingSchema.optional(),
 }).strict().refine(e => (e.mode === undefined) === (e.savedResultRecovery === undefined) && (e.mode === undefined || e.inputCheckpoint === null)
   // Prior-failures spec §2.1: a saved-result recovery builds no prompt, so it takes no prior failures -- nor an operator note
-  // (live transcript spec §10.2.6; review minor, Orca session ffec7b28).
-  && (e.mode === undefined || (e.work.priorFailures === undefined && e.work.operatorNote === undefined)))
+  // (live transcript spec §10.2.6; review minor, Orca session ffec7b28), nor a memory bundle (memory-in-runs spec §3).
+  && (e.mode === undefined || (e.work.priorFailures === undefined && e.work.operatorNote === undefined && e.work.memory === undefined)))
   // Task handoffs (Orca spec 2026-11-12 tester follow-up G §10.2): a saved-result recovery builds no prompt, so no handoff.
   .refine(e => e.mode === undefined || e.work.handoff === undefined)
   // Live token ceiling: it bounds the run's tokens in place of a finite work grant, and a saved-result recovery takes none.

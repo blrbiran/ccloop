@@ -107,6 +107,12 @@ export interface CollectionV1 {
    * boundary); absent otherwise, so no existing caller sees new bytes. A record the worker did not leave is `record-failed`.
    */
   attempt?: AttemptRecordV1;
+  /**
+   * Memory in runs (Orca spec 2026-11-20-memory-in-runs-and-read-api-design.md §3): the current attempt's bundle identity,
+   * from the accepted envelope. Present iff the envelope carries work.memory; never null, and the text is not echoed
+   * (Orca's stored envelope already names the same hash). Top level, like attempt, so the strict terminal schemas stay.
+   */
+  memory?: { sha256: string; ids: number[]; tokens: number };
 }
 
 export interface SessionCleanupEntryV1 { threadId: string; home: string; state: "failed" | "retry-failed"; detail: string;
@@ -338,6 +344,8 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
   const worker = liveness?.state === "alive" ? undefined : liveness;
   const attempt = input.work.kind === "loop" && input.work.attemptDelivery === "ref-v1" && storedCandidate !== null
     ? await attemptOf(input.work.sourceDir, progress) : undefined;
+  // Memory in runs (Orca spec 2026-11-20 §3): the envelope's bundle identity, present iff it carried one.
+  const memory = input.work.kind === "loop" ? input.work.memory : undefined;
   return {
     events,
     candidate: storedCandidate === null ? null : candidateOf(storedCandidate, proof),
@@ -358,6 +366,7 @@ export async function collectExecution(input: StartEnvelopeV3, afterSeq: number)
     ...(liveNotes === undefined ? {} : { liveNotes }),
     ...(sessionCleanup.length === 0 ? {} : { sessionCleanup }),
     ...(attempt === undefined ? {} : { attempt }),
+    ...(memory === undefined ? {} : { memory: { sha256: memory.sha256, ids: memory.ids, tokens: memory.tokens } }),
   };
 }
 

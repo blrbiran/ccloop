@@ -1779,6 +1779,11 @@ export async function runLoopFromState(
     return notes.length === 0 ? {} : { liveNotes: notes };
   };
   const noteFor = operatorNoteGate(options?.taskResultInput?.work.kind === "loop" ? options.taskResultInput.work.operatorNote : undefined);
+  // Memory in runs (Orca spec 2026-11-20-memory-in-runs-and-read-api-design.md §3): from the accepted envelope, for plan and
+  // execute of every attempt (the run's frozen bundle, not a per-attempt note); verify builds its context without this
+  // spread, and a saved-result recovery takes none (the envelope refuses the key beside mode).
+  const memory = options?.taskResultInput?.work.kind === "loop" && options.taskResultInput.mode === undefined ? options.taskResultInput.work.memory : undefined;
+  const memoryFor = (): { memory?: import("../runtime/types.js").RunMemory } => memory === undefined ? {} : { memory };
   const lastFailureContext = (): { lastFailure?: LastFailure; priorFailures?: PriorFailure[] } => {
     const last = state.recentFailures.at(-1);
     if (last === undefined) return priorFailures === undefined ? {} : { priorFailures };
@@ -2145,7 +2150,7 @@ export async function runLoopFromState(
         activePhase = "plan";
         const planNotes = await liveNotesAt("plan", attempt);
         const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal, onObservedUsage, idleLedger) =>
-          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...handoffFor(), ...planNotes, onObservedUsage, idleLedger }),
+          attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...memoryFor(), ...handoffFor(), ...planNotes, onObservedUsage, idleLedger }),
           { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
         );
 
@@ -2223,7 +2228,7 @@ export async function runLoopFromState(
         ? { timedOut: false as const, elapsedMs: 0, result: continuation.execution! }
         : await runPhaseWithTimeout(
         executeTimeoutMs,
-        (abortSignal, onObservedUsage, idleLedger) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...handoffFor(), ...executeNotes, onObservedUsage, idleLedger }),
+        (abortSignal, onObservedUsage, idleLedger) => attemptAdapter.execute({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, plan, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...memoryFor(), ...handoffFor(), ...executeNotes, onObservedUsage, idleLedger }),
         { awaitAbortedResult: true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
       );
       const executeStopTokens = budgetStopTokens(executeOutcome);
