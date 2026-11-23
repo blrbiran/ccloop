@@ -20,6 +20,19 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Tester #439: how long a launch waits for a worker's receipt before marking it never-claimed. 2000 ms was the only
+ * value production could ever use -- Orca's control `accept` passes no receiptTimeoutMs (command.ts) -- while on a
+ * loaded machine a bare `node` child took 1735 ms just to spawn and write its first receipt. The variable lets an
+ * operator raise it per machine; unset, unusable or non-positive values keep the 2000 ms default, so nothing that
+ * already works changes.
+ */
+export const DEFAULT_WORKER_RECEIPT_TIMEOUT_MS = 2_000;
+export function workerReceiptTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.CCLOOP_WORKER_RECEIPT_TIMEOUT_MS);
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : DEFAULT_WORKER_RECEIPT_TIMEOUT_MS;
+}
+
 async function readLstartUtc(pid: number): Promise<string> {
   const { stdout } = await execFileAsync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
     encoding: "utf8",
@@ -79,7 +92,7 @@ export async function launchWorker(record: AcceptedRecordV1, deps: WorkerLaunchD
   let spawnFailed = false;
   child.once("error", () => { spawnFailed = true; });
   child.unref();
-  const deadline = Date.now() + (deps.receiptTimeoutMs ?? 2_000);
+  const deadline = Date.now() + (deps.receiptTimeoutMs ?? workerReceiptTimeoutMs());
   while (Date.now() < deadline) {
     const current = await readAccepted(deps.sourceDir);
     if (

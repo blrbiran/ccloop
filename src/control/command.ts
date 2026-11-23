@@ -9,6 +9,7 @@ import { resolveAgent } from "../agents/materialize.js";
 import { listAgentModels } from "../agents/models.js";
 import { descriptorDefaults, getDescriptor } from "../agents/registry.js";
 import { assertAgentsTablePath, readAgentsTable } from "../agents/table.js";
+import { workerReceiptTimeoutMs } from "./workerLauncher.js";
 import { AgentError, type CapabilityViewV1 } from "../agents/types.js";
 import {
   agentSelectionSchema,
@@ -342,7 +343,9 @@ async function defaultHandler(request: ControlRequestV1, context: ControlContext
   // success, since Orca reads ccloop's code from the start of stderr.
   if (request.method === "models") return await listAgentModels(context.agentsTablePath, request.installation, { refresh: request.refresh });
   if (request.method === "accept") {
-    return await acceptStart(request.input, { agentsTablePath: context.agentsTablePath });
+    // Tester #439: the 2000 ms receipt default was the only value production could reach, because this dispatch passed
+    // no binding. It reads CCLOOP_WORKER_RECEIPT_TIMEOUT_MS now (unset: the same 2000 ms, byte for byte).
+    return await acceptStart(request.input, { agentsTablePath: context.agentsTablePath, receiptTimeoutMs: workerReceiptTimeoutMs() });
   }
   if (request.method === "inspect") {
     return await inspectExecution(request.input);
