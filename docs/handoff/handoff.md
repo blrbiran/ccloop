@@ -42,9 +42,15 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-> **Orca 会话 `c8fc876f`（2026-11-20）：本仓 main 已推（`/usr/bin/git ls-remote` 现测），Orca 已 repin 到含本轮 tick 的提交。** 推送按人的 `allow-push`；远端一律 `/usr/bin/git ls-remote` 现测。
+> **Orca 会话 `6add92a5`（2026-11-25）：本仓 main 已推（人推），Orca 已 repin 到含 #465 的 main 尖（`chore(deps): repin ccloop to 276114a…`）。** 远端一律 `/usr/bin/git ls-remote` 现测。
 
-### 最新（2026-11-20，Orca 会话 `c8fc876f`）—— 完全静默 run 的 live ceiling tick（Orca #369）：已推、已 repin
+### 最新（2026-11-24 → 25，Orca 会话 `d7ca40c0` 做、`6add92a5` repin）—— `npm test` 只跑改动部分；#465 MCP 名单读失败重读一次
+
+- `feat(test): npm test runs the changed part; test:full runs every file`：`scripts/test-affected.mjs`，`npm test`＝改动部分，`npm run test:full`＝原全量（红时自动跑 `check-known-reds`）。原「`npm test` 永远跑全量」的待办行已删（就是这笔）。
+- `fix(codex): a missing MCP list is read once more before the phase is refused (Orca tester #465)`：并联 task 首派稳定撞 `codex-phase-isolation-no-mcp-list`（瞬时探针失败被当终态），现在缺名单时重读一次再拒，拒绝原因不再被吞。Orca 侧 repin 后 `npm test`（改动部分）与 pin 脚本的默认解析 E2E 绿；**真 codex 付费复测未跑**。
+- Orca 跑门用的 ccloop 构建：`/Users/biran/code/skills/orca/.wt-ccloop-276114a/dist/cli.js`（下次 repin 前别删）。
+
+### 上一轮（2026-11-20，Orca 会话 `c8fc876f`）—— 完全静默 run 的 live ceiling tick（Orca #369）：已推、已 repin
 
 - 测试者 #369：Orca 的 `run abandon` 把 live ceiling 降到已观测的 work token；ccloop 只在 `onObservedUsage` 里比较 ceiling，provider 完全静默时没有任何 usage 事件 ⇒ 停下要等 10 分钟 idle watchdog 或 phase 超时（现场 4 分钟无信号）。
 - 做法（`src/controller/runLoop.ts`）：`runPhaseWithTimeout` 在有 `liveCeilingThreshold` 时再加一个 1 s `setInterval`，用同一谓词（`observedTokens >= ceiling`）判断，命中时走既有 abort／budgetStop 路径（`ceilingStop=true`），`finally` 清掉。**没有新的杀进程权限**，Orca 的结算路径不变；没有配置 ceiling 的 stage 行为逐字节不变。
@@ -62,7 +68,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 - **一切行为由 envelope 键 `work.attemptDelivery:"ref-v1"` 开关（只 protocol 4，与 `mode` 同现即拒 `attempt-delivery-with-saved-result`）；不带键时逐字节同旧**（独立审阅逐处核过）。带键时：worker 与 settle-lost 把尝试结束记成 commit（临时 index、`update-ref --stdin` 一次设两名、读回），不建 `repo`/`repos`；collect 多顶层 `attempt`（`AttemptRecordV1`）；续跑读 Orca snapshot v2（范围 bundle 取进 repoPath、单个 worktree）；恢复认 `legacy-published-candidate-v2`（在临时 bare＋alternates 里验，不写人的仓库）；`features.attemptRef:"v1"`。
 - **给 Orca P2 的约定（P2 已按此实现、已进 Orca main）**：`attempt.base` 是 `attempt^`（捕获时的 HEAD），不是 run 的起点 base；agent 在 worktree 里自己提交过的 run 可续跑、**不可**按 saved-result 恢复（`saved-result-attempt-not-on-base`）；新拒绝 `saved-result-snapshot-too-large`（先查一万文件／单文件上限再读 blob）、`saved-result-snapshot-partial`；续跑取件失败分 `control-resume-head-mismatch`／`-snapshot-invalid`／`-base-unavailable`；带键时 settle-lost **不再跑两个清理循环**（不改动已判过的树，留下的树 Orca 不得假定已删）；collect `dirs[].resultRepo` 仍写 `repos/<key>`，读 `commits.json` 的 `attemptSha`。
 - 判据：人逐条点名允许的两条已改（`tests/control/protocol4.test.ts`、`tests/control/savedResultEvidence.test.ts` 的 features `toEqual` 加 `attemptRef`，注释引人原话）；其余零改写。变异全红（P1 两轮共 26 个，含审阅补的 13 个）。全量 vitest（`--minWorkers=1 --maxWorkers=2`）2921/2921，`check-known-reds` RC 0；未改动 `214125f` 上 `tests/runtime/codex/stalledCauseAndFloor.test.ts`（#262）在高负载下曾 2/2 红，与本件无关（本件不碰 runtime）。
-- **等人**：推 ccloop main；之后 Orca repin（`scripts/pin-ccloop.mjs`，独立 `clone --local` 装树），repin 那一轮改写 Orca `tests/control/allowanceHeldSettlement.test.ts:59`（P1 下停住的 worktree 被记录并删掉，前提不再成立；改写方案在 Orca 台账）。本仓主检出有一个他人假 codex 留下的未跟踪 `undefined.version-calls`（未动）。
+- （2026-11-25 收成结论：本轮已推、Orca 已 repin 并改写 `allowanceHeldSettlement` 判据，见本节标题；原「等人」行按 Rule 13 删去过程；当时登记的未跟踪 `undefined.version-calls` 2026-11-25 `ls` 已不存在。）
 
 ### 上一轮（2026-11-19，Orca 会话 `543e800e`）—— omp 启动隔离（Orca #369 a、#375）：已推，Orca 已 repin 到 `57b6d15`（压成结论）
 
@@ -291,7 +297,6 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 | **#193 流写两份** | 量过（G4）：两份都被读；合并成一份要改既有判据（io-error 行为），人点名 |
 | **#122 退回 prompt 模式没报给 Orca** | 需要 Orca 的 strict collect 先收一个可选键（提议 `structuredOutputFallback`） |
 | **Linux** | 整套历史上红 5 条；之后只在临时 VM 跑过 `/usr/bin/flock` 两进程串行；**整套未在 Linux 再跑** |
-| **`npm test` 永远跑全量（~300 文件）** | 人 2026-11-24 要求：日常只跑改动部分，全量单独成 `npm run test:full`、只在发布或人要求时跑；下一轮**最先做**。分析与提案在 Orca 仓 `docs/superpowers/specs/2026-11-24-test-time-analysis.md`（提议移植 Orca 的 `test-affected`，`check-known-reds` 两档都可用） |
 
 ---
 
