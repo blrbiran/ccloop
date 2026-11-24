@@ -290,6 +290,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 | **#193 流写两份** | 量过（G4）：两份都被读；合并成一份要改既有判据（io-error 行为），人点名 |
 | **#122 退回 prompt 模式没报给 Orca** | 需要 Orca 的 strict collect 先收一个可选键（提议 `structuredOutputFallback`） |
 | **Linux** | 整套历史上红 5 条；之后只在临时 VM 跑过 `/usr/bin/flock` 两进程串行；**整套未在 Linux 再跑** |
+| **`npm test` 永远跑全量（~300 文件）** | 人 2026-11-24 要求：日常只跑改动部分，全量单独成 `npm run test:full`、只在发布或人要求时跑；下一轮**最先做**。分析与提案在 Orca 仓 `docs/superpowers/specs/2026-11-24-test-time-analysis.md`（提议移植 Orca 的 `test-affected`，`check-known-reds` 两档都可用） |
 
 ---
 
