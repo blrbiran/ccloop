@@ -104,7 +104,15 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     // Spec §3.3 "Where the MCP list comes from": read on every phase through the catalog cache, inside the phase deadline.
     // An abort or the deadline landing during the read is reported as such, not as a refusal (plan Review Focus 5).
     const deadline=Date.now()+timeout;
-    const catalog=await readAgentCatalog(installation,{deadline,signal:context.abortSignal,log:line=>{process.stderr.write(line+"\n");}});
+    const readCatalog=()=>readAgentCatalog(installation,{deadline,signal:context.abortSignal,log:line=>{process.stderr.write(line+"\n");}});
+    let catalog=await readCatalog();
+    // Orca tester #465: parallel tasks' first phases probe `codex mcp list` together and one transient failure was refused
+    // as final. A missing list is read once more (a missing list is never cached, so this probes again) after a short
+    // backoff inside the deadline; a list that stays missing is refused as before.
+    if(catalog.codexMcpServers===null&&!context.abortSignal?.aborted&&deadline-Date.now()>2_000){
+      await new Promise(resolve=>setTimeout(resolve,250+Math.floor(Math.random()*500)));
+      if(!context.abortSignal?.aborted)catalog=await readCatalog();
+    }
     isolation={home:null,codexHome:null,catalogError:catalog.catalogError};
     if(context.abortSignal?.aborted){result.reason="aborted";return persist();}
     if(Date.now()>=deadline){result.reason="timeout";return persist();}
@@ -120,7 +128,8 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
       // Spec §3.5: refused before spawn and before any skill link (plan Review Focus 3); final, booked 0 by the adapter.
       isolation={home:error.pair?.home??null,codexHome:error.pair?.codexHome??null,catalogError:catalog.catalogError};
       result.reason=error.reason;
-      if(error.reason==="codex-phase-isolation-no-mcp-list"&&catalog.mcpError!==undefined)result.refusalDetail=catalog.mcpError;
+      // Orca tester #465: a probe that threw as a whole names its error too (it lands in catalogError, not mcpError).
+      if(error.reason==="codex-phase-isolation-no-mcp-list"){const detail=catalog.mcpError??catalog.catalogError??undefined;if(detail!==undefined)result.refusalDetail=detail;}
       return persist();
     }
     // Orca tester #349 (human's ruling 「下一轮再删」): the run's next codex phase retries, once, a deletion an earlier call of

@@ -60,6 +60,8 @@ if(catalogCall!==null&&!process.argv.includes("exec")) {
   if(script.exitCode!==undefined) process.exit(script.exitCode);
   if(catalogCall==="mcp-list") {
     if(script.mcpExitCode!==undefined) process.exit(script.mcpExitCode);
+    // Orca tester #465: `mcpFailTimes` fails only the first N `mcp list` calls (a transient probe failure), counted in <marker>.mcp-failed.
+    if(script.mcpFailTimes!==undefined){const failed=existsSync(marker+".mcp-failed")?Number(readFileSync(marker+".mcp-failed","utf8")):0;if(failed<script.mcpFailTimes){writeFileSync(marker+".mcp-failed",String(failed+1));process.exit(1);}}
     const c=process.argv.flatMap((arg,i)=>arg==="-c"?[process.argv[i+1]]:[]);
     let linked=false; try{linked=lstatSync(`${process.env.CODEX_HOME}/config.toml`).isSymbolicLink();}catch{}
     const isolated=linked&&c.includes("features.plugins=false");

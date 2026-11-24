@@ -332,6 +332,16 @@ describe("codex phase isolation, one phase each (spec 2026-10-18 §3.3, §3.5)",
     expect(existsSync(join(outcome.evidenceDir, "process.json"))).toBe(false);
   });
 
+  // Orca tester #465: parallel tasks' first codex phases each probe `codex mcp list` at once; one transient failure was
+  // refused as final (codex-phase-isolation-no-mcp-list) and the run needed a person's close-run and retry, while the
+  // retry always worked. The phase now reads the list once more before refusing; a list that stays missing still refuses.
+  it("a transient MCP list failure is read again once before the phase is refused", async () => {
+    const w = await world("integration", { mcpFailTimes: 1 });
+    // mutation: drop the second read -> codex-phase-isolation-no-mcp-list, red
+    expect((await w.run("plan")).reason).toBe("completed");
+    expect(readFileSync(`${w.marker}.mcp-failed`, "utf8")).toBe("1");
+  });
+
   it("a phase with an unaddressable MCP name is refused before spawn", async () => {
     const w = await world("integration", { mcp: [{ name: "bad.name", enabled: true }] });
     expect((await w.run("plan")).reason).toBe("codex-phase-isolation-mcp-unaddressable:\"bad.name\"");
