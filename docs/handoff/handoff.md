@@ -21,6 +21,7 @@ rtk proxy npm run typecheck; rtk proxy npm run build
 node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才算基线绿
 ```
 
+- 2026-11-24 起 `npm test` 只跑改动部分（`scripts/test-affected.mjs`，人裁）；整套是 `npm run test:full`（它也会在红时自动跑 check-known-reds）。上面那条直接的 `vitest run` 仍是基线跑法。
 - *** **测试条数、红名单长度都【现测，不信任何文档里的数】。** *** 名单住在 `scripts/check-known-reds.mjs`
   （按全名、在祖先边界做子集判定；文件头的 ERRATUM 链记录了名单怎么增删的）。
 - ⚠️ **判断远端只能 `git ls-remote`**；`git status` 的 `ahead N` 是缓存 ref。结果只在跑出来那一秒为真。
@@ -334,6 +335,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
+- **2026-11-24 晚（Orca 会话 `d7ca40c0`→`6f9b7b78`）**：本仓两笔，**未推、未 repin**（闸门拒了本会话的 push，见 Orca handoff §4.0 第 0 条）。①`feat(test): npm test runs the changed part; test:full runs every file`：`npm test` 改为 `scripts/test-affected.mjs`（改动的测试、src 镜像目录[>60 只取同名]、直接非 type-only import 者、导入改动的 helper 的测试、点名改动脚本/夹具的测试；config 与 `tests/setup` 选全量；无人引用的文件选全量并明说），`npm run test:full` 是原来的整套 `vitest run`，红了自动跑 `check-known-reds`；判据 `tests/scripts/testAffected.test.ts` 10 条，6 个变异各只打红自己。②Orca #465 `fix(codex): a missing MCP list is read once more before the phase is refused`：MCP 列表为 null 时退避 250–750 ms 再读一次 catalog（剩余时限 >2 s 才读），仍缺照旧拒；拒绝说明在整个探针抛错时带 `catalogError`；隔离不变（不回退成「无 MCP」）。新判据（fake codex `mcpFailTimes: 1`）先红；codex 隔离相邻 4 文件 56/56。**没有改写任何既有判据**。门：`npm run test:full` 在 load≈330 下 2927 过／35 红（11 文件），**同 11 文件在未改动的 main 克隆里 28 红**（本分支 26 红）⇒ 负载，known-reds 名单未改。
 - **2026-11-24（Orca 会话 `221948a1` 续做）**：本仓**零代码改动**。Orca 要 repin 到含 `CCLOOP_WORKER_RECEIPT_TIMEOUT_MS` 的 `f8d368e`（主题行 `chore(deps): repin ccloop to f8d368e for the settable worker receipt timeout (#439)`；是否已进 Orca main 以 Orca handoff 与 `ls-remote` 现测为准），并由 Orca 的 `ccloopPort` 给每个 `ccloop control` 子进程传 `10000`（面板环境已有非空值则沿用）。**本仓默认值仍是 2000 ms、判据未改**——要抬默认值需改本仓判据，人点名。Orca 门用的 ccloop 构建在 `/Users/biran/code/skills/orca/.wt-ccloop-f8d368e`（`clone --local`＋`npm ci`＋build，`dist/build-info.json` 现测为 f8d368e）。
 - **2026-11-21 → 11-23 的结论（压缩；过程按文首方法取回）**：#439 的 2 s 回执超时是 Orca 现场 `launch-never-claimed` 的成因（负载 6 时空 node spawn 1735 ms），`LAUNCH_RELAUNCH_LIMIT` 仍为 2；`work.memory`（协议 3＋4、sha256 自校验、8192 B、只进 plan/execute、与 `mode` 互斥、`features.memory:"v1"`）已在 main、Orca 已用；Orca #385 拆分指令 v9 只改 Orca 自己的单次调用 schema，本仓契约不变。`stash@{0}`（`On tester-issues-20261123: superseded ccloop handoff line from fc492f1b`）是过期的一行 handoff，可由人 `git stash drop`。
 - **2026-11-21 此前（Orca 会话 `cf2d6dfd`）**：本仓本轮零代码改动、未 repin。Orca 侧：#419/#370 有 archived/closed mark 的组，`groupSummary.state` 读作 `archived`／`closed`（`storedState` 留原状态，guard 仍读存储状态）；#328 confirm 对 `workspaceMode=worktree` 且 delivery 需写共享 ref 的组合给 clone／working-tree 提示（不拒绝）；#375 把本仓已记录的 per-call MCP warnings 显示到 `run transcript`／Web，并加 `orca doctor` 的 stored-warning 检查（**omp 19.0.1 二进制里没有 `--no-mcp`**，`--version` exit 0 不构成 flag 证据；ccloop 仍只设 `OMP_MCP_TIMEOUT_MS=2000`）；#366 新增 `orca gc --include-uncleaned`；#418 run/task 回写只写 spec（依赖 `work.memory` bundle，未实现）。此前结论仍成立：`features.attemptRef:"v1"`＋collect `attempt`；#397 `finish()` 之后 chunk 不落盘；`failureCause` 四种细分；`sessionCleanup[]`；登记未修 `savedResultRecovery.ts` 松 `indexOf`；`#346` 不改本仓。
