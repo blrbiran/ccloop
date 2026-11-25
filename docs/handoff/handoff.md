@@ -42,64 +42,31 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 ## 当前状态
 
-> **Orca 会话 `6add92a5`（2026-11-25）：本仓 main 已推（人推），Orca 已 repin 到含 #465 的 main 尖（`chore(deps): repin ccloop to 276114a…`）。** 远端一律 `/usr/bin/git ls-remote` 现测。
+> **Orca 会话 `5d3d0c09`（2026-11-25）：本仓 main 已由 agent 推（人本轮授权「repin 需要时可 push ccloop」），Orca 随后 repin 到这笔 main 尖。** 远端一律 `/usr/bin/git ls-remote` 现测。
 
-### 最新（2026-11-24 → 25，Orca 会话 `d7ca40c0` 做、`6add92a5` repin）—— `npm test` 只跑改动部分；#465 MCP 名单读失败重读一次
+### 最新（2026-11-25，Orca 会话 `5d3d0c09`）—— #478 撞 live ceiling 的 run 带上续跑证据，续跑从被打断的阶段、同一个 attempt 接着做
 
-- `feat(test): npm test runs the changed part; test:full runs every file`：`scripts/test-affected.mjs`，`npm test`＝改动部分，`npm run test:full`＝原全量（红时自动跑 `check-known-reds`）。原「`npm test` 永远跑全量」的待办行已删（就是这笔）。
-- `fix(codex): a missing MCP list is read once more before the phase is refused (Orca tester #465)`：并联 task 首派稳定撞 `codex-phase-isolation-no-mcp-list`（瞬时探针失败被当终态），现在缺名单时重读一次再拒，拒绝原因不再被吞。Orca 侧 repin 后 `npm test`（改动部分）与 pin 脚本的默认解析 E2E 绿；**真 codex 付费复测未跑**。
-- Orca 跑门用的 ccloop 构建：`/Users/biran/code/skills/orca/.wt-ccloop-276114a/dist/cli.js`（下次 repin 前别删）。
+- 设计在 Orca：`Orca/docs/superpowers/specs/2026-11-25-ceiling-stop-keeps-work-design.md`（独立审阅后修订，§9 记审阅与处理）；计划 `Orca/docs/superpowers/plans/2026-11-25-ceiling-stop-keeps-work.md`。本仓主题行 `feat(control): a resumable live-ceiling stop carries its continuation and resumes the interrupted phase in the same attempt (#478)`、`docs(spec): a resumable live-ceiling stop carries its continuation -- Correction (#478)`（Correction 追加在 `docs/superpowers/specs/2026-11-12-live-ceiling-design.md`）。
+- **行为**：七个 ceiling 出口（attempt 前边界、plan 中途、execute 前边界、execute 中途无结果、partial execute 结果、完整 execute 结果／verify 前边界、verify 中途）在「可续跑」时仍以 `exhausted`＋`LIVE_CEILING_STOP_REASON`＋`liveCeilingStop` 结束，但 handoff packet 带 `allowanceContinuation {nextPhase, plan, execution, verification, state, usage}`（与 allowance park 同形），中途打断写事件 `ceiling_interrupted`（`<phase> in attempt N`），`enteredPhaseFiles` 去掉该阶段的文件 ⇒ candidate `missing:[]`。**partial 的 execute 结果 ⇒ `nextPhase:"execute"`**（`savedExecutionSchema` 不收 `completionStatus`），只有完整结果才到 verify；runner 造的可续跑 partial 现在以 `exhausted` 而不是 `failed` 结束（`failureCause` 不变）。
+- **可续跑** = 非 recovery、protocol 4 带 `tokenPolicy`、单目录、`cause !== "task-cap"`、用量已知、`attemptsUsed ≥ 1`、`timeRemainingMs > 0`、无 handoff 请求；否则与改前逐字节相同。
+- **续跑读者**（`materialize.ts` `savedCeilingStateSchema`）：无 `waitingCause`、`status:"exhausted"`；`tokenBudgetRemaining` 用真值（整数或 null，`known|unlimited`）；`attemptsRemaining ≥ 0`；`plan` 无 verification 只在 `{phase:"plan",at:"mid-call"}` 且 attempt 1。续跑提示：中途打断的阶段经 live-note 通道带 `CEILING_RESUME_NOTE`。
+- **attempt 不多扣（人本轮「有问题先按你的建议执行」下的控制器裁定，待人审）**：后继的 `inheritedUsage.attempts` 少继承一次，续跑以普通 1-attempt 授予跑同一个 attempt；`resumesAttempt` 在 `{phase:"plan",at:"boundary"}` 时为 0（那是新 attempt）。Orca 侧对应实现见 Orca handoff。
+- **判据**：`tests/controller/ceilingContinuation.test.ts`（25）＋`tests/control/ceilingContinuationWorker.test.ts`（1）；在旧码上 17 红／9 绿（9 绿＝8 条回归护栏＋attempt commit 一条）；17 个变异各只打红自己（变异在会话 scratchpad 的 clone 里）。未改写既有判据。
+- **门（现测）**：`npm run build` RC 0；`npm test`（改动部分，112 文件）在 load≈190 时 18 红／5 文件，五个文件各单跑过；`savedResultRecovery.native.test.ts` 对负载敏感：同一套 `node_modules` 的 A/B 克隆里，**未改动的 main 在 load 78 时红 7 条，分支在 load 46 时红 1 条，低负载下两边都 28/28** ⇒ 判负载（症状：worker 7.5 s 内未封存退出 → 收尾 `ENOTEMPTY`）。`npm test -- --rerun-failed` 在本仓不存在（vitest 拒绝该选项），手动逐文件重跑。
+- **登记未修**：plan 在最后一个 attempt（N ≥ 2）中途被打断没有会被其变异打红的判据；从一次拒绝续来的 run 在 attempt 1 的 plan 中途被打断时只带继承的 `recentFailures`、不带证据原文；真 codex 付费验收见 Orca handoff。
 
-### 上一轮（2026-11-20，Orca 会话 `c8fc876f`）—— 完全静默 run 的 live ceiling tick（Orca #369）：已推、已 repin
+### 2026-11-13 → 11-25 凌晨各轮仍成立的结论（2026-11-25 会话 `5d3d0c09` 压缩；过程原文按文首方法取回）
 
-- 测试者 #369：Orca 的 `run abandon` 把 live ceiling 降到已观测的 work token；ccloop 只在 `onObservedUsage` 里比较 ceiling，provider 完全静默时没有任何 usage 事件 ⇒ 停下要等 10 分钟 idle watchdog 或 phase 超时（现场 4 分钟无信号）。
-- 做法（`src/controller/runLoop.ts`）：`runPhaseWithTimeout` 在有 `liveCeilingThreshold` 时再加一个 1 s `setInterval`，用同一谓词（`observedTokens >= ceiling`）判断，命中时走既有 abort／budgetStop 路径（`ceilingStop=true`），`finally` 清掉。**没有新的杀进程权限**，Orca 的结算路径不变；没有配置 ceiling 的 stage 行为逐字节不变。
-- 判据：新增 `tests/controller/liveCeilingTick.test.ts`（claude fake `hang` 模式，400 ms 后把 ceiling 降到 0；断言 `exhausted`＋`liveCeilingStop.at="mid-call"` 并在约 1.3 s 内结束）。该判据先在旧码上红在「plan phase exceeded per-attempt timeout of 15000ms」。相邻 `liveCeiling.test.ts`＋`liveTokenThreshold.test.ts` 14/14 绿；typecheck／build RC 0。
-- **门（现测）**：全量 vitest 与 Orca quick/wide 门同时在跑时 14 红（`materializeV2`／`workerLost`／`endToEnd`／`ompVerificationOnlyRecovery` 等 13 条名单外）；四个文件单跑 **38/38 绿**（重跑，不是门）⇒ 判负载。`check-known-reds` 因此 RC 1，名单未改。
-- 登记：tick 只在已配置 ceiling 时存在（1 s 一个定时器／phase）；ceiling 为 0 且一个 token 都没观测到时按 `0 >= 0` 停，这是 abandon 的预期；`setInterval` 在 `finally` 清理，phase 结束后不残留。
-
-### 上一轮（2026-11-20，Orca 会话 `57896c64`）—— #397 转录热路径写入合批（压成结论）
-
-- 每个完整行（正文＋换行＋marker）作为一块一次 `writeSync`，256 KiB 与 `close()` 再 flush；stderr 每调用一个描述符。字节／marker／`atBytes` 不变，cap 不变。新增 `transcriptWriteBatch`（5）与 `stderrDescriptor`（1），改写 `transcriptCap` 一条（Ruling 行）。同机实测 16–21 s → 1.3–1.6 s；`finish()` 后到达的 chunk 不再落盘（已登记）。已推、已 repin。
-
-### 上上轮（2026-11-19，Orca 会话 `3ba26002`）—— 去掉复制 P1（Orca #363 #366）：已推、Orca 已 repin
-
-- 设计在 Orca：`Orca/docs/superpowers/specs/2026-11-19-change-sized-runs-design.md`（§5.2、§5.5、§6.1、§13 P1 行；末尾有 P0／P1／P2 的 Correction）。本仓主题行 `feat(control): the protocol-4 envelope key work.attemptDelivery "ref-v1", refused beside mode (…)` 至 `docs(protocol): a Correction for the P1 review -- attempt.base is attempt^, v2 recovery's strict rule and names (…)`（13 笔）；`docs/control-protocol-v1.md`「Continuation and result repository」后追加两段 Correction。
-- **一切行为由 envelope 键 `work.attemptDelivery:"ref-v1"` 开关（只 protocol 4，与 `mode` 同现即拒 `attempt-delivery-with-saved-result`）；不带键时逐字节同旧**（独立审阅逐处核过）。带键时：worker 与 settle-lost 把尝试结束记成 commit（临时 index、`update-ref --stdin` 一次设两名、读回），不建 `repo`/`repos`；collect 多顶层 `attempt`（`AttemptRecordV1`）；续跑读 Orca snapshot v2（范围 bundle 取进 repoPath、单个 worktree）；恢复认 `legacy-published-candidate-v2`（在临时 bare＋alternates 里验，不写人的仓库）；`features.attemptRef:"v1"`。
-- **给 Orca P2 的约定（P2 已按此实现、已进 Orca main）**：`attempt.base` 是 `attempt^`（捕获时的 HEAD），不是 run 的起点 base；agent 在 worktree 里自己提交过的 run 可续跑、**不可**按 saved-result 恢复（`saved-result-attempt-not-on-base`）；新拒绝 `saved-result-snapshot-too-large`（先查一万文件／单文件上限再读 blob）、`saved-result-snapshot-partial`；续跑取件失败分 `control-resume-head-mismatch`／`-snapshot-invalid`／`-base-unavailable`；带键时 settle-lost **不再跑两个清理循环**（不改动已判过的树，留下的树 Orca 不得假定已删）；collect `dirs[].resultRepo` 仍写 `repos/<key>`，读 `commits.json` 的 `attemptSha`。
-- 判据：人逐条点名允许的两条已改（`tests/control/protocol4.test.ts`、`tests/control/savedResultEvidence.test.ts` 的 features `toEqual` 加 `attemptRef`，注释引人原话）；其余零改写。变异全红（P1 两轮共 26 个，含审阅补的 13 个）。全量 vitest（`--minWorkers=1 --maxWorkers=2`）2921/2921，`check-known-reds` RC 0；未改动 `214125f` 上 `tests/runtime/codex/stalledCauseAndFloor.test.ts`（#262）在高负载下曾 2/2 红，与本件无关（本件不碰 runtime）。
-- （2026-11-25 收成结论：本轮已推、Orca 已 repin 并改写 `allowanceHeldSettlement` 判据，见本节标题；原「等人」行按 Rule 13 删去过程；当时登记的未跟踪 `undefined.version-calls` 2026-11-25 `ls` 已不存在。）
-
-### 上一轮（2026-11-19，Orca 会话 `543e800e`）—— omp 启动隔离（Orca #369 a、#375）：已推，Orca 已 repin 到 `57b6d15`（压成结论）
-
-- 设计 `docs/superpowers/specs/2026-11-18-omp-launch-isolation-design.md`（§6、§7）。**按次启动、不改任何 agent 的 profile／配置文件**（人裁）：omp loop 阶段 `--config` 覆盖（重试 3 次／60 s、关模型回退、关项目 MCP 配置）、`OMP_MCP_TIMEOUT_MS=2000`；provider 非 408/429 的 4xx 起 20 s 宽限（只被恢复行取消）后以 `provider-error` 结束，任何 omp 404 = `model-unavailable`；MCP 就绪警告进 collect `transcripts[].warnings`。两条 omp argv golden 人逐条允许改。真 omp 付费验收未跑；登记：`listAgents` 不报 omp MCP 清单、用户级 MCP 仍会启动、omp 4xx 后挂 4 分钟根因未证。
-
-### 上一轮（2026-11-18，Orca 会话 `4389b15f`）—— #347 execute 答案失败细分、#349 codex 会话删除失败不再判失败；均已推，Orca 已 repin 到 #349 那笔
-
-- 主题行 `feat(runtime): a refused execute answer is narration-only, execution-not-json or execution-shape (Orca #347)` 至 `fix(runtime): a typed claude assistant error is not refined into an answer cause; …`（#347）；`fix(runtime): a failed codex session deletion is recorded and retried once, never a failed phase (Orca #349)` 至 `docs(spec): Orca #349 review round …`（#349）。人授权本轮改 ccloop。
-- **#347**：执行阶段答案被拒时 `failureCause` 从 `unknown` 细分为 `narration-only`（无答案或散文，且未观察到工作）／`execution-not-json`／`execution-shape`；「工作」按适配器观察：codex 非 `agent_message`/`reasoning`/`error` 的 item（未知类型算工作）、claude runner 的 `toolUses`（缺 signals 文件算工作）、omp `tool_execution_start`。只细化 `unknown`；claude 已有带类型的 `assistantError` 时不细化；不进 `RETRYABLE_CAUSES`；codex 中止规则对三类同 `unknown`。改了 2 条既有判据（cause `unknown`→`execution-shape`，Ruling 行）。
-- **#349**：`codex delete --force` 失败不再让阶段失败：写 `session-cleanup-failed.json`（含 argv、`userHome`、exit／signal、stderr ≤512 B），collect 可选 `sessionCleanup[]{threadId,home,state,detail,command?,userHome?}`（无则缺席，collect 字节不变）；同 run 下一 codex 阶段或 **run 结束时**重试一次，再败 `retry-failed` 不再自动重试；「已清」只认 rollout 文件确实不在；sessions 目录读不出记为失败走重试；清理本身让调用失败时 cause `cleanup-failed`（不可阶段内重试）。**删除补上 `-c model_catalog_json=<abs>`**——0.167.0 实测：私有 home 配置里相对路径时缺这对参数删除报「failed to load configuration」；但现场 `01a1e8f9-…` 的失败成因**未证**（证据已不在）；同一私有 home 的状态库被写锁时一次删除等了 14 s（> 10 s 超时），可能是另一成因。改了 2 条既有判据（phaseIsolation，Ruling 行）。spec Correction 追加在 `2026-10-18-codex-phase-isolation-design.md` 与 `2026-10-21-failure-causes-and-transient-retries-design.md`。
-- **门（现测）**：两项都在的 main 上全量 287 文件／2,856 条全过、`check-known-reds` RC0（负载 18–27）；高负载时 `stalledCauseAndFloor` #262 (1)（`io-error`≠`stalled`）与 `skillsController` 「fixture marker missing」在未改动 main 上同样红。
-- **环境教训**：vitest 2.1.9 单独 `--maxWorkers=2` 报 min/max 冲突，要 `--minWorkers=1 --maxWorkers=2`；`/private/tmp` 会话 scratchpad 会被外部清掉（本轮删掉过一个 worktree，残留记录已用不带 force 的 `git worktree remove` 清掉）。
-- **登记未修**：live ceiling 被调低后 ccloop 只在下一次用量观测或阶段边界才比较（`createLiveCeilingWatch` 读新 revision 但不触发检查），abandon 的花费已封顶（最多再一次调用），只影响收尾快慢——低优先。
-
-### 上一轮（2026-11-17，Orca 会话 `9982cf01`）—— 转录行接收时间标记（已推，Orca 已 repin）
-
-- 主题行 `feat(runtime): stamp transcript rows at receipt (#320)` 至 `fix(runtime): keep a full final raw transcript line at close (#320)`：每条保留的原始行后追加 `{"type":"ccloop.line-observed","atBytes":…,"ccloopObservedAt":…}`，原始 events、decoder 与各帽不变；旧 transcript 无标记时 Orca 不显示时间、不回填。（过程于 Orca 会话 `543e800e` 压掉：分支已合推、Orca 已 repin 多次，结论在此句；原文按页首方法取回。）
-
-### 上一轮（2026-11-13，Orca 会话 `c8b75eac`，测试者反馈 J 轮）—— 单次调用容许前言、陈旧锁回收、never-claimed、build-info、`model-unavailable`、原始用量明细；**全部已推、Orca 已 repin**（以 `git ls-remote` 现核）
-
-- **人的话**：点名判据「点名允许改必要的测试」（对 `codexSingleCall.test.ts:229` 的多条消息规则、旧标题、`accepted.lock`）；「这次批准改写所有必要的判据」；cacheRead「选3，都要记录原始token…有就记录，没有就留空」。
-- **主题行**（`git log --grep` 取，都以 `(Orca follow-up J)` 结尾）：
-  - `fix(codex): a single call may open with preamble messages; the -o answer stays the answer`：同一回合内先有前言消息、`-o` 文件是对象 ⇒ 接受；前面的消息本身也解析成对象 ⇒ 两个答案、仍拒 `not-single:messages`；多回合、工具、`-o` 非对象照拒。Orca chain spec §6.1 已追加更正。
-  - `test(control): the worker-free criterion names the stop-proved candidate it asserts`：旧标题改为「candidate 带停止证明时不带 worker」（`workerLost.test.ts:160`，Ruling 行）。
-  - `fix(control): a lock left by a dead holder is recovered…`＋`refactor(control): an identity-less lock holder…`：`control/accepted.lock` 记 `{pid,startedAt,nonce}`（lstart 按 UTC），持有者经 `classifyOwnerProcess` 证实已死（pid 不在或被复用）⇒ 竞争者以硬链接独占认领后删、重试；活着或无法判定 ⇒ 仍 `control-accepted-busy`。**无身份的旧锁照旧占用、要手删**（不设年龄上限）；回收者恰在 link 与 unlink 之间被杀会再留一把无法判定的锁。`workerLost.test.ts:271-275` 改成不再手删锁（Ruling 行）。
-  - `fix(control): a launch no worker ever claimed is reported and relaunched by a re-issued accept`（#308）：`markAcceptedUnknown` 后 `worker:null` 可证「从未认领」⇒ inspect/accept 答 `{kind:"unknown", launch:"never-claimed"}`；重发 accept 在锁内换新 executionId 重拉。顺带修：worker 命令起不来时未处理的 `'error'` 杀掉控制进程、记录永远停在 `intended`。已停在 `intended` 的旧记录要手清。接收超时 2 s 未改（负载下可能就是现场成因）。
-  - `feat(build): dist/build-info.json names the commit the build was made from`（#287）：`npm run build` 末步写 `{commit,builtAt}`；只在包根是 git 根时用 git，否则读 `export-subst` 的 `scripts/archive-commit.txt`，再不行 `commit:null`。**经 npm 真装（Orca repin）实测 commit 正确**——那次 npm 走的是 git clone，codeload 归档那条路仍只在本地 `git archive` 验过。
-  - `feat(runtime): a provider that does not serve the model is failure cause model-unavailable`（#299）：codex `unexpected status 404 … model`、claude `model_not_found`；不在 RETRYABLE_CAUSES；omp 无样本仍 `unknown`。
-  - `feat(usage): record raw usage detail per model and the phase of each work event`：byModel 可选 `reasoning`／`cacheWrite5m`／`cacheWrite1h`／`requests`／`maxRequestInput`（子项，四项之和不变），usage event 可选 `phase`（plan|execute|verify|setup；单次调用、handoff、saved-result、worker-lost 事件不带）；某字段在一个 run 里缺过一次就一直缺；`maxRequestInput` 按阶段、不累计。claude 的 reasoning／两档缓存写取自结果信封的每模型用量（偏离 Orca spec §8.2，有真 haiku 探针为据），`requests`／`maxRequestInput` 只在流与信封对得上时给；codex 只有 reasoning；omp 每个 `message_end` 计一次请求。改写 `ompSingleCall.test.ts:159,:322`（Ruling 行）。spec 在 Orca 仓 `docs/superpowers/specs/2026-11-13-raw-usage-detail-design.md`。
-- **门（现测）**：各席全量各一次，名单外红都在未改动 main clone 上同形或单跑过（日志 `/private/tmp/orca-j1113/ccloop-seat{,2,3}/`）。变异 7＋15＋24 全红。
-- **挂账**：`stalledCauseAndFloor`、`updates.test.ts`、`parseArgs`「example contract run」、`runSetupCommands` 超时类在负载下名单外红（单跑绿）——进不进 `check-known-reds` 名单归人；备份分支 `j-backup-before-reword`（实现席改提交说明前留下，要 `branch -D`，归人）。
+- **测试分档**：`npm test`＝改动部分（`scripts/test-affected.mjs`），`npm run test:full`＝全量（红时自动跑 `check-known-reds`）。
+- **#465**：codex MCP 名单缺失时重读一次再拒，拒绝原因不再被吞；真 codex 付费复测未跑。
+- **#369 live ceiling tick**：配置了 ceiling 时每阶段 1 s `setInterval` 用同一谓词检查，完全静默的 provider 也能在约 1 s 内被停；未配置时逐字节不变。
+- **#397**：转录每个完整行一次 `writeSync`（256 KiB 与 close 时 flush），`finish()` 后到达的 chunk 不落盘（登记）。
+- **去复制 P1（Orca #363 #366）**：一切由 envelope `work.attemptDelivery:"ref-v1"` 开关（只 protocol 4、与 `mode` 互斥）；尝试结束记成 commit（临时 index，未跟踪文件也在内）；`attempt.base` 是 `attempt^`；agent 自己在 worktree 提交过的 run 可续跑、不可按 saved-result 恢复；续跑读 Orca snapshot v2；`features.attemptRef:"v1"`。
+- **omp 启动隔离（Orca #369 a、#375）**：按次 `--config` 覆盖、不改 profile；非 408/429 的 4xx 20 s 宽限后 `provider-error`；omp 404＝`model-unavailable`。
+- **#347／#349**：执行答案被拒细分 `narration-only`／`execution-not-json`／`execution-shape`；codex 会话删除失败只记录并重试一次，不判阶段失败（删除带 `-c model_catalog_json=<abs>`）。
+- **#320**：转录行后追加 `ccloop.line-observed` 接收时间标记。
+- **J 轮（Orca follow-up J）**：单次调用允许前言消息；死持有者的 `accepted.lock` 可回收（无身份旧锁要手删）；从未认领的 launch 报 `never-claimed` 并可重发 accept；`dist/build-info.json` 记构建 commit；provider 不服务模型 ⇒ `model-unavailable`；每模型原始用量明细与 usage event 的 `phase`。挂账：`stalledCauseAndFloor`、`updates.test.ts` 等在负载下名单外红（单跑绿）是否进 `check-known-reds` 归人；备份分支 `j-backup-before-reword` 要 `branch -D`（归人）。
+- **登记**：live ceiling 被调低后只在下一次观测或阶段边界比较（tick 已缓解完全静默的情况）。
 
 ### I、G、E 轮与 #225 轮的结论（I 轮于 2026-11-13 Orca 会话 `c8b75eac` 压入：已推、Orca 已 repin；G／E／#225 轮 2026-11-13 Orca 会话 `7e164691` 压入；过程原文按文首的 `git show <那一笔>^:docs/handoff/handoff.md` 取回）
 
