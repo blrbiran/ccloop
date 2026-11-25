@@ -44,7 +44,13 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 > **Orca 会话 `5d3d0c09`（2026-11-25）：本仓 main 已由 agent 推（人本轮授权「repin 需要时可 push ccloop」），Orca 随后 repin 到这笔 main 尖。** 远端一律 `/usr/bin/git ls-remote` 现测。
 
-### 最新（2026-11-25 晚，Orca 会话 `dee8a34f`）—— 模型目录探针的上限从 1 MiB 提到 16 MiB：这台机器上每个 codex phase 原本都起不来
+### 最新（2026-11-26，Orca Batch 70）—— #493 Codex phase 私有目录检查
+
+- `fix(codex): a phase refuses a private CODEX_HOME that carries hooks.json (tester #493)` 已合推。相位隔离发现私有 `CODEX_HOME/hooks.json` 或私有 `HOME/.codex/hooks.json` 时拒绝启动。保留现有 argv 与历史恢复格式。检查覆盖这两处文件路径，链接的 `config.toml` 和其它 hook 来源仍需分别看待。
+- 免费复核 `codex --version` 与 `codex features list -c features.hooks=false`：本机 0.172.0 列表显示 false，测试者记录了实际 exec 仍执行 hook 的现场。没有重新跑付费 exec。
+- 代码提交观测点 `4ccbfc2`：`vitest run tests/runtime/codex/codexPhaseIsolation.test.ts tests/control/savedResultRecovery.test.ts` 51/51，`npm run typecheck`、`npm run build` RC 0。推后裸 `npm test` 选 0 文件，仅 typecheck，完整套件未跑。
+
+### 上一轮（2026-11-25 晚，Orca 会话 `dee8a34f`）—— 模型目录探针的上限从 1 MiB 提到 16 MiB：这台机器上每个 codex phase 原本都起不来
 
 - **真实缺陷（不是 Orca 的配置问题）**：`codex debug models` 在本机输出 **1,450,999 B**，因为 `~/.codex/config.toml` 的 `model_catalog_json` 指向一份 925,668 B 的 magpie 目录；`src/agents/catalogProbe.ts` 的 `OUTPUT_LIMIT = 1 MiB` 把它 SIGKILL 在 `output-limit · stage decode`，于是 codex 阶段一开始就被拒 `codex-phase-isolation-no-mcp-list: agent-catalog-unavailable: output-limit`。现场：`~/.orca/control/panel.runs/run-9e4cf054…/run/codex/1/plan/call-mjlbVh/outcome.json` 的 `refusalDetail`；一次真实的 Orca ceiling 验收因此 0 token 卡住。
 - **改动**：`PROBE_STDOUT_LIMIT = 16 * 1024 * 1024`（16,777,216 / 1,450,999 ≈ 11.6× 余量），仍是硬上限；注释写明测量、版本与为什么 1 MiB 从来不是目录数据的安全边界。`stderr` 那一支用的是同一个常量（单个 pipe chunk 约 64 KiB，本来就不可能触发；stderr 内存另有 `STDERR_KEEP = 4096` 兜底，登记未改）。
@@ -314,7 +320,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-25 晚（Orca 会话 `dee8a34f`）**：模型目录探针的 16 MiB 修复已推 main。Orca 用它 repin 后，同一任务 attempt 1 的 Codex execute 成功从 ceiling stop 续跑，落地测试通过。阶段用量、组账口径与复核命令见 Orca handoff §3.最新。
+- **2026-11-26（Orca Batch 70）**：#493 私有目录检查见本仓「当前状态」。上一轮 16 MiB 目录探针修复及 #478 同 attempt 付费验收见 Orca handoff 的 Batch 69 段。
 - **2026-11-24 晚（Orca 会话 `d7ca40c0`→`6f9b7b78`）**：本仓两笔，**未推、未 repin**（闸门拒了本会话的 push，见 Orca handoff §4.0 第 0 条）。①`feat(test): npm test runs the changed part; test:full runs every file`：`npm test` 改为 `scripts/test-affected.mjs`（改动的测试、src 镜像目录[>60 只取同名]、直接非 type-only import 者、导入改动的 helper 的测试、点名改动脚本/夹具的测试；config 与 `tests/setup` 选全量；无人引用的文件选全量并明说），`npm run test:full` 是原来的整套 `vitest run`，红了自动跑 `check-known-reds`；判据 `tests/scripts/testAffected.test.ts` 10 条，6 个变异各只打红自己。②Orca #465 `fix(codex): a missing MCP list is read once more before the phase is refused`：MCP 列表为 null 时退避 250–750 ms 再读一次 catalog（剩余时限 >2 s 才读），仍缺照旧拒；拒绝说明在整个探针抛错时带 `catalogError`；隔离不变（不回退成「无 MCP」）。新判据（fake codex `mcpFailTimes: 1`）先红；codex 隔离相邻 4 文件 56/56。**没有改写任何既有判据**。门：`npm run test:full` 在 load≈330 下 2927 过／35 红（11 文件），**同 11 文件在未改动的 main 克隆里 28 红**（本分支 26 红）⇒ 负载，known-reds 名单未改。
 - **2026-11-24（Orca 会话 `221948a1` 续做）**：本仓**零代码改动**。Orca 要 repin 到含 `CCLOOP_WORKER_RECEIPT_TIMEOUT_MS` 的 `f8d368e`（主题行 `chore(deps): repin ccloop to f8d368e for the settable worker receipt timeout (#439)`；是否已进 Orca main 以 Orca handoff 与 `ls-remote` 现测为准），并由 Orca 的 `ccloopPort` 给每个 `ccloop control` 子进程传 `10000`（面板环境已有非空值则沿用）。**本仓默认值仍是 2000 ms、判据未改**——要抬默认值需改本仓判据，人点名。Orca 门用的 ccloop 构建在 `/Users/biran/code/skills/orca/.wt-ccloop-f8d368e`（`clone --local`＋`npm ci`＋build，`dist/build-info.json` 现测为 f8d368e）。
 - **2026-11-21 → 11-23 的结论（压缩；过程按文首方法取回）**：#439 的 2 s 回执超时是 Orca 现场 `launch-never-claimed` 的成因（负载 6 时空 node spawn 1735 ms），`LAUNCH_RELAUNCH_LIMIT` 仍为 2；`work.memory`（协议 3＋4、sha256 自校验、8192 B、只进 plan/execute、与 `mode` 互斥、`features.memory:"v1"`）已在 main、Orca 已用；Orca #385 拆分指令 v9 只改 Orca 自己的单次调用 schema，本仓契约不变。`stash@{0}`（`On tester-issues-20261123: superseded ccloop handoff line from fc492f1b`）是过期的一行 handoff，可由人 `git stash drop`。
