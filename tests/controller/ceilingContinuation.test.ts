@@ -370,10 +370,12 @@ describe("criterion 4: a second ceiling inside a continuation is resumable again
 describe("criterion 5: plan without the rejection is accepted only for a ceiling stop on attempt 1", () => {
   it("accepted for the attempt-1 plan stop; refused once the saved state says attempt 2 or is a plain allowance park", async () => {
     const a = await stopRun({ plan: async (c) => { await streamUntilStopped(c, 50); throw new Error("stopped"); }, execute: async () => EXECUTION, verify: async () => APPROVED }, { ceiling: 40 });
-    const reader = async (next: { input: InputCheckpointV1 }) => readAllowanceContinuation({ ...a.envelope, claim: { ...a.envelope.claim, runId: "run-b" }, inputCheckpoint: next.input, tokenPolicy: inheritedAfter(a, true) } as never);
+    const reader = async (next: { input: InputCheckpointV1 }, resumes = true) => readAllowanceContinuation({ ...a.envelope, claim: { ...a.envelope.claim, runId: "run-b" }, inputCheckpoint: next.input, tokenPolicy: inheritedAfter(a, resumes) } as never);
     expect(await reader(await bundleFrom(a))).toMatchObject({ nextPhase: "plan", plan: null, execution: null });
-    await expect(reader(await bundleFrom(a, (state) => { state.currentAttempt = 2; state.attemptsUsed = 2; }))).rejects.toThrow(/control-allowance-/);
-    await expect(reader(await bundleFrom(a, (state) => { delete state.liveCeilingStop; state.waitingCause = "token-allowance"; }))).rejects.toThrow(/control-allowance-/);
+    // Each tamper is otherwise valid, so the refusal is the missing rejection itself (its null ref is unreachable).
+    await expect(reader(await bundleFrom(a, (state) => { state.currentAttempt = 2; }))).rejects.toThrow("control-allowance-evidence-unreachable");
+    await expect(reader(await bundleFrom(a, (state) => { delete state.liveCeilingStop; state.waitingCause = "token-allowance"; state.status = "blocked_waiting_human";
+      state.budgetSnapshot = { ...state.budgetSnapshot, attemptsRemaining: 2, tokenBudgetRemaining: 0, tokenRemainingStatus: "known" }; }), false)).rejects.toThrow("control-allowance-evidence-unreachable");
     await expect(reader(await bundleFrom(a, (state) => { state.liveCeilingStop.cause = "task-cap"; }))).rejects.toThrow(/control-allowance-/);
   }, 60_000);
 });

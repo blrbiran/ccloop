@@ -72,3 +72,39 @@ the ceiling is re-evaluated on every usage observation (criterion "lets the phas
 | K2-M8 the watch takes an older revision | the watch criterion |
 | K2-M9 the watch reports every failed read | the watch criterion |
 | K2-M10 a mid-call plan stop keeps the old stop reason | resumed run |
+
+## Correction (2026-11-25, Orca session 5d3d0c09, #478)
+
+Appended by the ccloop implementation seat of Orca session `5d3d0c09` (branch `feat/ceiling-continuation-478`); the text
+above is unchanged. Orca spec: `docs/superpowers/specs/2026-11-25-ceiling-stop-keeps-work-design.md` §5.1 (Orca repository).
+"A stop" in Interfaces is extended for a **resumable** stop; every other stop is as written above.
+
+- **Resumable** = not a saved-result recovery, a token policy present (protocol 4), one directory (no `additionalRepos`),
+  `cause` not `task-cap`, every settled phase's usage known, `attemptsUsed >= 1`, `timeRemainingMs > 0`, and no handoff
+  request latched or deadline fired. (`timeRemainingMs > 0` is this implementation's addition: the reader has always
+  refused a saved state with no time left.)
+- A resumable stop is still terminal `exhausted` with `stopReason: "live token ceiling reached"` and `liveCeilingStop`, and
+  the terminal state also carries `allowanceNextPhase` (no `waitingCause`): `plan` for the boundary before a new attempt
+  and for a plan cut mid-call; `execute` before execute, for an execute cut mid-call with no result, and for any partial
+  execute result; `verify` for a complete execute result (mid-call or at the verify boundary) and for a verify cut mid-call.
+  A runner-built partial at the ceiling that ended `failed` before now ends `exhausted` when resumable (its failure cause
+  is unchanged).
+- When the resumed phase is the one cut mid-call, the run appends event `ceiling_interrupted` with detail
+  `<phase> in attempt <N>`; the handoff packet's entered-phase filter excludes that phase's file, as for
+  `handoff_interrupted`. The filter now applies to such a terminal run, and `execution_finished` also enters
+  `execution.json` (an attempt resumed at verify never emitted `execute_started`).
+- The packet carries `allowanceContinuation {nextPhase, plan, execution, verification, state, usage}`, `contractHash`,
+  `acceptedContract` and `tokenPolicy` as a token-allowance park does; the worker captures the usage ledger for it. A plan
+  cut mid-call in attempt N >= 2 carries attempt N-1's `verify.json`; on attempt 1 `verification` is `null`.
+- Reader (`readAllowanceContinuation`): besides a park's saved state it accepts one with no `waitingCause`, `status`
+  `exhausted`, `liveCeilingStop.cause` `group` or `pause-line`, `tokenBudgetRemaining` an integer or `null` with
+  `tokenRemainingStatus` `known` or `unlimited`, and `attemptsRemaining >= 0`. `verification: null` with `nextPhase: "plan"`
+  is accepted only for a plan cut mid-call on attempt 1.
+- Attempts: every resumable stop except the boundary before a new attempt **resumes the attempt it stopped in**. Its
+  successor's `tokenPolicy.inheritedUsage.attempts` must be at least the predecessor's inherited attempts plus its local
+  attempts **minus one** (the reader refuses less), so the resumed attempt keeps its number and a stop on the last attempt
+  can continue with a one-attempt grant. Tokens, active time and sessions are inherited whole, as for a park.
+- The resumed phase, when it was cut mid-call, carries one live note (id `ccloop-ceiling-resume`, text
+  `CEILING_RESUME_NOTE` in `runLoop.ts`) in its prompt; it is not an inbox note and Orca sees no delivery for it.
+- No envelope or report field was added. Criteria: `tests/controller/ceilingContinuation.test.ts`,
+  `tests/control/ceilingContinuationWorker.test.ts`. No existing criterion was edited.
