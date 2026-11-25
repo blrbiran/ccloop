@@ -283,11 +283,28 @@ async function enteredPhaseFiles(sourceDir: string, runDir: string, attempt: num
         if (event.detail === `handoff deadline interrupted ${phase} in attempt ${attempt}`) entered.delete(file);
       }
     }
+    // Orca #478 (spec 2026-11-25-ceiling-stop-keeps-work-design.md §5.1 item 1): likewise the phase a resumable live-ceiling
+    // stop cut mid-call (detail `<phase> in attempt <n>`); its continuation runs that phase again on the saved tree.
+    if (event.type === "ceiling_interrupted") {
+      for (const [phase, file] of Object.entries(PHASE_FILE)) {
+        if (event.detail === `${phase} in attempt ${attempt}`) entered.delete(file);
+      }
+    }
     if (event.detail !== `attempt ${attempt}`) continue;
     if (event.type === "execute_started") entered.add("execution.json");
-    if (event.type === "execution_finished") entered.add("verify.json");
+    // #478: an attempt that resumed at verify (a continuation) never started execute here, yet its execution.json was
+    // written from the carried result before verify was entered, and a second ceiling stop must carry it on.
+    if (event.type === "execution_finished") { entered.add("execution.json"); entered.add("verify.json"); }
   }
   return entered;
+}
+
+/**
+ * Orca #478 (spec 2026-11-25-ceiling-stop-keeps-work-design.md §5.1): a terminal live-ceiling stop the run loop judged
+ * resumable names its continuation's phase; its packet then carries `allowanceContinuation` exactly as a token-allowance park.
+ */
+export function isCeilingContinuation(runState: RunState): boolean {
+  return runState.waitingCause === undefined && runState.liveCeilingStop !== undefined && runState.allowanceNextPhase !== undefined;
 }
 
 export async function buildHandoffPacket(
@@ -316,8 +333,9 @@ export async function buildHandoffPacket(
   if(_privateRecovery !== undefined)artifacts.push(stateRef!);
   await retainFile(envelope.work.sourceDir, join(runDir, "loop-contract.json"), "loop-contract.json", artifacts, missing);
   const phaseRefs: Record<string, ArtifactRefV1 | null> = {};
+  const carriesContinuation = envelope.protocol === 4 && (runState.waitingCause === "token-allowance" || isCeilingContinuation(runState));
   if (runState.currentAttempt > 0) {
-    const entered = (request !== null && !isTerminalRunStatus(runState.status)) || (envelope.protocol === 4 && runState.waitingCause === "token-allowance")
+    const entered = (request !== null && !isTerminalRunStatus(runState.status)) || carriesContinuation
       ? await enteredPhaseFiles(envelope.work.sourceDir, runDir, runState.currentAttempt)
       : null;
     for (const name of ["plan.json", "execution.json", "verify.json"]) {
@@ -334,12 +352,18 @@ export async function buildHandoffPacket(
     }
   }
   let allowance: Pick<HandoffPacketV1, "contractHash" | "acceptedContract" | "allowanceContinuation" | "tokenPolicy"> = {};
-  if (envelope.protocol === 4 && runState.waitingCause === "token-allowance") {
+  if (carriesContinuation) {
     const nextPhase = runState.allowanceNextPhase;
     const plan = nextPhase === "plan" ? null : phaseRefs["plan.json"];
-    const verification = nextPhase === "plan" ? phaseRefs["verify.json"] : null;
+    // #478: a ceiling stop that cut plan mid-call is in attempt N; the rejection it carries is attempt N-1's (none on attempt 1).
+    const stop = runState.liveCeilingStop;
+    const planCut = isCeilingContinuation(runState) && nextPhase === "plan" && stop?.at === "mid-call";
+    const verification = nextPhase !== "plan" ? null : !planCut ? phaseRefs["verify.json"] : runState.currentAttempt === 1 ? null
+      : await retainFile(envelope.work.sourceDir, join(runDir, "attempts", String(runState.currentAttempt - 1), "verify.json"),
+        `attempts/${runState.currentAttempt - 1}/verify.json`, artifacts, missing);
     const execution = nextPhase === "verify" ? phaseRefs["execution.json"] : null;
-    if (!allowanceUsage || !stateRef || (!plan && nextPhase !== "plan") || !nextPhase || (nextPhase === "verify" && !execution) || (nextPhase === "plan" && !verification)) throw new ControlProtocolError("control-allowance-evidence-missing");
+    if (!allowanceUsage || !stateRef || (!plan && nextPhase !== "plan") || !nextPhase || (nextPhase === "verify" && !execution)
+      || (nextPhase === "plan" && !verification && !(planCut && runState.currentAttempt === 1))) throw new ControlProtocolError("control-allowance-evidence-missing");
     const acceptedContract = await writeEvidence(envelope.work.sourceDir, Buffer.from(canonicalJson(envelope.work.contract)));
     artifacts.push(acceptedContract, allowanceUsage);
     allowance = { tokenPolicy: envelope.tokenPolicy, contractHash: envelope.contractHash, acceptedContract, allowanceContinuation: { nextPhase, plan: plan ?? null, execution: execution ?? null, verification: verification ?? null, state: stateRef, usage: allowanceUsage } };

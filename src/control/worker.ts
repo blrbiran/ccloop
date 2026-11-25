@@ -19,6 +19,7 @@ import { recordAttemptEnd } from "./attemptRecord.js";
 import { prepareContinuationContract, readAllowanceContinuation } from "./materialize.js";
 import {
   buildHandoffPacket,
+  isCeilingContinuation,
   persistHandoffCandidate,
   readHandoffRequestOptional,
 } from "./handoff.js";
@@ -387,7 +388,7 @@ export async function runControlWorker(argv: string[]): Promise<void> {
         }
         const existingEvents = await readUsageEvents(sourceDir);
         const predictedHighWater = (existingEvents.at(-1)?.eventSeq ?? 0) + 1;
-        const allowanceUsage = envelope.protocol === 4 && runState.waitingCause === "token-allowance"
+        const allowanceUsage = envelope.protocol === 4 && (runState.waitingCause === "token-allowance" || isCeilingContinuation(runState))
           ? await captureKnownWorkUsageLedger(sourceDir, { runId: envelope.claim.runId, generation: envelope.claim.generation, usageHighWater: predictedHighWater })
           : undefined;
         if(envelope.mode==="verify-saved-result"&&runState.status==="succeeded"){

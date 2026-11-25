@@ -381,6 +381,9 @@ async function readRejectionEvidence(runDir: string, state: RunState): Promise<s
   return null;
 }
 
+/** #478 (Orca spec 2026-11-25-ceiling-stop-keeps-work-design.md §5.1): the one note a resumed, interrupted phase carries. */
+export const CEILING_RESUME_NOTE = "The previous run of this phase stopped at the token ceiling before it finished. The worktree already holds its changes: review them and finish the phase; do not start over.";
+
 function initialState(contract: LoopContract): RunState {
   return {
     status: "queued",
@@ -1682,7 +1685,9 @@ export interface RunControlHooks {
   /** Live notes (Orca follow-up G Part 5): the worker's inbox, read once at every phase start; absent for a recovery. */
   liveNotes?: import("../runtime/types.js").LiveNoteInbox;
   /** Only the worker supplies this, after validating the checkpoint and reachable artifacts. */
-  allowanceContinuation?: { nextPhase: "plan" | "execute" | "verify"; plan: AttemptPlan | null; execution: ExecutionResult | null; recentFailures?: FailureFingerprint[]; lastRejectionEvidence?: string[] };
+  allowanceContinuation?: { nextPhase: "plan" | "execute" | "verify"; plan: AttemptPlan | null; execution: ExecutionResult | null; recentFailures?: FailureFingerprint[]; lastRejectionEvidence?: string[];
+    /** #478: the continuation of a live-ceiling stop that cut `nextPhase` mid-call; that phase's prompt carries CEILING_RESUME_NOTE. */
+    interrupted?: true };
   /** Trusted accepted control envelope supplied only by the worker. */
   taskResultInput?: StartEnvelopeV3;
   /** Only supported original provider evidence can create a recovery capsule. */
@@ -1865,6 +1870,29 @@ export async function runLoopFromState(
     liveCeiling !== undefined && ceilingReachedAtBoundary(ceilingRunTokens(), liveCeiling.current()) ? liveCeilingStopOf(phase, "boundary") : undefined;
   const handoffRequested = (): boolean => options?.stopRequested?.requested === true;
   const handoffAborted = (): boolean => options?.phaseSignal?.aborted === true;
+  // A live-ceiling stop keeps its paid work (Orca #478, Orca spec 2026-11-25-ceiling-stop-keeps-work-design.md §5.1): a stop
+  // Orca can lift (group, pause-line) of a run that paid for at least one attempt stays the same terminal `exhausted` stop and
+  // also names the phase its continuation resumes at (`allowanceNextPhase`, read by the handoff packet builder). A phase cut
+  // mid-call that is resumed is named by a `ceiling_interrupted` event, so its never-written file is not listed as missing.
+  // Not resumable => the stop of before, byte for byte.
+  const resumableCeilingStop = (stop: LiveCeilingStopV1): boolean => !recovery && options?.tokenPolicy !== undefined
+    && contract.context.additionalRepos === undefined && stop.cause !== "task-cap" && observationsKnown && state.attemptsUsed >= 1
+    && state.budgetSnapshot.timeRemainingMs > 0 && !handoffRequested() && !handoffAborted();
+  const ceilingStopState = async (stop: LiveCeilingStopV1, nextPhase: "plan" | "execute" | "verify"): Promise<RunState> => {
+    if (!resumableCeilingStop(stop)) return { ...state, liveCeilingStop: stop };
+    if (stop.at === "mid-call" && stop.phase === nextPhase) {
+      await appendEvent(runDir, { type: "ceiling_interrupted", at: new Date().toISOString(), detail: `${nextPhase} in attempt ${state.currentAttempt}` });
+    }
+    return { ...state, liveCeilingStop: stop, allowanceNextPhase: nextPhase };
+  };
+  // The continuation of a phase cut mid-call (§5.1 "Interrupted-phase note"): that phase's prompt carries one note, through
+  // the live-note channel, at the resumed attempt only. It is not an Orca note, so the inbox records no delivery of it.
+  const notesAt = async (phase: PhaseName, attempt: number): Promise<{ liveNotes?: import("../runtime/types.js").LiveNote[] }> => {
+    const taken = await liveNotesAt(phase, attempt);
+    const resumed = options?.allowanceContinuation;
+    if (recovery || attempt !== 1 || resumed?.interrupted !== true || resumed.nextPhase !== phase) return taken;
+    return { liveNotes: [...(taken.liveNotes ?? []), { id: "ccloop-ceiling-resume", text: CEILING_RESUME_NOTE, at: new Date().toISOString() }] };
+  };
 
   // Package 2 / debt 2, review round 1: created per invocation, so the abandonment-event latch is
   // scoped to this run of the loop rather than to the process. Every loop-state.json write below
@@ -1949,7 +1977,7 @@ export async function runLoopFromState(
     }
     const ceilingBeforeAttempt = boundaryCeilingStop(state.attemptsUsed === 0 ? options?.allowanceContinuation?.nextPhase ?? "plan" : "plan");
     if (ceilingBeforeAttempt !== undefined) {
-      return await persistTerminalState(runDir, writeOwnedRunState, { ...state, liveCeilingStop: ceilingBeforeAttempt }, "exhausted", LIVE_CEILING_STOP_REASON);
+      return await persistTerminalState(runDir, writeOwnedRunState, await ceilingStopState(ceilingBeforeAttempt, "plan"), "exhausted", LIVE_CEILING_STOP_REASON);
     }
     const attempt = recovery ? 1 : state.attemptsUsed + 1;
 
@@ -2148,7 +2176,7 @@ export async function runLoopFromState(
         // §8.1: launching a Claude call is a side effect.
         await heartbeat.assertHeld();
         activePhase = "plan";
-        const planNotes = await liveNotesAt("plan", attempt);
+        const planNotes = await notesAt("plan", attempt);
         const planOutcome = await runPhaseWithTimeout(planTimeoutMs, (abortSignal, onObservedUsage, idleLedger) =>
           attemptAdapter.plan({ ...buildAttemptContext(contract, state, runDir, attempt, worktreePath, abortSignal, undefined, undefined, options), ...lastFailureContext(), ...noteFor(attempt), ...memoryFor(), ...handoffFor(), ...planNotes, onObservedUsage, idleLedger }),
           { awaitAbortedResult: attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
@@ -2166,7 +2194,7 @@ export async function runLoopFromState(
           state = await persistTerminalState(
             runDir,
             writeOwnedRunState,
-            planCeiling ? { ...state, liveCeilingStop: liveCeilingStopOf("plan", "mid-call") } : state,
+            planCeiling ? await ceilingStopState(liveCeilingStopOf("plan", "mid-call"), "plan") : state,
             "exhausted",
             planCeiling ? LIVE_CEILING_STOP_REASON : hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("plan", planTimeoutMs),
           );
@@ -2208,7 +2236,7 @@ export async function runLoopFromState(
         const ceilingBeforeExecute = boundaryCeilingStop("execute");
         if (ceilingBeforeExecute !== undefined) {
           await guardedWriteArtifacts(() => writeCompletedAttemptArtifacts(runDir, attempt, plan, execution));
-          state = await persistTerminalState(runDir, writeOwnedRunState, { ...state, liveCeilingStop: ceilingBeforeExecute }, "exhausted", LIVE_CEILING_STOP_REASON);
+          state = await persistTerminalState(runDir, writeOwnedRunState, await ceilingStopState(ceilingBeforeExecute, "execute"), "exhausted", LIVE_CEILING_STOP_REASON);
           await heartbeat.assertHeld();
           await cleanupAttemptWorkspaceBestEffort(contract.context.repoPath, worktreePath, runDir, "cleanup after terminal decision exhausted");
           return state;
@@ -2223,7 +2251,7 @@ export async function runLoopFromState(
       // §8.1: launching a Claude call is a side effect.
       await heartbeat.assertHeld();
       activePhase = continuation?.nextPhase === "verify" ? null : "execute";
-      const executeNotes = continuation?.nextPhase === "verify" ? {} : await liveNotesAt("execute", attempt);
+      const executeNotes = continuation?.nextPhase === "verify" ? {} : await notesAt("execute", attempt);
       const executeOutcome = continuation?.nextPhase === "verify"
         ? { timedOut: false as const, elapsedMs: 0, result: continuation.execution! }
         : await runPhaseWithTimeout(
@@ -2269,7 +2297,7 @@ export async function runLoopFromState(
           state = await persistTerminalState(
             runDir,
             writeOwnedRunState,
-            executeCeiling ? { ...state, liveCeilingStop: liveCeilingStopOf("execute", "mid-call") } : state,
+            executeCeiling ? await ceilingStopState(liveCeilingStopOf("execute", "mid-call"), "execute") : state,
             "exhausted",
             executeCeiling ? LIVE_CEILING_STOP_REASON : hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("execute", executeTimeoutMs),
             timedOutCallCause(executeOutcome.abortedError),
@@ -2369,13 +2397,17 @@ export async function runLoopFromState(
             detail: `failureType error, ${completedExecution.changedFiles.length} changed file(s): ${completedExecution.failureMessage}`,
           });
         } else {
+          const partialCeiling = executeCeiling ? liveCeilingStopOf("execute", "mid-call") : undefined;
+          // #478: a resumable ceiling stop ends exhausted whatever the partial says -- Orca's ceiling settle takes only an
+          // exhausted stop, and the continuation resumes this execute.
+          const partialResumes = partialCeiling !== undefined && resumableCeilingStop(partialCeiling);
           state = await persistTerminalState(
             runDir,
             writeOwnedRunState,
-            executeCeiling ? { ...state, liveCeilingStop: liveCeilingStopOf("execute", "mid-call") } : state,
+            partialCeiling !== undefined ? await ceilingStopState(partialCeiling, "execute") : state,
             // Activity watchdog (spec 2026-10-21 §2.3): a partial carrying `stalled` is checked before the timeout mapping --
             // a stall is a transient fault, not a spent budget.
-            attachedCause(completedExecution)?.classification.cause === "stalled" || completedExecution.failureType !== "timeout" ? "failed" : "exhausted",
+            partialResumes ? "exhausted" : attachedCause(completedExecution)?.classification.cause === "stalled" || completedExecution.failureType !== "timeout" ? "failed" : "exhausted",
             // Live token threshold (issue #225): the claude runner's partial after a budget stop says SIGTERM; the run says budget.
             executeCeiling ? LIVE_CEILING_STOP_REASON : executeStopTokens === undefined ? completedExecution.failureMessage : BUDGET_EXHAUSTED_REASON,
             // Spec §5 row 2: the cause the adapter attached to its runner-built partial.
@@ -2426,7 +2458,8 @@ export async function runLoopFromState(
         }
         state = ceilingBeforeVerify === undefined
           ? await persistTerminalState(runDir, writeOwnedRunState, state, "exhausted", BUDGET_EXHAUSTED_REASON)
-          : await persistTerminalState(runDir, writeOwnedRunState, { ...state, liveCeilingStop: ceilingBeforeVerify }, "exhausted", LIVE_CEILING_STOP_REASON);
+          : await persistTerminalState(runDir, writeOwnedRunState,
+            await ceilingStopState(ceilingBeforeVerify, isPartialExecutionResult(completedExecution) ? "execute" : "verify"), "exhausted", LIVE_CEILING_STOP_REASON);
         await heartbeat.assertHeld();
         await cleanupAttemptWorkspaceBestEffort(
           contract.context.repoPath,
@@ -2475,7 +2508,7 @@ export async function runLoopFromState(
             recovery ? (command,index)=>runSavedResultCheck(runDir,worktreePath!,command,index,options?.phaseSignal ? AbortSignal.any([abortSignal,options.phaseSignal]) : abortSignal,providerOptions?.onProcessRegistered) : undefined,
             recovery ? ()=>assertSavedResultUnmodified(runDir,worktreePath!,recovery,state) : undefined,
             attempt + inheritedAttempts === 1 && recovery === undefined,
-            () => liveNotesAt("verify", attempt),
+            () => notesAt("verify", attempt),
           ),
           { awaitAbortedResult: recovery !== undefined || attemptAdapter.awaitAbortedPhaseCleanup === true, liveTokenThreshold: phaseTokenThreshold(), liveCeilingThreshold: phaseCeilingThresholdOf },
         );
@@ -2516,7 +2549,7 @@ export async function runLoopFromState(
         state = await persistTerminalState(
           runDir,
           writeOwnedRunState,
-          verifyCeiling ? { ...state, liveCeilingStop: liveCeilingStopOf("verify", "mid-call") } : state,
+          verifyCeiling ? await ceilingStopState(liveCeilingStopOf("verify", "mid-call"), "verify") : state,
           "exhausted",
           verifyCeiling ? LIVE_CEILING_STOP_REASON : hasBudgetExceeded(state) ? BUDGET_EXHAUSTED_REASON : getPhaseTimeoutReason("verify", verifyTimeoutMs),
         );

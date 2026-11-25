@@ -238,6 +238,15 @@ const savedStateSchema = z.object({ currentAttempt: z.number().int().positive(),
   budgetSnapshot: z.object({ attemptsRemaining: z.number().int().positive(), timeRemainingMs: z.number().int().positive(), tokenBudgetRemaining: z.literal(0), tokenRemainingStatus: z.literal("known") }).passthrough(),
   recentFailures: z.array(fingerprintSchema), waitingCause: z.literal("token-allowance"), allowanceNextPhase: z.enum(["plan", "execute", "verify"]),
 }).passthrough();
+// Orca #478 (spec 2026-11-25-ceiling-stop-keeps-work-design.md §5.1 "Saved-state rules"): a terminal live-ceiling stop for a
+// cause Orca can lift. It has no waitingCause, its token remainder is the real one (null for a run with no token grant), and
+// it may have used its last attempt -- the continuation resumes that attempt rather than starting another.
+const savedCeilingStateSchema = z.object({ status: z.literal("exhausted"), currentAttempt: z.number().int().positive(), attemptsUsed: z.number().int().positive(),
+  budgetSnapshot: z.object({ attemptsRemaining: z.number().int().nonnegative(), timeRemainingMs: z.number().int().positive(),
+    tokenBudgetRemaining: z.number().int().nonnegative().nullable(), tokenRemainingStatus: z.enum(["known", "unlimited"]) }).passthrough(),
+  recentFailures: z.array(fingerprintSchema), waitingCause: z.undefined(), allowanceNextPhase: z.enum(["plan", "execute", "verify"]),
+  liveCeilingStop: z.object({ cause: z.enum(["group", "pause-line"]), phase: z.enum(["plan", "execute", "verify"]), at: z.enum(["mid-call", "boundary"]) }).passthrough(),
+}).passthrough();
 const savedVerificationSchema = z.object({ approved: z.literal(false), rejectCategory: z.string(), primaryTargetPaths: z.array(z.string()), failingCommand: z.string().nullable(), safeToRetry: z.literal(true), pauseSignals: z.array(z.string()), stopSignals: z.array(z.string()) }).passthrough();
 
 function semanticContract(contract: LoopContract): unknown {
@@ -264,7 +273,8 @@ export async function readAllowanceContinuation(envelope: LoopStartEnvelope): Pr
   if (!handoffRef.success) fail("control-allowance-evidence-invalid");
   const packet = decode(handoffRef.data) as Record<string, unknown>;
   if (packet.allowanceContinuation === undefined) {
-    if ((packet.runState as Record<string, unknown> | undefined)?.waitingCause === "token-allowance") fail("control-allowance-evidence-missing");
+    const saved = packet.runState as Record<string, unknown> | undefined;
+    if (saved?.waitingCause === "token-allowance" || (saved?.liveCeilingStop !== undefined && saved.allowanceNextPhase !== undefined)) fail("control-allowance-evidence-missing");
     return undefined;
   }
   const continuation = allowanceSchema.safeParse(packet.allowanceContinuation);
@@ -274,7 +284,8 @@ export async function readAllowanceContinuation(envelope: LoopStartEnvelope): Pr
     || identity.workItemId !== envelope.claim.workItemId || identity.taskId !== envelope.claim.taskId || identity.graphVersion !== envelope.claim.graphVersion
     || identity.targetVersion !== envelope.claim.targetVersion || packet.contractHash !== envelope.contractHash) fail("control-allowance-authority-mismatch");
   const state = packet.runState as Record<string, unknown> | undefined;
-  if (state?.waitingCause !== "token-allowance" || state.allowanceNextPhase !== continuation.data.nextPhase) fail("control-allowance-evidence-invalid");
+  const ceiling = state?.waitingCause === undefined && state?.liveCeilingStop !== undefined;
+  if ((state?.waitingCause !== "token-allowance" && !ceiling) || state?.allowanceNextPhase !== continuation.data.nextPhase) fail("control-allowance-evidence-invalid");
   const artifacts = z.array(artifactRefSchema).safeParse(packet.artifacts);
   if (!artifacts.success) fail("control-allowance-evidence-invalid");
   const reachable = (raw: unknown): ArtifactRefV1 => {
@@ -284,9 +295,14 @@ export async function readAllowanceContinuation(envelope: LoopStartEnvelope): Pr
   };
   const source = loopContractSchema.safeParse(decode(reachable(packet.acceptedContract)));
   if (!source.success || canonicalHash(semanticContract(source.data)) !== canonicalHash(semanticContract(envelope.work.contract))) fail("control-allowance-authority-mismatch");
-  const savedState = savedStateSchema.safeParse(decode(reachable(continuation.data.state)));
+  const savedState = (ceiling ? savedCeilingStateSchema : savedStateSchema).safeParse(decode(reachable(continuation.data.state)));
   const policy = tokenPolicySchema.safeParse(packet.tokenPolicy);
   if (!savedState.success || canonicalHash(savedState.data) !== canonicalHash(packet.runState) || !policy.success) fail("control-allowance-evidence-invalid");
+  // #478 goal 2: every ceiling stop but the one before a new attempt resumes the attempt it stopped in, so the successor's
+  // lineage counts that attempt once (it inherits one attempt fewer than the predecessor used) and numbers it the same.
+  const stop = ceiling ? (savedState.data as z.infer<typeof savedCeilingStateSchema>).liveCeilingStop : undefined;
+  const resumesAttempt = stop !== undefined && !(stop.phase === "plan" && stop.at === "boundary") ? 1 : 0;
+  const interrupted = stop !== undefined && stop.at === "mid-call" && stop.phase === continuation.data.nextPhase ? { interrupted: true as const } : {};
   const localUsage = parseKnownWorkUsageLedger(decode(reachable(continuation.data.usage)), {
     runId: input.predecessorRunId, generation: identity.generation, usageHighWater: packet.usageHighWater,
   });
@@ -294,12 +310,16 @@ export async function readAllowanceContinuation(envelope: LoopStartEnvelope): Pr
   const currentPolicy = tokenPolicySchema.safeParse(envelope.tokenPolicy);
   if (!currentPolicy.success) fail("control-allowance-lineage-invalid");
   for (const dimension of ["tokens", "activeMs", "attempts", "sessions"] as const) {
-    const consumed = policy.data.inheritedUsage[dimension] + localUsage[dimension];
+    const consumed = policy.data.inheritedUsage[dimension] + localUsage[dimension] - (dimension === "attempts" ? resumesAttempt : 0);
     if (!Number.isSafeInteger(consumed) || currentPolicy.data.inheritedUsage[dimension] < consumed) fail("control-allowance-lineage-invalid");
   }
   const recentFailures = savedState.data.recentFailures;
   if (continuation.data.nextPhase === "plan") {
     if (continuation.data.plan !== null || continuation.data.execution !== null) fail("control-allowance-phase-invalid");
+    // #478: only a ceiling stop that cut attempt 1's plan has no rejection to carry.
+    if (continuation.data.verification === null && resumesAttempt === 1 && savedState.data.currentAttempt === 1) {
+      return { nextPhase: "plan", plan: null, execution: null, recentFailures, ...interrupted };
+    }
     const verification = savedVerificationSchema.safeParse(decode(reachable(continuation.data.verification)));
     if (!verification.success || !recentFailures.length) fail("control-allowance-phase-invalid");
     const value = verification.data;
@@ -307,7 +327,8 @@ export async function readAllowanceContinuation(envelope: LoopStartEnvelope): Pr
     if (canonicalHash(recentFailures.at(-1)) !== canonicalHash(fingerprint)) fail("control-allowance-phase-invalid");
     const decision = evaluateStopDecision({ humanCancelled: false, successSatisfied: false,
       humanGateHit: value.pauseSignals.some(signal => source.data.escalationAndExit.pauseOn.includes(signal)),
-      attemptNumber: policy.data.inheritedUsage.attempts + savedState.data.currentAttempt,
+      // #478: a plan cut mid-call is in the attempt after the rejection; the rejection was judged with one attempt fewer.
+      attemptNumber: policy.data.inheritedUsage.attempts + savedState.data.currentAttempt - resumesAttempt,
       maxAttempts: policy.data.inheritedUsage.attempts + savedState.data.currentAttempt + savedState.data.budgetSnapshot.attemptsRemaining,
       budgetExceeded: false, recentFailures: recentFailures.slice(0, -1), verifier: value,
     });
@@ -316,16 +337,16 @@ export async function readAllowanceContinuation(envelope: LoopStartEnvelope): Pr
     // hash-checked above, so the renewed attempt's plan sees why the last one failed. Absent unless a string array.
     const evidence = (value as { evidence?: unknown }).evidence;
     const lastRejectionEvidence = Array.isArray(evidence) && evidence.every((entry) => typeof entry === "string") ? { lastRejectionEvidence: evidence as string[] } : {};
-    return { nextPhase: "plan", plan: null, execution: null, recentFailures, ...lastRejectionEvidence };
+    return { nextPhase: "plan", plan: null, execution: null, recentFailures, ...lastRejectionEvidence, ...interrupted };
   }
   if (continuation.data.verification !== null) fail("control-allowance-phase-invalid");
   const plan = savedPlanSchema.safeParse(decode(reachable(continuation.data.plan)));
   if (!plan.success) fail("control-allowance-phase-invalid");
   if (continuation.data.nextPhase === "execute") {
     if (continuation.data.execution !== null) fail("control-allowance-phase-invalid");
-    return { nextPhase: "execute", plan: plan.data, execution: null, recentFailures };
+    return { nextPhase: "execute", plan: plan.data, execution: null, recentFailures, ...interrupted };
   }
   const execution = savedExecutionSchema.safeParse(decode(reachable(continuation.data.execution)));
   if (!execution.success) fail("control-allowance-phase-invalid");
-  return { nextPhase: "verify", plan: plan.data, execution: execution.data, recentFailures };
+  return { nextPhase: "verify", plan: plan.data, execution: execution.data, recentFailures, ...interrupted };
 }
