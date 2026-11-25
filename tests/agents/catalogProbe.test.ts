@@ -90,12 +90,47 @@ describe("criterion 2: deadline and abort (spec §4.3)", () => {
     expect(error.message).toMatch(/^agent-catalog-unavailable: spawn ENOENT · stage spawn · elapsedMs \d+$/);
   });
 
-  it("stops output past 1 MiB as stage decode", async () => {
-    const w = await omp();
-    await writeFile(w.installation.command[0], `#!/bin/sh\n[ "$1" = warm ] && exit 0\nhead -c 2000000 /dev/zero\n`);
-    spawnSync(w.installation.command[0], ["warm"]);
-    const error = await failure(readOmpCatalog(w.installation));
+  // A catalog of exactly `bytes` bytes: 10,000 unique valid rows, the first one's `note` padded to hit the size. It is
+  // written beside the marker and emitted by `cat` (synchronous writes that all land before exit, unlike a fake's
+  // process.stdout.write followed by process.exit, which truncates a large pipe write).
+  async function catalogOf(w: { marker: string; installation: InstallationV1 }, bytes: number): Promise<void> {
+    const rows = Array.from({ length: 10_000 }, (_, index) => ({ provider: "gateway", kind: "chat", id: `model-${index}`,
+      selector: `gateway/model-${index}`, contextWindow: 200000, maxTokens: 8192, note: "" }));
+    const pad = bytes - Buffer.byteLength(JSON.stringify({ models: rows }));
+    expect(pad).toBeGreaterThan(0);
+    rows[0]!.note = "x".repeat(pad);
+    const json = JSON.stringify({ models: rows });
+    expect(Buffer.byteLength(json)).toBe(bytes);
+    await writeFile(`${w.marker}.big.json`, json);
+    await writeFile(w.installation.command[0], `#!/bin/sh\n[ "$1" = warm ] && exit 0\ncat '${w.marker}.big.json'\n`);
+  }
+
+  // Ruling: tester batch 69 (2026-11-25) -- `codex debug models` writes 1,450,999 bytes on the human's machine because
+  // ~/.codex/config.toml points model_catalog_json at a 925 KB magpie catalog, and the old 1 MiB cap killed every codex
+  // phase as `agent-catalog-unavailable: output-limit · stage decode`. A catalog is data the tool asked for and grows with
+  // the model list, so the bound is now 16 MiB (still a hard bound: a runaway probe is killed). This pins BOTH sides.
+  it("parses a 2,000,000-byte catalog and still stops one past 16 MiB as stage decode", async () => {
+    const parsed = await omp();
+    await catalogOf(parsed, 2_000_000);
+    const read = await readOmpCatalog(parsed.installation);
+    expect(read).toHaveLength(10_000);
+    expect(read[9_999]!.selector).toBe("gateway/model-9999");
+
+    const runaway = await omp();
+    await writeFile(runaway.installation.command[0], `#!/bin/sh\n[ "$1" = warm ] && exit 0\nhead -c 20000000 /dev/zero\n`);
+    spawnSync(runaway.installation.command[0], ["warm"]);
+    const error = await failure(readOmpCatalog(runaway.installation));
     expect(error.message).toMatch(/^omp-model-catalog-unavailable: output-limit · stage decode · elapsedMs \d+$/);
+  }, 20_000);
+
+  // Ruling: tester batch 69 (2026-11-25) -- 1,450,999 bytes is the measured size of `codex debug models` on this machine
+  // (a 925 KB magpie catalog named by ~/.codex/config.toml). It failed as output-limit under the old 1 MiB cap; it must parse.
+  it("parses a catalog of the measured 1,450,999 bytes", async () => {
+    const w = await omp();
+    await catalogOf(w, 1_450_999);
+    const read = await readOmpCatalog(w.installation);
+    expect(read).toHaveLength(10_000);
+    expect(read[0]).toEqual({ selector: "gateway/model-0", provider: "gateway", contextWindow: 200000, maxTokens: 8192 });
   }, 20_000);
 
   it("caps the timeout at 30 s and follows a nearer deadline", () => {

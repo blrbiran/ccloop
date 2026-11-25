@@ -1,6 +1,11 @@
 import { spawn } from "node:child_process";
 
-const OUTPUT_LIMIT = 1024 * 1024;
+// Tester batch 69 (2026-11-25): `codex debug models` writes 1,450,999 bytes on this machine -- the person's
+// ~/.codex/config.toml names a 925 KB magpie catalog in model_catalog_json -- and the old 1 MiB bound killed every codex
+// phase as `agent-catalog-unavailable: output-limit · stage decode`. A model catalog is data the tool was asked for and
+// grows with the model list, so 1 MiB was never a safety bound for it. 16 MiB leaves an ~11x margin over the measurement
+// while staying a hard bound: a runaway probe is still killed.
+const PROBE_STDOUT_LIMIT = 16 * 1024 * 1024;
 const STDERR_KEEP = 4096;
 const STDERR_TAIL_BYTES = 400;
 
@@ -49,9 +54,9 @@ export function runProbe(code: string, command: string, args: string[], env: Nod
     const timer = setTimeout(() => kill(`timeout ${options.timeoutMs}ms`, "timeout"), options.timeoutMs);
     const onAbort = (): void => kill("aborted", "abort");
     options.signal?.addEventListener("abort", onAbort, { once: true });
-    child.stdout.on("data", (chunk: Buffer) => { bytes += chunk.length; if (bytes > OUTPUT_LIMIT) { kill("output-limit", "decode"); return; } chunks.push(chunk); });
+    child.stdout.on("data", (chunk: Buffer) => { bytes += chunk.length; if (bytes > PROBE_STDOUT_LIMIT) { kill("output-limit", "decode"); return; } chunks.push(chunk); });
     child.stderr.on("data", (chunk: Buffer) => {
-      if (chunk.length > OUTPUT_LIMIT) kill("output-limit", "decode");
+      if (chunk.length > PROBE_STDOUT_LIMIT) kill("output-limit", "decode");
       stderr = Buffer.concat([stderr, chunk.subarray(Math.max(0, chunk.length - STDERR_KEEP))]);
       if (stderr.length > STDERR_KEEP) stderr = stderr.subarray(stderr.length - STDERR_KEEP);
     });
