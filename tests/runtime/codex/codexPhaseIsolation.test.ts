@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readlink, realpath, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readlink, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -82,6 +82,25 @@ describe("codex phase isolation module (spec 2026-10-18 §3.3-§3.5)", () => {
       const w = await world({ HOME });
       const error = await failure(codexPhaseIsolation({ installation: w.installation, mcpServers: [], runDir: w.runDir, attempt: 1, env: w.env }));
       expect(error).toMatchObject({ reason: "codex-phase-isolation-real-home-unknown", neverStarted: true });
+    }
+  });
+
+  // Tester #493: `features.hooks=false` is not the boundary that holds on codex-cli 0.172.0 (the tester measured
+  // `codex exec` still running the hooks while our `features list` reports false). The private CODEX_HOME, which links
+  // only auth.json/config.toml, is. A hooks.json appearing there means the isolation stopped holding; refuse before spawn.
+  it("refuses a private pair that carries hooks.json", async () => {
+    const w = await world();
+    const pair = await codexSingleCallHome({ runDir: w.runDir, sourceCodexHome: w.source, executable: process.execPath, env: w.env });
+    await writeFile(join(pair.codexHome, "hooks.json"), "{}");
+    const error = await failure(codexPhaseIsolation({ installation: w.installation, mcpServers: [], runDir: w.runDir, attempt: 1, env: w.env }));
+    expect(error).toMatchObject({ reason: `codex-phase-isolation-hooks-exposed:${join(pair.codexHome, "hooks.json")}`, neverStarted: true });
+  });
+
+  it("a fresh private pair carries no hooks.json", async () => {
+    const w = await world();
+    const isolated = await codexPhaseIsolation({ installation: w.installation, mcpServers: [], runDir: w.runDir, attempt: 1, env: w.env });
+    for (const path of [join(isolated.codexHome, "hooks.json"), join(isolated.home, ".codex", "hooks.json")]) {
+      expect(await lstat(path).then(() => true, () => false)).toBe(false);
     }
   });
 });

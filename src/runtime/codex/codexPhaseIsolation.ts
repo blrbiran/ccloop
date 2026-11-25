@@ -1,4 +1,5 @@
-import { isAbsolute } from "node:path";
+import { lstat } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import { CODEX_PHASE_CONFIG, CodexConfigFileMissing, codexConfigFileArgs, codexSingleCallHome, effectiveCodexHome } from "../../agents/codexIsolation.js";
 import type { InstallationV1 } from "../../agents/types.js";
 import { addressableMcpServer } from "./codexSingleCall.js";
@@ -51,6 +52,15 @@ export async function codexPhaseIsolation(input: { installation: InstallationV1;
       throw new CodexPhaseIsolationRefused(`codex-phase-isolation-home-invalid:${(error as Error).message.slice("codex-single-call-home-invalid:".length)}`);
     }
     throw error;
+  }
+  // Tester #493: `features.hooks=false` is not the boundary that holds on codex-cli 0.172.0 (the tester measured the hooks
+  // still running; our `features list` reports false, so the two disagree). The private pair is: it links only
+  // auth.json/config.toml, never hooks.json. Refuse before spawn if one appeared there -- codex would read it and the
+  // phase would run hooks outside the isolation.
+  for (const hooks of [join(pair.codexHome, "hooks.json"), join(pair.home, ".codex", "hooks.json")]) {
+    if (await lstat(hooks).then(() => true, () => false)) {
+      throw new CodexPhaseIsolationRefused(`codex-phase-isolation-hooks-exposed:${hooks}`, pair);
+    }
   }
   // Orca tester issue 121: before the MCP list, so a missing catalog file (which also failed the MCP probe) is named as such.
   let configFileArgs: string[];

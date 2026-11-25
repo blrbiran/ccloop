@@ -29,6 +29,12 @@ export const CODEX_SINGLE_CALL_CONFIG: readonly string[] = [
 export const CODEX_PHASE_CONFIG: readonly string[] = [
   "notify=[]", "features.plugins=false", "include_apps_instructions=false", "include_collaboration_mode_instructions=false", "features.hooks=false",
 ];
+// *** ERRATUM (2026-11-26, Orca tester ledger batch 70, tester #493): `features.hooks=false` is kept for older codex versions
+// but is NOT the boundary that holds on codex-cli 0.172.0. The tester measured `codex exec` still running the hooks with the
+// flag while our own `features list -c features.hooks=false` reports false -- list output and runtime behaviour disagree.
+// The boundary that does hold is the private CODEX_HOME below: it links only auth.json/config.toml, never hooks.json.
+// codexPhaseIsolation (runtime/codex/codexPhaseIsolation.ts) now refuses with codex-phase-isolation-hooks-exposed if a
+// hooks.json appears there, and a criterion pins the fresh pair as carrying none. ***
 
 /**
  * The installation's effective CODEX_HOME (Task 8 ruling 2): its configDir, else an inherited absolute non-empty
