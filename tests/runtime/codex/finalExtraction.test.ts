@@ -19,8 +19,8 @@ const partial = { ...complete, completionStatus: "partial", failureType: "error"
 const rejection = { approved: false, rejectCategory: "check", primaryTargetPaths: ["answer.txt"], failingCommand: "node check.cjs", safeToRetry: true, evidence: ["answer.txt is 0"], pauseSignals: [] as string[], stopSignals: [] as string[] };
 const approvalTemplate = { approved: true, rejectCategory: "", primaryTargetPaths: [] as string[], failingCommand: null, safeToRetry: false, evidence: [] as string[], pauseSignals: [] as string[], stopSignals: [] as string[] };
 
-async function withFinal(phase: Phase, text: string) {
-  const f = await codexFixture("final-text");
+async function withFinal(phase: Phase, text: string, mode = "final-text") {
+  const f = await codexFixture(mode);
   dirs.push(f.dir);
   const finals = join(f.dir, "finals.json");
   await writeFile(finals, JSON.stringify({ [phase]: text }));
@@ -66,6 +66,39 @@ describe("Codex adapter final-message extraction (codex phase output hardening)"
     expect(message).toBe(`Error: codex-result-invalid: ${call}`);
     expect(await readFile(join(call, "decode-error.txt"), "utf8")).toBe("Error: codex-result-invalid");
     expect(await readJson(join(call, "final-extraction.json"))).toEqual({ method: "none", candidates: 1, valid: 0, hidden: false, originalBytes: Buffer.byteLength(text, "utf8") });
+  });
+
+  for (const phase of ["plan", "verify"] as const) it(`records bounded, value-free JSON syntax diagnosis for ${phase}`, async () => {
+    const text = '{"summary":"broken {"slug":1}","primaryTargetPaths":[]}';
+    const f = await withFinal(phase, text);
+    const message = await failure(f.adapter[phase](f.context));
+    const call = await f.call();
+    const detail = "invalid JSON at byte offset 21";
+    expect(message).toBe(`Error: codex-result-invalid: ${call}: ${detail}`);
+    expect(await readFile(join(call, "decode-error.txt"), "utf8")).toBe(`Error: codex-result-invalid: ${detail}`);
+    expect(await readJson(join(call, "final-format-issues.json"))).toEqual({ schema: "ccloop-final-format-issues-v1", phase, kind: "invalid-json", offsetBytes: 21 });
+    expect(await readFile(join(call, "final-format-issues.json"), "utf8")).not.toContain("slug");
+    expect(await readFile(join(call, "final-format-issues.json"), "utf8")).not.toContain("broken");
+    expect((await stat(join(call, "final-format-issues.json"))).mode & 0o777).toBe(0o600);
+  });
+
+  for (const phase of ["plan", "verify"] as const) it(`keeps a fatal stream error when ${phase} final JSON is also malformed`, async () => {
+    const text = '{"summary":"broken {"slug":1}","primaryTargetPaths":[]}';
+    const f = await withFinal(phase, text, "final-text-error");
+    const message = await failure(f.adapter[phase](f.context));
+    const call = await f.call();
+    expect(message).toBe(`Error: codex-event-error: ${call}`);
+    expect(await readFile(join(call, "decode-error.txt"), "utf8")).toBe("Error: codex-event-error");
+    expect(await exists(join(call, "final-format-issues.json"))).toBe(false);
+  });
+
+  it("classifies malformed plan JSON with the bounded detail", async () => {
+    const text = '{"summary":"broken {"slug":1}","primaryTargetPaths":[]}';
+    const f = await withFinal("plan", text);
+    const state = await (await import("../../../src/controller/runLoop.js")).runLoop(f.contract, f.runDir, f.adapter);
+    expect(state.status).toBe("failed");
+    expect(state.failureCause).toMatchObject({ cause: "execution-not-json", phase: "plan", detail: "invalid-final-json: invalid JSON at byte offset 21" });
+    expect(state.stopReason).toContain("invalid JSON at byte offset 21");
   });
 
   it("writes no extraction evidence when no candidate parses", async () => {

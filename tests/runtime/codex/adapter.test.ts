@@ -14,6 +14,10 @@ describe("Codex runtime adapter",()=>{
     const f=await fixture();const a=new CodexAdapter(f.config);
     for(const phase of ["plan","execute","verify"] as const)expect(await a[phase](f.context)).toMatchObject({tokenUsage:15,usageEvidence:{usageStatus:"present",normalizedTotal:15}});
   });
+  it("accepts a reconnect diagnostic followed by completed plan output",async()=>{
+    const f=await fixture("reconnect-then-usage");
+    expect(await new CodexAdapter(f.config).plan(f.context)).toMatchObject({summary:"fixture",primaryTargetPaths:["answer.txt"],tokenUsage:15});
+  });
   it("rejects nonzero exit despite a complete final message",async()=>{
     const f=await fixture("nonzero");await expect(new CodexAdapter(f.config).execute(f.context)).rejects.toThrow("codex-exit-error");
   });

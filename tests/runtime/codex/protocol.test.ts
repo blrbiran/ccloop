@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { decodeCodexResult, parseCodexConfig, phaseJsonSchema } from "../../../src/runtime/codex/protocol.js";
+import { CodexUsageFold, decodeCodexResult, decodeCodexUsage, parseCodexConfig, phaseJsonSchema } from "../../../src/runtime/codex/protocol.js";
 
 const config = { command: [process.execPath], model: "fixture; touch nope", budgetMode: "soft", sandbox: "read-only", timeoutMs: 1000, killGraceMs: 10 };
 const final = JSON.stringify({ summary: "inspect target", primaryTargetPaths: ["answer.txt"] });
 const event = (usage: unknown) => JSON.stringify({ type: "turn.completed", usage }) + "\n";
 const good = event({ input_tokens: 12, cached_input_tokens: 8, output_tokens: 3 });
+const reconnectMessage = "Reconnecting... 1/5 (stream disconnected before completion: TokenSwitch: timeout: request timeout: error sending request for url (https://example.invalid/responses) (504: you can retry your request))";
 
 describe("Codex protocol", () => {
   it("accepts model as data and validates all config fields", () => expect(parseCodexConfig(config)).toEqual(config));
@@ -27,6 +28,33 @@ describe("Codex protocol", () => {
   it("does not accept a payload without completion", () => expect(() => decodeCodexResult("plan", "", final)).toThrow("codex-no-completion"));
   it("rejects conflicting completed totals", () => expect(() => decodeCodexResult("plan", good+event({input_tokens:14,output_tokens:3}),final)).toThrow("codex-conflicting-completion"));
   it.each(["turn.failed","error"])("never hides %s behind later completion", type => expect(() => decodeCodexResult("plan",JSON.stringify({type})+"\n"+good,final)).toThrow("codex-event-error"));
+  it("accepts a recognized reconnect error only when a later completion follows", () => {
+    const reconnect = JSON.stringify({ type: "error", message: reconnectMessage });
+    const events = reconnect + "\n" + good;
+    const fold = new CodexUsageFold();
+    fold.push({ kind: "row", row: JSON.parse(reconnect) });
+    fold.push({ kind: "row", row: JSON.parse(event({ input_tokens: 12, output_tokens: 3 })) });
+    expect(fold.value().tokenUsage).toBe(15);
+    expect(decodeCodexUsage(events, true).tokenUsage).toBe(15);
+    expect(decodeCodexResult("plan", events, final).tokenUsage).toBe(15);
+    expect(() => decodeCodexUsage(reconnect + "\n", true)).toThrow("codex-event-error");
+  });
+  it("rejects reconnect-like near matches even when a later completion follows", () => {
+    const nearMatches = [
+      reconnectMessage + " trailing text",
+      "Reconnecting... 1/5 (stream disconnected before completion: request failed)",
+      reconnectMessage.replace("1/5", "2/1"),
+    ];
+    for (const message of nearMatches) {
+      const events = JSON.stringify({ type: "error", message }) + "\n" + good;
+      expect(() => decodeCodexUsage(events)).toThrow("codex-event-error");
+    }
+  });
+  it("keeps a reconnect error fatal after completion and when a turn fails", () => {
+    const reconnect = JSON.stringify({ type: "error", message: reconnectMessage });
+    expect(() => decodeCodexUsage(good + reconnect + "\n")).toThrow("codex-event-error");
+    expect(() => decodeCodexUsage(reconnect + "\n" + JSON.stringify({ type: "turn.failed" }) + "\n" + good)).toThrow("codex-event-error");
+  });
   it.each(["not json\n", "null\n", "{}\n"])("rejects malformed event %s", raw => expect(() => decodeCodexResult("plan",raw+good,final)).toThrow("codex-events-invalid"));
   it("allows unknown typed events", () => expect(decodeCodexResult("plan",'{"type":"future.event"}\n'+good,final).tokenUsage).toBe(15));
   it.each(["oops", "{}", '{"summary":2,"primaryTargetPaths":[]}', JSON.stringify({...JSON.parse(final),tokenUsage:1}),JSON.stringify({...JSON.parse(final),usageEvidence:{}})])("rejects malformed or invented model evidence %s", raw => expect(() => decodeCodexResult("plan",good,raw)).toThrow("codex-result-invalid"));

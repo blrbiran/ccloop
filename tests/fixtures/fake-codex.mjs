@@ -285,7 +285,7 @@ process.stdin.on("end",()=>{
   // Codex phase output hardening (2026-10-08): mode `final-text`, argv `final-text <marker> <finalsFile>`, writes the
   // finalsFile's string for this phase (`{"plan"?, "execute"?, "verify"?}`) as the final message verbatim, replacing the
   // JSON answer above; a phase without an entry answers as mode `ok` does.
-  if(mode==="final-text"){const text=JSON.parse(readFileSync(process.argv[4],"utf8"))[phase];if(typeof text==="string")writeFileSync(value("-o"),text);}
+  if(mode==="final-text"||mode==="final-text-error"){const text=JSON.parse(readFileSync(process.argv[4],"utf8"))[phase];if(typeof text==="string")writeFileSync(value("-o"),text);}
   if(phase==="execute" && mode==="no-usage") return;
   const events=JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"中文"}})+"\n"+JSON.stringify({type:"turn.completed",usage:{input_tokens:mode==="high-usage"?39997:12,output_tokens:3}})+"\n";
   if(mode==="child-holds-pipe") {
@@ -309,6 +309,10 @@ process.stdin.on("end",()=>{
     };
     pump();return;
   }
+  if(mode==="reconnect-then-usage") {
+    const error=JSON.stringify({type:"error",message:"Reconnecting... 1/5 (stream disconnected before completion: TokenSwitch: timeout: request timeout: error sending request for url (https://example.invalid/responses) (504: you can retry your request))"})+"\n";
+    process.stdout.write(error+events);return;
+  }
   // Tester follow-up E §1 (Orca issue #249): mode `error-then-usage` prints a synthetic mid-stream `error` row and then the
   // default mode's events (an agent message and turn.completed with usage 12 + 3), after the default final answer;
   // `error-no-usage` prints the same `error` row and agent message but no turn.completed.
@@ -316,9 +320,13 @@ process.stdin.on("end",()=>{
     const error=JSON.stringify({type:"error",message:"fixture mid-stream error"})+"\n";
     process.stdout.write(error+(mode==="error-then-usage"?events:events.split("\n")[0]+"\n"));return;
   }
+  if(mode==="final-text-error") {
+    const error=JSON.stringify({type:"error",message:"fixture terminal error"})+"\n";
+    process.stdout.write(error+events);return;
+  }
   // Orca tester #347: in mode final-text, the finalsFile's `<phase>Items` (item objects, e.g. a command_execution) print as
   // item.completed rows before the default events; absent, nothing changes.
-  const items=mode==="final-text"?(JSON.parse(readFileSync(process.argv[4],"utf8"))[`${phase}Items`]??[]):[];
+  const items=mode==="final-text"||mode==="final-text-error"?(JSON.parse(readFileSync(process.argv[4],"utf8"))[`${phase}Items`]??[]):[];
   // Orca #349 review: FAKE_CODEX_THREADS=1 gives every phase call its own thread (thread.started first, a rollout in
   // CODEX_HOME), as the real codex does, so each call's session is deleted after it.
   if(process.env.FAKE_CODEX_THREADS==="1") {

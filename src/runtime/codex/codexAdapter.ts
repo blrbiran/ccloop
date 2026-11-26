@@ -69,6 +69,17 @@ function ownCause(error: unknown): boolean {
   return cause !== undefined && cause !== "budget-exhausted" && cause !== "unknown" && !EXECUTE_ANSWER_CAUSES.has(cause);
 }
 
+function invalidPlanVerifyJson(final: string, phase: CodexPhase): { offsetBytes: number | null; detail: string } | null {
+  if ((phase !== "plan" && phase !== "verify") || !/^\s*[\[{]/.test(final)) return null;
+  try { JSON.parse(final); return null; } catch (error) {
+    const match = error instanceof Error ? /\bposition\s+(\d+)\b/i.exec(error.message) : null;
+    const position = match === null ? NaN : Number(match[1]);
+    const offsetBytes = Number.isSafeInteger(position) && position >= 0 && position <= final.length
+      ? Buffer.byteLength(final.slice(0, position), "utf8") : null;
+    return { offsetBytes, detail: offsetBytes === null ? "invalid JSON syntax" : `invalid JSON at byte offset ${offsetBytes}` };
+  }
+}
+
 export class CodexAdapter implements RuntimeAdapter {
   private readonly config: CodexConfig;
   // Agent selection (2026-09-26): extraEnv carries the installation's config directory (CODEX_HOME) to the CLI.
@@ -121,6 +132,9 @@ export class CodexAdapter implements RuntimeAdapter {
     // Orca tester issue #274 (as omp's, issue 125): an execute answer the strict shape refused names what it refused; cause unchanged.
     const formatDetail = (error as { formatDetail?: unknown }).formatDetail;
     if (classification !== null && typeof formatDetail === "string") classification = { ...classification, detail: formatDetail };
+    if (classification?.cause === "unknown" && (error as { planVerifyFinalJson?: unknown }).planVerifyFinalJson === true) {
+      classification = { ...classification, cause: "execution-not-json" };
+    }
     // *** ERRATUM (Orca tester #347, session 4389b15f, 2026-11-18): "cause unchanged" above holds for that line only; the
     // next line gives such an answer its own cause (failure-causes spec, Correction 2026-11-18). ***
     // Orca tester #347: an execute final the strict decode refused is classified by its form and whether a work item was seen.
@@ -214,6 +228,15 @@ export class CodexAdapter implements RuntimeAdapter {
       const modelUsage = outcome.stream.modelUsage.value(this.config.model);
       return modelUsage === null ? result : { ...result, modelUsage };
     } catch (error) {
+      const syntax = error instanceof Error && error.message === "codex-result-invalid"
+        ? invalidPlanVerifyJson(outcome.final, phase) : null;
+      if (syntax !== null) {
+        await writeFile(join(outcome.evidenceDir, "final-format-issues.json"), JSON.stringify({ schema: "ccloop-final-format-issues-v1", phase, kind: "invalid-json", offsetBytes: syntax.offsetBytes }), { mode: 0o600 });
+        await writeFile(join(outcome.evidenceDir, "decode-error.txt"), `Error: codex-result-invalid: ${syntax.detail}`, { mode: 0o600 });
+        throw Object.assign(new Error(`Error: codex-result-invalid: ${outcome.evidenceDir}: ${syntax.detail}`), {
+          observedTokens: outcome.stream.turnUsage.value(), formatDetail: `invalid-final-json: ${syntax.detail}`, planVerifyFinalJson: true,
+        });
+      }
       await writeFile(join(outcome.evidenceDir, "decode-error.txt"), String(error), { mode: 0o600 });
       // Tester follow-up E §1 (Orca issue #249): as the execute path above, the turn usage the stdout showed, null when none.
       throw Object.assign(new Error(`${String(error)}: ${outcome.evidenceDir}`), { observedTokens: outcome.stream.turnUsage.value() });

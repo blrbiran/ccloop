@@ -83,6 +83,11 @@ export function executeWireJsonSchema(): Record<string, unknown> {
 
 const record = (x: unknown): x is Record<string,unknown> => x !== null && typeof x === "object" && !Array.isArray(x);
 const integer = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
+function reconnectDiagnostic(message: unknown): boolean {
+  if (typeof message !== "string") return false;
+  const match = /^Reconnecting\.\.\. ([1-5])\/([1-5]) \(stream disconnected before completion: .+error sending request for url \([^()\r\n]+\) \((?:408|429|5\d\d): you can retry your request\)\)$/.exec(message);
+  return match !== null && Number(match[1]) <= Number(match[2]);
+}
 export type PhaseResults = {plan:AttemptPlan; execute:ExecutionResult; verify:VerificationResult};
 /**
  * Orca handoff delivery (2026-09-25), spec §13.1 C-3: the total of the last well-formed
@@ -132,6 +137,7 @@ export class CodexUsageFold {
   private error: string | null = null;
   private completed: Record<string, unknown> | undefined;
   private completedJson = "";
+  private pendingReconnect = false;
   constructor(private readonly uniqueCompletion = false) {}
   push(line: JsonLine): void {
     if (this.error !== null || line.kind === "blank") return;
@@ -139,14 +145,19 @@ export class CodexUsageFold {
     if (line.kind === "unparsed") { this.error = "codex-events-invalid"; return; }
     const row = line.row;
     if (!record(row) || typeof row.type !== "string") { this.error = "codex-events-invalid"; return; }
-    if (row.type === "turn.failed" || row.type === "error") { this.error = "codex-event-error"; return; }
+    if (row.type === "turn.failed") { this.error = "codex-event-error"; return; }
+    if (row.type === "error") {
+      if (this.completed === undefined && reconnectDiagnostic(row.message)) { this.pendingReconnect = true; return; }
+      this.error = "codex-event-error"; return;
+    }
     if (row.type !== "turn.completed") return;
     const json = JSON.stringify(row);
     if (this.completed && (this.uniqueCompletion || this.completedJson !== json)) { this.error = "codex-conflicting-completion"; return; }
-    this.completed = row; this.completedJson = json;
+    this.completed = row; this.completedJson = json; this.pendingReconnect = false;
   }
   value(): {tokenUsage:number;usageEvidence:UsageEvidence} {
     if (this.error !== null) throw new Error(this.error);
+    if (this.pendingReconnect) throw new Error("codex-event-error");
     return codexUsageOf(this.completed);
   }
 }
