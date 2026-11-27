@@ -112,7 +112,7 @@ export class CodexAdapter implements RuntimeAdapter {
           this.extraEnv, this.codexSkillsDir, this.installation);
         if (refused !== null) await recordPromptFallback(outcome.evidenceDir, refused);
         try {
-          return { ok: true, value: await this.decodePhase(phase, outcome), evidenceDir: outcome.evidenceDir };
+          return { ok: true, value: await this.decodePhase(phase, outcome, context), evidenceDir: outcome.evidenceDir };
         } catch (error) {
           const failed = this.failedTry<PhaseResults[P]>(phase, outcome, error as Error);
           if (failed.ok || refused !== null || this.installation?.structuredOutput === "prompt" || !refusedOutputSchema(failed.classification)) return failed;
@@ -160,10 +160,11 @@ export class CodexAdapter implements RuntimeAdapter {
   get awaitAbortedPhaseCleanup(): boolean { return this.codexSkillsDir !== undefined || this.installation !== undefined; }
 
   /** One call's outcome as the phase's result, or the error it fails with (unchanged from before the shared loop). */
-  private async decodePhase<P extends CodexPhase>(phase: P, outcome: PhaseOutcome): Promise<PhaseResults[P]> {
-    const lowerBound = outcome.reason === "completed" ? null : Math.max(0, (outcome.liveUsageTokens ?? 0) - (outcome.observedTokens ?? 0));
-    // Orca issue #262 (as omp's, Orca #116): retain only the part of the exact-thread rollout watermark that stdout did not report.
-    // This floor is added to already-booked stdout usage, so an overlapping call must contribute only its positive difference.
+  private async decodePhase<P extends CodexPhase>(phase: P, outcome: PhaseOutcome, context: AttemptContext): Promise<PhaseResults[P]> {
+    const rolloutStall = outcome.reason === "stalled" && !context.abortSignal?.aborted;
+    const lowerBound = rolloutStall ? Math.max(0, (outcome.liveUsageTokens ?? 0) - (outcome.observedTokens ?? 0))
+      : outcome.reason === "completed" ? null : outcome.stream.turnUsage.value();
+    // The new rollout difference is watchdog-stall-only while no controller-owned abort has won the race; other terminal reasons keep their prior stdout floor behavior.
     if (lowerBound !== null && lowerBound > 0) await writeFile(join(outcome.evidenceDir, "usage-lower-bound.json"), JSON.stringify({ tokens: lowerBound }), { mode: 0o600 }).catch(() => undefined);
     if (outcome.cleanupError !== undefined) throw Object.assign(new Error(outcome.cleanupError), { observedTokens: outcome.observedTokens });
     const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? outcome.stream.rateLimit.value() : null;

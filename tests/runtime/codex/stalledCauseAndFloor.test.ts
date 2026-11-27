@@ -70,7 +70,7 @@ describe("Orca #262 (2): a non-completed Codex call exports only usage not alrea
     expect(existsSync(join(call!, "usage-lower-bound.json"))).toBe(false);
   }, 30_000);
 
-  it("an exact execute abort books stdout usage without adding it again as a floor", async () => {
+  it("preserves the stdout floor for an exact execute abort", async () => {
     const f = await codex("idle-script", { idleTimeoutMs: null });
     await writeFile(`${f.marker}.idle-script.json`, JSON.stringify({ steps: [{ delayMs: 0, stdout: { type: "thread.started", thread_id: "t" } }, { delayMs: 0, stdout: usage }], end: "hang" }));
     const controller = new AbortController();
@@ -85,7 +85,7 @@ describe("Orca #262 (2): a non-completed Codex call exports only usage not alrea
     const out = await pending as { error?: Error & { observedTokens?: number | null } };
     expect(String(out.error?.message)).toMatch(/^codex-aborted: /);
     expect(out.error?.observedTokens).toBe(15);
-    expect(existsSync(join(call, "usage-lower-bound.json"))).toBe(false);
+    expect(JSON.parse(await readFile(join(call, "usage-lower-bound.json"), "utf8"))).toEqual({ tokens: 15 });
   }, 30_000);
 
   it("writes none when no turn usage was seen", async () => {

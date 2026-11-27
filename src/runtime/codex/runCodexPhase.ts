@@ -267,6 +267,10 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     }catch{result.reason="io-error";}
   }
   if(result.reason!=="completed")result.observedTokens=stream.turnUsage.value();
+  // Delete only after the process and its pipes have closed; a failed deletion remains visible and blocks completion.
+  // *** ERRATUM (Orca tester #349, session 4389b15f, 2026-11-18): "blocks completion" no longer holds -- a failed deletion
+  // is recorded (session-cleanup-failed.json) and the phase keeps its outcome; what still reaches the catch below (a
+  // broken rollout read, an evidence write) is classified cleanup-failed by the adapter. ***
   // The observer drains the exact launched rollout before deleting its session; keep its independent watermark out of stdout accounting.
   const rememberLiveUsage=(tokens:number|null)=>{if(tokens!==null)Object.defineProperty(result,"liveUsageTokens",{value:tokens,enumerable:false,configurable:true});};
   try { rememberLiveUsage(await live?.finish()??null); }

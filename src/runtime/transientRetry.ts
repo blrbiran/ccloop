@@ -96,7 +96,7 @@ export async function runWithTransientRetry<T>(options: {
       await writeFile(join(result.evidenceDir, "failure-cause.json"), JSON.stringify({
         cause: classification.cause, workObserved: classification.workObserved, call, nextDelayMs: next, detail: classification.detail,
         usageObserved: observation.kind !== "null" || result.diagnosticObservedTokens !== undefined,
-        ...(result.diagnosticObservedTokens === undefined ? {} : { observedTokens: result.diagnosticObservedTokens }),
+        ...(result.diagnosticObservedTokens === undefined ? {} : { observedTokens: result.diagnosticObservedTokens, observedTokensSource: "max(stdout, codex-live-rollout)" }),
         ...(next === null && call > 1 ? { retriedTriesUnobserved: unobserved } : {}),
       }), { mode: 0o600 }).catch(() => undefined); // Best-effort evidence: never replaces the call's own failure.
     }

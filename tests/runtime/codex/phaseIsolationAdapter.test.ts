@@ -45,7 +45,37 @@ it("writes a live rollout watermark for a stalled call without changing stdout r
   expect(error.observedTokens).toBeNull();
   expect(JSON.parse(readFileSync(join(dir, "usage-lower-bound.json"), "utf8"))).toEqual({ tokens: 125 });
   expect(await observedUsageLowerBound(w.dir)).toBe(125);
-  expect(JSON.parse(readFileSync(join(dir, "failure-cause.json"), "utf8"))).toMatchObject({ usageObserved: true, observedTokens: 125 });
+  expect(JSON.parse(readFileSync(join(dir, "failure-cause.json"), "utf8"))).toMatchObject({ usageObserved: true, observedTokens: 125, observedTokensSource: "max(stdout, codex-live-rollout)" });
+}, 30_000);
+
+it("does not create a rollout floor for a live-observation abort", async () => {
+  const w = await world({ mcp: [] }, "rollout-usage");
+  const config = parseCodexConfig({ ...w.config, idleTimeoutMs: null });
+  const adapter = new CodexAdapter(config, { CODEX_HOME: w.source }, undefined, { installation: w.installation });
+  const controller = new AbortController();
+  const error = await failure(adapter.plan({ ...w.context, abortSignal: controller.signal,
+    onObservedUsage: tokens => { if (tokens >= 125) controller.abort(); } })) as Error;
+  expect(error.message).toContain("codex-aborted:");
+  const calls = await readdir(join(w.runDir, "codex", "1", "plan"));
+  const dir = join(w.runDir, "codex", "1", "plan", calls.find(name => name.startsWith("call-"))!);
+  expect(JSON.parse(readFileSync(join(dir, "outcome.json"), "utf8")).reason).toBe("aborted");
+  expect(existsSync(join(dir, "usage-lower-bound.json"))).toBe(false);
+}, 30_000);
+
+it("keeps the prior stdout floor when an external abort races a watchdog stall", async () => {
+  const w = await world({ mcp: [] }, "rollout-usage-retry");
+  const config = parseCodexConfig({ ...w.config, idleTimeoutMs: 100, killGraceMs: 1_000 });
+  const adapter = new CodexAdapter(config, { CODEX_HOME: w.source }, undefined, { installation: w.installation, rateLimitDelaysMs: [] });
+  const controller = new AbortController();
+  const pending = failure(adapter.plan({ ...w.context, abortSignal: controller.signal }));
+  await expect.poll(() => { try { return readFileSync(`${w.marker}.term`, "utf8"); } catch { return ""; } }, { timeout: 10_000 }).toContain("TERM");
+  controller.abort();
+  const error = await pending as Error;
+  expect(error.message).toContain("codex-stalled:");
+  const calls = await readdir(join(w.runDir, "codex", "1", "plan"));
+  const dir = join(w.runDir, "codex", "1", "plan", calls.find(name => name.startsWith("call-"))!);
+  expect(JSON.parse(readFileSync(join(dir, "outcome.json"), "utf8")).reason).toBe("stalled");
+  expect(JSON.parse(readFileSync(join(dir, "usage-lower-bound.json"), "utf8"))).toEqual({ tokens: 15 });
 }, 30_000);
 
 it("keeps only the unbooked difference when a live-watermark stall succeeds on retry", async () => {

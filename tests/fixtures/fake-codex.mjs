@@ -197,6 +197,7 @@ process.stdin.on("end",()=>{
       writeFileSync(join(path,`rollout-2026-11-14T00-00-00-${id}.jsonl`),JSON.stringify({type:"event_msg",payload:{type:"token_count",info:{total_token_usage:{input_tokens:120,output_tokens:5,total_tokens:125}}}})+"\n");
       writeSync(1,JSON.stringify({type:"thread.started",thread_id:id})+"\n");
       writeSync(1,JSON.stringify({type:"turn.completed",usage:{input_tokens:12,output_tokens:3}})+"\n");
+      process.on("SIGTERM",()=>appendFileSync(marker+".term","TERM\n"));
       setInterval(()=>{},1000);return;
     }
   }
