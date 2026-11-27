@@ -90,7 +90,8 @@ export class CodexLiveObserver {
       } finally { closeSync(fd); }
     } finally { this.polling = false; }
   }
-  async finish(): Promise<void> {
+  get watermark(): number | null { return this.tokens > 0 ? this.tokens : null; }
+  async finish(): Promise<number | null> {
     if (this.timer) clearInterval(this.timer);
     while (this.polling) await new Promise(resolve=>setTimeout(resolve,10));
     let observationError: unknown;
@@ -102,12 +103,13 @@ export class CodexLiveObserver {
       }
     } catch(error) { observationError=error; }
     this.stopped=true;
-    if (this.id === null) return;
+    if (this.id === null) return null;
     // A broken rollout read must never skip deletion of the identified session.
     // Orca tester #349 (human's ruling, session 4389b15f, 2026-11-18): a failed deletion never changes the phase's outcome;
     // it is recorded beside the call (session-cleanup-failed.json) for collect and the next sweep.
     await settleDeletion(this.evidenceDir,null,this.home,this.command,this.source,this.env,this.id);
     if (observationError !== undefined) throw observationError;
+    return this.watermark;
   }
 }
 

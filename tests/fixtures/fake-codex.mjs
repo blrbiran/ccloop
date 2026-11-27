@@ -189,6 +189,17 @@ process.stdin.on("end",()=>{
       const leaf=process.env.FAKE_CODEX_SKILL_PATH.replace(/\/SKILL\.md$/,"");unlinkSync(leaf);writeFileSync(leaf,"foreign");
     }
   }
+  if(mode==="rollout-usage-retry") {
+    const call=readFileSync(marker+".argv","utf8").trim().split("\n").length;
+    if(call===1) {
+      const path=join(process.env.CODEX_HOME,"sessions","2026","11","14"),id="01a13431-3db4-73a1-afd1-154f0477282d";
+      mkdirSync(path,{recursive:true});
+      writeFileSync(join(path,`rollout-2026-11-14T00-00-00-${id}.jsonl`),JSON.stringify({type:"event_msg",payload:{type:"token_count",info:{total_token_usage:{input_tokens:120,output_tokens:5,total_tokens:125}}}})+"\n");
+      writeSync(1,JSON.stringify({type:"thread.started",thread_id:id})+"\n");
+      writeSync(1,JSON.stringify({type:"turn.completed",usage:{input_tokens:12,output_tokens:3}})+"\n");
+      setInterval(()=>{},1000);return;
+    }
+  }
   if(mode==="rollout-usage" || mode==="rollout-usage-complete") {
     const path=join(process.env.CODEX_HOME,"sessions","2026","11","14");mkdirSync(path,{recursive:true});
     const id="01a13431-3db4-73a1-afd1-154f0477282d";

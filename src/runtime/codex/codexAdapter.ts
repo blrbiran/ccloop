@@ -143,10 +143,14 @@ export class CodexAdapter implements RuntimeAdapter {
     const retrySafe = outcome.cleanupError !== undefined ? false : classification?.cause === "rate-limited" ? rateLimited === "before-work"
       : classification !== null && (phase !== "execute" || !classification.workObserved);
     const observedTokens = (error as { observedTokens?: unknown }).observedTokens;
+    const stdoutObservedTokens = typeof observedTokens === "number" && observedTokens > 0 ? observedTokens : 0;
+    const liveObservedTokens = outcome.liveUsageTokens ?? 0;
+    const diagnosticObservedTokens = liveObservedTokens > 0 ? Math.max(stdoutObservedTokens, liveObservedTokens) : 0;
     const observation: TryObservation = (error as { rateLimitedBeforeWork?: unknown }).rateLimitedBeforeWork === true || (error as { neverStarted?: unknown }).neverStarted === true ? { kind: "rule0" }
       : typeof observedTokens === "number" && observedTokens > 0 ? { kind: "tokens", tokens: observedTokens } : { kind: "null" };
     return {
       ok: false, error, evidenceDir: outcome.evidenceDir, classification, retrySafe, observation,
+      ...(diagnosticObservedTokens > 0 ? { diagnosticObservedTokens } : {}),
       onDecided: rateLimited === "before-work"
         ? async (call, nextDelayMs) => { await writeFile(join(outcome.evidenceDir, "rate-limit.json"), JSON.stringify({ classification: rateLimited, call, nextDelayMs }), { mode: 0o600 }); }
         : undefined,
@@ -157,12 +161,12 @@ export class CodexAdapter implements RuntimeAdapter {
 
   /** One call's outcome as the phase's result, or the error it fails with (unchanged from before the shared loop). */
   private async decodePhase<P extends CodexPhase>(phase: P, outcome: PhaseOutcome): Promise<PhaseResults[P]> {
+    const lowerBound = outcome.reason === "completed" ? null : Math.max(0, (outcome.liveUsageTokens ?? 0) - (outcome.observedTokens ?? 0));
+    // Orca issue #262 (as omp's, Orca #116): retain only the part of the exact-thread rollout watermark that stdout did not report.
+    // This floor is added to already-booked stdout usage, so an overlapping call must contribute only its positive difference.
+    if (lowerBound !== null && lowerBound > 0) await writeFile(join(outcome.evidenceDir, "usage-lower-bound.json"), JSON.stringify({ tokens: lowerBound }), { mode: 0o600 }).catch(() => undefined);
     if (outcome.cleanupError !== undefined) throw Object.assign(new Error(outcome.cleanupError), { observedTokens: outcome.observedTokens });
     const rateLimited = outcome.reason === "exit-error" || outcome.reason === "io-error" ? outcome.stream.rateLimit.value() : null;
-    // Orca issue #262 (as omp's, Orca #116): a call that ended without a final after codex reported turn usage leaves that
-    // usage as a floor (collect's usageLowerBound). Best-effort: a failed write must not replace the call's own failure.
-    const lowerBound = outcome.reason === "completed" ? null : outcome.stream.turnUsage.value();
-    if (lowerBound !== null && lowerBound > 0) await writeFile(join(outcome.evidenceDir, "usage-lower-bound.json"), JSON.stringify({ tokens: lowerBound }), { mode: 0o600 }).catch(() => undefined);
     if (outcome.reason === "aborted") throw new CodexPhaseAborted(outcome.evidenceDir, outcome.observedTokens);
     // Spec §3.3: named; a rejection before any work books 0 (rateLimitedBeforeWork, observedTokensOf), any other keeps
     // the usage its stdout showed, or null.

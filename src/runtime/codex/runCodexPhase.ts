@@ -52,6 +52,8 @@ export type PhaseOutcome = {
   readonly events:string;
   // Orca handoff delivery C-3: usage observed in the stdout of a phase that did not complete; null otherwise.
   observedTokens:number|null;
+  /** In-memory only: the exact launched thread's rollout watermark, kept separate from retry usage accounting. */
+  liveUsageTokens?:number;
   // Failure causes (ccloop spec 2026-10-21 §3 "Every kind"): the errno of a spawn that failed, so ENOENT is executable-missing.
   spawnErrno?:string;
   // Orca tester issue 125 (session 3cfc2e73): a no-MCP-list refusal carries the MCP probe's own reason (outcome.json too).
@@ -265,11 +267,9 @@ export async function runCodexPhase(config:CodexConfig, request:PhaseRequest, ex
     }catch{result.reason="io-error";}
   }
   if(result.reason!=="completed")result.observedTokens=stream.turnUsage.value();
-  // Delete only after the process and its pipes have closed; a failed deletion remains visible and blocks completion.
-  // *** ERRATUM (Orca tester #349, session 4389b15f, 2026-11-18): "blocks completion" no longer holds -- a failed deletion
-  // is recorded (session-cleanup-failed.json) and the phase keeps its outcome; what still reaches the catch below (a
-  // broken rollout read, an evidence write) is classified cleanup-failed by the adapter. ***
-  try { await live?.finish(); }
-  catch(error){ioError=String(error);result.cleanupError=ioError;result.observedTokens=stream.turnUsage.value();result.reason="io-error";}
+  // The observer drains the exact launched rollout before deleting its session; keep its independent watermark out of stdout accounting.
+  const rememberLiveUsage=(tokens:number|null)=>{if(tokens!==null)Object.defineProperty(result,"liveUsageTokens",{value:tokens,enumerable:false,configurable:true});};
+  try { rememberLiveUsage(await live?.finish()??null); }
+  catch(error){rememberLiveUsage(live?.watermark??null);ioError=String(error);result.cleanupError=ioError;result.observedTokens=stream.turnUsage.value();result.reason="io-error";}
   return persist();
 }

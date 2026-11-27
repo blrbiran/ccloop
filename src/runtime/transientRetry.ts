@@ -25,6 +25,8 @@ export type TryResult<T> =
     /** Spec §4 "Retry-safety, per kind": the caller's verdict for this try. */
     retrySafe: boolean;
     observation: TryObservation;
+    /** Failure evidence only; must not change the tokens this try books into retry totals. */
+    diagnosticObservedTokens?: number;
     /** Called once the loop decided the try's next delay (null: no retry); codex writes rate-limit.json here. */
     onDecided?: (call: number, nextDelayMs: number | null) => Promise<void>;
     /**
@@ -93,7 +95,8 @@ export async function runWithTransientRetry<T>(options: {
     if (classification !== null) {
       await writeFile(join(result.evidenceDir, "failure-cause.json"), JSON.stringify({
         cause: classification.cause, workObserved: classification.workObserved, call, nextDelayMs: next, detail: classification.detail,
-        usageObserved: observation.kind !== "null",
+        usageObserved: observation.kind !== "null" || result.diagnosticObservedTokens !== undefined,
+        ...(result.diagnosticObservedTokens === undefined ? {} : { observedTokens: result.diagnosticObservedTokens }),
         ...(next === null && call > 1 ? { retriedTriesUnobserved: unobserved } : {}),
       }), { mode: 0o600 }).catch(() => undefined); // Best-effort evidence: never replaces the call's own failure.
     }

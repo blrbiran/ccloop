@@ -101,6 +101,13 @@ describe("test 3/4: the shared retry loop (bounded, safe, and booking every try)
     expect(r.calls()).toBe(2);
   });
 
+  it("does not add diagnostic-only lower bounds to retry token totals", async () => {
+    const first = { ...transient(null), diagnosticObservedTokens: 125 };
+    const r = run([first, { ok: true, value: { tokenUsage: 5 }, evidenceDir: "/nonexistent" }]);
+    expect(await r.promise).toEqual({ tokenUsage: 5 });
+    expect(r.calls()).toBe(2);
+  });
+
   it("gives up after three retries with the cause attached and the sum observed", async () => {
     const r = run([transient(1), transient(2), transient(3), transient(4)]);
     const out = await settle(r.promise) as { error: Error };

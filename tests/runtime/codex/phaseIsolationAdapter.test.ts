@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { codexDescriptor } from "../../../src/agents/codex.js";
 import type { InstallationV1, MaterializedAgentConfigV1 } from "../../../src/agents/types.js";
 import { createStopRequestSignal, runLoop } from "../../../src/controller/runLoop.js";
+import { observedUsageLowerBound } from "../../../src/control/usageLowerBound.js";
 import { CodexAdapter } from "../../../src/runtime/codex/codexAdapter.js";
 import { parseCodexConfig } from "../../../src/runtime/codex/protocol.js";
 import { observedTokensOf } from "../../../src/runtime/types.js";
@@ -16,8 +17,8 @@ import { codexFixture } from "./fixture.js";
 // and sent no token, so its usage is booked 0 (`neverStarted`, a named exception to "usage is never booked as 0"); setting
 // up the isolation fails the same way every time, so the refusal is final -- not retried, and not turned into a handoff
 // boundary -- as a codex-skills-* setup failure is today.
-async function world(catalog: unknown) {
-  const f = await codexFixture("integration");
+async function world(catalog: unknown, mode = "integration") {
+  const f = await codexFixture(mode);
   const source = join(f.dir, "source-codex-home");
   await mkdir(source); await writeFile(join(source, "auth.json"), "{}"); await writeFile(join(source, "config.toml"), "");
   const cache = await realpath(await mkdtemp(join(tmpdir(), "ccloop-phase-iso-cache-")));
@@ -32,6 +33,46 @@ async function world(catalog: unknown) {
 const failure = (promise: Promise<unknown>) => promise.then(() => { throw new Error("expected a rejection"); }, (error: unknown) => error);
 
 afterEach(() => { vi.unstubAllEnvs(); });
+
+it("writes a live rollout watermark for a stalled call without changing stdout retry usage", async () => {
+  const w = await world({ mcp: [] }, "rollout-usage");
+  const config = parseCodexConfig({ ...w.config, idleTimeoutMs: 100 });
+  const adapter = new CodexAdapter(config, { CODEX_HOME: w.source }, undefined, { installation: w.installation, rateLimitDelaysMs: [] });
+  const error = await failure(adapter.plan(w.context)) as Error & { observedTokens?: number | null };
+  const calls = await readdir(join(w.runDir, "codex", "1", "plan"));
+  const dir = join(w.runDir, "codex", "1", "plan", calls.find(name => name.startsWith("call-"))!);
+  expect(error.message).toContain("codex-stalled:");
+  expect(error.observedTokens).toBeNull();
+  expect(JSON.parse(readFileSync(join(dir, "usage-lower-bound.json"), "utf8"))).toEqual({ tokens: 125 });
+  expect(await observedUsageLowerBound(w.dir)).toBe(125);
+  expect(JSON.parse(readFileSync(join(dir, "failure-cause.json"), "utf8"))).toMatchObject({ usageObserved: true, observedTokens: 125 });
+}, 30_000);
+
+it("keeps only the unbooked difference when a live-watermark stall succeeds on retry", async () => {
+  const w = await world({ mcp: [] }, "rollout-usage-retry");
+  const config = parseCodexConfig({ ...w.config, idleTimeoutMs: 100 });
+  const adapter = new CodexAdapter(config, { CODEX_HOME: w.source }, undefined, { installation: w.installation, rateLimitDelaysMs: [1] });
+  await expect(adapter.plan(w.context)).resolves.toMatchObject({ summary: "fixture", tokenUsage: 30 });
+  const calls = (await readdir(join(w.runDir, "codex", "1", "plan"))).filter(name => name.startsWith("call-"));
+  expect(calls).toHaveLength(2);
+  const callDir = (name: string) => join(w.runDir, "codex", "1", "plan", name);
+  const firstName = calls.find(name => JSON.parse(readFileSync(join(callDir(name), "outcome.json"), "utf8")).reason === "stalled")!;
+  const secondName = calls.find(name => JSON.parse(readFileSync(join(callDir(name), "outcome.json"), "utf8")).reason === "completed")!;
+  const first = callDir(firstName);
+  const second = callDir(secondName);
+  expect(JSON.parse(readFileSync(join(first, "usage-lower-bound.json"), "utf8"))).toEqual({ tokens: 110 });
+  expect(JSON.parse(readFileSync(join(second, "retry-usage.json"), "utf8"))).toMatchObject({ priorObservedTokens: 15 });
+  expect(await observedUsageLowerBound(w.dir)).toBe(110);
+}, 30_000);
+
+it("keeps completed stdout usage authoritative instead of writing a live floor", async () => {
+  const w = await world({ mcp: [] }, "rollout-usage-complete");
+  const adapter = new CodexAdapter(parseCodexConfig(w.config), { CODEX_HOME: w.source }, undefined, { installation: w.installation });
+  await expect(adapter.plan(w.context)).resolves.toMatchObject({ summary: "done", tokenUsage: 125 });
+  const calls = await readdir(join(w.runDir, "codex", "1", "plan"));
+  const dir = join(w.runDir, "codex", "1", "plan", calls.find(name => name.startsWith("call-"))!);
+  expect(existsSync(join(dir, "usage-lower-bound.json"))).toBe(false);
+}, 30_000);
 
 it("a refused phase throws neverStarted and books 0", async () => {
   const w = await world({ mcpExitCode: 1 });

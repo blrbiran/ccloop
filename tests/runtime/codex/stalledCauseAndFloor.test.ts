@@ -58,15 +58,34 @@ it("Orca #262 end to end: runLoop with the codex adapter books the stall, not bu
   expect(state.failureCause).toMatchObject({ cause: "stalled", phase: "execute" });
 }, 90_000);
 
-describe("Orca #262 (2): a codex call that ended without a final leaves its observed turn usage as a floor", () => {
+describe("Orca #262 (2): a non-completed Codex call exports only usage not already reported by stdout", () => {
   const usage = { type: "turn.completed", usage: { input_tokens: 12, output_tokens: 3 } };
-  it("writes usage-lower-bound.json with the shape omp writes, from the turn usage it saw", async () => {
+  it("does not export an exact execute stall's stdout usage a second time", async () => {
     const f = await codex("idle-script", { idleTimeoutMs: 300 });
     await writeFile(`${f.marker}.idle-script.json`, JSON.stringify({ steps: [{ delayMs: 0, stdout: { type: "thread.started", thread_id: "t" } }, { delayMs: 0, stdout: usage }], end: "hang" }));
-    const out = await settle(f.adapter.execute({ ...f.context, plan: { summary: "p", primaryTargetPaths: ["answer.txt"] } })) as { error?: Error };
+    const out = await settle(f.adapter.execute({ ...f.context, plan: { summary: "p", primaryTargetPaths: ["answer.txt"] } })) as { error?: Error & { observedTokens?: number | null } };
     expect(String(out.error?.message)).toMatch(/^codex-stalled: /);
+    expect(out.error?.observedTokens).toBe(15);
     const [call] = await f.calls();
-    expect(JSON.parse(await readFile(join(call!, "usage-lower-bound.json"), "utf8"))).toEqual({ tokens: 15 });
+    expect(existsSync(join(call!, "usage-lower-bound.json"))).toBe(false);
+  }, 30_000);
+
+  it("an exact execute abort books stdout usage without adding it again as a floor", async () => {
+    const f = await codex("idle-script", { idleTimeoutMs: null });
+    await writeFile(`${f.marker}.idle-script.json`, JSON.stringify({ steps: [{ delayMs: 0, stdout: { type: "thread.started", thread_id: "t" } }, { delayMs: 0, stdout: usage }], end: "hang" }));
+    const controller = new AbortController();
+    const pending = settle(f.adapter.execute({ ...f.context, abortSignal: controller.signal, plan: { summary: "p", primaryTargetPaths: ["answer.txt"] } }));
+    let call = "";
+    await expect.poll(async () => {
+      const calls = await f.calls();
+      call = calls[0] ?? "";
+      return call === "" ? "" : readFile(join(call, "events.jsonl"), "utf8").catch(() => "");
+    }, { timeout: 10_000 }).toContain('"type":"turn.completed"');
+    controller.abort();
+    const out = await pending as { error?: Error & { observedTokens?: number | null } };
+    expect(String(out.error?.message)).toMatch(/^codex-aborted: /);
+    expect(out.error?.observedTokens).toBe(15);
+    expect(existsSync(join(call, "usage-lower-bound.json"))).toBe(false);
   }, 30_000);
 
   it("writes none when no turn usage was seen", async () => {
