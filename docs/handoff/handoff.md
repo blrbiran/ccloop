@@ -320,6 +320,8 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
+- **2026-11-28（Orca 会话 `1cdb9811`）复核**：本仓**零代码改动、无需 repin**。本轮 Orca 做的是验收侧完整性（#562/#564/#558/#580：测试范围闸、schema 27 套件计数、TAP 分段身份与 realpath、共享全套命令识别与同命令重试），只动 Orca 自己的 `src/control/**` 与 Web 层，不碰 agent 适配器、契约或 collect 形状。ccloop 仍钉在远端 main 尖（`git ls-remote` 现查）。Orca 侧「测量出的测试条数缺口不可豁免」是可逆裁定，未改本仓任何合同字段。
+
 - **2026-11-27（Orca 会话 `ed65fdb8`）复核**：本仓运行时代码未改，无须 repin。Orca 的依赖仍含 #519/#520/#553。#519 已覆盖报告中的网关重连措辞和后续完成，通用重连措辞和 rate-limit 折叠一致性仍有待复测。#520 把 watchdog stall 下界单列展示，控制器主导的中止与已结算用量保留原口径。#553 已为整份 plan/verify final 的非法 JSON 提供有界诊断，带前言及解析器未给偏移的形状仍有诊断缺口。聚焦验证见 Orca handoff。
 
 - **2026-11-27（Orca 会话 `51784279`）**：#519／#553 已在远端 `main`，主题 `fix(codex): accept completed reconnects and diagnose invalid finals (#519 #553)`。`git ls-remote` 已确认 #520 也在远端 `main`，主题 `fix(codex): retain exact-thread usage floors on stalls` 和 `fix(codex): scope rollout floors to watchdog stalls`。watchdog stall 的下界只包含对应 rollout 超出的未上报用量。控制器主导的中止和 stdout 精确记账口径维持原行为。`vitest run tests/runtime/codex/phaseIsolationAdapter.test.ts tests/control/collectUsageLowerBound.test.ts tests/runtime/codex/usageAfterErrorRow.test.ts --minWorkers=1 --maxWorkers=2` 在 `0aeba3f` 为 20/20，typecheck/build RC 0。`stalledCauseAndFloor` 长场景的 `io-error` 前置失败在基线 `099b4d5` 单跑同样复现。Orca 用 `0aeba3f` 的本地构建通过 worker 恢复配对 7/7。Orca 会话 `862140e4` 随后把 `chore(deps): repin ccloop to cf4f9b4 (#520)` 快进合入 Orca 本地 main。pin 脚本及 Orca 改动门的验证见 Orca handoff §3.最新。远端与运行中面板版本各自现查。
