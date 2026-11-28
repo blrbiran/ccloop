@@ -320,7 +320,7 @@ node scripts/check-known-reds.mjs <scratchpad>/vitest.json; echo $?   # RC 0 才
 
 # 📌 Orca 那条线（单节滚动 —— 每轮就地更新、不新增 Orca 章节）
 
-- **2026-11-28（Orca 会话 `1cdb9811`）复核**：本仓**零代码改动、无需 repin**。本轮 Orca 做的是验收侧完整性（#562/#564/#558/#580：测试范围闸、schema 27 套件计数、TAP 分段身份与 realpath、共享全套命令识别与同命令重试），只动 Orca 自己的 `src/control/**` 与 Web 层，不碰 agent 适配器、契约或 collect 形状。ccloop 仍钉在远端 main 尖（`git ls-remote` 现查）。Orca 侧「测量出的测试条数缺口不可豁免」是可逆裁定，未改本仓任何合同字段。
+- **2026-11-28（Orca 会话 `1cdb9811`，随后 Orca 会话 `8fa3052e` 续做）复核**：本仓**零代码改动、无需 repin**。Orca 先做验收侧完整性（#562/#564/#558/#580：测试范围闸、schema 27 套件计数、TAP 分段身份与 realpath、共享全套命令识别与同命令重试），随后做 review 证据对齐（#544）与需求接受冲突留痕／review 上下文（#542/#557），都只动 Orca 自己的 `src/control/**`、`src/commands/**` 与 Web 层，不碰 agent 适配器、契约或 collect 形状。ccloop 仍钉在远端 main 尖（`git ls-remote` 现查）。Orca 侧「测量出的测试条数缺口不可豁免」是可逆裁定，未改本仓任何合同字段。
 
 - **2026-11-27（Orca 会话 `ed65fdb8`）复核**：本仓运行时代码未改，无须 repin。Orca 的依赖仍含 #519/#520/#553。#519 已覆盖报告中的网关重连措辞和后续完成，通用重连措辞和 rate-limit 折叠一致性仍有待复测。#520 把 watchdog stall 下界单列展示，控制器主导的中止与已结算用量保留原口径。#553 已为整份 plan/verify final 的非法 JSON 提供有界诊断，带前言及解析器未给偏移的形状仍有诊断缺口。聚焦验证见 Orca handoff。
 
